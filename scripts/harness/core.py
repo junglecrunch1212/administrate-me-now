@@ -522,7 +522,7 @@ def run_diff_hygiene(root: Path) -> str:
     """Check both the committed candidate and current task worktree for defects."""
 
     base_sha = candidate_base_sha(root)
-    checks = (
+    checks: tuple[tuple[str, list[str]], ...] = (
         ("committed candidate diff", [base_sha, "HEAD"]),
         ("staged diff", ["--cached", "HEAD"]),
         ("unstaged diff", []),
@@ -827,6 +827,7 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
     check_statuses = [check["status"] for check in verification["checks"]]
     for check in verification["checks"]:
         _validate_check_receipt(run_dir, canonical_binding, check)
+    _validate_attempt_history(run_dir, canonical_binding, verification)
     has_failure = (
         "FAIL" in check_statuses
         or verification["browser"]["status"] == "FAIL"
@@ -1043,9 +1044,130 @@ def _validate_browser_evidence(
             raise HarnessError(f"browser screenshot dimensions mismatch: {path.name}")
 
 
-def _validate_check_receipt(
-    run_dir: Path, canonical_binding: dict[str, Any], check: dict[str, Any]
+_CHECK_RECEIPT_FIELDS = (
+    "check_id",
+    "tier",
+    "command",
+    "status",
+    "exit_code",
+    "duration_seconds",
+    "evidence_class",
+)
+
+
+def _attempt_summary(attempt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **{field: attempt[field] for field in _CHECK_RECEIPT_FIELDS},
+        "receipt": attempt["receipt"],
+    }
+
+
+def _validate_attempt_history(
+    run_dir: Path,
+    canonical_binding: dict[str, Any],
+    verification: dict[str, Any],
 ) -> None:
+    attempts = verification.get("attempts", [])
+    identities: set[str] = set()
+    receipt_paths: set[str] = set()
+    log_paths: set[str] = set()
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for attempt in attempts:
+        identity = attempt["attempt_id"]
+        if identity in identities:
+            raise HarnessError(f"duplicate check attempt identity: {identity}")
+        identities.add(identity)
+        receipt_value, log_value = _validate_check_receipt(
+            run_dir,
+            canonical_binding,
+            _attempt_summary(attempt),
+            expected_receipt_sha256=attempt["receipt_sha256"],
+            expected_attempt={
+                "attempt_id": identity,
+                "order": attempt["attempt_order"],
+                "started_at": attempt["started_at"],
+                "finished_at": attempt["finished_at"],
+            },
+        )
+        if receipt_value in receipt_paths:
+            raise HarnessError(f"reused check attempt receipt path: {receipt_value}")
+        if log_value in log_paths:
+            raise HarnessError(f"reused check attempt log path: {log_value}")
+        receipt_paths.add(receipt_value)
+        log_paths.add(log_value)
+        grouped.setdefault((attempt["tier"], attempt["check_id"]), []).append(attempt)
+
+    for key, history in grouped.items():
+        observed = [attempt["attempt_order"] for attempt in history]
+        expected = list(range(1, len(history) + 1))
+        if observed != expected:
+            raise HarnessError(
+                f"check attempt ordering changed for {key[0]}/{key[1]}: "
+                f"{observed} != {expected}"
+            )
+        if len({attempt["command"] for attempt in history}) != 1:
+            raise HarnessError(
+                f"check attempt command changed within history: {key[0]}/{key[1]}"
+            )
+
+    summaries = {
+        (check["tier"], check["check_id"]): check
+        for check in verification["checks"]
+    }
+    if len(summaries) != len(verification["checks"]):
+        raise HarnessError("canonical check summary contains duplicate identities")
+    if set(summaries) != set(grouped):
+        raise HarnessError("canonical check summary contradicts attempt history")
+    for key, history in grouped.items():
+        if summaries[key] != _attempt_summary(history[-1]):
+            raise HarnessError(
+                f"canonical check summary is not the latest attempt: {key[0]}/{key[1]}"
+            )
+
+    first_focused = [
+        attempt["status"]
+        for attempt in attempts
+        if attempt["tier"] == "focused" and attempt["attempt_order"] == 1
+    ]
+    expected_first_pass = (
+        "FAIL"
+        if "FAIL" in first_focused
+        else "PASS"
+        if first_focused
+        else "UNDETERMINED"
+    )
+    if verification["metrics"]["first_pass_focused"] != expected_first_pass:
+        raise HarnessError("first-pass focused metric contradicts attempt history")
+
+    for directory_name, declared in (
+        ("check-receipts", receipt_paths),
+        ("check-logs", log_paths),
+    ):
+        directory = run_dir / directory_name
+        actual = (
+            {
+                path.relative_to(run_dir).as_posix()
+                for path in directory.rglob("*")
+                if path.is_file()
+            }
+            if directory.is_dir()
+            else set()
+        )
+        if actual != {path for path in declared if path.startswith(f"{directory_name}/")}:
+            raise HarnessError(
+                f"unlisted or missing canonical {directory_name}: "
+                f"actual={sorted(actual)} declared={sorted(declared)}"
+            )
+
+
+def _validate_check_receipt(
+    run_dir: Path,
+    canonical_binding: dict[str, Any],
+    check: dict[str, Any],
+    *,
+    expected_receipt_sha256: str | None = None,
+    expected_attempt: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     receipt_value = Path(check["receipt"])
     if receipt_value.is_absolute() or ".." in receipt_value.parts:
         raise HarnessError(f"unsafe check receipt path: {check['receipt']}")
@@ -1058,12 +1180,18 @@ def _validate_check_receipt(
         ) from exc
     if not receipt_path.is_file():
         raise HarnessError(f"missing check receipt: {check['receipt']}")
+    if expected_receipt_sha256 is not None and sha256_file(
+        receipt_path
+    ) != expected_receipt_sha256:
+        raise HarnessError(f"check receipt hash mismatch: {check['receipt']}")
     receipt = load_json(receipt_path)
     if receipt.get("binding") != canonical_binding:
         raise HarnessError(f"stale check receipt binding: {check['receipt']}")
     expected_check = {key: value for key, value in check.items() if key != "receipt"}
     if receipt.get("check") != expected_check:
         raise HarnessError(f"check receipt contradicts report: {check['receipt']}")
+    if expected_attempt is not None and receipt.get("attempt") != expected_attempt:
+        raise HarnessError(f"check attempt receipt metadata changed: {check['receipt']}")
     if check["status"] == "PASS" and check["exit_code"] != 0:
         raise HarnessError(f"PASS check has nonzero exit: {check['check_id']}")
     if check["status"] == "FAIL" and check["exit_code"] in {0, None}:
@@ -1081,12 +1209,17 @@ def _validate_check_receipt(
         raise HarnessError(f"check log escapes run directory: {log_value}") from exc
     if not log_path.is_file() or sha256_file(log_path) != log.get("sha256"):
         raise HarnessError(f"check log hash mismatch: {log_value}")
+    if expected_attempt is not None and (
+        f"{log_path.stat().st_mode & 0o7777:04o}" != log.get("mode")
+    ):
+        raise HarnessError(f"check log mode mismatch: {log_value}")
     if check["command"].startswith(
         "npm --prefix tools/console-reference-harness run test:gate7"
     ):
         _validate_supported_toolchain(receipt, log_path, context="browser")
     if check["command"].startswith("npm --prefix openclaw/administrateme "):
         _validate_supported_toolchain(receipt, log_path, context="OpenClaw")
+    return check["receipt"], log_value.as_posix()
 
 
 def _validate_browser_toolchain(receipt: dict[str, Any], log_path: Path) -> None:

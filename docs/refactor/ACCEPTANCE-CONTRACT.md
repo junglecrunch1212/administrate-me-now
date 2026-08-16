@@ -13,6 +13,28 @@ surface. Disabled/unconfigured optional providers remain explicit and
 nonblocking, observation-only remains active, and no provider effect is
 introduced.
 
+Google Calendar exact-head remediation amendment (2026-08-16): lease
+contention is coordination, not provider failure. A non-holder makes no
+provider call, emits no adapter error, changes no cursor/circuit/token/health,
+and returns before the poll interval; an expired or stale holder is equally
+unable to publish a terminal result. Only the unexpired holder of the exact
+lease and fencing version may persist success or failure. `CancelledError`
+propagates unchanged from provider request, pagination, validation, append,
+cursor/circuit persistence, scheduling, and supervisor shutdown; the
+finally-safe lease release is the only coordination cleanup, already durable
+facts remain immutable, and replay deduplicates them. Cancellation cannot
+become backoff, running, failure evidence, or an interval sleep.
+
+AC-44 attempt-history amendment (2026-08-16): every check execution has an
+append-only ordered attempt identity, receipt, log path, exact log digest and
+mode, timestamps, command, binding, exit, and status. The canonical summary is
+only the latest attempt for a check, while every earlier same-binding attempt
+remains enumerated and validated. Duplicate identities, receipt or log reuse,
+missing/unlisted/reordered evidence, changed receipt/log bytes or mode, foreign
+bindings, summary/history contradiction, and false first-pass metrics fail
+closed. A binding refresh invalidates and archives all prior-bound attempts;
+it cannot promote them into the new candidate proof.
+
 CO-017 amendment (2026-08-11): AC-42 proves that an exhausted terminal
 message assessment can be reassessed only through an authenticated,
 observation-only, exact-source recovery request. The currently failed

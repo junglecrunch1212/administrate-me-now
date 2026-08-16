@@ -4,7 +4,7 @@
   "title": "AdministrateMe verification report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "run_id", "binding", "status", "started_at", "finished_at", "changed_files", "checks", "browser", "metrics", "unresolved"],
+  "required": ["schema_version", "run_id", "binding", "status", "started_at", "finished_at", "changed_files", "checks", "attempts", "browser", "metrics", "unresolved"],
   "properties": {
     "schema_version": {"type": "integer", "const": 1},
     "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,79}$"},
@@ -30,6 +30,10 @@
           "receipt": {"type": "string", "minLength": 1}
         }
       }
+    },
+    "attempts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/attempt"}
     },
     "browser": {
       "type": "object",
@@ -67,6 +71,26 @@
     "unresolved": {"type": "array", "items": {"type": "string", "minLength": 1}}
   },
   "$defs": {
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "attempt_order", "started_at", "finished_at", "check_id", "tier", "command", "status", "exit_code", "duration_seconds", "evidence_class", "receipt", "receipt_sha256"],
+      "properties": {
+        "attempt_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+        "attempt_order": {"type": "integer", "minimum": 1},
+        "started_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"type": "string", "format": "date-time"},
+        "check_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+        "tier": {"type": "string", "enum": ["static", "focused", "journey", "breadth", "release"]},
+        "command": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["PASS", "FAIL", "UNDETERMINED", "NOT_APPLICABLE", "NOT_CONFIGURED"]},
+        "exit_code": {"type": ["integer", "null"]},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "evidence_class": {"type": "string", "enum": ["fixture", "local_candidate", "hosted_ci", "live"]},
+        "receipt": {"type": "string", "minLength": 1},
+        "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
     "screenshot": {
       "type": "object",
       "additionalProperties": false,

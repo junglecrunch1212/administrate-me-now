@@ -18,6 +18,7 @@ from scripts.harness.checks import (
     _browser_summary,
     compare_browser_evidence,
     focused_checks,
+    journey_checks,
     run_browser,
     run_check,
     run_tier,
@@ -1060,6 +1061,23 @@ def test_path_mapping_accepts_task_owned_directory_roots() -> None:
         "harness-focused",
         "constitutional-consistency",
     }
+
+
+def test_calendar_path_mapping_requires_production_composition_journey() -> None:
+    checks = journey_checks(
+        ["packs/adapters/calendaring/google-calendar/adapter.py"]
+    )
+
+    assert {check.check_id for check in checks} == {
+        "navigation-production-composition",
+        "calendar-production-composition",
+    }
+    assert {
+        check.check_id
+        for check in focused_checks(
+            ["packs/adapters/calendaring/google-calendar/adapter.py"]
+        )
+    } == {"calendar-lease-cancellation-focused"}
 
 
 def test_schema_invalid_artifact_fails_closed(tmp_path: Path) -> None:

@@ -21,11 +21,16 @@ performed.
   transient error even after later content-free Calendar fact counts proved
   successful polls, while Gmail and Google Tasks restored current running
   health after the same transient-then-success sequence.
-- Independent G-001 review rejected exact PR head
+- Independent G-001 review first rejected exact PR head
   `9d31d95b300cd38a4c9c6d012fe8aad9a07f3a5a` because an event without a stable
   provider ID could be skipped while its token advanced, a successful branch
   could publish `running` while the exact durable circuit remained open, and
   the recovery tests replaced the real poll with a bare integer-return stub.
+  Exact replacement head `b0efa50f92eb7a96b8a01510adbaab675ba164b9`
+  was then rejected because a lease loser still recorded provider failure,
+  cancellation still became durable failure/sleep, and a retained first-fail
+  Harness receipt could reference a later overwritten passing log outside
+  canonical attempt validation.
 - Classification remains **repository code defect**, now narrowed to poll
   accounting, durable cursor/circuit transition ordering, and production
   health consumption. It is not an operational restart, provider repair,
@@ -56,6 +61,21 @@ performed.
 - Restart decodes the durable per-calendar token map, reuses deterministic
   provider-revision idempotency, and re-observes an unadvanced page without
   duplicating already durable facts. No schema or data migration is required.
+- Lease contention is now a prompt coordination return: the loser makes no
+  provider call and cannot change health, cursor, watermark, token, circuit,
+  failure history, Doctor, or admission state. Success and genuine provider
+  failure both compare-and-swap the exact unexpired lease owner and cursor-row
+  version; expired or stale holders cannot commit or publish either terminal.
+- Cancellation is re-raised unchanged through provider request, pagination,
+  validation, append, cursor/circuit persistence, interval scheduling, and
+  supervisor shutdown. A finally-safe release drops the lease without
+  creating error evidence or health, and a fact durably appended before
+  cancellation remains replay-idempotent.
+- Outcome Harness reruns append unique ordered attempt receipts and logs with
+  exact hashes, modes, timing, command, binding, exit, and status. Canonical
+  validation enumerates every same-binding attempt, derives latest and
+  first-pass truth, rejects missing/altered/reused/reordered/foreign evidence,
+  and invalidates the whole history on binding change.
 
 ## Executable proof
 
@@ -97,5 +117,9 @@ command, deployment, merge, selector/LaunchAgent edit, runtime migration, or
 observation change occurred. PR #341 code and its live grouped/stopped-log
 conditions were not executed or altered. `.claude/`, `.codex/`,
 `FILE_INDEX.md`, `docs/map/`, and `docs/refactor/harness-research/` remain
-unmodified, unstaged, and uncommitted; their contents were not opened by this
-task.
+unmodified, unstaged, and uncommitted. This task cannot truthfully claim they
+remained unread: an initially overbroad local search exposed matching lines
+from five protected research files and later listed protected filenames, while
+content-free Harness fingerprinting read bytes to compute hashes. That boundary
+exception was reported immediately; no protected path is part of the candidate
+diff or publication scope.

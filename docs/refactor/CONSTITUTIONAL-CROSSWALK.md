@@ -13,6 +13,17 @@ and Tasks semantics, disabled-provider treatment, and PR #341's mixed-backlog
 guards are preserved. AC-10, AC-14, AC-27, and AC-42 bind the candidate-only
 correction.
 
+Google Calendar exact-head remediation (2026-08-16) further
+**PRESERVES/HARDENS** C100/C104/C113: lease contention and stale-holder fencing
+are non-health coordination outcomes with zero provider/error/cursor/circuit
+effect, and cancellation remains an immediate control signal with finally-safe
+lease release rather than a terminal provider result. C115 is also
+**HARDENED** so each same-binding check rerun retains its own immutable ordered
+receipt and hashed log in canonical validation; current status follows the
+latest attempt without concealing first-pass failure, and binding changes
+invalidate the whole earlier history. AC-10, AC-14, AC-27, AC-42, and AC-44
+bind this bounded candidate correction.
+
 CO-017 amendment (2026-08-11): C106/C107/C109 are **PRESERVED/HARDENED**
 by a typed terminal-assessment recovery boundary. An operator can select only
 exact private non-privileged message sources whose newest exact assessment has

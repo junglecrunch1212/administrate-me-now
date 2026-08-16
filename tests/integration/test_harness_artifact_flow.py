@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from scripts.harness.core import (
     write_json,
 )
 from scripts.harness import run_artifacts
+from scripts.harness.checks import CheckSpec, run_check
 from scripts.harness.run_artifacts import (
     create_run,
     finalize_owner_handoff,
@@ -30,6 +32,40 @@ from scripts.harness.run_artifacts import (
     refresh_bindings,
     sync_owner_handoff,
 )
+
+
+_ATTEMPT_HISTORY_TASK_PATHS = [
+    "adminme/adapters/cursor_store.py",
+    "packs/adapters/calendaring/google-calendar/adapter.py",
+    "schemas/harness/verification-report.schema.json",
+    "scripts/harness/checks.py",
+    "scripts/harness/core.py",
+    "scripts/harness/run_artifacts.py",
+    "tests/integration/test_adapter_google_calendar_supervisor.py",
+    "tests/integration/test_harness_artifact_flow.py",
+    "tests/unit/adapters/calendaring/test_google_calendar.py",
+    "tests/unit/adapters/test_cursor_store_gate6.py",
+    "tests/unit/harness/test_core.py",
+]
+
+
+def _create_fail_then_pass_attempts(root: Path, run_dir: Path) -> None:
+    create_run(
+        root,
+        requested_outcome="Preserve every check attempt.",
+        task_paths=_ATTEMPT_HISTORY_TASK_PATHS,
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    sentinel = run_dir / "pass-next"
+    quoted = shlex.quote(str(sentinel))
+    spec = CheckSpec(
+        "fail-then-pass",
+        "focused",
+        f"test -f {quoted} || (touch {quoted}; exit 7)",
+    )
+    record_checks(run_dir, [run_check(root, run_dir, spec)])
+    record_checks(run_dir, [run_check(root, run_dir, spec)])
 
 
 def test_run_artifacts_create_validate_and_refresh_in_system_temp(
@@ -67,6 +103,131 @@ def test_run_artifacts_create_validate_and_refresh_in_system_temp(
         root, [".codex/", "docs/map/"]
     )
     assert not str(run_dir.resolve()).startswith(str(root.resolve()))
+
+
+def test_rejected_head_fail_then_pass_attempts_are_immutable_and_canonical(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-attempt-history"
+    _create_fail_then_pass_attempts(root, run_dir)
+    report = load_json(run_dir / "verification-report.json")
+    first, second = report["attempts"]
+    first_receipt = run_dir / first["receipt"]
+    first_value = load_json(first_receipt)
+    first_log = run_dir / first_value["log"]["path"]
+    first_receipt_bytes = first_receipt.read_bytes()
+    first_log_bytes = first_log.read_bytes()
+
+    assert first["status"] == "FAIL"
+    assert second["status"] == "PASS"
+    assert first["receipt"] != second["receipt"]
+    assert first_receipt.read_bytes() == first_receipt_bytes
+    assert first_log.read_bytes() == first_log_bytes
+    assert first_value["attempt"]["order"] == 1
+    second_value = load_json(run_dir / second["receipt"])
+    assert second_value["attempt"]["order"] == 2
+    assert first_value["attempt"]["attempt_id"] != second_value["attempt"]["attempt_id"]
+    assert [
+        attempt
+        for attempt in report["attempts"]
+        if attempt["check_id"] == "fail-then-pass"
+    ] == [first, second]
+    [check] = [
+        item for item in report["checks"] if item["check_id"] == "fail-then-pass"
+    ]
+    assert check["status"] == "PASS"
+    assert report["metrics"]["first_pass_focused"] == "FAIL"
+    validate_run(run_dir, root)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "overwrite-first-log",
+        "shared-log-path",
+        "redirect-failure-to-pass-log",
+        "missing-receipt",
+        "missing-log",
+        "changed-log-mode",
+        "reordered-attempts",
+        "foreign-binding",
+        "pass-summary-for-latest-failure",
+        "false-first-pass",
+        "duplicate-attempt-id",
+        "altered-receipt",
+        "unlisted-attempt",
+    ],
+)
+def test_attempt_history_validation_rejects_evidence_tampering(
+    mutation: str,
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / f"administrateme-harness-attempt-negative-{mutation}"
+    _create_fail_then_pass_attempts(root, run_dir)
+    report_path = run_dir / "verification-report.json"
+    report = load_json(report_path)
+    first, second = report["attempts"]
+    first_receipt_path = run_dir / first["receipt"]
+    second_receipt_path = run_dir / second["receipt"]
+    first_receipt = load_json(first_receipt_path)
+    second_receipt = load_json(second_receipt_path)
+    first_log = run_dir / first_receipt["log"]["path"]
+    second_log = run_dir / second_receipt["log"]["path"]
+
+    def replace_receipt(index: int, path: Path, value: dict[str, object]) -> None:
+        write_json(path, value)
+        report["attempts"][index]["receipt_sha256"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+
+    if mutation == "overwrite-first-log":
+        first_log.write_bytes(second_log.read_bytes())
+    elif mutation == "shared-log-path":
+        second_receipt["log"] = dict(first_receipt["log"])
+        replace_receipt(1, second_receipt_path, second_receipt)
+    elif mutation == "redirect-failure-to-pass-log":
+        first_receipt["log"] = dict(second_receipt["log"])
+        replace_receipt(0, first_receipt_path, first_receipt)
+    elif mutation == "missing-receipt":
+        first_receipt_path.unlink()
+    elif mutation == "missing-log":
+        first_log.unlink()
+    elif mutation == "changed-log-mode":
+        first_log.chmod(0o600)
+    elif mutation == "reordered-attempts":
+        report["attempts"] = [second, first]
+    elif mutation == "foreign-binding":
+        first_receipt["binding"] = {
+            **first_receipt["binding"],
+            "diff_sha256": "f" * 64,
+        }
+        replace_receipt(0, first_receipt_path, first_receipt)
+    elif mutation == "pass-summary-for-latest-failure":
+        second_receipt["check"] = {
+            **second_receipt["check"],
+            "status": "FAIL",
+            "exit_code": 9,
+        }
+        report["attempts"][1]["status"] = "FAIL"
+        report["attempts"][1]["exit_code"] = 9
+        replace_receipt(1, second_receipt_path, second_receipt)
+    elif mutation == "false-first-pass":
+        report["metrics"]["first_pass_focused"] = "PASS"
+    elif mutation == "duplicate-attempt-id":
+        report["attempts"][1]["attempt_id"] = first["attempt_id"]
+    elif mutation == "altered-receipt":
+        first_receipt["attempt"]["finished_at"] = "2026-08-16T00:00:00Z"
+        write_json(first_receipt_path, first_receipt)
+    elif mutation == "unlisted-attempt":
+        report["attempts"] = [second]
+    else:  # pragma: no cover - parameter list is closed above
+        raise AssertionError(mutation)
+    write_json(report_path, report)
+
+    with pytest.raises(HarnessError):
+        validate_run(run_dir, root)
 
 
 def test_preservation_task_paths_must_match_bound_verification_scope(

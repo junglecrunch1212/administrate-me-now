@@ -13,6 +13,10 @@ from typing import Literal
 CircuitState = Literal["closed", "open", "half_open"]
 
 
+class AdapterLeaseLost(RuntimeError):
+    """The caller no longer owns the unexpired lease/fencing version."""
+
+
 @dataclass(frozen=True)
 class AdapterCursor:
     adapter_id: str
@@ -277,6 +281,7 @@ class AdapterCursorStore:
         provider_watermark: str,
         expected_updated_at_ms: int,
         lease_owner: str,
+        now_ms: int | None = None,
     ) -> AdapterCursor:
         """Atomically persist a complete poll and close its exact circuit.
 
@@ -291,19 +296,21 @@ class AdapterCursorStore:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 row = self._conn.execute(
-                    "SELECT updated_at_ms, lease_owner, circuit_state "
+                    "SELECT updated_at_ms, lease_owner, lease_until_ms, circuit_state "
                     "FROM adapter_cursors WHERE adapter_id=?",
                     (adapter_id,),
                 ).fetchone()
                 if row is None:
                     raise RuntimeError("adapter cursor disappeared during poll")
+                now = self._now_ms() if now_ms is None else now_ms
                 if (
                     int(row["updated_at_ms"]) != int(expected_updated_at_ms)
                     or row["lease_owner"] != lease_owner
+                    or int(row["lease_until_ms"] or 0) <= now
                     or row["circuit_state"] not in {"closed", "half_open"}
                 ):
-                    raise RuntimeError(
-                        "adapter circuit changed while provider poll was in progress"
+                    raise AdapterLeaseLost(
+                        "adapter lease or circuit changed while provider poll was in progress"
                     )
                 now = self._next_updated_at_ms(int(row["updated_at_ms"]))
                 cursor_update = self._conn.execute(
@@ -331,6 +338,70 @@ class AdapterCursorStore:
                 if circuit_update.rowcount != 1:
                     raise RuntimeError(
                         "adapter circuit could not close after cursor persistence"
+                    )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+        return self.get(adapter_id)
+
+    def record_poll_error(
+        self,
+        adapter_id: str,
+        *,
+        expected_updated_at_ms: int,
+        lease_owner: str,
+        open_after: int = 3,
+        now_ms: int | None = None,
+    ) -> AdapterCursor:
+        """Record a poll failure only for its current unexpired lease holder.
+
+        Ordinary coordination contention and stale work cannot increment the
+        shared failure history, open the circuit, or fence the authoritative
+        runtime. The compare-and-swap version is the same token used by
+        :meth:`complete_poll`.
+        """
+
+        if open_after <= 0:
+            raise ValueError("open_after must be positive")
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT updated_at_ms, lease_owner, lease_until_ms, circuit_state "
+                    "FROM adapter_cursors WHERE adapter_id=?",
+                    (adapter_id,),
+                ).fetchone()
+                now = self._now_ms() if now_ms is None else now_ms
+                if (
+                    row is None
+                    or int(row["updated_at_ms"]) != int(expected_updated_at_ms)
+                    or row["lease_owner"] != lease_owner
+                    or int(row["lease_until_ms"] or 0) <= now
+                    or row["circuit_state"] not in {"closed", "half_open"}
+                ):
+                    raise AdapterLeaseLost(
+                        "adapter poll failure lost its lease or fencing version"
+                    )
+                updated_at = self._next_updated_at_ms(int(row["updated_at_ms"]))
+                changed = self._conn.execute(
+                    "UPDATE adapter_cursors SET error_count=error_count+1, "
+                    "circuit_state=CASE WHEN error_count+1>=? THEN 'open' "
+                    "ELSE circuit_state END, updated_at_ms=? "
+                    "WHERE adapter_id=? AND updated_at_ms=? AND lease_owner=? "
+                    "AND lease_until_ms>?",
+                    (
+                        open_after,
+                        updated_at,
+                        adapter_id,
+                        expected_updated_at_ms,
+                        lease_owner,
+                        now,
+                    ),
+                )
+                if changed.rowcount != 1:
+                    raise AdapterLeaseLost(
+                        "adapter poll failure lost authority before persistence"
                     )
                 self._conn.execute("COMMIT")
             except BaseException:
@@ -387,4 +458,4 @@ class AdapterCursorStore:
         return self.get(adapter_id)
 
 
-__all__ = ["AdapterCursor", "AdapterCursorStore", "CircuitState"]
+__all__ = ["AdapterCursor", "AdapterCursorStore", "AdapterLeaseLost", "CircuitState"]

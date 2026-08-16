@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from adminme.adapters.cursor_store import AdapterCursorStore
+from adminme.adapters.cursor_store import AdapterCursorStore, AdapterLeaseLost
 
 
 def test_cursor_lease_dedupe_circuit_and_restart(tmp_path: Path) -> None:
@@ -144,3 +144,61 @@ def test_release_preserves_a_newer_cross_process_circuit_transition(
     finally:
         recovery.close()
         poller.close()
+
+
+def test_expired_lease_cannot_commit_success_or_failure(tmp_path: Path) -> None:
+    store = AdapterCursorStore(tmp_path / "cursor.db")
+    try:
+        assert store.claim("calendar", "worker-a", ttl_ms=100, now_ms=1_000)
+        claimed = store.get("calendar")
+        with pytest.raises(AdapterLeaseLost, match="lease or circuit changed"):
+            store.complete_poll(
+                "calendar",
+                provider_watermark='{"version":1}',
+                expected_updated_at_ms=claimed.updated_at_ms,
+                lease_owner="worker-a",
+                now_ms=1_101,
+            )
+        with pytest.raises(AdapterLeaseLost, match="lost its lease"):
+            store.record_poll_error(
+                "calendar",
+                expected_updated_at_ms=claimed.updated_at_ms,
+                lease_owner="worker-a",
+                now_ms=1_101,
+            )
+        durable = store.get("calendar")
+        assert durable.provider_watermark is None
+        assert durable.error_count == 0
+        assert durable.circuit_state == "closed"
+    finally:
+        store.close()
+
+
+def test_poll_failure_is_fenced_to_holder_across_restart(tmp_path: Path) -> None:
+    path = tmp_path / "cursor.db"
+    winner = AdapterCursorStore(path)
+    try:
+        assert winner.claim("calendar", "worker-a", ttl_ms=30_000)
+        claimed = winner.get("calendar")
+    finally:
+        winner.close()
+
+    restarted = AdapterCursorStore(path)
+    try:
+        before = restarted.get("calendar")
+        with pytest.raises(AdapterLeaseLost, match="lost its lease"):
+            restarted.record_poll_error(
+                "calendar",
+                expected_updated_at_ms=claimed.updated_at_ms,
+                lease_owner="worker-b",
+            )
+        assert restarted.get("calendar") == before
+        failed = restarted.record_poll_error(
+            "calendar",
+            expected_updated_at_ms=claimed.updated_at_ms,
+            lease_owner="worker-a",
+        )
+        assert failed.error_count == 1
+        assert failed.circuit_state == "closed"
+    finally:
+        restarted.close()

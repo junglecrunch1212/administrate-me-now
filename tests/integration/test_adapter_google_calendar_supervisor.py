@@ -136,6 +136,20 @@ class _IntegrationEventLog:
         return f"event-{len(self.calls)}"
 
 
+class _IntegrationBarrierEventLog(_IntegrationEventLog):
+    def __init__(self, blocked_type: str) -> None:
+        super().__init__()
+        self.blocked_type = blocked_type
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        if envelope.type == self.blocked_type and not self.entered.is_set():
+            self.entered.set()
+            await self.release.wait()
+        return await super().write(envelope, **kwargs)
+
+
 def _make_integration_ctx(
     event_log: _IntegrationEventLog,
     *,
@@ -470,6 +484,172 @@ async def test_production_loader_supervisor_reports_running_after_poll_recovery(
     finally:
         await supervisor.stop()
         cursor_store.close()
+
+
+async def test_production_supervisor_shutdown_cancels_inflight_calendar_promptly(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "adapter_supervisor_port": 0,
+        "adapters": [
+            {
+                "id": "calendar-shutdown-fixture",
+                "kind": "calendaring-google-calendar",
+                "config": {
+                    "oauth_credentials_ref": "keychain://fixture/google-calendar",
+                    "calendar_id": "primary",
+                    "member_id": "member-fixture",
+                    "provider_account_id": "account-fixture",
+                    "poll_interval_s": 60,
+                },
+            }
+        ],
+    }
+    [adapter] = load_builtin_adapters(config, repository_root=REPO_ROOT)
+    adapter._credentials_resolver = lambda _ref: "{}"
+    service = _IntegrationCalendarService(
+        list_pages=[
+            {
+                "items": [
+                    {
+                        "id": "shutdown-inflight-event",
+                        "etag": "shutdown-revision",
+                        "summary": "Synthetic in-flight event",
+                        "start": {"dateTime": "2026-05-18T15:00:00Z"},
+                        "end": {"dateTime": "2026-05-18T16:00:00Z"},
+                    }
+                ],
+                "nextSyncToken": "must-not-advance",
+            }
+        ]
+    )
+    adapter._service_factory = lambda *_args: service
+    event_log = _IntegrationBarrierEventLog("calendar.event_added")
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    supervisor = AdapterSupervisor(
+        config_path=tmp_path / "unused.yaml",
+        config_data=config,
+        adapter_loader=lambda _config: [adapter],
+        ctx_factory=lambda: _make_integration_ctx(event_log, cursor_store=cursor_store),
+    )
+
+    await supervisor.start()
+    try:
+        await asyncio.wait_for(event_log.entered.wait(), timeout=1)
+        started = asyncio.get_running_loop().time()
+        await asyncio.wait_for(supervisor.stop(), timeout=0.5)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed < 0.5
+        assert elapsed < adapter._poll_interval_s / 10
+        durable = cursor_store.get("calendar-shutdown-fixture")
+        assert durable.lease_owner is None
+        assert durable.provider_watermark is None
+        assert durable.error_count == 0
+        assert durable.circuit_state == "closed"
+        assert [call for call in event_log.calls if call["type"] == "adapter.error"] == []
+        assert adapter.status().state == "stopped"
+        assert all(
+            managed.task is None or managed.task.done()
+            for managed in supervisor._managed.values()
+        )
+    finally:
+        if not supervisor._stopping:
+            await supervisor.stop()
+        cursor_store.close()
+
+
+async def test_two_production_supervisors_fence_calendar_lease_loser(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "adapter_supervisor_port": 0,
+        "adapters": [
+            {
+                "id": "calendar-contended-fixture",
+                "kind": "calendaring-google-calendar",
+                "config": {
+                    "oauth_credentials_ref": "keychain://fixture/google-calendar",
+                    "calendar_id": "primary",
+                    "member_id": "member-fixture",
+                    "provider_account_id": "account-fixture",
+                    "poll_interval_s": 60,
+                },
+            }
+        ],
+    }
+    [winner_adapter] = load_builtin_adapters(config, repository_root=REPO_ROOT)
+    [loser_adapter] = load_builtin_adapters(config, repository_root=REPO_ROOT)
+    winner_adapter._credentials_resolver = lambda _ref: "{}"
+    loser_adapter._credentials_resolver = lambda _ref: "{}"
+    winner_service = _IntegrationCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "winner-token"}]
+    )
+    loser_service = _IntegrationCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "loser-must-not-run"}]
+    )
+    winner_adapter._service_factory = lambda *_args: winner_service
+    loser_adapter._service_factory = lambda *_args: loser_service
+    winner_log = _IntegrationBarrierEventLog("calendar.source_observed")
+    loser_log = _IntegrationEventLog()
+    database = tmp_path / "calendar-cursors.sqlite3"
+    winner_store = AdapterCursorStore(database)
+    loser_store = AdapterCursorStore(database)
+    loser_claimed = asyncio.Event()
+    original_claim = loser_store.claim
+
+    def observed_claim(*args: Any, **kwargs: Any) -> bool:
+        result = original_claim(*args, **kwargs)
+        loser_claimed.set()
+        return result
+
+    loser_store.claim = observed_claim  # type: ignore[method-assign]
+    winner_supervisor = AdapterSupervisor(
+        config_path=tmp_path / "winner.yaml",
+        config_data=config,
+        adapter_loader=lambda _config: [winner_adapter],
+        ctx_factory=lambda: _make_integration_ctx(
+            winner_log, cursor_store=winner_store
+        ),
+    )
+    loser_supervisor = AdapterSupervisor(
+        config_path=tmp_path / "loser.yaml",
+        config_data=config,
+        adapter_loader=lambda _config: [loser_adapter],
+        ctx_factory=lambda: _make_integration_ctx(loser_log, cursor_store=loser_store),
+    )
+
+    await winner_supervisor.start()
+    try:
+        await asyncio.wait_for(winner_log.entered.wait(), timeout=1)
+        before = loser_store.get("calendar-contended-fixture")
+        await loser_supervisor.start()
+        await asyncio.wait_for(loser_claimed.wait(), timeout=1)
+        after = loser_store.get("calendar-contended-fixture")
+
+        assert after == before
+        assert loser_service.list_calls == []
+        assert [call for call in loser_log.calls if call["type"] == "adapter.error"] == []
+        assert loser_adapter.status().state != "running"
+        assert next(iter(loser_supervisor.inventory().values()))["state"] != "running"
+
+        winner_log.release.set()
+
+        async def winner_finished() -> None:
+            while winner_store.get("calendar-contended-fixture").provider_watermark is None:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(winner_finished(), timeout=1)
+        completed = winner_store.get("calendar-contended-fixture")
+        assert len(winner_service.list_calls) == 1
+        assert completed.error_count == 0
+        assert completed.circuit_state == "closed"
+    finally:
+        winner_log.release.set()
+        await loser_supervisor.stop()
+        await winner_supervisor.stop()
+        loser_store.close()
+        winner_store.close()
 
 
 async def test_open_calendar_circuit_blocks_provider_write_admission(

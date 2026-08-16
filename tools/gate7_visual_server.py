@@ -59,6 +59,8 @@ class _Gate7CalendarRequest:
                 ],
                 "nextSyncToken": "must-not-advance",
             }
+        if self._service.mode == "cancelled":
+            raise asyncio.CancelledError
         return {
             "items": [
                 {
@@ -249,7 +251,7 @@ def build_app():
     async def set_calendar_health(mode: str):
         """Drive only synthetic Calendar protocol states for rendered QA."""
 
-        if mode not in {"open", "malformed", "recovered"}:
+        if mode not in {"open", "malformed", "recovered", "contended", "cancelled"}:
             raise HTTPException(400, "unsupported Calendar fixture mode")
         runtime = app.state.runtime
         if runtime.adapters is None or runtime.adapter_cursor_store is None:
@@ -259,6 +261,68 @@ def build_app():
             raise HTTPException(503, "Calendar fixture adapter is unavailable")
         store = runtime.adapter_cursor_store
         cursor_id = "calendar-health-fixture"
+        if mode in {"contended", "cancelled"}:
+            # The configured authoritative runtime remains the surface source.
+            # Give it a long next schedule, then exercise a second production
+            # adapter instance against the same durable cursor.
+            managed.adapter._poll_interval_s = 60  # noqa: SLF001
+            deadline = time.monotonic() + 5
+            while store.get(cursor_id).lease_owner is not None:
+                if time.monotonic() >= deadline:
+                    raise HTTPException(503, "Calendar fixture lease did not settle")
+                await asyncio.sleep(0.01)
+            adapter_type = type(managed.adapter)
+            contender = adapter_type(
+                config=dict(managed.adapter._config),  # noqa: SLF001
+                max_poll_cycles=1,
+            )
+            contender.instance_name = cursor_id
+            contender._service = calendar_service  # noqa: SLF001
+            contender._poll_interval_s = 60  # noqa: SLF001
+            ctx = runtime.adapters._ctx_factory()  # noqa: SLF001
+            before_calls = calendar_service.list_calls
+            if mode == "contended":
+                holder = "gate7-authoritative-holder"
+                if not store.claim(cursor_id, holder, ttl_ms=30_000):
+                    raise HTTPException(503, "Calendar fixture could not hold lease")
+                before = store.get(cursor_id)
+                try:
+                    await contender._poll_loop(ctx=ctx)  # noqa: SLF001
+                    unchanged = store.get(cursor_id) == before
+                finally:
+                    store.release(cursor_id, holder)
+                provider_calls = calendar_service.list_calls - before_calls
+                cancelled = False
+            else:
+                before = store.get(cursor_id)
+                calendar_service.mode = "cancelled"
+                try:
+                    await contender._poll_loop(ctx=ctx)  # noqa: SLF001
+                except asyncio.CancelledError:
+                    cancelled = True
+                else:
+                    cancelled = False
+                finally:
+                    calendar_service.mode = "recovered"
+                after = store.get(cursor_id)
+                unchanged = (
+                    after.provider_watermark == before.provider_watermark
+                    and after.error_count == before.error_count
+                    and after.circuit_state == before.circuit_state
+                    and after.lease_owner is None
+                )
+                provider_calls = calendar_service.list_calls - before_calls
+            cursor = store.get(cursor_id)
+            return {
+                "mode": mode,
+                "state": managed.adapter.status().state,
+                "circuit_state": cursor.circuit_state,
+                "cursor_present": cursor.provider_watermark is not None,
+                "provider_calls": provider_calls,
+                "state_unchanged": unchanged,
+                "cancelled": cancelled,
+                "provider_writes": calendar_service.write_calls,
+            }
         if mode in {"open", "malformed"}:
             calendar_service.mode = "transient" if mode == "open" else "malformed"
             while store.get(cursor_id).error_count < 3:
@@ -269,6 +333,16 @@ def build_app():
             calendar_service.mode = "recovered"
             if store.get(cursor_id).circuit_state == "open":
                 store.begin_recovery(cursor_id)
+
+        if managed.adapter._poll_interval_s >= 60:  # noqa: SLF001
+            previous_cycles = managed.adapter._max_poll_cycles  # noqa: SLF001
+            managed.adapter._max_poll_cycles = 1  # noqa: SLF001
+            try:
+                await managed.adapter._poll_loop(  # noqa: SLF001
+                    ctx=runtime.adapters._ctx_factory()  # noqa: SLF001
+                )
+            finally:
+                managed.adapter._max_poll_cycles = previous_cycles  # noqa: SLF001
 
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:

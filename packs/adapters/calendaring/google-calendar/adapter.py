@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
+from adminme.adapters.cursor_store import AdapterLeaseLost
 from adminme.adapters.emission import write_adapter_event
 from adminme.adapters.credentials import resolve_json_credentials
 from adminme.lib.adapters import (
@@ -441,12 +442,35 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 return
             try:
                 await self._poll_once(ctx=ctx)
+            except asyncio.CancelledError:
+                raise
+            except CalendarLeaseContended:
+                # Coordination is not provider health. Keep the authoritative
+                # holder's durable and published state completely untouched.
+                pass
+            except CalendarLeaseLost:
+                # A concurrent authoritative transition wins. Reflect only
+                # that already-durable truth; never write a stale terminal.
+                if ctx.cursor_store is not None:
+                    durable = ctx.cursor_store.get(self._cursor_id())
+                    self._status.extra["durable_cursor"] = self._public_cursor(durable)
+                    if durable.circuit_state != "closed":
+                        self._status.state = "backoff"
+            except CalendarPollHandled as exc:
+                if exc.rethrow:
+                    raise
+                if exc.severity == "fatal":
+                    return
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind, retry_after_s = self._classify_calendar_error(exc)
                 self._status.state = "crashed" if severity == "fatal" else "backoff"
                 circuit_already_open = isinstance(exc, CalendarCircuitOpen)
                 cursor_failure: Exception | None = None
-                if ctx.cursor_store is not None and not circuit_already_open:
+                if (
+                    ctx.cursor_store is not None
+                    and not circuit_already_open
+                    and not self._config.get("member_id")
+                ):
                     try:
                         cursor = ctx.cursor_store.record_error(self._cursor_id())
                     except Exception as cursor_exc:  # durable health stays fail-closed
@@ -485,10 +509,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 else:
                     self._status.state = "running"
             cycles += 1
-            try:
-                await asyncio.sleep(self._poll_interval_s)
-            except asyncio.CancelledError:
+            if self._max_poll_cycles is not None and cycles >= self._max_poll_cycles:
                 return
+            await asyncio.sleep(self._poll_interval_s)
 
     async def _poll_once(self, *, ctx: AdapterContext) -> int:
         """Complete one provider -> facts -> cursor -> circuit transaction."""
@@ -510,6 +533,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         expected_updated_at_ms: int | None = None
         sync_tokens = dict(self._sync_tokens)
         initial_calendars = set(self._initial_sync_calendars)
+        claimed_cursor: Any = None
         if store is not None:
             current = store.get(cursor_id)
             self._status.extra["durable_cursor"] = self._public_cursor(current)
@@ -523,16 +547,17 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 ttl_ms=max(30_000, self._poll_interval_s * 2_000),
             )
             if not lease_claimed:
-                raise CalendarPollIncomplete(
+                raise CalendarLeaseContended(
                     "Google Calendar poll lease is held by another runtime"
                 )
-            claimed = store.get(cursor_id)
-            expected_updated_at_ms = claimed.updated_at_ms
-            sync_tokens, initial_calendars = self._decode_poll_watermark(
-                claimed.provider_watermark
-            )
+            claimed_cursor = store.get(cursor_id)
+            expected_updated_at_ms = claimed_cursor.updated_at_ms
 
         try:
+            if claimed_cursor is not None:
+                sync_tokens, initial_calendars = self._decode_poll_watermark(
+                    claimed_cursor.provider_watermark
+                )
             entries = (
                 self._fetch_calendar_entries()
                 if self._config.get("discover_calendars")
@@ -592,6 +617,66 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 self._sync_token = next_tokens.get(calendar_id)
                 self._initial_sync_complete = calendar_id in next_initial
             return emitted
+        except asyncio.CancelledError:
+            raise
+        except AdapterLeaseLost as exc:
+            raise CalendarLeaseLost(
+                "Google Calendar poll lost its lease or fencing identity"
+            ) from exc
+        except BaseException as exc:
+            if store is None or not lease_claimed or expected_updated_at_ms is None:
+                raise
+            severity, error_kind, retry_after_s = self._classify_calendar_error(exc)
+            try:
+                durable = store.record_poll_error(
+                    cursor_id,
+                    expected_updated_at_ms=expected_updated_at_ms,
+                    lease_owner=self._lease_owner,
+                )
+            except asyncio.CancelledError:
+                raise
+            except AdapterLeaseLost as lease_exc:
+                raise CalendarLeaseLost(
+                    "Google Calendar poll lost authority before failure persistence"
+                ) from lease_exc
+            except Exception as cursor_exc:
+                self._status.state = "crashed" if severity == "fatal" else "backoff"
+                self._status.extra["durable_cursor_error"] = type(cursor_exc).__name__
+                try:
+                    await self._emit_error(
+                        ctx=ctx,
+                        severity=severity,
+                        error_kind=error_kind,
+                        error_message=str(exc) or type(exc).__name__,
+                        retry_after_s=retry_after_s,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as emit_exc:
+                    raise CalendarPollHandled(
+                        "Google Calendar failure could not publish its audit",
+                        severity=severity,
+                        rethrow=True,
+                    ) from emit_exc
+                raise CalendarPollHandled(
+                    "Google Calendar failure could not update its durable circuit",
+                    severity=severity,
+                    rethrow=True,
+                ) from cursor_exc
+            else:
+                self._status.state = "crashed" if severity == "fatal" else "backoff"
+                self._status.extra.pop("durable_cursor_error", None)
+                self._status.extra["durable_cursor"] = self._public_cursor(durable)
+            await self._emit_error(
+                ctx=ctx,
+                severity=severity,
+                error_kind=error_kind,
+                error_message=str(exc) or type(exc).__name__,
+                retry_after_s=retry_after_s,
+            )
+            raise CalendarPollHandled(
+                str(exc) or type(exc).__name__, severity=severity
+            ) from exc
         finally:
             if store is not None and lease_claimed:
                 store.release(cursor_id, self._lease_owner)
@@ -1582,6 +1667,29 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
 
 class CalendarPollIncomplete(RuntimeError):
     """A provider cycle did not reach its durable terminal boundary."""
+
+
+class CalendarLeaseContended(CalendarPollIncomplete):
+    """Another runtime owns the authoritative adapter lease."""
+
+
+class CalendarLeaseLost(CalendarPollIncomplete):
+    """This poll no longer owns the lease/fencing version it acquired."""
+
+
+class CalendarPollHandled(CalendarPollIncomplete):
+    """The lease holder already published the governed terminal failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        severity: str,
+        rethrow: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.severity = severity
+        self.rethrow = rethrow
 
 
 class CalendarCircuitOpen(CalendarPollIncomplete):

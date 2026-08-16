@@ -31,6 +31,7 @@ event-schema layer — not the pack's internal manifest / validator surface
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,6 +98,39 @@ class _FakeEventLog:
 class _FailingEventLog(_FakeEventLog):
     async def write(self, envelope: Any, **_kwargs: Any) -> str:
         raise RuntimeError("event log unavailable")
+
+
+class _BarrierEventLog(_FakeEventLog):
+    """Pause one exact durable append without relying on timing."""
+
+    def __init__(self, blocked_type: str) -> None:
+        super().__init__()
+        self.blocked_type = blocked_type
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        if envelope.type == self.blocked_type and not self.entered.is_set():
+            self.entered.set()
+            await self.release.wait()
+        return await super().write(envelope, **kwargs)
+
+
+class _DedupeEventLog(_FakeEventLog):
+    """Model the encrypted log's idempotency-key behavior across restart."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._ids: dict[str, str] = {}
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        key = envelope.idempotency_key
+        if isinstance(key, str) and key in self._ids:
+            return self._ids[key]
+        event_id = await super().write(envelope, **kwargs)
+        if isinstance(key, str):
+            self._ids[key] = event_id
+        return event_id
 
 
 def _ctx(
@@ -691,6 +725,335 @@ def _make_event(
     if updated is not None:
         out["updated"] = updated
     return out
+
+
+async def test_rejected_head_lease_loser_is_coordination_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A losing runtime cannot manufacture provider or shared failure state."""
+
+    database = tmp_path / "calendar-contention.sqlite3"
+    winner_store = AdapterCursorStore(database)
+    loser_store = AdapterCursorStore(database)
+    winner_service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "winner-token"}]
+    )
+    loser_service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "loser-must-not-run"}]
+    )
+    winner = _make_member_adapter(
+        service=winner_service,
+        instance_name="calendar-shared-instance",
+    )
+    loser = _make_member_adapter(
+        service=loser_service,
+        instance_name="calendar-shared-instance",
+    )
+    loser._poll_interval_s = 60
+    winner_log = _BarrierEventLog("calendar.source_observed")
+    loser_log = _FakeEventLog()
+    winner_task = asyncio.create_task(
+        winner._poll_once(
+            ctx=_seed_ctx(winner, winner_log, cursor_store=winner_store)
+        )
+    )
+    try:
+        await winner_log.entered.wait()
+        before = loser_store.get("calendar-shared-instance")
+        scheduled_sleeps: list[float] = []
+
+        async def record_sleep(delay: float) -> None:
+            scheduled_sleeps.append(delay)
+
+        monkeypatch.setattr(_adapter_mod.asyncio, "sleep", record_sleep)
+        await loser._poll_loop(
+            ctx=_seed_ctx(loser, loser_log, cursor_store=loser_store)
+        )
+        after = loser_store.get("calendar-shared-instance")
+
+        assert loser_service.list_calls == []
+        assert after == before
+        assert [call for call in loser_log.calls if call["type"] == "adapter.error"] == []
+        assert scheduled_sleeps == []
+        assert loser.status().state != "running"
+    finally:
+        winner_log.release.set()
+        assert await winner_task == 0
+        assert len(winner_service.list_calls) == 1
+        completed = winner_store.get("calendar-shared-instance")
+        assert completed.provider_watermark is not None
+        assert completed.error_count == 0
+        assert completed.circuit_state == "closed"
+        winner_store.close()
+        loser_store.close()
+
+
+async def test_different_calendar_instances_poll_concurrently_without_contention(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "calendar-independent-instances.sqlite3"
+    first_store = AdapterCursorStore(database)
+    second_store = AdapterCursorStore(database)
+    first_service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "first-token"}]
+    )
+    second_service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "second-token"}]
+    )
+    first = _make_member_adapter(
+        service=first_service,
+        instance_name="calendar-instance-a",
+    )
+    second = _make_member_adapter(
+        service=second_service,
+        instance_name="calendar-instance-b",
+    )
+    first_log = _BarrierEventLog("calendar.source_observed")
+    first_task = asyncio.create_task(
+        first._poll_once(
+            ctx=_seed_ctx(first, first_log, cursor_store=first_store)
+        )
+    )
+    try:
+        await first_log.entered.wait()
+        assert (
+            await second._poll_once(
+                ctx=_seed_ctx(second, _FakeEventLog(), cursor_store=second_store)
+            )
+            == 0
+        )
+        assert len(second_service.list_calls) == 1
+        assert second_store.get("calendar-instance-b").provider_watermark is not None
+        assert first_store.get("calendar-instance-a").lease_owner == first._lease_owner
+    finally:
+        first_log.release.set()
+        assert await first_task == 0
+        assert len(first_service.list_calls) == 1
+        assert first_store.get("calendar-instance-a").provider_watermark is not None
+        first_store.close()
+        second_store.close()
+
+
+async def test_rejected_head_append_cancellation_propagates_without_failure(
+    tmp_path: Path,
+) -> None:
+    """Cancellation during an in-flight fact append remains cancellation."""
+
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cancellation.sqlite3")
+    service = _FakeCalendarService(
+        list_pages=[
+            {
+                "items": [_make_event(event_id="cancelled-after-provider")],
+                "nextSyncToken": "must-not-advance",
+            }
+        ]
+    )
+    adapter = _make_member_adapter(
+        service=service,
+        instance_name="calendar-cancelled-append",
+        max_poll_cycles=None,
+    )
+    adapter._poll_interval_s = 60
+    event_log = _BarrierEventLog("calendar.event_added")
+    task = asyncio.create_task(
+        adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+    )
+    try:
+        await event_log.entered.wait()
+        task.cancel()
+        for _ in range(8):
+            if task.done():
+                break
+            await asyncio.sleep(0)
+
+        assert task.done()
+        assert task.cancelled()
+        durable = cursor_store.get(adapter.instance_name)
+        assert durable.lease_owner is None
+        assert durable.provider_watermark is None
+        assert durable.error_count == 0
+        assert durable.circuit_state == "closed"
+        assert adapter.status().state not in {"backoff", "running"}
+        assert [call for call in event_log.calls if call["type"] == "adapter.error"] == []
+    finally:
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        cursor_store.close()
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "provider_request",
+        "pagination",
+        "fact_validation",
+        "cursor_persistence",
+        "circuit_persistence",
+    ],
+)
+async def test_poll_phase_cancellation_is_never_provider_failure(
+    phase: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor_store = AdapterCursorStore(tmp_path / f"calendar-cancel-{phase}.sqlite3")
+    event = _make_event(event_id=f"cancel-{phase}")
+    pages: list[dict[str, Any] | BaseException] = [
+        {"items": [event], "nextSyncToken": "must-not-advance"}
+    ]
+    if phase == "provider_request":
+        pages = [asyncio.CancelledError()]
+    elif phase == "pagination":
+        pages = [
+            {"items": [event], "nextPageToken": "page-2"},
+            asyncio.CancelledError(),
+        ]
+    elif phase == "circuit_persistence":
+        pages = [ConnectionResetError("provider failed before cancellation")]
+    adapter = _make_member_adapter(
+        service=_FakeCalendarService(list_pages=pages),
+        instance_name=f"calendar-cancel-{phase}",
+    )
+    event_log = _FakeEventLog()
+
+    if phase == "fact_validation":
+
+        def cancel_validation(*_args: Any, **_kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(adapter, "_validate_provider_event", cancel_validation)
+    elif phase == "cursor_persistence":
+
+        def cancel_cursor(*_args: Any, **_kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(cursor_store, "complete_poll", cancel_cursor)
+    elif phase == "circuit_persistence":
+
+        def cancel_circuit(*_args: Any, **_kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(cursor_store, "record_poll_error", cancel_circuit)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await adapter._poll_loop(
+                ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+            )
+        durable = cursor_store.get(adapter.instance_name)
+        assert durable.lease_owner is None
+        assert durable.provider_watermark is None
+        assert durable.error_count == 0
+        assert durable.circuit_state == "closed"
+        assert adapter._sync_tokens == {}
+        assert adapter.status().state not in {"backoff", "running"}
+        assert [call for call in event_log.calls if call["type"] == "adapter.error"] == []
+    finally:
+        cursor_store.close()
+
+
+async def test_cancellation_after_durable_fact_replays_without_duplicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "calendar-cancel-replay.sqlite3"
+    cursor_store = AdapterCursorStore(path)
+    event = _make_event(event_id="durable-before-cancel", updated="2026-05-18T14:00:00Z")
+    first_service = _FakeCalendarService(
+        list_pages=[{"items": [event], "nextSyncToken": "replay-token"}]
+    )
+    first = _make_member_adapter(
+        service=first_service,
+        instance_name="calendar-cancel-replay",
+    )
+    event_log = _DedupeEventLog()
+
+    def cancel_cursor(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(cursor_store, "complete_poll", cancel_cursor)
+    with pytest.raises(asyncio.CancelledError):
+        await first._poll_loop(
+            ctx=_seed_ctx(first, event_log, cursor_store=cursor_store)
+        )
+    assert (
+        len([call for call in event_log.calls if call["type"] == "calendar.event_added"])
+        == 1
+    )
+    assert cursor_store.get("calendar-cancel-replay").provider_watermark is None
+
+    monkeypatch.undo()
+    restarted = _make_member_adapter(
+        service=_FakeCalendarService(
+            list_pages=[{"items": [event], "nextSyncToken": "replay-token"}]
+        ),
+        instance_name="calendar-cancel-replay",
+    )
+    try:
+        await restarted._poll_loop(
+            ctx=_seed_ctx(restarted, event_log, cursor_store=cursor_store)
+        )
+        assert (
+            len(
+                [call for call in event_log.calls if call["type"] == "calendar.event_added"]
+            )
+            == 1
+        )
+        durable = cursor_store.get("calendar-cancel-replay")
+        assert durable.provider_watermark is not None
+        assert durable.error_count == 0
+        assert durable.circuit_state == "closed"
+    finally:
+        cursor_store.close()
+
+
+async def test_poll_schedule_cancellation_propagates_without_orphan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cancel-schedule.sqlite3")
+    adapter = _make_member_adapter(
+        service=_FakeCalendarService(
+            list_pages=[{"items": [], "nextSyncToken": "scheduled-token"}]
+        ),
+        instance_name="calendar-cancel-schedule",
+        max_poll_cycles=None,
+    )
+    adapter._poll_interval_s = 60
+    sleep_entered = asyncio.Event()
+    never_release = asyncio.Event()
+
+    async def blocked_schedule(_delay: float) -> None:
+        sleep_entered.set()
+        await never_release.wait()
+
+    monkeypatch.setattr(_adapter_mod.asyncio, "sleep", blocked_schedule)
+    task = asyncio.create_task(
+        adapter._poll_loop(
+            ctx=_seed_ctx(adapter, _FakeEventLog(), cursor_store=cursor_store)
+        )
+    )
+    try:
+        await sleep_entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+        durable = cursor_store.get(adapter.instance_name)
+        assert durable.lease_owner is None
+        assert durable.error_count == 0
+        assert durable.circuit_state == "closed"
+    finally:
+        if not task.done():
+            task.cancel()
+        cursor_store.close()
 
 
 async def test_poll_once_emits_calendar_event_added_on_first_observation() -> None:
@@ -1423,7 +1786,7 @@ async def test_circuit_persistence_failure_after_provider_success_is_audited(
         raise RuntimeError("circuit persistence unavailable")
 
     monkeypatch.setattr(cursor_store, "complete_poll", fail_complete_poll)
-    monkeypatch.setattr(cursor_store, "record_error", fail_record_error)
+    monkeypatch.setattr(cursor_store, "record_poll_error", fail_record_error)
     try:
         with pytest.raises(CalendarPollIncomplete, match="durable circuit"):
             await adapter._poll_loop(

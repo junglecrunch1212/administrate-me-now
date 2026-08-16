@@ -69,6 +69,29 @@ JOURNEY_CHECKS = (
     ),
 )
 
+CALENDAR_JOURNEY_CHECK = CheckSpec(
+    "calendar-production-composition",
+    "journey",
+    "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest "
+    "-p no:cacheprovider -q "
+    "tests/integration/test_adapter_google_calendar_supervisor.py "
+    "tests/integration/test_runtime_application.py::test_calendar_real_protocol_recovery_reaches_runtime_and_member_health "
+    "tests/integration/test_runtime_application.py::test_calendar_malformed_protocol_fails_readiness_and_member_health "
+    "tests/integration/test_runtime_application.py::test_calendar_restart_replays_same_provider_page_without_duplicate_facts "
+    "tests/acceptance/test_macos_bootstrap_operations.py::test_doctor_fails_when_configured_calendar_adapter_is_not_running",
+)
+
+CALENDAR_JOURNEY_PREFIXES = (
+    "adminme/adapters/cursor_store.py",
+    "packs/adapters/calendaring/google-calendar/",
+    "tests/unit/adapters/calendaring/test_google_calendar.py",
+    "tests/unit/adapters/test_cursor_store_gate6.py",
+    "tests/integration/test_adapter_google_calendar_supervisor.py",
+    "tests/integration/test_runtime_application.py",
+    "tools/gate7_visual_server.py",
+    "tools/console-reference-harness/run-gate7.mjs",
+)
+
 BREADTH_CHECKS = (
     CheckSpec("poetry-sync", "breadth", "poetry sync --with dev"),
     CheckSpec("root-suite", "breadth", "PYTHONPATH=bridge poetry run pytest -q"),
@@ -114,6 +137,19 @@ RELEASE_CHECKS = (
 )
 
 PATH_RULES: tuple[tuple[tuple[str, ...], tuple[CheckSpec, ...]], ...] = (
+    (
+        CALENDAR_JOURNEY_PREFIXES,
+        (
+            CheckSpec(
+                "calendar-lease-cancellation-focused",
+                "focused",
+                "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest "
+                "-p no:cacheprovider -q "
+                "tests/unit/adapters/calendaring/test_google_calendar.py "
+                "tests/unit/adapters/test_cursor_store_gate6.py",
+            ),
+        ),
+    ),
     (
         ("scripts/harness/", "schemas/harness/", ".agents/skills/adminme-"),
         (
@@ -182,13 +218,24 @@ def focused_checks(changed_paths: list[str]) -> list[CheckSpec]:
     return list(selected.values())
 
 
+def journey_checks(changed_paths: list[str]) -> list[CheckSpec]:
+    selected = {check.check_id: check for check in JOURNEY_CHECKS}
+    if any(
+        path == prefix.rstrip("/") or path.startswith(prefix)
+        for path in changed_paths
+        for prefix in CALENDAR_JOURNEY_PREFIXES
+    ):
+        selected[CALENDAR_JOURNEY_CHECK.check_id] = CALENDAR_JOURNEY_CHECK
+    return list(selected.values())
+
+
 def tier_checks(tier: str, changed_paths: list[str] | None = None) -> list[CheckSpec]:
     if tier == "static":
         return list(STATIC_CHECKS)
     if tier == "focused":
         return focused_checks(changed_paths or [])
     if tier == "journey":
-        return list(JOURNEY_CHECKS)
+        return journey_checks(changed_paths or [])
     if tier == "breadth":
         return list(BREADTH_CHECKS)
     if tier == "release":
@@ -207,10 +254,25 @@ def run_check(
     ensure_ephemeral_run_dir(run_dir, root)
     logs = run_dir / "check-logs"
     logs.mkdir(exist_ok=True)
-    receipt_path = run_dir / "check-receipts" / f"{spec.tier}-{spec.check_id}.json"
-    receipt_path.parent.mkdir(exist_ok=True)
-    receipt_path.unlink(missing_ok=True)
+    verification = load_json(run_dir / "verification-report.json")
+    prior_attempts = [
+        attempt
+        for attempt in verification.get("attempts", [])
+        if attempt["tier"] == spec.tier and attempt["check_id"] == spec.check_id
+    ]
+    attempt_order = len(prior_attempts) + 1
     expected_binding = _assert_current_candidate_binding(root, run_dir, "before")
+    attempt_id = (
+        f"{spec.tier}-{spec.check_id}-{attempt_order:04d}-"
+        f"{expected_binding['diff_sha256'][:12]}"
+    )
+    receipt_path = run_dir / "check-receipts" / f"{attempt_id}.json"
+    receipt_path.parent.mkdir(exist_ok=True)
+    log_path = logs / f"{attempt_id}.log"
+    if receipt_path.exists() or log_path.exists():
+        raise HarnessError(
+            f"immutable check attempt path already exists: {attempt_id}"
+        )
     started = utc_now()
     begin = time.monotonic()
     process = subprocess.run(
@@ -229,12 +291,12 @@ def run_check(
         "after",
         expected=expected_binding,
     )
-    log_path = logs / f"{spec.tier}-{spec.check_id}.log"
+    finished = utc_now()
     log_path.write_text(
         "\n".join(
             (
                 f"started_at={started}",
-                f"finished_at={utc_now()}",
+                f"finished_at={finished}",
                 f"command={spec.command}",
                 f"toolchain={json.dumps(toolchain, sort_keys=True) if toolchain else 'not-recorded'}",
                 f"exit_code={process.returncode}",
@@ -258,16 +320,31 @@ def run_check(
     receipt_value = {
         "schema_version": 1,
         "binding": expected_binding,
+        "attempt": {
+            "attempt_id": attempt_id,
+            "order": attempt_order,
+            "started_at": started,
+            "finished_at": finished,
+        },
         "check": check,
         "log": {
             "path": log_path.relative_to(run_dir).as_posix(),
             "sha256": sha256_file(log_path),
+            "mode": f"{log_path.stat().st_mode & 0o7777:04o}",
         },
     }
     if toolchain is not None:
         receipt_value["toolchain"] = toolchain
     write_json(receipt_path, receipt_value)
-    return {**check, "receipt": receipt_path.relative_to(run_dir).as_posix()}
+    return {
+        "attempt_id": attempt_id,
+        "attempt_order": attempt_order,
+        "started_at": started,
+        "finished_at": finished,
+        **check,
+        "receipt": receipt_path.relative_to(run_dir).as_posix(),
+        "receipt_sha256": sha256_file(receipt_path),
+    }
 
 
 def run_tier(

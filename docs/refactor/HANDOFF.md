@@ -41,6 +41,29 @@ the candidate. A new immutable PR head, exact-bound Harness receipts, hosted
 checks, and independent review remain required before any G-001 authority could
 be considered.
 
+Its replacement head `b0efa50f92eb7a96b8a01510adbaab675ba164b9`
+was then rejected for three bounded remaining defects. A runtime that lost the
+Calendar lease treated contention as a provider failure and could mutate the
+authoritative circuit. `CancelledError` could be swallowed into durable error
+history and a poll-interval shutdown delay. Outcome Harness reruns reused a
+log path, so a retained failure receipt could point at later passing bytes and
+remain outside canonical validation. The remediation makes contention and
+stale-holder loss mutation-free coordination, propagates cancellation through
+the production supervisor with finally-safe lease release, and records every
+same-binding check attempt in an ordered canonical history with a unique
+receipt, immutable log, digest, mode, binding, timing, command, exit, and
+status. Latest attempts determine current status without rewriting first-pass
+truth; any binding change invalidates the whole prior history.
+
+Deterministic barriers prove one same-instance winner, a prompt mutation-free
+loser, fenced expired/stale holders, independent instances, genuine winner
+failure, cancellation across every poll phase, partial-durable replay, and
+bounded supervisor shutdown. The reviewed Harness journey selection now
+requires the real Calendar loader/supervisor, runtime readiness, Doctor, and
+write-admission composition in addition to member navigation and desktop/narrow
+Gate 7 semantics. A fresh immutable head and all final exact-bound local,
+browser, macOS, hosted, and independent-review evidence remain pending.
+
 ## 2026-08-15 Google Calendar current-health diagnosis
 
 Current `origin/main` is merge `88bd571`; the active family release and both

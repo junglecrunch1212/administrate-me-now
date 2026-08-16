@@ -19,6 +19,7 @@ from .core import (
     new_run_directory,
     repository_state,
     render_owner_handoff,
+    sha256_file,
     utc_now,
     validate_artifact_value,
     validate_run,
@@ -284,6 +285,7 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
             "finished_at": utc_now(),
             "changed_files": task_paths,
             "checks": [],
+            "attempts": [],
             "browser": {
                 "status": "UNDETERMINED",
                 "output_directory": None,
@@ -304,7 +306,7 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
                 "applicable_journeys": 1,
                 "passed_journeys": 0,
                 "false_green_count": 0,
-                "first_pass_focused": "PASS",
+                "first_pass_focused": "UNDETERMINED",
                 "autonomous_recovery_rate": "UNDETERMINED",
             },
             "unresolved": [
@@ -403,11 +405,19 @@ def _invalidate_stale_evidence(run_dir: Path) -> None:
 
     verification_path = run_dir / "verification-report.json"
     verification: dict[str, Any] = json.loads(verification_path.read_text("utf-8"))
+    invalidated_root = run_dir / "invalidated-attempts"
+    for name in ("check-receipts", "check-logs"):
+        current = run_dir / name
+        if current.is_dir() and any(current.iterdir()):
+            invalidated_root.mkdir(exist_ok=True)
+            index = len(list(invalidated_root.iterdir())) + 1
+            current.rename(invalidated_root / f"{index:04d}-{name}")
     verification.update(
         {
             "status": "UNDETERMINED",
             "finished_at": utc_now(),
             "checks": [],
+            "attempts": [],
             "browser": {
                 "status": "UNDETERMINED",
                 "output_directory": None,
@@ -427,6 +437,7 @@ def _invalidate_stale_evidence(run_dir: Path) -> None:
         }
     )
     verification["metrics"]["passed_journeys"] = 0
+    verification["metrics"]["first_pass_focused"] = "UNDETERMINED"
     verification["metrics"]["autonomous_recovery_rate"] = "UNDETERMINED"
     write_json(verification_path, verification)
 
@@ -460,11 +471,85 @@ def _invalidate_stale_evidence(run_dir: Path) -> None:
     _write_owner_handoff(run_dir, owner)
 
 
+_CHECK_FIELDS = (
+    "check_id",
+    "tier",
+    "command",
+    "status",
+    "exit_code",
+    "duration_seconds",
+    "evidence_class",
+)
+
+
+def _check_summary(attempt: dict[str, Any]) -> dict[str, Any]:
+    return {**{field: attempt[field] for field in _CHECK_FIELDS}, "receipt": attempt["receipt"]}
+
+
+def _canonical_attempt(
+    run_dir: Path,
+    candidate: dict[str, Any],
+    existing_attempts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Normalize legacy fixture receipts while preserving real attempt identity."""
+
+    key = (candidate["tier"], candidate["check_id"])
+    order = 1 + sum(
+        (attempt["tier"], attempt["check_id"]) == key
+        for attempt in existing_attempts
+    )
+    receipt_path = run_dir / candidate["receipt"]
+    receipt = load_json(receipt_path)
+    if "attempt_id" in candidate:
+        if candidate.get("attempt_order") != order:
+            raise HarnessError(
+                f"check attempt order is not append-only: {candidate['attempt_id']}"
+            )
+        attempt = dict(candidate)
+    else:
+        current_binding = load_json(run_dir / "outcome-contract.json")["binding"]
+        attempt_id = (
+            f"{candidate['tier']}-{candidate['check_id']}-{order:04d}-"
+            f"{current_binding['diff_sha256'][:12]}"
+        )
+        timestamp = utc_now()
+        log = receipt.get("log")
+        if not isinstance(log, dict):
+            raise HarnessError(
+                f"check receipt lacks a hashed log: {candidate['receipt']}"
+            )
+        log_path = run_dir / str(log.get("path", ""))
+        log["mode"] = f"{log_path.stat().st_mode & 0o7777:04o}"
+        receipt["attempt"] = {
+            "attempt_id": attempt_id,
+            "order": order,
+            "started_at": timestamp,
+            "finished_at": timestamp,
+        }
+        write_json(receipt_path, receipt)
+        attempt = {
+            "attempt_id": attempt_id,
+            "attempt_order": order,
+            "started_at": timestamp,
+            "finished_at": timestamp,
+            **candidate,
+            "receipt_sha256": sha256_file(receipt_path),
+        }
+    if sha256_file(receipt_path) != attempt.get("receipt_sha256"):
+        raise HarnessError(f"check receipt hash mismatch: {candidate['receipt']}")
+    return attempt
+
+
 def record_checks(run_dir: Path, receipts: list[dict[str, Any]]) -> None:
     path = run_dir / "verification-report.json"
     data: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    attempts = list(data.get("attempts", []))
     existing = {(check["tier"], check["check_id"]): check for check in data["checks"]}
-    existing.update({(check["tier"], check["check_id"]): check for check in receipts})
+    for candidate in receipts:
+        attempt = _canonical_attempt(run_dir, candidate, attempts)
+        attempts.append(attempt)
+        existing[(attempt["tier"], attempt["check_id"])] = _check_summary(attempt)
+    data["attempts"] = attempts
     data["checks"] = list(existing.values())
     data["finished_at"] = utc_now()
     write_json(path, data)
@@ -546,7 +631,11 @@ def _reconcile_verification(run_dir: Path) -> None:
     data["status"] = (
         "FAIL" if has_failure else "PASS" if not data["unresolved"] else "UNDETERMINED"
     )
-    focused = [check["status"] for check in checks if check["tier"] == "focused"]
+    focused = [
+        attempt["status"]
+        for attempt in data.get("attempts", [])
+        if attempt["tier"] == "focused" and attempt["attempt_order"] == 1
+    ]
     data["metrics"]["first_pass_focused"] = (
         "FAIL" if "FAIL" in focused else "PASS" if "PASS" in focused else "UNDETERMINED"
     )
