@@ -259,7 +259,9 @@ jobs:
   g002-deterministic-consistency:
     name: g002-deterministic-consistency
     needs: deterministic-consistency
-    if: always()
+    if: >-
+      always() &&
+      vars.ADMINME_CODEX_REVIEW_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Bind the required check to the complete reusable suite
@@ -282,6 +284,7 @@ jobs:
       - credential-free-macos-rehearsal
     if: >-
       always() &&
+      vars.ADMINME_CODEX_REVIEW_ENABLED == 'true' &&
       needs.exact-head-review.outputs.macos_required == 'true'
     runs-on: ubuntu-latest
     steps:

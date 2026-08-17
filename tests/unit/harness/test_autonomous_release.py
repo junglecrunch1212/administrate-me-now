@@ -352,10 +352,16 @@ def test_required_g002_checks_bind_exact_head_reusable_suites() -> None:
     assert jobs["g002-deterministic-consistency"]["needs"] == (
         "deterministic-consistency"
     )
+    assert "ADMINME_CODEX_REVIEW_ENABLED" in jobs[
+        "g002-deterministic-consistency"
+    ]["if"]
     assert jobs["g002-credential-free-rehearsal"]["needs"] == [
         "exact-head-review",
         "credential-free-macos-rehearsal",
     ]
+    assert "ADMINME_CODEX_REVIEW_ENABLED" in jobs[
+        "g002-credential-free-rehearsal"
+    ]["if"]
     for name in (
         "administrateme-consistency.yml",
         "macos-bootstrap.yml",
