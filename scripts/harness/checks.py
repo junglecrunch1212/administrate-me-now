@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import time
+import uuid
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,12 +62,54 @@ STATIC_CHECKS = (
     ),
 )
 
-JOURNEY_CHECKS = (
+NAVIGATION_JOURNEY_CHECKS = (
     CheckSpec(
         "navigation-production-composition",
         "journey",
         "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest -p no:cacheprovider -q tests/integration/test_harness_member_navigation.py tests/acceptance/test_gate7_household_experience.py::test_ten_surfaces_three_modes_and_independent_route_denial",
     ),
+)
+
+G002_JOURNEY_CHECKS = (
+    CheckSpec(
+        "g002-guarded-release-production-composition",
+        "journey",
+        "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest -p no:cacheprovider -q tests/unit/harness/test_autonomous_release.py tests/unit/bootstrap/test_g002_bounded_repair.py tests/acceptance/test_macos_bootstrap_operations.py::test_g002_observation_release_revalidates_healthy_baseline_after_backup tests/acceptance/test_macos_bootstrap_operations.py::test_g002_bounded_repair_revalidates_after_backup_and_accepts_monotonic_settlement tests/acceptance/test_macos_bootstrap_operations.py::test_g002_bounded_repair_rolls_back_on_non_monotonic_settlement",
+    ),
+)
+
+DEFAULT_JOURNEY_CHECKS = (
+    CheckSpec(
+        "runtime-spine-production-composition",
+        "journey",
+        "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest -p no:cacheprovider -q tests/acceptance/test_runtime_spine.py::test_real_process_boot_ingest_diagnostics_and_shutdown",
+    ),
+)
+
+NAVIGATION_JOURNEY_PATHS = (
+    "adminme/products/member/navigation.py",
+    "adminme/products/member/surfaces.py",
+    "adminme/products/member/main.py",
+    "tests/unit/harness/test_member_navigation_characterization.py",
+    "tests/integration/test_harness_member_navigation.py",
+    "tests/acceptance/test_gate7_household_experience.py",
+)
+
+G002_JOURNEY_PATHS = (
+    "AGENTS.md",
+    ".agents/skills/adminme-",
+    ".github/codex/prompts/g002-",
+    ".github/workflows/administrateme-autonomous-review.yml",
+    "bootstrap/g002_bounded_repair.py",
+    "bootstrap/cli.py",
+    "bootstrap/update.sh",
+    "bootstrap/upgrade.py",
+    "docs/refactor/ADR-0011-",
+    "schemas/harness/",
+    "scripts/harness/",
+    "tests/unit/bootstrap/test_g002_bounded_repair.py",
+    "tests/unit/harness/",
+    "tests/acceptance/test_macos_bootstrap_operations.py",
 )
 
 BREADTH_CHECKS = (
@@ -182,13 +225,26 @@ def focused_checks(changed_paths: list[str]) -> list[CheckSpec]:
     return list(selected.values())
 
 
+def _path_matches_any(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in prefixes)
+
+
+def journey_checks(changed_paths: list[str]) -> list[CheckSpec]:
+    selected: dict[str, CheckSpec] = {}
+    if any(_path_matches_any(path, NAVIGATION_JOURNEY_PATHS) for path in changed_paths):
+        selected.update({check.check_id: check for check in NAVIGATION_JOURNEY_CHECKS})
+    if any(_path_matches_any(path, G002_JOURNEY_PATHS) for path in changed_paths):
+        selected.update({check.check_id: check for check in G002_JOURNEY_CHECKS})
+    return list(selected.values()) or list(DEFAULT_JOURNEY_CHECKS)
+
+
 def tier_checks(tier: str, changed_paths: list[str] | None = None) -> list[CheckSpec]:
     if tier == "static":
         return list(STATIC_CHECKS)
     if tier == "focused":
         return focused_checks(changed_paths or [])
     if tier == "journey":
-        return list(JOURNEY_CHECKS)
+        return journey_checks(changed_paths or [])
     if tier == "breadth":
         return list(BREADTH_CHECKS)
     if tier == "release":
@@ -205,14 +261,12 @@ def run_check(
     toolchain: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     ensure_ephemeral_run_dir(run_dir, root)
-    logs = run_dir / "check-logs"
-    logs.mkdir(exist_ok=True)
-    receipt_path = run_dir / "check-receipts" / f"{spec.tier}-{spec.check_id}.json"
-    receipt_path.parent.mkdir(exist_ok=True)
-    receipt_path.unlink(missing_ok=True)
     expected_binding = _assert_current_candidate_binding(root, run_dir, "before")
     started = utc_now()
+    attempt_id = f"{time.time_ns()}-{uuid.uuid4().hex}"
     begin = time.monotonic()
+    execution_environment = dict(environment or {})
+    execution_environment["ADMINME_ACTIVE_HARNESS_RUN"] = str(run_dir.resolve())
     process = subprocess.run(
         spec.command,
         cwd=root,
@@ -220,7 +274,7 @@ def run_check(
         executable="/bin/bash",
         capture_output=True,
         text=True,
-        env=clean_environment(environment),
+        env=clean_environment(execution_environment),
     )
     duration = time.monotonic() - begin
     _assert_current_candidate_binding(
@@ -229,7 +283,12 @@ def run_check(
         "after",
         expected=expected_binding,
     )
-    log_path = logs / f"{spec.tier}-{spec.check_id}.log"
+    attempt_dir = (
+        run_dir / "check-attempts" / f"{spec.tier}-{spec.check_id}" / attempt_id
+    )
+    attempt_dir.mkdir(parents=True, exist_ok=False)
+    log_path = attempt_dir / "check.log"
+    receipt_path = attempt_dir / "receipt.json"
     log_path.write_text(
         "\n".join(
             (
@@ -279,6 +338,14 @@ def run_tier(
     environment: dict[str, str] | None = None,
     node_bin: str | None = None,
 ) -> list[dict[str, Any]]:
+    if changed_paths is None:
+        verification = load_json(run_dir / "verification-report.json")
+        selected = verification.get("changed_files")
+        if not isinstance(selected, list) or not all(
+            isinstance(path, str) for path in selected
+        ):
+            raise HarnessError("run lacks a valid bound changed-path manifest")
+        changed_paths = selected
     receipts: list[dict[str, Any]] = []
     node_environment: dict[str, str] | None = None
     node_toolchain: dict[str, str] | None = None

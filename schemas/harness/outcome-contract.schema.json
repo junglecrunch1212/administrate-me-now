@@ -13,6 +13,7 @@
     "visible_non_goals",
     "acceptance_cases",
     "privacy",
+    "release_impacts",
     "external_or_irreversible",
     "owner_questions"
   ],
@@ -77,6 +78,32 @@
         "notes": {"type": "string"}
       }
     },
+    "release_impacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_writes_enabled",
+        "runtime_or_dependency_migration",
+        "provider_enrollment",
+        "credentials_keychain_or_permissions",
+        "privacy_or_authorization_change",
+        "destructive_data_change",
+        "observation_mode_change",
+        "release_control_change",
+        "member_visible_behavior"
+      ],
+      "properties": {
+        "provider_writes_enabled": {"$ref": "#/$defs/release_impact"},
+        "runtime_or_dependency_migration": {"$ref": "#/$defs/release_impact"},
+        "provider_enrollment": {"$ref": "#/$defs/release_impact"},
+        "credentials_keychain_or_permissions": {"$ref": "#/$defs/release_impact"},
+        "privacy_or_authorization_change": {"$ref": "#/$defs/release_impact"},
+        "destructive_data_change": {"$ref": "#/$defs/release_impact"},
+        "observation_mode_change": {"$ref": "#/$defs/release_impact"},
+        "release_control_change": {"$ref": "#/$defs/release_impact"},
+        "member_visible_behavior": {"$ref": "#/$defs/release_impact"}
+      }
+    },
     "external_or_irreversible": {
       "type": "object",
       "additionalProperties": false,
@@ -90,6 +117,10 @@
     "owner_questions": {"type": "array", "maxItems": 1, "items": {"type": "string", "minLength": 1}}
   },
   "$defs": {
+    "release_impact": {
+      "type": "string",
+      "enum": ["YES", "NO", "UNDETERMINED"]
+    },
     "binding": {
       "type": "object",
       "additionalProperties": false,

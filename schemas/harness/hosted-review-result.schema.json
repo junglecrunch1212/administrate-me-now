@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["head_sha", "base_sha", "review_completed_at", "conclusion", "scope", "findings", "unresolved_evidence"],
+  "properties": {
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "review_completed_at": {"type": "string", "format": "date-time"},
+    "conclusion": {"type": "string", "enum": ["APPROVE", "CHANGES_REQUIRED", "UNDETERMINED"]},
+    "scope": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {"type": "string", "enum": ["correctness", "privacy", "replay", "determinism", "surface", "failure_paths", "completeness", "release_boundary"]}
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "severity", "category", "path", "line", "summary", "evidence", "actionable"],
+        "properties": {
+          "finding_id": {"type": "string", "pattern": "^AR-[0-9]{3}$"},
+          "severity": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+          "category": {"type": "string", "enum": ["correctness", "privacy", "replay", "determinism", "surface", "failure_paths", "completeness", "release_boundary"]},
+          "path": {"type": "string", "minLength": 1},
+          "line": {"type": "integer", "minimum": 1},
+          "summary": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string", "minLength": 1},
+          "actionable": {"type": "boolean"}
+        }
+      }
+    },
+    "unresolved_evidence": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme.local/schemas/harness/g002-live-browser-receipt-v1.json",
+  "title": "AdministrateMe G-002 authenticated live browser receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "merge_commit",
+    "status",
+    "desktop_assertions",
+    "narrow_assertions",
+    "semantic_assertions",
+    "console_errors",
+    "page_errors",
+    "request_failures",
+    "routes",
+    "authorization",
+    "modes",
+    "provider_effects_delta",
+    "observed_at"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "merge_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "status": {"type": "string", "const": "PASS"},
+    "desktop_assertions": {"type": "integer", "minimum": 1},
+    "narrow_assertions": {"type": "integer", "minimum": 1},
+    "semantic_assertions": {"type": "integer", "minimum": 1},
+    "console_errors": {"type": "integer", "const": 0},
+    "page_errors": {"type": "integer", "const": 0},
+    "request_failures": {"type": "integer", "const": 0},
+    "routes": {"type": "string", "const": "PASS"},
+    "authorization": {"type": "string", "const": "PASS"},
+    "modes": {"type": "string", "const": "PASS"},
+    "provider_effects_delta": {"type": "integer", "const": 0},
+    "observed_at": {"type": "string", "format": "date-time"}
+  }
+}

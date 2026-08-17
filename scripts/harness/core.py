@@ -273,12 +273,25 @@ def ensure_ephemeral_run_dir(path: Path, root: Path | None = None) -> Path:
     resolved = path.resolve()
     repo = (root or repository_root()).resolve()
     temp = Path(tempfile.gettempdir()).resolve()
+    queue_root = g002_queue_root(repo, required=False)
+    persistent_runs = (queue_root / "runs").resolve() if queue_root else None
+    allowed = False
     try:
         resolved.relative_to(temp)
-    except ValueError as exc:
+        allowed = True
+    except ValueError:
+        pass
+    if persistent_runs is not None:
+        try:
+            resolved.relative_to(persistent_runs)
+            allowed = True
+        except ValueError:
+            pass
+    if not allowed:
         raise HarnessError(
-            f"harness run must be under the system temp directory: {temp}"
-        ) from exc
+            "harness run must be under system temp or the configured private "
+            "G-002 queue run directory"
+        )
     try:
         resolved.relative_to(repo)
     except ValueError:
@@ -289,6 +302,35 @@ def ensure_ephemeral_run_dir(path: Path, root: Path | None = None) -> Path:
         raise HarnessError(
             "harness run directory must start with administrateme-harness-"
         )
+    return resolved
+
+
+def g002_queue_root(
+    root: Path | None = None, *, required: bool = True
+) -> Path | None:
+    """Return a private durable queue root explicitly enrolled outside the repo."""
+
+    raw = os.environ.get("ADMINME_G002_QUEUE_ROOT")
+    if not raw:
+        if required:
+            raise HarnessError("ADMINME_G002_QUEUE_ROOT is not configured")
+        return None
+    configured = Path(raw)
+    if not configured.is_absolute() or configured.is_symlink():
+        raise HarnessError("G-002 queue root must be an absolute non-symlink directory")
+    resolved = configured.resolve()
+    repository = (root or repository_root()).resolve()
+    try:
+        resolved.relative_to(repository)
+    except ValueError:
+        pass
+    else:
+        raise HarnessError("G-002 queue root must remain outside the repository")
+    if not resolved.is_dir():
+        raise HarnessError("G-002 queue root does not exist")
+    metadata = resolved.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise HarnessError("G-002 queue root must be owner-only (mode 0700)")
     return resolved
 
 
@@ -522,7 +564,7 @@ def run_diff_hygiene(root: Path) -> str:
     """Check both the committed candidate and current task worktree for defects."""
 
     base_sha = candidate_base_sha(root)
-    checks = (
+    checks: tuple[tuple[str, list[str]], ...] = (
         ("committed candidate diff", [base_sha, "HEAD"]),
         ("staged diff", ["--cached", "HEAD"]),
         ("unstaged diff", []),
@@ -553,21 +595,17 @@ def task_diff_bytes(
     if not normalized:
         return b""
     base = base_sha or _run_git(root, "rev-parse", "HEAD").strip()
-    manifest = [b"TASK_PATHS_V2\0"]
-    for relative in normalized:
-        encoded = relative.encode("utf-8")
-        manifest.extend((f"{len(encoded)}:".encode("ascii"), encoded, b"\0"))
-    committed = _run_git(
-        root, "diff", "--binary", base, "HEAD", "--", *normalized
-    ).encode()
+    from .hosted_binding import committed_task_prefix
+
+    committed_prefix = committed_task_prefix(
+        root, normalized, base_sha=base, head_sha="HEAD"
+    )
     staged = _run_git(
         root, "diff", "--cached", "--binary", "HEAD", "--", *normalized
     ).encode()
     unstaged = _run_git(root, "diff", "--binary", "--", *normalized).encode()
     blocks = [
-        *manifest,
-        b"\nCOMMITTED_DIFF\0",
-        committed,
+        committed_prefix,
         b"\nSTAGED_DIFF\0",
         staged,
         b"\nUNSTAGED_DIFF\0",
@@ -809,9 +847,18 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
             raise HarnessError(f"{name} is bound to a different candidate")
 
     verification = artifacts["verification-report.json"]
+    outcome = artifacts["outcome-contract.json"]
     preservation = artifacts["preservation-manifest.json"]
     review = artifacts["review-report.json"]
     owner = artifacts["owner-handoff.metadata.json"]
+    from .autonomous_release import browser_required
+
+    needs_browser = browser_required(
+        verification["changed_files"],
+        declared_visible=(
+            outcome["release_impacts"]["member_visible_behavior"] == "YES"
+        ),
+    )
     if preservation["rollback"]["task_owned_paths"] != verification["changed_files"]:
         raise HarnessError(
             "preservation-manifest.json task-owned paths differ from the bound "
@@ -827,6 +874,8 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
     check_statuses = [check["status"] for check in verification["checks"]]
     for check in verification["checks"]:
         _validate_check_receipt(run_dir, canonical_binding, check)
+    _validate_retained_check_attempts(run_dir)
+    _validate_retained_hosted_reviews(run_dir, root)
     has_failure = (
         "FAIL" in check_statuses
         or verification["browser"]["status"] == "FAIL"
@@ -837,7 +886,10 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
         or any(
             status in {"UNDETERMINED", "NOT_CONFIGURED"} for status in check_statuses
         )
-        or verification["browser"]["status"] == "UNDETERMINED"
+        or (
+            needs_browser
+            and verification["browser"]["status"] == "UNDETERMINED"
+        )
         or review["conclusion"] != "APPROVE"
         or bool(review["unresolved_evidence"])
         or any(finding["actionable"] for finding in review["findings"])
@@ -859,7 +911,7 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
                 "verification-report.json claims PASS with unresolved, failed, "
                 f"or missing proof (missing tiers: {missing_tiers})"
             )
-        if browser["status"] == "PASS" and (
+        if needs_browser and browser["status"] == "PASS" and (
             browser["console_errors"]
             or browser["page_errors"]
             or browser["request_failures"]
@@ -867,10 +919,15 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
             or not browser["narrow"]
         ):
             raise HarnessError("browser PASS lacks clean desktop and narrow evidence")
+        if needs_browser and browser["status"] != "PASS":
+            raise HarnessError(
+                "verification-report.json claims PASS without required browser proof"
+            )
+        expected_browser = "PASS" if needs_browser else browser["status"]
         if owner["proof"] != {
             "deterministic": "PASS",
             "production_journey": "PASS",
-            "browser": browser["status"],
+            "browser": expected_browser,
             "independent_review": "APPROVE",
         }:
             raise HarnessError("owner handoff proof contradicts verification PASS")
@@ -1043,34 +1100,40 @@ def _validate_browser_evidence(
             raise HarnessError(f"browser screenshot dimensions mismatch: {path.name}")
 
 
-def _validate_check_receipt(
-    run_dir: Path, canonical_binding: dict[str, Any], check: dict[str, Any]
-) -> None:
-    receipt_value = Path(check["receipt"])
+def _validate_check_receipt_value(
+    run_dir: Path,
+    receipt_value: Path,
+    *,
+    expected_binding: dict[str, Any] | None = None,
+    expected_check: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if receipt_value.is_absolute() or ".." in receipt_value.parts:
-        raise HarnessError(f"unsafe check receipt path: {check['receipt']}")
+        raise HarnessError(f"unsafe check receipt path: {receipt_value}")
     receipt_path = (run_dir / receipt_value).resolve()
     try:
         receipt_path.relative_to(run_dir.resolve())
     except ValueError as exc:
         raise HarnessError(
-            f"check receipt escapes run directory: {check['receipt']}"
+            f"check receipt escapes run directory: {receipt_value}"
         ) from exc
     if not receipt_path.is_file():
-        raise HarnessError(f"missing check receipt: {check['receipt']}")
+        raise HarnessError(f"missing check receipt: {receipt_value}")
     receipt = load_json(receipt_path)
-    if receipt.get("binding") != canonical_binding:
-        raise HarnessError(f"stale check receipt binding: {check['receipt']}")
-    expected_check = {key: value for key, value in check.items() if key != "receipt"}
-    if receipt.get("check") != expected_check:
-        raise HarnessError(f"check receipt contradicts report: {check['receipt']}")
+    binding_value = receipt.get("binding")
+    check = receipt.get("check")
+    if not isinstance(binding_value, dict) or not isinstance(check, dict):
+        raise HarnessError(f"malformed retained check receipt: {receipt_value}")
+    if expected_binding is not None and binding_value != expected_binding:
+        raise HarnessError(f"stale check receipt binding: {receipt_value}")
+    if expected_check is not None and check != expected_check:
+        raise HarnessError(f"check receipt contradicts report: {receipt_value}")
     if check["status"] == "PASS" and check["exit_code"] != 0:
         raise HarnessError(f"PASS check has nonzero exit: {check['check_id']}")
     if check["status"] == "FAIL" and check["exit_code"] in {0, None}:
         raise HarnessError(f"FAIL check lacks nonzero exit: {check['check_id']}")
     log = receipt.get("log")
     if not isinstance(log, dict):
-        raise HarnessError(f"check receipt lacks a hashed log: {check['receipt']}")
+        raise HarnessError(f"check receipt lacks a hashed log: {receipt_value}")
     log_value = Path(log.get("path", ""))
     if log_value.is_absolute() or ".." in log_value.parts:
         raise HarnessError(f"unsafe check log path: {log_value}")
@@ -1087,6 +1150,77 @@ def _validate_check_receipt(
         _validate_supported_toolchain(receipt, log_path, context="browser")
     if check["command"].startswith("npm --prefix openclaw/administrateme "):
         _validate_supported_toolchain(receipt, log_path, context="OpenClaw")
+    return receipt
+
+
+def _validate_check_receipt(
+    run_dir: Path, canonical_binding: dict[str, Any], check: dict[str, Any]
+) -> None:
+    receipt_value = Path(check["receipt"])
+    expected_check = {key: value for key, value in check.items() if key != "receipt"}
+    _validate_check_receipt_value(
+        run_dir,
+        receipt_value,
+        expected_binding=canonical_binding,
+        expected_check=expected_check,
+    )
+
+
+def _validate_retained_check_attempts(run_dir: Path) -> None:
+    """Hash-validate every immutable check attempt, including invalidated runs."""
+
+    attempts = run_dir / "check-attempts"
+    if not attempts.exists():
+        return
+    if not attempts.is_dir():
+        raise HarnessError("check-attempts is not a directory")
+    receipts = sorted(attempts.glob("*/*/receipt.json"))
+    unexpected = sorted(path for path in attempts.rglob("*.json") if path not in receipts)
+    if unexpected:
+        raise HarnessError("retained check receipt has a non-canonical path")
+    for receipt_path in receipts:
+        _validate_check_receipt_value(
+            run_dir, receipt_path.relative_to(run_dir)
+        )
+
+
+def _validate_retained_hosted_reviews(run_dir: Path, root: Path | None) -> None:
+    """Validate every imported hosted attempt, not only the selected approval."""
+
+    attempts = run_dir / "hosted-review" / "attempts"
+    if not attempts.exists():
+        return
+    if not attempts.is_dir():
+        raise HarnessError("hosted-review attempts is not a directory")
+    from .autonomous_release import load_schema_value
+
+    for attempt in sorted(attempts.iterdir()):
+        if not attempt.is_dir() or set(path.name for path in attempt.iterdir()) != {
+            "receipt.json",
+            "result.json",
+        }:
+            raise HarnessError("hosted review attempt has non-canonical contents")
+        result = load_schema_value(
+            attempt / "result.json", "hosted-review-result.schema.json", root
+        )
+        receipt = load_schema_value(
+            attempt / "receipt.json", "hosted-review-receipt.schema.json", root
+        )
+        actionable = sorted(
+            finding["finding_id"]
+            for finding in result["findings"]
+            if finding["actionable"]
+        )
+        if (
+            result["head_sha"] != receipt["head_sha"]
+            or result["base_sha"] != receipt["base_sha"]
+            or result["conclusion"] != receipt["conclusion"]
+            or actionable != sorted(receipt["actionable_finding_ids"])
+            or len(result["findings"]) != receipt["finding_count"]
+            or len(result["unresolved_evidence"])
+            != receipt["unresolved_evidence_count"]
+        ):
+            raise HarnessError("retained hosted review result contradicts its receipt")
 
 
 def _validate_browser_toolchain(receipt: dict[str, Any], log_path: Path) -> None:
@@ -1175,6 +1309,7 @@ def clean_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     if extra:
         environment.update(extra)
     safe_adminme_names = {
+        "ADMINME_ACTIVE_HARNESS_RUN",
         "ADMINME_GATE7_EVIDENCE_DIR",
         "ADMINME_GATE7_PYTHON",
         "ADMINME_GATE7_VISUAL_NOW",

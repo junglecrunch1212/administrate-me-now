@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.harness import checks as harness_checks
 from scripts.harness import core as harness_core
 from scripts.harness.checks import (
     CheckSpec,
@@ -47,6 +48,7 @@ from scripts.harness.core import (
     validate_artifact_value,
     validate_schema_file,
 )
+from scripts.harness.hosted_binding import clean_committed_binding
 
 
 def _bind_browser_run(run_dir: Path, *directories: Path) -> None:
@@ -305,6 +307,81 @@ def test_check_refuses_binding_changed_during_command(tmp_path: Path) -> None:
     assert not (run_dir / "check-receipts/static-mid-check.json").exists()
 
 
+def test_private_g002_queue_root_allows_durable_harness_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir(mode=0o700)
+    run_dir = queue_root / "runs" / "administrateme-harness-fixture"
+    run_dir.mkdir(parents=True)
+    monkeypatch.setenv("ADMINME_G002_QUEUE_ROOT", str(queue_root))
+
+    assert ensure_ephemeral_run_dir(run_dir, repo) == run_dir.resolve()
+
+    queue_root.chmod(0o750)
+    with pytest.raises(HarnessError, match="owner-only"):
+        ensure_ephemeral_run_dir(run_dir, repo)
+
+
+def test_every_retained_check_attempt_is_immutable_and_hash_validated(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    run_dir = tmp_path / "administrateme-harness-attempt-history"
+    root.mkdir()
+    _bound_check_fixture(root, run_dir)
+
+    first = run_check(root, run_dir, CheckSpec("repeat", "static", "true"))
+    second = run_check(root, run_dir, CheckSpec("repeat", "static", "false"))
+
+    assert first["receipt"] != second["receipt"]
+    assert (run_dir / first["receipt"]).is_file()
+    assert (run_dir / second["receipt"]).is_file()
+    harness_core._validate_retained_check_attempts(run_dir)
+
+    receipt = json.loads((run_dir / first["receipt"]).read_text("utf-8"))
+    first_log = run_dir / receipt["log"]["path"]
+    first_log.write_text(first_log.read_text("utf-8") + "tampered\n", "utf-8")
+    with pytest.raises(HarnessError, match="check log hash mismatch"):
+        harness_core._validate_retained_check_attempts(run_dir)
+
+
+def test_run_tier_uses_bound_changed_paths_without_cli_repetition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "administrateme-harness-bound-selection"
+    run_dir.mkdir()
+    (run_dir / "verification-report.json").write_text(
+        json.dumps({"changed_files": ["scripts/harness/example.py"]}), "utf-8"
+    )
+    observed: list[str] = []
+
+    def fake_run_check(
+        _root: Path,
+        _run_dir: Path,
+        spec: CheckSpec,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        observed.append(spec.check_id)
+        return {
+            "check_id": spec.check_id,
+            "tier": spec.tier,
+            "command": spec.command,
+            "status": "PASS",
+            "exit_code": 0,
+            "duration_seconds": 0,
+            "evidence_class": "fixture",
+            "receipt": "fixture.json",
+        }
+
+    monkeypatch.setattr(harness_checks, "run_check", fake_run_check)
+    harness_checks.run_tier(tmp_path, run_dir, "focused")
+
+    assert observed == ["harness-focused"]
+
+
 def test_committed_candidate_diff_binds_content_and_declared_path_scope(
     tmp_path: Path,
 ) -> None:
@@ -342,6 +419,9 @@ def test_committed_candidate_diff_binds_content_and_declared_path_scope(
     assert b"-baseline" in complete
     assert b"+candidate" in complete
     assert complete != incomplete
+    hosted = clean_committed_binding(tmp_path, base_sha=base)
+    assert hosted["changed_paths"] == ["candidate.txt"]
+    assert hosted["diff_sha256"] == hashlib.sha256(incomplete).hexdigest()
 
 
 def test_declared_scope_must_cover_every_committed_candidate_path(
@@ -944,12 +1024,14 @@ def test_clean_environment_removes_live_authority_even_from_overrides(
     environment = clean_environment(
         {
             **{name: "override-live-value" for name in unsafe},
+            "ADMINME_ACTIVE_HARNESS_RUN": "/tmp/fixture-harness-run",
             "ADMINME_GATE7_EVIDENCE_DIR": "/tmp/fixture-evidence",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
 
     assert unsafe.isdisjoint(environment)
+    assert environment["ADMINME_ACTIVE_HARNESS_RUN"] == "/tmp/fixture-harness-run"
     assert environment["ADMINME_GATE7_EVIDENCE_DIR"] == "/tmp/fixture-evidence"
     assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
 

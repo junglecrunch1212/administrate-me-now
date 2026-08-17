@@ -5,7 +5,7 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 ## Working rules
 
 - v2 integration work belongs on `codex/administrateme-v2-runtime`, based on `main`. Never rewrite published history or weaken tests.
-- Release authority is deny-by-default: do not merge a pull request, push directly to `main`, or begin Phase B unless the exact G-001 controlled-release procedure below is active and satisfied.
+- Release authority is deny-by-default: do not merge a pull request, push directly to `main`, or begin Phase B unless the exact G-001 procedure or an effective, enrolled, deterministic G-002 decision below is active and satisfied.
 - Preserve unrelated changes. Never place household names, emails, phone numbers, addresses, credentials, or tokens in platform code, bootstrap code, built-ins, or tests.
 - Keep the dependency direction: adapters -> encrypted append-only event log/durable bus -> deterministic projections -> pipelines -> family surfaces. Sources emit events; projections are never a source of truth.
 - OpenClaw owns channels, conversations, generic memory, sessions, model routing, cron/background execution, agent orchestration, generic tool approval, device nodes, and runtime administration. AdministrateMe owns typed household truth, domain authorization, scope/privacy, projections, workbooks, provenance, correction, observation, and outcome feedback.
@@ -71,6 +71,93 @@ itself by observing that the file changed.
   privacy, rollback, or live acceptance differs from the authorized plan.
   Preserve diagnostics and the last healthy release; do not broaden authority
   to finish the task.
+
+## G-002 autonomous observation release train
+
+G-002 is a standing release capability for ordinary observation-only releases
+and bounded repairs. It supersedes G-001's per-head owner phrase and separate
+user-visible review-task requirement only inside the deterministic G-002
+envelope. G-001 remains the only route for a candidate that changes provider-
+write authority, observation mode, runtimes or dependencies, provider
+enrollment, credentials, Keychain, permissions, privacy or authorization,
+destructive data behavior, release controls, or any path classified manual by
+`scripts/harness/autonomous_release.py`.
+
+The governance change that introduces G-002 cannot authorize its own merge or
+enrollment. The repository owner manually merges that governance-only PR, adds
+an `OPENAI_API_KEY` repository secret used only by the read-only hosted job, sets
+`ADMINME_CODEX_REVIEW_ENABLED=true`, and configures the resulting hosted review
+as required. A task created before that merge continues under G-001.
+
+- Run exact-bound static, focused, production-composition, and applicable
+  browser checks first. Then run the independent exhaustive adversarial review
+  before breadth, release-candidate, and macOS suites. A review completed after
+  breadth is not G-002 evidence.
+- An eligible owner-requested build may publish a draft and enqueue one exact
+  committed head after `review-ready`; it does not gain merge or live authority.
+  The versioned scheduled operator in
+  `.github/codex/prompts/g002-release-operator.md` is the only standing
+  consumer of that immutable local queue.
+- The hosted reviewer is a fresh, ephemeral, read-only Codex job with no
+  implementation context or write permission. It reviews the exact candidate
+  head, records a content-free receipt, and fails on actionable or unresolved
+  evidence. A head change triggers a new review; it does not require an owner
+  prompt.
+- Every hosted result/receipt and every local command attempt remains immutable.
+  Canonical Harness validation re-hashes retained failed and invalidated
+  attempts; only the latest exact-bound attempt may determine current status.
+- An admitted ordinary observation release requires a healthy baseline. An
+  admitted bounded repair may start from a degraded baseline only when it names
+  one or more exact unhealthy required capabilities. Non-target degradation may
+  remain, but every target must recover and no new or worsened degradation may
+  appear. Otherwise the updater rolls back.
+- Both lanes require current `origin/main` containment, clean mergeability,
+  zero actionable threads, exact-head deterministic/production/browser-as-
+  applicable/breadth/release/hosted proof, an attested updater, observation
+  active, zero live provider claims, and backup capability. The deterministic
+  decision is `python -m scripts.harness.cli autonomous-release <manifest>`.
+  The evaluator rejects declared green fields unless the outcome-bound impact
+  classification, validated Harness run,
+  exact release-tier receipts, downloaded hosted review result/receipt, and
+  actual review-before-breadth timestamps agree.
+- After a passing G-002 decision, the release operator may merge that exact
+  PR/head through GitHub with a merge commit and
+  run the ordinary guarded Phase B transaction without another owner message.
+  It may not push to `main`, bypass protection, rewrite history, enable writes,
+  or broaden a repair target.
+- Settlement requires the exact selected merge, observation retained, verified
+  encrypted backup, a fresh complete Doctor report, an exact-merge live
+  authenticated privacy/isolation receipt, applicable authenticated browser
+  proof, rollback readiness, zero provider effects, and monotonic required-
+  capability and named Doctor-check health. The ordinary lane requires every
+  Doctor check healthy; bounded repair may retain only admitted non-target
+  failures after all named capability and Doctor targets clear. Any ambiguity
+  returns `ROLLBACK`, never success. A bounded repair is passed to the updater
+  only by an exact admission receipt and generated two-parent-merge activation
+  policy.
+- The operator posts one content-free release receipt. G-002 does not require a
+  second docs-only PR for an otherwise complete release; governing documents
+  are updated in a later ordinary documentation batch. Failed or incomplete
+  attempts remain immutable evidence and do not consume owner attention.
+
+## Code Review Rules
+
+### Event-sourced concurrency and authority
+
+- Flag any path that can append, advance a cursor, close health/circuit state,
+  or report readiness after its lease/authority expired or transferred. The
+  safe path revalidates authority at the durable mutation boundary.
+- Flag cancellation that is swallowed, translated into a durable provider
+  error, advances state, or waits on a polling interval. Cancellation must
+  propagate unchanged and leave no false durable result.
+
+### Harness evidence
+
+- Flag a check rerun that overwrites, drops, or excludes a prior attempt from
+  canonical validation. Every retained receipt and hashed log must validate;
+  the current conclusion may derive from the latest attempt only.
+- Flag review performed only after breadth/release work. The exhaustive
+  adversarial review belongs at the exact-bound pre-breadth checkpoint.
 
 ## Repository map
 

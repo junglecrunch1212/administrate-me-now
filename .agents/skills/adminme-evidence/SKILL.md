@@ -12,10 +12,11 @@ Translate receipts into an owner-ready result while preserving every uncertainty
 1. Refresh bindings and validate the complete temporary run.
 2. Confirm every required check ran against the bound candidate. Keep fixture, local candidate, hosted CI, and live evidence distinct.
 3. Derive readiness from deterministic receipts. A failed, missing, stale, schema-invalid, or wrong-head gate remains `FAIL` or `UNDETERMINED`.
-4. Confirm browser evidence includes desktop and narrow screenshots plus console, page, request, accessibility, route, authorization, and observation outcomes for touched member paths.
+4. For classified member-visible or capability-health changes, confirm browser evidence includes desktop and narrow screenshots plus console, page, request, accessibility, route, authorization, and observation outcomes. Otherwise require exact `NOT_APPLICABLE`; never manufacture screenshots.
 5. Confirm the independent review is read-only, exact-diff, schema-valid, and free of unresolved actionable findings.
-6. Run `PYTHONPATH=bridge poetry run python -m scripts.harness.cli finalize-owner <run-dir> --what-now-works <summary> --task <task> --expected-result <result>`. The command produces `owner-handoff.metadata.json` and renders `owner-handoff.md` only after current-bound deterministic, production-journey, browser, and independent-review proof passes.
-7. Report owner-autonomy metrics without inventing historical baselines.
+6. Confirm the independent adversarial review completed before breadth began. For enrolled G-002, derive the manifest from the exact queue, Harness, Doctor, and diagnostics with `prepare-release-manifest`; never hand-author its green fields. Run `autonomous-release --receipt` and preserve `DENY` or `ROLLBACK` without inference.
+7. Run `PYTHONPATH=bridge poetry run python -m scripts.harness.cli finalize-owner <run-dir> --what-now-works <summary> --task <task> --expected-result <result>`. The command produces `owner-handoff.metadata.json` and renders `owner-handoff.md` only after current-bound deterministic, production-journey, applicable browser, and independent-review proof passes.
+8. Report owner-autonomy metrics without inventing historical baselines.
 
 ## Boundaries
 

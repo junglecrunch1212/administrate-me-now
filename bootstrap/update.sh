@@ -8,6 +8,8 @@ resolve_instance_root
 
 approve_flag=""
 source_repair_flag=""
+g002_repair_policy=""
+g002_observation_policy=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -18,6 +20,24 @@ while [[ "${1:-}" == --* ]]; do
       [[ -z "$source_repair_flag" ]] || fail "source-repair approval was repeated"
       source_repair_flag="$1"
       ;;
+    --g002-bounded-repair-policy)
+      [[ -z "$g002_repair_policy" ]] || fail "G-002 repair policy was repeated"
+      shift
+      g002_repair_policy="${1:-}"
+      [[ "$g002_repair_policy" == /* ]] \
+        || fail "G-002 repair policy path must be absolute"
+      [[ -f "$g002_repair_policy" ]] \
+        || fail "G-002 repair policy is missing"
+      ;;
+    --g002-observation-release-policy)
+      [[ -z "$g002_observation_policy" ]] || fail "G-002 observation policy was repeated"
+      shift
+      g002_observation_policy="${1:-}"
+      [[ "$g002_observation_policy" == /* ]] \
+        || fail "G-002 observation policy path must be absolute"
+      [[ -f "$g002_observation_policy" ]] \
+        || fail "G-002 observation policy is missing"
+      ;;
     *)
       fail "unknown update option: $1"
       ;;
@@ -25,9 +45,16 @@ while [[ "${1:-}" == --* ]]; do
   shift
 done
 
+if [[ -n "$g002_repair_policy" || -n "$g002_observation_policy" ]]; then
+  [[ -z "$approve_flag" && -z "$source_repair_flag" ]] \
+    || fail "G-002 authority cannot be combined with migration or source-repair approval"
+  [[ -z "$g002_repair_policy" || -z "$g002_observation_policy" ]] \
+    || fail "G-002 observation and bounded-repair policies cannot be combined"
+fi
+
 candidate="${1:-}"
 [[ -n "$candidate" ]] \
-  || fail "usage: update.sh [--approve-runtime-migration] [--approve-declared-source-assessment-repair] /absolute/path/to/reviewed-candidate"
+  || fail "usage: update.sh [--approve-runtime-migration] [--approve-declared-source-assessment-repair] [--g002-observation-release-policy /absolute/path/to/policy.json] [--g002-bounded-repair-policy /absolute/path/to/policy.json] /absolute/path/to/reviewed-candidate"
 [[ "$candidate" == /* ]] || fail "candidate path must be absolute"
 [[ -d "$candidate" ]] || fail "candidate checkout does not exist"
 candidate="$(cd "$candidate" && pwd -P)"
@@ -179,6 +206,12 @@ if [[ -n "$approve_flag" ]]; then
 fi
 if [[ -n "$source_repair_flag" ]]; then
   upgrade_args+=("$source_repair_flag")
+fi
+if [[ -n "$g002_repair_policy" ]]; then
+  upgrade_args+=(--g002-bounded-repair-policy "$g002_repair_policy")
+fi
+if [[ -n "$g002_observation_policy" ]]; then
+  upgrade_args+=(--g002-observation-release-policy "$g002_observation_policy")
 fi
 (
   cd "$candidate"

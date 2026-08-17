@@ -47,6 +47,8 @@ def create_run(
     protected_paths: list[str],
     run_dir: Path | None = None,
 ) -> Path:
+    from .autonomous_release import browser_required
+
     task_paths = complete_task_scope(root, task_paths)
     assert_task_scope_covers_tracked_changes(root, task_paths, protected_paths)
     directory = run_dir or new_run_directory()
@@ -67,90 +69,53 @@ def create_run(
             "requested_outcome": requested_outcome,
             "primary_journey": {
                 "actor_role": "principal",
-                "start_path": "/member/today",
-                "steps": [
-                    "Open the authenticated member portal.",
-                    "Move through the existing navigation destinations.",
-                    "Confirm labels, order, authorization, and mode are unchanged.",
-                ],
-                "expected_result": "The same surfaces render with no visible navigation or mode change.",
+                "start_path": "/",
+                "steps": ["UNDETERMINED"],
+                "expected_result": "UNDETERMINED",
             },
             "visible_non_goals": [
-                "No wording, route, click, payload, or information-density change.",
-                "No release or live household change.",
+                "No release or live household change is authorized by a local run."
             ],
             "acceptance_cases": [
                 {
-                    "case_id": "navigation-happy",
-                    "state": "happy",
-                    "applicable": True,
-                    "when": "An authorized adult opens the portal.",
-                    "then": "All ten existing destinations appear in their existing order and labels.",
-                },
-                {
-                    "case_id": "navigation-empty",
-                    "state": "empty",
+                    "case_id": f"outcome-{state.replace('_', '-')}",
+                    "state": state,
                     "applicable": False,
-                    "when": "Navigation has no destinations.",
-                    "then": "No empty navigation state is introduced by this extraction.",
-                    "not_applicable_reason": "Every supported role retains at least one deterministic destination.",
-                },
-                {
-                    "case_id": "navigation-loading",
-                    "state": "loading",
-                    "applicable": False,
-                    "when": "The navigation payload is being loaded.",
-                    "then": "No new loading state is introduced by this server-side extraction.",
-                    "not_applicable_reason": "The extracted functions are synchronous and retain the existing page bootstrap behavior.",
-                },
-                {
-                    "case_id": "navigation-stale",
-                    "state": "stale",
-                    "applicable": False,
-                    "when": "A stored navigation snapshot becomes stale.",
-                    "then": "No stale snapshot behavior is introduced.",
-                    "not_applicable_reason": "Navigation is derived from the current authenticated session rather than a stored navigation projection.",
-                },
-                {
-                    "case_id": "navigation-denied",
-                    "state": "denied",
-                    "applicable": True,
-                    "when": "A child, device, or ambient identity requests an unauthorized surface directly.",
-                    "then": "The server returns the existing non-enumerating 404 response.",
-                },
-                {
-                    "case_id": "navigation-degraded",
-                    "state": "degraded",
-                    "applicable": True,
-                    "when": "Domain projections are unavailable after route authorization.",
-                    "then": "The surface retains the existing unavailable-domain failure behavior.",
-                },
-                {
-                    "case_id": "navigation-retry",
-                    "state": "retry",
-                    "applicable": False,
-                    "when": "A read-only navigation request is retried.",
-                    "then": "No mutation or idempotency receipt is involved.",
-                    "not_applicable_reason": "The pilot changes no command or write path.",
-                },
-                {
-                    "case_id": "navigation-terminal-failure",
-                    "state": "terminal_failure",
-                    "applicable": False,
-                    "when": "A navigation operation reaches a terminal write outcome.",
-                    "then": "No terminal write result is produced.",
-                    "not_applicable_reason": "The extraction changes only deterministic read and authorization helpers; its existing unavailable-domain read failure is covered by the degraded case.",
-                },
+                    "when": "UNDETERMINED",
+                    "then": "UNDETERMINED",
+                    "not_applicable_reason": "UNDETERMINED",
+                }
+                for state in (
+                    "happy",
+                    "empty",
+                    "loading",
+                    "stale",
+                    "degraded",
+                    "denied",
+                    "retry",
+                    "terminal_failure",
+                )
             ],
             "privacy": {
                 "touches_private_data": False,
                 "changes_authorization": False,
-                "notes": "Authorization behavior is characterized and preserved, not redesigned.",
+                "notes": "UNDETERMINED",
+            },
+            "release_impacts": {
+                "provider_writes_enabled": "UNDETERMINED",
+                "runtime_or_dependency_migration": "UNDETERMINED",
+                "provider_enrollment": "UNDETERMINED",
+                "credentials_keychain_or_permissions": "UNDETERMINED",
+                "privacy_or_authorization_change": "UNDETERMINED",
+                "destructive_data_change": "UNDETERMINED",
+                "observation_mode_change": "UNDETERMINED",
+                "release_control_change": "UNDETERMINED",
+                "member_visible_behavior": "UNDETERMINED",
             },
             "external_or_irreversible": {
                 "required": False,
                 "side_effect_class": "REPOSITORY_WRITE",
-                "notes": "Local repository implementation only; no external, release, or live action.",
+                "notes": "UNDETERMINED",
             },
             "owner_questions": [],
         },
@@ -167,13 +132,8 @@ def create_run(
                     "evidence_class": "local_candidate",
                 },
                 {
-                    "path": "docs/refactor/UX-BEHAVIOR-CONTRACT.md",
+                    "path": "docs/refactor/CURRENT-STATE.md",
                     "status": "accepted",
-                    "evidence_class": "local_candidate",
-                },
-                {
-                    "path": "docs/refactor/CHANGE-ORDER-018-SOURCE-TIME-AND-CONTEXT-CORRECTION.md",
-                    "status": "candidate",
                     "evidence_class": "local_candidate",
                 },
             ],
@@ -181,8 +141,8 @@ def create_run(
             "inventories": inventories,
             "evidence": [
                 {
-                    "claim": "The immutable candidate merge base and current candidate each pass the reviewed navigation production-composition journey.",
-                    "source": "scripts/harness/baseline_navigation.py and bound check receipts",
+                    "claim": "UNDETERMINED",
+                    "source": "UNDETERMINED",
                     "evidence_class": "local_candidate",
                 }
             ],
@@ -193,64 +153,28 @@ def create_run(
         {
             **common,
             "classification": "PRESERVE",
-            "touched_surfaces": inventories["surfaces"],
+            "touched_surfaces": [],
             "preserved_behaviors": [
                 {
-                    "behavior_id": "navigation-role-map",
-                    "when": "Adult, child, device, ambient, or view-as navigation is requested.",
-                    "then": "The existing role-derived routes, labels, order, and hrefs are returned.",
-                    "evidence": [
-                        "tests/unit/harness/test_member_navigation_characterization.py",
-                        "tests/integration/test_harness_member_navigation.py",
-                    ],
-                },
-                {
-                    "behavior_id": "experience-precedence",
-                    "when": "Experience mode and semantics are composed.",
-                    "then": "Child-role, view-member profile, preference override, quiet-hours, and interruption-budget precedence remain exact.",
-                    "evidence": [
-                        "tests/unit/harness/test_member_navigation_characterization.py"
-                    ],
-                },
-                {
-                    "behavior_id": "observation-payload",
-                    "when": "A surface is returned in observation mode.",
-                    "then": "The existing active, writes_execute, explanation, and evidence link fields remain exact.",
-                    "evidence": ["tests/integration/test_harness_member_navigation.py"],
+                    "behavior_id": "task-preservation",
+                    "when": "UNDETERMINED",
+                    "then": "UNDETERMINED",
+                    "evidence": ["UNDETERMINED"],
                 },
             ],
-            "no_change_boundaries": [
-                "Event schemas, encrypted log, bus, projections, and pipelines.",
-                "Provider commands, approvals, observation semantics, and terminal audit.",
-                "Routes, aliases, payloads, visible wording, navigation order, and click count.",
-                "Privacy, authMember/viewMember, release state, and OpenClaw boundaries.",
-            ],
+            "no_change_boundaries": ["UNDETERMINED"],
             "state_boundaries": [
                 {
                     "state": "happy",
-                    "expected_behavior": "Authorized routes render through production composition.",
-                    "evidence": "tests/integration/test_harness_member_navigation.py",
-                },
-                {
-                    "state": "denied",
-                    "expected_behavior": "Unauthorized direct routes return the existing non-enumerating 404.",
-                    "evidence": "tests/unit/harness/test_member_navigation_characterization.py",
-                },
-                {
-                    "state": "degraded",
-                    "expected_behavior": "Unavailable domain views remain a 503 after authorization.",
-                    "evidence": "adminme/products/member/surfaces.py",
+                    "expected_behavior": "UNDETERMINED",
+                    "evidence": "UNDETERMINED",
                 },
             ],
-            "characterization_checks": [
-                "tests/unit/harness/test_member_navigation_characterization.py",
-                "tests/integration/test_harness_member_navigation.py",
-                "tests/acceptance/test_gate7_household_experience.py::test_ten_surfaces_three_modes_and_independent_route_denial",
-            ],
+            "characterization_checks": ["UNDETERMINED"],
             "migration_required": False,
             "rollback": {
                 "task_owned_paths": task_paths,
-                "method": "Reverse only task-owned lines with a reviewed patch, then rerun characterization and production-composition checks.",
+                "method": "Reverse only task-owned lines with a reviewed patch, then rerun the classified characterization and production-composition checks.",
                 "forbidden_operations": [
                     "git reset --hard",
                     "git checkout --",
@@ -264,11 +188,13 @@ def create_run(
     )
     _write_markdown(
         directory / "implementation-plan.md",
-        """# Implementation plan
+        f"""# Implementation plan
 
 ## Technical choices
 
-Build a thin deterministic harness from versioned schemas, repository-local skills, existing production tests, and a generated current-state index. Extract only the member navigation seam behind compatibility imports.
+Requested outcome: {requested_outcome}
+
+UNDETERMINED until `adminme-outcome` and `adminme-change` replace this scaffold with the bounded technical choice and exact failure paths.
 
 ## Failure and rollback
 
@@ -285,7 +211,9 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
             "changed_files": task_paths,
             "checks": [],
             "browser": {
-                "status": "UNDETERMINED",
+                "status": (
+                    "UNDETERMINED" if browser_required(task_paths) else "NOT_APPLICABLE"
+                ),
                 "output_directory": None,
                 "report_path": None,
                 "report_sha256": None,
@@ -304,7 +232,7 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
                 "applicable_journeys": 1,
                 "passed_journeys": 0,
                 "false_green_count": 0,
-                "first_pass_focused": "PASS",
+                "first_pass_focused": "UNDETERMINED",
                 "autonomous_recovery_rate": "UNDETERMINED",
             },
             "unresolved": [
@@ -347,9 +275,9 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
             "independent_review": "UNDETERMINED",
         },
         "try_this": {
-            "start_path": "/member/today",
-            "task": "Open the member portal and use the existing navigation.",
-            "expected_result": "The same destinations, labels, order, and experience mode appear.",
+            "start_path": "/",
+            "task": requested_outcome,
+            "expected_result": "UNDETERMINED",
             "desktop_screenshot": None,
             "narrow_screenshot": None,
         },
@@ -401,15 +329,28 @@ def refresh_bindings(root: Path, run_dir: Path, task_paths: list[str]) -> None:
 def _invalidate_stale_evidence(run_dir: Path) -> None:
     """Clear conclusions when the candidate changes; logs remain historical only."""
 
+    from .autonomous_release import browser_required
+
     verification_path = run_dir / "verification-report.json"
     verification: dict[str, Any] = json.loads(verification_path.read_text("utf-8"))
+    outcome = load_json(run_dir / "outcome-contract.json")
     verification.update(
         {
             "status": "UNDETERMINED",
             "finished_at": utc_now(),
             "checks": [],
             "browser": {
-                "status": "UNDETERMINED",
+                "status": (
+                    "UNDETERMINED"
+                    if browser_required(
+                        verification["changed_files"],
+                        declared_visible=(
+                            outcome["release_impacts"]["member_visible_behavior"]
+                            == "YES"
+                        ),
+                    )
+                    else "NOT_APPLICABLE"
+                ),
                 "output_directory": None,
                 "report_path": None,
                 "report_sha256": None,
@@ -480,13 +421,56 @@ def record_browser(run_dir: Path, result: dict[str, Any]) -> None:
     _reconcile_verification(run_dir)
 
 
+def record_browser_not_applicable(
+    run_dir: Path, root: Path | None = None
+) -> dict[str, Any]:
+    """Record the classifier's N/A result without executing a browser suite."""
+
+    ensure_ephemeral_run_dir(run_dir, root)
+    if root is not None:
+        assert_current_run_state(run_dir, root)
+    path = run_dir / "verification-report.json"
+    data: dict[str, Any] = load_json(path)
+    outcome = load_json(run_dir / "outcome-contract.json")
+    from .autonomous_release import browser_required
+
+    if browser_required(
+        data["changed_files"],
+        declared_visible=(
+            outcome["release_impacts"]["member_visible_behavior"] == "YES"
+        ),
+    ):
+        raise HarnessError("browser proof is required for this candidate")
+    data["checks"] = [
+        check for check in data["checks"] if check["check_id"] != "gate7-browser"
+    ]
+    data["browser"] = {
+        "status": "NOT_APPLICABLE",
+        "output_directory": None,
+        "report_path": None,
+        "report_sha256": None,
+        "assertion_count": 0,
+        "browser_engine": None,
+        "desktop": [],
+        "narrow": [],
+        "console_errors": [],
+        "page_errors": [],
+        "request_failures": [],
+    }
+    write_json(path, data)
+    _reconcile_verification(run_dir)
+    return data["browser"]
+
+
 def _reconcile_verification(run_dir: Path) -> None:
     """Derive the current conclusion from current-bound proof, never stale prose."""
 
     from .checks import tier_checks
+    from .autonomous_release import browser_required
 
     path = run_dir / "verification-report.json"
     data: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    outcome = load_json(run_dir / "outcome-contract.json")
     review: dict[str, Any] = json.loads(
         (run_dir / "review-report.json").read_text("utf-8")
     )
@@ -522,7 +506,16 @@ def _reconcile_verification(run_dir: Path) -> None:
             + "."
         )
     browser_status = data["browser"]["status"]
-    if browser_status != "PASS":
+    needs_browser = browser_required(
+        data["changed_files"],
+        declared_visible=(
+            outcome["release_impacts"]["member_visible_behavior"] == "YES"
+        ),
+    )
+    if not needs_browser and browser_status == "UNDETERMINED":
+        browser_status = "NOT_APPLICABLE"
+        data["browser"]["status"] = browser_status
+    if needs_browser and browser_status != "PASS":
         unresolved.append(f"Browser proof is {browser_status}.")
     if review["conclusion"] != "APPROVE":
         unresolved.append(
@@ -550,15 +543,20 @@ def _reconcile_verification(run_dir: Path) -> None:
     data["metrics"]["first_pass_focused"] = (
         "FAIL" if "FAIL" in focused else "PASS" if "PASS" in focused else "UNDETERMINED"
     )
-    has_production_journey = any(
-        check["tier"] == "journey"
-        and check["check_id"] == "navigation-production-composition"
-        and check["status"] == "PASS"
+    from .checks import tier_checks
+
+    required_journeys = {
+        check.check_id for check in tier_checks("journey", data["changed_files"])
+    }
+    passed_journey_ids = {
+        check["check_id"]
         for check in checks
-    )
+        if check["tier"] == "journey" and check["status"] == "PASS"
+    }
+    has_production_journey = required_journeys <= passed_journey_ids
     data["metrics"]["passed_journeys"] = (
         data["metrics"]["applicable_journeys"]
-        if has_production_journey and browser_status == "PASS"
+        if has_production_journey and browser_status in {"PASS", "NOT_APPLICABLE"}
         else 0
     )
     data["finished_at"] = utc_now()
@@ -596,13 +594,89 @@ def record_review(run_dir: Path, review_path: Path, root: Path | None = None) ->
         raise
 
 
+def record_hosted_review(
+    run_dir: Path,
+    result_path: Path,
+    receipt_path: Path,
+    root: Path,
+) -> dict[str, str]:
+    """Import an immutable hosted review only at the exact pre-breadth checkpoint."""
+
+    from .autonomous_release import load_schema_value
+
+    checkpoint = review_checkpoint(run_dir, root)
+    if checkpoint["status"] != "READY":
+        raise HarnessError("hosted review import requires the ready pre-breadth checkpoint")
+    verification = load_json(run_dir / "verification-report.json")
+    if any(check["tier"] in {"breadth", "release"} for check in verification["checks"]):
+        raise HarnessError("hosted review cannot be imported after breadth began")
+    result = load_schema_value(
+        result_path, "hosted-review-result.schema.json", root
+    )
+    receipt = load_schema_value(
+        receipt_path, "hosted-review-receipt.schema.json", root
+    )
+    bound = checkpoint["binding"]
+    actionable = sorted(
+        finding["finding_id"]
+        for finding in result["findings"]
+        if finding["actionable"]
+    )
+    if (
+        result["head_sha"] != bound["head_sha"]
+        or result["base_sha"] != bound["base_sha"]
+        or receipt["head_sha"] != bound["head_sha"]
+        or receipt["base_sha"] != bound["base_sha"]
+        or receipt["diff_sha256"] != bound["diff_sha256"]
+        or sorted(receipt["actionable_finding_ids"]) != actionable
+        or receipt["finding_count"] != len(result["findings"])
+        or receipt["unresolved_evidence_count"] != len(result["unresolved_evidence"])
+        or receipt["conclusion"] != result["conclusion"]
+    ):
+        raise HarnessError("hosted review result and receipt do not match this binding")
+    attempt_name = (
+        f"{receipt['workflow_run_id']}-{receipt['workflow_run_attempt']}"
+    )
+    attempt_dir = run_dir / "hosted-review" / "attempts" / attempt_name
+    if attempt_dir.exists():
+        raise HarnessError("hosted review attempt is already retained and immutable")
+    attempt_dir.mkdir(parents=True)
+    canonical_result = attempt_dir / "result.json"
+    canonical_receipt = attempt_dir / "receipt.json"
+    candidate_path = attempt_dir / "review-report.import.json"
+    try:
+        write_json(canonical_result, result)
+        write_json(canonical_receipt, receipt)
+        candidate = {
+            "schema_version": 1,
+            "run_id": checkpoint["run_id"],
+            "binding": bound,
+            "reviewer": f"hosted-codex:{receipt['workflow_run']}",
+            "read_only": True,
+            "scope": result["scope"],
+            "findings": result["findings"],
+            "unresolved_evidence": result["unresolved_evidence"],
+            "conclusion": result["conclusion"],
+        }
+        write_json(candidate_path, candidate)
+        record_review(run_dir, candidate_path, root)
+    except Exception:
+        raise
+    finally:
+        candidate_path.unlink(missing_ok=True)
+    return {
+        "result": canonical_result.relative_to(run_dir).as_posix(),
+        "receipt": canonical_receipt.relative_to(run_dir).as_posix(),
+    }
+
+
 def finalize_owner_handoff(
     run_dir: Path,
     *,
     what_now_works: str,
     task: str,
     expected_result: str,
-    start_path: str = "/member/today",
+    start_path: str = "/",
     remaining_decision: str | None = None,
     release_status: str = "CANDIDATE_ONLY",
     root: Path | None = None,
@@ -621,18 +695,35 @@ def finalize_owner_handoff(
     passed_tiers = {
         check["tier"] for check in verification["checks"] if check["status"] == "PASS"
     }
-    production_journey_passed = any(
-        check["check_id"] == "navigation-production-composition"
-        and check["tier"] == "journey"
-        and check["status"] == "PASS"
+    from .checks import tier_checks
+
+    required_journeys = {
+        check.check_id
+        for check in tier_checks("journey", verification["changed_files"])
+    }
+    passed_journey_ids = {
+        check["check_id"]
         for check in verification["checks"]
-    )
+        if check["tier"] == "journey" and check["status"] == "PASS"
+    }
+    production_journey_passed = required_journeys <= passed_journey_ids
     actionable_findings = [
         finding["finding_id"] for finding in review["findings"] if finding["actionable"]
     ]
+    from .autonomous_release import browser_required
+
+    needs_browser = browser_required(
+        verification["changed_files"],
+        declared_visible=(
+            outcome["release_impacts"]["member_visible_behavior"] == "YES"
+        ),
+    )
+    expected_browser = (
+        "PASS" if needs_browser else verification["browser"]["status"]
+    )
     if (
         verification["status"] != "PASS"
-        or verification["browser"]["status"] != "PASS"
+        or verification["browser"]["status"] != expected_browser
         or required_tiers - passed_tiers
         or not production_journey_passed
         or review["conclusion"] != "APPROVE"
@@ -650,23 +741,26 @@ def finalize_owner_handoff(
         raise HarnessError("live evidence cannot be finalized as CANDIDATE_ONLY")
 
     browser = verification["browser"]
-    desktop = browser["desktop"][0]["path"]
-    narrow = browser["narrow"][0]["path"]
+    desktop = browser["desktop"][0]["path"] if needs_browser else None
+    narrow = browser["narrow"][0]["path"] if needs_browser else None
     owner = {
         "schema_version": HARNESS_SCHEMA_VERSION,
         "run_id": outcome["run_id"],
         "binding": outcome["binding"],
         "requested_outcome": outcome["requested_outcome"],
         "what_now_works": what_now_works,
-        "what_did_not_change": [
-            "The ten member destinations retain their existing labels, order, routes, and role visibility.",
-            "Authorization, experience-mode precedence, observation behavior, and domain failure responses retain their characterized behavior.",
-            "No release, deployment, provider write, or live household action was performed.",
-        ],
+        "what_did_not_change": list(
+            dict.fromkeys(
+                [
+                    *outcome["visible_non_goals"],
+                    "No release, deployment, provider write, or live household action was performed.",
+                ]
+            )
+        ),
         "proof": {
             "deterministic": "PASS",
             "production_journey": "PASS",
-            "browser": "PASS",
+            "browser": expected_browser,
             "independent_review": "APPROVE",
         },
         "try_this": {
@@ -699,3 +793,73 @@ def sync_owner_handoff(run_dir: Path) -> None:
 
     owner = json.loads((run_dir / "owner-handoff.metadata.json").read_text("utf-8"))
     _write_owner_handoff(run_dir, owner)
+
+
+def review_checkpoint(run_dir: Path, root: Path) -> dict[str, Any]:
+    """Prove the cheap, exact-bound defect-discovery checkpoint is ready.
+
+    Independent review belongs here, before breadth and release-candidate work.
+    This function does not manufacture review evidence or mark the run green.
+    """
+
+    from .autonomous_release import browser_required
+    from .checks import tier_checks
+
+    validate_run(run_dir, root)
+    verification = load_json(run_dir / "verification-report.json")
+    outcome = load_json(run_dir / "outcome-contract.json")
+    declared = {
+        (check["tier"], check["check_id"]): check
+        for check in verification["checks"]
+    }
+    gaps: list[str] = []
+
+    def contains_undetermined(value: Any) -> bool:
+        if isinstance(value, str):
+            return "UNDETERMINED" in value
+        if isinstance(value, list):
+            return any(contains_undetermined(item) for item in value)
+        if isinstance(value, dict):
+            return any(contains_undetermined(item) for item in value.values())
+        return False
+
+    for artifact_name in (
+        "outcome-contract.json",
+        "evidence-inventory.json",
+        "preservation-manifest.json",
+    ):
+        if contains_undetermined(load_json(run_dir / artifact_name)):
+            gaps.append(f"contract/{artifact_name}")
+    if "UNDETERMINED" in (run_dir / "implementation-plan.md").read_text("utf-8"):
+        gaps.append("contract/implementation-plan.md")
+    for tier in ("static", "focused", "journey"):
+        for spec in tier_checks(tier, verification["changed_files"]):
+            check = declared.get((spec.tier, spec.check_id))
+            if (
+                check is None
+                or check["command"] != spec.command
+                or check["status"] != "PASS"
+                or check["exit_code"] != 0
+            ):
+                gaps.append(f"{spec.tier}/{spec.check_id}")
+    if browser_required(
+        verification["changed_files"],
+        declared_visible=(
+            outcome["release_impacts"]["member_visible_behavior"] == "YES"
+        ),
+    ) and verification["browser"]["status"] != "PASS":
+        gaps.append("journey/gate7-browser")
+    if any(check["status"] == "FAIL" for check in verification["checks"]):
+        gaps.append("failed-current-check")
+    return {
+        "status": "READY" if not gaps else "NOT_READY",
+        "run_id": outcome["run_id"],
+        "binding": outcome["binding"],
+        "changed_files": verification["changed_files"],
+        "missing_or_failed": sorted(set(gaps)),
+        "next": (
+            "Run an independent exhaustive adversarial review now; do not start breadth."
+            if not gaps
+            else "Complete the exact static, focused, production-journey, and applicable browser checkpoint."
+        ),
+    }

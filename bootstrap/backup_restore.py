@@ -177,6 +177,48 @@ class BackupManager:
             if staging_root.exists():
                 shutil.rmtree(staging_root)
 
+    def verify(self, backup: Path) -> dict[str, Any]:
+        """Authenticate, inspect, and replay a backup without switching live state."""
+
+        source = ensure_within(backup, self.paths.backup_dir)
+        if not source.is_file():
+            raise BackupError("backup file is missing")
+        references = self._references()
+        backup_key = self.store.get(references["backup"])
+        event_key = self.store.get(references["event_log"])
+        envelope = json.loads(source.read_text("utf-8"))
+        if (
+            envelope.get("format") != "administrateme-backup-v1"
+            or envelope.get("version") != BACKUP_FORMAT_VERSION
+        ):
+            raise BackupError("unsupported backup format")
+        try:
+            payload = AESGCM(backup_key).decrypt(
+                base64.b64decode(envelope["nonce"]),
+                base64.b64decode(envelope["ciphertext"]),
+                b"administrateme-backup-v1",
+            )
+        except Exception as exc:
+            raise BackupError("backup decryption or authentication failed") from exc
+        staging_root = Path(
+            tempfile.mkdtemp(prefix="verify-staging-", dir=self.paths.root)
+        )
+        try:
+            manifest = self._extract_and_validate(payload, staging_root)
+            if manifest["manifest_sha256"] != envelope["manifest_sha256"]:
+                raise BackupError("backup manifest identity does not match envelope")
+            asyncio.run(self._prove_rebuild(staging_root / "state", event_key))
+            return {
+                "status": "verified",
+                "manifest_sha256": manifest["manifest_sha256"],
+                "file_count": manifest["file_count"],
+                "projections_rebuilt": len(PROJECTION_NAMES),
+                "workbooks_rebuilt": True,
+            }
+        finally:
+            if staging_root.exists():
+                shutil.rmtree(staging_root)
+
     def _references(self) -> dict[str, str]:
         path = self.paths.instance_dir / "config" / "secret-references.json"
         if not path.is_file():

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme.local/schemas/harness/hosted-review-receipt-v1.json",
+  "title": "AdministrateMe hosted early-review receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "pull_request",
+    "workflow_run_id",
+    "workflow_run_attempt",
+    "head_sha",
+    "base_sha",
+    "diff_sha256",
+    "review_started_at",
+    "review_completed_at",
+    "conclusion",
+    "actionable_finding_ids",
+    "finding_count",
+    "unresolved_evidence_count",
+    "workflow_run"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+    "pull_request": {"type": "integer", "minimum": 1},
+    "workflow_run_id": {"type": "integer", "minimum": 1},
+    "workflow_run_attempt": {"type": "integer", "minimum": 1},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "diff_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "review_started_at": {"type": "string", "format": "date-time"},
+    "review_completed_at": {"type": "string", "format": "date-time"},
+    "conclusion": {"type": "string", "enum": ["APPROVE", "CHANGES_REQUIRED", "UNDETERMINED"]},
+    "actionable_finding_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^AR-[0-9]{3}$"}
+    },
+    "finding_count": {"type": "integer", "minimum": 0},
+    "unresolved_evidence_count": {"type": "integer", "minimum": 0},
+    "workflow_run": {"type": "string", "format": "uri"}
+  }
+}

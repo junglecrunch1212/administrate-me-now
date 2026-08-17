@@ -11,12 +11,13 @@ Build the smallest complete change while keeping the existing product behavior e
 
 1. Read the instruction chain, current-state index, outcome contract, evidence inventory, and preservation manifest.
 2. Pin branch, HEAD, base, tracked changes, untracked files, runtimes, and task-owned paths without cleaning or overwriting owner state.
-3. Trace the affected behavior from live entrypoint through authorization, event append, projection, pipeline, output, observation, and every failure path that applies.
+3. Trace the affected behavior from live entrypoint through authorization, event append, projection, pipeline, output, observation, and every failure path that applies. Replace the generic evidence-inventory, preservation-manifest, and implementation-plan `UNDETERMINED` placeholders with those exact task-specific sources, boundaries, checks, and choices before claiming checkpoint readiness.
 4. Write characterization tests before a behavior-preserving cleanup. A defect fix requires a failing regression test and a governing `PRESERVE`, `MODERNIZE`, `SUPERSEDE`, or `DEFER` classification.
 5. Implement one bounded batch. Keep old active paths until replacement parity passes.
-6. Run static, focused, production journey, breadth, and release-candidate tiers as applicable. Use the harness check selector and retain exact receipts in the temp run.
-7. Run browser proof for every touched member path. Treat an unexplained semantic, authorization, console, network, accessibility, desktop, or narrow difference as a regression.
-8. Refresh exact diff bindings and validate every run artifact.
+6. Run static, focused, and production-journey tiers. Run browser proof when `scripts.harness.autonomous_release.browser_required` classifies the changed behavior as member-visible. Treat an unexplained semantic, authorization, console, network, accessibility, desktop, or narrow difference as a regression.
+7. Run `PYTHONPATH=bridge poetry run python -m scripts.harness.cli review-ready <run-dir>`. Stop and close its gaps until it reports `READY`, then request the independent exhaustive adversarial review before starting breadth or release-candidate work.
+8. If review finds a defect, add its failing regression first, repair one bounded batch, refresh the binding, and return to step 6. Once the exact head is approved, run breadth, release-candidate, applicable macOS, and hosted gates without changing code.
+9. Refresh exact diff bindings and validate every run artifact. For a release candidate, evaluate the versioned G-001/G-002 lane; never infer autonomous authority from a green test alone.
 
 ## Failure and rollback
 
@@ -30,7 +31,8 @@ Build the smallest complete change while keeping the existing product behavior e
 
 - Keep deterministic code authoritative for truth, eligibility, ranking, routing, scope, authorization, and pass/fail.
 - Keep all language work behind the pinned OpenClaw `llm-task` seam.
-- Do not commit, push, open or modify a PR, merge, deploy, begin Phase B, mutate providers, alter Keychain/permissions, or disable observation.
+- Before G-002 is effective and enrolled, do not commit, push, open or modify a PR, merge, deploy, begin Phase B, mutate providers, alter Keychain/permissions, or disable observation unless a later publication/release task has separate explicit authority under effective G-001.
+- After G-002 is effective and enrolled, an owner-requested build task may commit only its bound paths, push normally, open a draft PR, and create one immutable local queue entry without a second owner phrase only when the committed exact-head cheap checkpoint is `READY` and `queue-g002` accepts the outcome-bound impact classification. That standing publication authority never covers a manual path, high-risk impact, merge, deployment, live mutation, provider action, observation change, or G-001 candidate. The scheduled operator prompt is the only standing merge/release authority.
 
 <!-- BEGIN GENERATED:ADMINME-HARNESS -->
 ## Generated harness reference

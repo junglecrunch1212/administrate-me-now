@@ -3,10 +3,10 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_018_MIXED_BACKLOG_REPAIR_LOCAL_CANDIDATE
-verified_local_date: 2026-08-15
+gate_result: G_002_AUTONOMOUS_OBSERVATION_RELEASE_TRAIN_LOCAL_CANDIDATE
+verified_local_date: 2026-08-16
 verified_github_date: pending
-branch: codex/co018-mixed-backlog-recovery
+branch: codex/administrateme-v2-runtime
 candidate_commit_resolution: local_candidate_pending_immutable_head_gates_and_draft_pr
 pull_request_url: pending
 openclaw_version: 2026.7.2
@@ -16,6 +16,59 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 ---
 
 # Release handoff
+
+## 2026-08-16 G-002 autonomous observation release-train candidate
+
+G-001 has prevented real defects, but its review was positioned after the most
+expensive proof and its owner ceremony applied equally to low- and high-risk
+work. PR #342 therefore repeated full green suites before lease, cancellation,
+authority-transfer, and Harness-history findings were discovered. Reverting
+those checks would hide defects rather than restore throughput.
+
+The local G-002 candidate preserves G-001 for provider writes, observation,
+runtimes/dependencies, enrollment, credentials/Keychain/permissions,
+privacy/authorization, destructive data, and release-control changes. For an
+ordinary low-risk observation release or exact bounded repair, it moves the
+exhaustive independent review after static/focused/production/applicable-
+browser proof and before breadth, release, or applicable hosted macOS work. A
+same-repository GitHub workflow runs Codex ephemerally and read-only, binds its
+schema result and content-free receipt to the exact head/base/diff, retains the
+attempt immutably, and starts later hosted jobs only after approval. This uses
+the official Codex action boundary; it does not add a model provider SDK or a
+second application router.
+
+The Harness now records browser `NOT_APPLICABLE` for a classified non-visible
+change, exposes the exact `review-ready` checkpoint, imports a hosted review,
+retains unique local receipt/log attempts, validates every retained attempt,
+and binds all nine release-impact decisions in the original outcome contract.
+An immutable local queue copies the exact Harness run into an enrolled
+owner-only durable root and hands one exact committed candidate to the
+versioned scheduled operator. Each scheduled run appends an immutable
+content-free lifecycle receipt; completion also retains a digest-bound exact
+settlement manifest that canonical selection revalidates. The operator
+derives—not hand-authors—the manifest from the queue, complete Harness run,
+hosted artifacts, Doctor, and live diagnostics.
+Ordinary releases still require a healthy baseline. Both lanes bind their exact
+admission receipt to the actual two-parent merge before the guarded updater can
+run. A bounded repair additionally binds unhealthy capability and failed Doctor
+targets. The updater revalidates baseline before and after backup, authenticates
+and decrypts the backup into temporary staging, validates its manifest/digests,
+rebuilds all fifteen projections and retained workbooks, permits only monotonic
+target repair, and rolls back on any new or worsened failure.
+Final settlement also requires a schema-valid, exact-merge authenticated live
+privacy/isolation receipt; it cannot infer that green field from pre-release
+tests. The ordinary lane requires a wholly healthy fresh Doctor report. A
+bounded repair may retain only admitted non-target baseline failures after all
+named capability and Doctor targets clear.
+
+This governance candidate changes its own manual paths and therefore denies its
+own G-002 eligibility. It is uncommitted, unpublished, unmerged, unenrolled,
+and unreleased. A later publication task must create its immutable head and run
+the current G-001 process. After manual merge, the owner must separately add
+the repository-scoped OpenAI API secret, set the enablement variable, configure
+the orchestrated checks as required, create the local queue directory, and
+install the checked-in release-operator prompt as a Codex scheduled task. No
+current PR, including PR #342, inherits this candidate authority.
 
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 

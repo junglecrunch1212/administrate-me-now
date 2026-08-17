@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,7 +21,7 @@ from bootstrap.bridge_enrollment import (
     MemberBridgeInstaller,
     MemberBridgePaths,
 )
-from bootstrap.contracts import DeploymentPaths, repository_root
+from bootstrap.contracts import DeploymentPaths, atomic_write, repository_root
 from bootstrap.doctor import Doctor
 from bootstrap.openclaw_activation import activate as activate_openclaw
 from bootstrap.openclaw_cron import OpenClawCronReconciler
@@ -117,6 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor")
     doctor.add_argument("--export", type=Path)
     doctor.add_argument("--no-synthetic-proof", action="store_true")
+    diagnostics = subparsers.add_parser("diagnostics")
+    diagnostics.add_argument("--export", type=Path, required=True)
     for name in (
         "start",
         "stop",
@@ -150,6 +153,22 @@ def build_parser() -> argparse.ArgumentParser:
                 "--approve-declared-source-assessment-repair",
                 action="store_true",
                 help=("activate only the candidate-declared exact degraded baseline"),
+            )
+            child.add_argument(
+                "--g002-observation-release-policy",
+                type=Path,
+                help=(
+                    "activate only the exact healthy-baseline merge admitted by "
+                    "an enrolled G-002 release operator"
+                ),
+            )
+            child.add_argument(
+                "--g002-bounded-repair-policy",
+                type=Path,
+                help=(
+                    "activate only the exact merge and monotonic degraded-baseline "
+                    "repair admitted by an enrolled G-002 release operator"
+                ),
             )
         elif name == "bridge-export":
             child.add_argument("member_id")
@@ -255,8 +274,37 @@ def main(argv: list[str] | None = None) -> int:
                 if args.export
                 else doctor.run(include_synthetic_proof=proof)
             )
+            if args.export:
+                result = {
+                    **result,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                atomic_write(
+                    args.export,
+                    (json.dumps(result, indent=2, sort_keys=True) + "\n").encode(
+                        "utf-8"
+                    ),
+                )
             _print(result)
             return 0 if result["status"] == "healthy" else 1
+        if args.command == "diagnostics":
+            diagnostics_result = ServiceManager(
+                paths, test_mode=test_mode
+            ).runtime_diagnostics()
+            if diagnostics_result is None:
+                raise RuntimeError("live runtime diagnostics are unavailable")
+            diagnostics_result = {
+                **diagnostics_result,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            atomic_write(
+                args.export,
+                (
+                    json.dumps(diagnostics_result, indent=2, sort_keys=True) + "\n"
+                ).encode("utf-8"),
+            )
+            _print({"status": "exported", "path": str(args.export.resolve())})
+            return 0
         if args.command in {"start", "stop", "status"}:
             manager = ServiceManager(paths, test_mode=test_mode)
             result = getattr(manager, args.command)()
@@ -359,6 +407,16 @@ def main(argv: list[str] | None = None) -> int:
                 bool(args.approve_declared_source_assessment_repair)
                 if args.command == "upgrade"
                 else False
+            ),
+            g002_bounded_repair_policy=(
+                args.g002_bounded_repair_policy
+                if args.command == "upgrade"
+                else None
+            ),
+            g002_observation_release_policy=(
+                args.g002_observation_release_policy
+                if args.command == "upgrade"
+                else None
             ),
         )
         if args.command == "upgrade":

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,19 @@ from bootstrap.contracts import (
     load_versions,
 )
 from bootstrap.doctor import Doctor
+from bootstrap.g002_bounded_repair import (
+    G002BoundedRepairError,
+    G002BoundedRepairPolicy,
+    G002ObservationReleasePolicy,
+    analyze_g002_repair_settlement,
+    load_g002_bounded_repair_policy,
+    load_g002_observation_release_policy,
+    validate_candidate_identity as validate_g002_candidate_identity,
+    validate_g002_observation_boundary,
+    validate_g002_observation_baseline,
+    validate_g002_repair_baseline,
+    validate_g002_repair_settlement,
+)
 from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
@@ -158,12 +172,16 @@ class UpgradeManager:
         test_mode: bool = False,
         approve_runtime_migration: bool = False,
         approve_source_assessment_repair: bool = False,
+        g002_bounded_repair_policy: Path | None = None,
+        g002_observation_release_policy: Path | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
         self.test_mode = test_mode
         self.approve_runtime_migration = approve_runtime_migration
         self.approve_source_assessment_repair = approve_source_assessment_repair
+        self.g002_bounded_repair_policy = g002_bounded_repair_policy
+        self.g002_observation_release_policy = g002_observation_release_policy
         self.services = ServiceManager(paths, test_mode=test_mode)
 
     def _active_release_root(self) -> Path:
@@ -224,6 +242,42 @@ class UpgradeManager:
         except RuntimeError as exc:
             raise UpgradeError(str(exc)) from exc
         return diagnostics
+
+    def _validate_g002_repair_online(
+        self, policy: G002BoundedRepairPolicy
+    ) -> dict[str, Any]:
+        doctor = self._run_release_doctor(
+            self._active_release_root(), include_synthetic_proof=False
+        )
+        diagnostics = self.services.runtime_diagnostics()
+        if diagnostics is None:
+            raise UpgradeError(
+                "G-002 bounded repair requires live runtime diagnostics"
+            )
+        try:
+            return validate_g002_repair_baseline(
+                policy, doctor=doctor, diagnostics=diagnostics
+            )
+        except G002BoundedRepairError as exc:
+            raise UpgradeError(str(exc)) from exc
+
+    def _validate_g002_observation_online(
+        self, policy: G002ObservationReleasePolicy
+    ) -> dict[str, Any]:
+        doctor = self._run_release_doctor(
+            self._active_release_root(), include_synthetic_proof=False
+        )
+        diagnostics = self.services.runtime_diagnostics()
+        if diagnostics is None:
+            raise UpgradeError(
+                "G-002 observation release requires live runtime diagnostics"
+            )
+        try:
+            return validate_g002_observation_baseline(
+                policy, doctor=doctor, diagnostics=diagnostics
+            )
+        except G002BoundedRepairError as exc:
+            raise UpgradeError(str(exc)) from exc
 
     def _attest_controller_provenance(self, candidate: Path, commit: str) -> None:
         """Require production upgrades to execute the reviewed candidate policy."""
@@ -337,6 +391,88 @@ class UpgradeManager:
 
             time.sleep(POST_SWITCH_POLL_SECONDS)
             last = self._run_release_doctor(release, include_synthetic_proof=False)
+
+    def _post_switch_g002_repair(
+        self,
+        release: Path,
+        policy: G002BoundedRepairPolicy,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Wait only for admitted targets/transients, then prove monotonic health."""
+
+        deadline = time.monotonic() + (
+            0 if self.test_mode else POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
+        )
+        while True:
+            doctor = self._run_release_doctor(
+                release, include_synthetic_proof=False
+            )
+            diagnostics = self.services.runtime_diagnostics()
+            if diagnostics is None:
+                if (
+                    not self.test_mode
+                    and not self.services.runtime_is_live()
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(POST_SWITCH_POLL_SECONDS)
+                    continue
+                raise UpgradeError(
+                    "G-002 settlement requires live runtime diagnostics"
+                )
+            try:
+                validate_g002_observation_boundary(doctor, diagnostics)
+                analysis = analyze_g002_repair_settlement(
+                    policy, doctor=doctor, diagnostics=diagnostics
+                )
+            except G002BoundedRepairError as exc:
+                raise UpgradeError(str(exc)) from exc
+
+            disallowed_checks = set(analysis["disallowed_doctor_checks"])
+            retryable_checks = disallowed_checks.issubset(
+                _TRANSIENT_POST_SWITCH_CHECKS
+            )
+            has_retryable_gap = bool(
+                analysis["unresolved_targets"]
+                or analysis["unresolved_target_checks"]
+                or (disallowed_checks and retryable_checks)
+            )
+            if analysis["disallowed_capabilities"] or (
+                disallowed_checks and not retryable_checks
+            ):
+                try:
+                    validate_g002_repair_settlement(
+                        policy, doctor=doctor, diagnostics=diagnostics
+                    )
+                except G002BoundedRepairError as exc:
+                    raise UpgradeError(str(exc)) from exc
+
+            if not has_retryable_gap:
+                full_doctor = self._run_release_doctor(
+                    release, include_synthetic_proof=True
+                )
+                full_diagnostics = self.services.runtime_diagnostics()
+                if full_diagnostics is None:
+                    raise UpgradeError(
+                        "G-002 full settlement lost runtime diagnostics"
+                    )
+                try:
+                    evidence = validate_g002_repair_settlement(
+                        policy,
+                        doctor=full_doctor,
+                        diagnostics=full_diagnostics,
+                    )
+                except G002BoundedRepairError as exc:
+                    raise UpgradeError(str(exc)) from exc
+                return full_doctor, evidence
+
+            if self.test_mode or time.monotonic() >= deadline:
+                try:
+                    validate_g002_repair_settlement(
+                        policy, doctor=doctor, diagnostics=diagnostics
+                    )
+                except G002BoundedRepairError as exc:
+                    raise UpgradeError(str(exc)) from exc
+                raise UpgradeError("G-002 settlement ended without complete proof")
+            time.sleep(POST_SWITCH_POLL_SECONDS)
 
     def _run_release_doctor(
         self, release: Path, *, include_synthetic_proof: bool
@@ -460,9 +596,60 @@ class UpgradeManager:
             if self.approve_source_assessment_repair
             else None
         )
+        authority_count = sum(
+            value is not None
+            for value in (
+                repair_policy,
+                self.g002_bounded_repair_policy,
+                self.g002_observation_release_policy,
+            )
+        )
+        if authority_count > 1:
+            raise UpgradeError(
+                "source-assessment and G-002 release authorities cannot be combined"
+            )
+        if (
+            self.g002_bounded_repair_policy is not None
+            or self.g002_observation_release_policy is not None
+        ) and self.approve_runtime_migration:
+            raise UpgradeError(
+                "G-002 release authority cannot approve a runtime migration"
+            )
+        g002_policy = (
+            load_g002_bounded_repair_policy(self.g002_bounded_repair_policy)
+            if self.g002_bounded_repair_policy is not None
+            else None
+        )
+        g002_observation_policy = (
+            load_g002_observation_release_policy(
+                self.g002_observation_release_policy
+            )
+            if self.g002_observation_release_policy is not None
+            else None
+        )
+        if g002_policy is not None:
+            try:
+                validate_g002_candidate_identity(g002_policy, candidate)
+            except G002BoundedRepairError as exc:
+                raise UpgradeError(str(exc)) from exc
+        if g002_observation_policy is not None:
+            try:
+                validate_g002_candidate_identity(g002_observation_policy, candidate)
+            except G002BoundedRepairError as exc:
+                raise UpgradeError(str(exc)) from exc
         repair_diagnostics = (
             self._validate_source_repair_online(repair_policy)
             if repair_policy is not None
+            else None
+        )
+        g002_baseline = (
+            self._validate_g002_repair_online(g002_policy)
+            if g002_policy is not None
+            else None
+        )
+        g002_observation_baseline = (
+            self._validate_g002_observation_online(g002_observation_policy)
+            if g002_observation_policy is not None
             else None
         )
         evidence = validate_candidate(
@@ -491,11 +678,13 @@ class UpgradeManager:
             approve_runtime_migration=self.approve_runtime_migration,
         )
         self._prepare_release(release)
-        backup = BackupManager(
+        backup_manager = BackupManager(
             self.paths,
             root=self.root,
             test_mode=self.test_mode,
-        ).create()
+        )
+        backup = backup_manager.create()
+        backup_verification = backup_manager.verify(Path(backup["path"]))
         pointer = self.paths.app_dir / "current-release.json"
         previous = json.loads(pointer.read_text("utf-8")) if pointer.exists() else None
         previous_release = (
@@ -504,15 +693,20 @@ class UpgradeManager:
             else None
         )
         was_running = self.services.status().status != "stopped"
-        if repair_policy is not None and not was_running:
+        if (
+            repair_policy is not None
+            or g002_policy is not None
+            or g002_observation_policy is not None
+        ) and not was_running:
             raise UpgradeError(
-                "declared source-assessment repair requires running services "
+                "declared degraded-baseline repair requires running services "
                 "at the quiescence boundary"
             )
         pointer_switched = False
         openclaw_switched = False
         plugin_registration_attempted = False
         source_repair_evidence: dict[str, Any] | None = None
+        g002_settlement_evidence: dict[str, Any] | None = None
         try:
             if repair_policy is not None:
                 # Backup quiescing restarts the active release. Take the final
@@ -530,6 +724,14 @@ class UpgradeManager:
                     gateway_live_at_quiescence=True,
                     append_requests=True,
                     test_mode=self.test_mode,
+                )
+            elif g002_policy is not None:
+                # Backup may restart the active release. Rebind the complete
+                # content-free health sets immediately before the switch.
+                g002_baseline = self._validate_g002_repair_online(g002_policy)
+            elif g002_observation_policy is not None:
+                g002_observation_baseline = self._validate_g002_observation_online(
+                    g002_observation_policy
                 )
             self._install_reviewed_openclaw(release)
             openclaw_switched = True
@@ -552,8 +754,13 @@ class UpgradeManager:
             configure_required_llm_tool(self.paths, test_mode=self.test_mode)
             install_launch_agents(self.paths, release, test_mode=self.test_mode)
             self.services.start()
-            result = self._post_switch_doctor(release)
-            if result["status"] != "healthy":
+            if g002_policy is not None:
+                result, g002_settlement_evidence = self._post_switch_g002_repair(
+                    release, g002_policy
+                )
+            else:
+                result = self._post_switch_doctor(release)
+            if g002_policy is None and result["status"] != "healthy":
                 failed = ", ".join(sorted(self._failed_check_names(result)))
                 raise UpgradeError(
                     f"candidate failed post-switch Doctor: {failed or 'unknown check'}"
@@ -629,11 +836,25 @@ class UpgradeManager:
         return {
             "status": "upgraded",
             "commit": commit,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
             "backup": backup["path"],
+            "backup_manifest_sha256": backup["manifest_sha256"],
+            "backup_verification": backup_verification,
             "compatibility": evidence,
             "upgrade_controller_attested": True,
             "rollback_available": previous is not None,
             "source_assessment_repair": source_repair_evidence,
+            "g002_bounded_repair": {
+                "baseline": g002_baseline,
+                "settlement": g002_settlement_evidence,
+            }
+            if g002_policy is not None
+            else None,
+            "g002_observation_release": {
+                "baseline": g002_observation_baseline,
+            }
+            if g002_observation_policy is not None
+            else None,
         }
 
     def rollback(self) -> dict[str, Any]:

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme.local/schemas/harness/g002-live-privacy-receipt-v1.json",
+  "title": "AdministrateMe G-002 authenticated live privacy receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "merge_commit",
+    "status",
+    "authenticated_self_scope",
+    "cross_member_denial",
+    "non_enumerating_denial",
+    "session_scope",
+    "replay_isolation",
+    "observation_active",
+    "provider_effects_delta",
+    "observed_at"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "merge_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "status": {"type": "string", "const": "PASS"},
+    "authenticated_self_scope": {"type": "string", "const": "PASS"},
+    "cross_member_denial": {"type": "string", "const": "PASS"},
+    "non_enumerating_denial": {"type": "string", "const": "PASS"},
+    "session_scope": {"type": "string", "const": "PASS"},
+    "replay_isolation": {"type": "string", "const": "PASS"},
+    "observation_active": {"type": "boolean", "const": true},
+    "provider_effects_delta": {"type": "integer", "const": 0},
+    "observed_at": {"type": "string", "format": "date-time"}
+  }
+}

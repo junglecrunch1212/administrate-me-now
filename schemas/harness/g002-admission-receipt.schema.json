@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme.local/schemas/harness/g002-admission-receipt-v1.json",
+  "title": "AdministrateMe G-002 admission receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision",
+    "lane",
+    "repository",
+    "pull_request",
+    "base_sha",
+    "head_sha",
+    "manifest_sha256",
+    "run_id",
+    "binding_diff_sha256",
+    "target_degradations",
+    "target_doctor_checks",
+    "admitted_at"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "decision": {"type": "string", "const": "ADMIT"},
+    "lane": {"type": "string", "enum": ["observation", "bounded_repair"]},
+    "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+    "pull_request": {"type": "integer", "minimum": 1},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,79}$"},
+    "binding_diff_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "target_degradations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "target_doctor_checks": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "admitted_at": {"type": "string", "format": "date-time"}
+  }
+}

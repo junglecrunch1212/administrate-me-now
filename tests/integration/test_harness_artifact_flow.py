@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -22,14 +23,53 @@ from scripts.harness.core import (
 )
 from scripts.harness import run_artifacts
 from scripts.harness.run_artifacts import (
-    create_run,
+    create_run as _create_run,
     finalize_owner_handoff,
     record_browser,
+    record_browser_not_applicable,
     record_checks,
     record_review,
-    refresh_bindings,
+    refresh_bindings as _refresh_bindings,
     sync_owner_handoff,
 )
+
+
+def _active_candidate_paths() -> set[str]:
+    active = os.environ.get("ADMINME_ACTIVE_HARNESS_RUN")
+    if not active:
+        return set()
+    active_report = load_json(Path(active) / "verification-report.json")
+    return set(active_report["changed_files"])
+
+
+def create_run(
+    root: Path,
+    *,
+    requested_outcome: str,
+    task_paths: list[str],
+    protected_paths: list[str],
+    run_dir: Path,
+) -> Path:
+    """Include the exact active candidate scope during pre-commit Harness checks."""
+
+    task_paths = sorted(set(task_paths) | _active_candidate_paths())
+    return _create_run(
+        root,
+        requested_outcome=requested_outcome,
+        task_paths=task_paths,
+        protected_paths=protected_paths,
+        run_dir=run_dir,
+    )
+
+
+def refresh_bindings(root: Path, run_dir: Path, task_paths: list[str]) -> None:
+    """Keep fixture refreshes bound to the same active pre-commit scope."""
+
+    _refresh_bindings(
+        root,
+        run_dir,
+        sorted(set(task_paths) | _active_candidate_paths()),
+    )
 
 
 def test_run_artifacts_create_validate_and_refresh_in_system_temp(
@@ -96,7 +136,8 @@ def test_validation_rejects_self_consistent_manifest_missing_candidate_path(
     root = Path(__file__).resolve().parents[2]
     run_dir = tmp_path / "administrateme-harness-incomplete-candidate-scope"
     complete = candidate_diff_paths(root)
-    assert len(complete) > 1
+    if len(complete) <= 1:
+        pytest.skip("committed candidate diff is available after publication commit")
     create_run(
         root,
         requested_outcome="Reject a self-consistent but incomplete candidate manifest.",
@@ -173,7 +214,6 @@ def test_validation_invalidates_in_place_protected_file_change(
         run_dir=run_dir,
     )
     _validate_run_semantics(run_dir, root)
-
     protected.write_text("private fixture two\n", "utf-8")
 
     with pytest.raises(HarnessError, match="repository state is stale"):
@@ -200,10 +240,74 @@ def test_validation_invalidates_in_place_protected_file_change(
     review = load_json(review_path)
     owner = load_json(owner_path)
     assert verification["checks"] == []
-    assert verification["browser"]["status"] == "UNDETERMINED"
+    assert verification["browser"]["status"] == "NOT_APPLICABLE"
     assert review["conclusion"] == "UNDETERMINED"
     assert owner["proof"]["deterministic"] == "UNDETERMINED"
     _validate_run_semantics(run_dir, root)
+
+
+def test_non_visible_browser_command_records_not_applicable_without_execution(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-browser-not-applicable"
+    create_run(
+        root,
+        requested_outcome="Do not execute browser proof for a non-visible change.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    verification_path = run_dir / "verification-report.json"
+    verification = load_json(verification_path)
+    verification["checks"].append(
+        {
+            "check_id": "gate7-browser",
+            "tier": "journey",
+            "command": "fixture must be removed",
+            "status": "FAIL",
+            "exit_code": 1,
+            "duration_seconds": 0,
+            "evidence_class": "fixture",
+            "receipt": "fixture-must-be-removed.json",
+        }
+    )
+    verification["browser"]["status"] = "FAIL"
+    write_json(verification_path, verification)
+
+    result = record_browser_not_applicable(run_dir, root)
+
+    current = load_json(verification_path)
+    assert result["status"] == "NOT_APPLICABLE"
+    assert current["browser"]["status"] == "NOT_APPLICABLE"
+    assert all(check["check_id"] != "gate7-browser" for check in current["checks"])
+    _validate_run_semantics(run_dir, root)
+
+
+def test_declared_member_visible_behavior_requires_browser_for_backend_path(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-declared-visible"
+    create_run(
+        root,
+        requested_outcome="Require browser proof for a declared visible result.",
+        task_paths=sorted(
+            set(candidate_diff_paths(root))
+            | {"packs/adapters/calendaring/google-calendar/adapter.py"}
+        ),
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    outcome_path = run_dir / "outcome-contract.json"
+    outcome = load_json(outcome_path)
+    outcome["release_impacts"]["member_visible_behavior"] = "YES"
+    write_json(outcome_path, outcome)
+
+    run_artifacts._reconcile_verification(run_dir)
+
+    verification = load_json(run_dir / "verification-report.json")
+    assert "Browser proof is NOT_APPLICABLE." in verification["unresolved"]
 
 
 def test_semantically_false_green_run_is_rejected(tmp_path: Path) -> None:
@@ -518,7 +622,7 @@ def test_finalize_owner_restores_artifacts_after_post_write_failure(
         for tier, check_id in (
             ("static", "static-fixture"),
             ("focused", "focused-fixture"),
-            ("journey", "navigation-production-composition"),
+            ("journey", "g002-guarded-release-production-composition"),
             ("breadth", "breadth-fixture"),
         )
     ]
@@ -824,7 +928,7 @@ def test_changed_binding_invalidates_every_receipt(
     review = json.loads((run_dir / "review-report.json").read_text("utf-8"))
     owner = json.loads((run_dir / "owner-handoff.metadata.json").read_text("utf-8"))
     assert verification["checks"] == []
-    assert verification["browser"]["status"] == "UNDETERMINED"
+    assert verification["browser"]["status"] == "NOT_APPLICABLE"
     assert review["conclusion"] == "UNDETERMINED"
     assert owner["proof"]["deterministic"] == "UNDETERMINED"
 
@@ -926,7 +1030,7 @@ def test_current_browser_and_production_journey_reconcile_journey_metric(
         )
         return {**check, "receipt": artifact.name}
 
-    journey = receipt("navigation-production-composition")
+    journey = receipt("g002-guarded-release-production-composition")
     record_checks(run_dir, [journey])
     record_browser(
         run_dir,
