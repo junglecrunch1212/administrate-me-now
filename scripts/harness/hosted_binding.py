@@ -78,9 +78,7 @@ def clean_committed_binding(
     )
     if not paths:
         raise HostedBindingError("hosted candidate has no committed changed paths")
-    prefix = committed_task_prefix(
-        root, paths, base_sha=base_sha, head_sha=head_sha
-    )
+    prefix = committed_task_prefix(root, paths, base_sha=base_sha, head_sha=head_sha)
     digest = hashlib.sha256(
         b"".join(
             [

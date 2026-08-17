@@ -606,21 +606,17 @@ def record_hosted_review(
 
     checkpoint = review_checkpoint(run_dir, root)
     if checkpoint["status"] != "READY":
-        raise HarnessError("hosted review import requires the ready pre-breadth checkpoint")
+        raise HarnessError(
+            "hosted review import requires the ready pre-breadth checkpoint"
+        )
     verification = load_json(run_dir / "verification-report.json")
     if any(check["tier"] in {"breadth", "release"} for check in verification["checks"]):
         raise HarnessError("hosted review cannot be imported after breadth began")
-    result = load_schema_value(
-        result_path, "hosted-review-result.schema.json", root
-    )
-    receipt = load_schema_value(
-        receipt_path, "hosted-review-receipt.schema.json", root
-    )
+    result = load_schema_value(result_path, "hosted-review-result.schema.json", root)
+    receipt = load_schema_value(receipt_path, "hosted-review-receipt.schema.json", root)
     bound = checkpoint["binding"]
     actionable = sorted(
-        finding["finding_id"]
-        for finding in result["findings"]
-        if finding["actionable"]
+        finding["finding_id"] for finding in result["findings"] if finding["actionable"]
     )
     if (
         result["head_sha"] != bound["head_sha"]
@@ -634,9 +630,7 @@ def record_hosted_review(
         or receipt["conclusion"] != result["conclusion"]
     ):
         raise HarnessError("hosted review result and receipt do not match this binding")
-    attempt_name = (
-        f"{receipt['workflow_run_id']}-{receipt['workflow_run_attempt']}"
-    )
+    attempt_name = f"{receipt['workflow_run_id']}-{receipt['workflow_run_attempt']}"
     attempt_dir = run_dir / "hosted-review" / "attempts" / attempt_name
     if attempt_dir.exists():
         raise HarnessError("hosted review attempt is already retained and immutable")
@@ -718,9 +712,7 @@ def finalize_owner_handoff(
             outcome["release_impacts"]["member_visible_behavior"] == "YES"
         ),
     )
-    expected_browser = (
-        "PASS" if needs_browser else verification["browser"]["status"]
-    )
+    expected_browser = "PASS" if needs_browser else verification["browser"]["status"]
     if (
         verification["status"] != "PASS"
         or verification["browser"]["status"] != expected_browser
@@ -809,8 +801,7 @@ def review_checkpoint(run_dir: Path, root: Path) -> dict[str, Any]:
     verification = load_json(run_dir / "verification-report.json")
     outcome = load_json(run_dir / "outcome-contract.json")
     declared = {
-        (check["tier"], check["check_id"]): check
-        for check in verification["checks"]
+        (check["tier"], check["check_id"]): check for check in verification["checks"]
     }
     gaps: list[str] = []
 
@@ -842,12 +833,15 @@ def review_checkpoint(run_dir: Path, root: Path) -> dict[str, Any]:
                 or check["exit_code"] != 0
             ):
                 gaps.append(f"{spec.tier}/{spec.check_id}")
-    if browser_required(
-        verification["changed_files"],
-        declared_visible=(
-            outcome["release_impacts"]["member_visible_behavior"] == "YES"
-        ),
-    ) and verification["browser"]["status"] != "PASS":
+    if (
+        browser_required(
+            verification["changed_files"],
+            declared_visible=(
+                outcome["release_impacts"]["member_visible_behavior"] == "YES"
+            ),
+        )
+        and verification["browser"]["status"] != "PASS"
+    ):
         gaps.append("journey/gate7-browser")
     if any(check["status"] == "FAIL" for check in verification["checks"]):
         gaps.append("failed-current-check")

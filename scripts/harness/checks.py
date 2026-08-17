@@ -45,6 +45,11 @@ class CheckSpec:
 
 STATIC_CHECKS = (
     CheckSpec(
+        "ruff-format",
+        "static",
+        "poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools",
+    ),
+    CheckSpec(
         "harness-unit",
         "static",
         "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest -p no:cacheprovider -q tests/unit/harness",
@@ -226,7 +231,9 @@ def focused_checks(changed_paths: list[str]) -> list[CheckSpec]:
 
 
 def _path_matches_any(path: str, prefixes: tuple[str, ...]) -> bool:
-    return any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in prefixes)
+    return any(
+        path == prefix.rstrip("/") or path.startswith(prefix) for prefix in prefixes
+    )
 
 
 def journey_checks(changed_paths: list[str]) -> list[CheckSpec]:

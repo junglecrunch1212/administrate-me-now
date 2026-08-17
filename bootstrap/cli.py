@@ -409,9 +409,7 @@ def main(argv: list[str] | None = None) -> int:
                 else False
             ),
             g002_bounded_repair_policy=(
-                args.g002_bounded_repair_policy
-                if args.command == "upgrade"
-                else None
+                args.g002_bounded_repair_policy if args.command == "upgrade" else None
             ),
             g002_observation_release_policy=(
                 args.g002_observation_release_policy

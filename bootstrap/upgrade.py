@@ -251,9 +251,7 @@ class UpgradeManager:
         )
         diagnostics = self.services.runtime_diagnostics()
         if diagnostics is None:
-            raise UpgradeError(
-                "G-002 bounded repair requires live runtime diagnostics"
-            )
+            raise UpgradeError("G-002 bounded repair requires live runtime diagnostics")
         try:
             return validate_g002_repair_baseline(
                 policy, doctor=doctor, diagnostics=diagnostics
@@ -403,9 +401,7 @@ class UpgradeManager:
             0 if self.test_mode else POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
         )
         while True:
-            doctor = self._run_release_doctor(
-                release, include_synthetic_proof=False
-            )
+            doctor = self._run_release_doctor(release, include_synthetic_proof=False)
             diagnostics = self.services.runtime_diagnostics()
             if diagnostics is None:
                 if (
@@ -415,9 +411,7 @@ class UpgradeManager:
                 ):
                     time.sleep(POST_SWITCH_POLL_SECONDS)
                     continue
-                raise UpgradeError(
-                    "G-002 settlement requires live runtime diagnostics"
-                )
+                raise UpgradeError("G-002 settlement requires live runtime diagnostics")
             try:
                 validate_g002_observation_boundary(doctor, diagnostics)
                 analysis = analyze_g002_repair_settlement(
@@ -427,9 +421,7 @@ class UpgradeManager:
                 raise UpgradeError(str(exc)) from exc
 
             disallowed_checks = set(analysis["disallowed_doctor_checks"])
-            retryable_checks = disallowed_checks.issubset(
-                _TRANSIENT_POST_SWITCH_CHECKS
-            )
+            retryable_checks = disallowed_checks.issubset(_TRANSIENT_POST_SWITCH_CHECKS)
             has_retryable_gap = bool(
                 analysis["unresolved_targets"]
                 or analysis["unresolved_target_checks"]
@@ -451,9 +443,7 @@ class UpgradeManager:
                 )
                 full_diagnostics = self.services.runtime_diagnostics()
                 if full_diagnostics is None:
-                    raise UpgradeError(
-                        "G-002 full settlement lost runtime diagnostics"
-                    )
+                    raise UpgradeError("G-002 full settlement lost runtime diagnostics")
                 try:
                     evidence = validate_g002_repair_settlement(
                         policy,
@@ -621,9 +611,7 @@ class UpgradeManager:
             else None
         )
         g002_observation_policy = (
-            load_g002_observation_release_policy(
-                self.g002_observation_release_policy
-            )
+            load_g002_observation_release_policy(self.g002_observation_release_policy)
             if self.g002_observation_release_policy is not None
             else None
         )

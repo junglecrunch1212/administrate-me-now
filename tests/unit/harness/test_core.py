@@ -22,6 +22,7 @@ from scripts.harness.checks import (
     run_browser,
     run_check,
     run_tier,
+    tier_checks,
 )
 from scripts.harness.baseline_navigation import BASELINE_TEST
 from scripts.harness.core import (
@@ -64,6 +65,14 @@ def _bind_browser_run(run_dir: Path, *directories: Path) -> None:
         (directory / "harness-binding.json").write_text(
             json.dumps(current), encoding="utf-8"
         )
+
+
+def test_static_tier_rejects_unformatted_repository_files() -> None:
+    checks = {check.check_id: check for check in tier_checks("static")}
+
+    assert checks["ruff-format"].command == (
+        "poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools"
+    )
 
 
 def _fixture_png(

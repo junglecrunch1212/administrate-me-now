@@ -196,11 +196,11 @@ def load_release_manifest(path: Path, root: Path | None = None) -> dict[str, Any
     schema = load_json(schema_path)
     try:
         Draft202012Validator.check_schema(schema)
-        Draft202012Validator(
-            schema, format_checker=FormatChecker()
-        ).validate(value)
+        Draft202012Validator(schema, format_checker=FormatChecker()).validate(value)
     except (SchemaError, ValidationError) as exc:
-        raise HarnessError(f"invalid autonomous release manifest: {exc.message}") from exc
+        raise HarnessError(
+            f"invalid autonomous release manifest: {exc.message}"
+        ) from exc
     return value
 
 
@@ -212,9 +212,7 @@ def load_schema_value(path: Path, schema_name: str, root: Path | None = None) ->
     schema = load_json(schema_path)
     try:
         Draft202012Validator.check_schema(schema)
-        Draft202012Validator(
-            schema, format_checker=FormatChecker()
-        ).validate(value)
+        Draft202012Validator(schema, format_checker=FormatChecker()).validate(value)
     except (SchemaError, ValidationError) as exc:
         raise HarnessError(f"invalid {schema_name} artifact: {exc.message}") from exc
     return value
@@ -227,9 +225,7 @@ def _validate_schema_value(
     schema = load_json(schema_path)
     try:
         Draft202012Validator.check_schema(schema)
-        Draft202012Validator(
-            schema, format_checker=FormatChecker()
-        ).validate(value)
+        Draft202012Validator(schema, format_checker=FormatChecker()).validate(value)
     except (SchemaError, ValidationError) as exc:
         raise HarnessError(f"invalid {schema_name} artifact: {exc.message}") from exc
 
@@ -308,10 +304,13 @@ def evaluate_release(value: dict[str, Any]) -> dict[str, Any]:
         proof["breadth_started_at"]
     ):
         reasons.append("independent adversarial review began after breadth work")
-    if browser_required(
-        candidate["changed_paths"],
-        declared_visible=impacts["member_visible_behavior"],
-    ) and proof["browser"] != "PASS":
+    if (
+        browser_required(
+            candidate["changed_paths"],
+            declared_visible=impacts["member_visible_behavior"],
+        )
+        and proof["browser"] != "PASS"
+    ):
         reasons.append("member-visible candidate lacks browser proof")
     needs_macos = hosted_macos_required(candidate["changed_paths"])
     if needs_macos and proof["hosted_macos"] != "PASS":
@@ -506,9 +505,7 @@ def _validate_github_evidence(value: dict[str, Any]) -> None:
     if hosted_macos_required(candidate["changed_paths"]):
         required.add("g002-credential-free-rehearsal")
     failed = sorted(
-        name
-        for name in required
-        if latest.get(name, {}).get("conclusion") != "success"
+        name for name in required if latest.get(name, {}).get("conclusion") != "success"
     )
     if failed:
         raise HarnessError(
@@ -571,8 +568,7 @@ def _validate_bound_harness(value: dict[str, Any], root: Path) -> None:
     if sorted(candidate["changed_paths"]) != sorted(verification["changed_files"]):
         mismatches.append("complete changed-path manifest")
     bound_impacts = {
-        name: declared == "YES"
-        for name, declared in outcome["release_impacts"].items()
+        name: declared == "YES" for name, declared in outcome["release_impacts"].items()
     }
     if value["impacts"] != bound_impacts:
         mismatches.append("outcome-bound release impacts")
@@ -581,13 +577,14 @@ def _validate_bound_harness(value: dict[str, Any], root: Path) -> None:
             "autonomous release contradicts its Harness run: " + ", ".join(mismatches)
         )
     if verification["status"] != "PASS" or review["conclusion"] != "APPROVE":
-        raise HarnessError("autonomous release requires a validated passing Harness run")
+        raise HarnessError(
+            "autonomous release requires a validated passing Harness run"
+        )
 
     from .checks import tier_checks
 
     declared_checks = {
-        (check["tier"], check["check_id"]): check
-        for check in verification["checks"]
+        (check["tier"], check["check_id"]): check for check in verification["checks"]
     }
     for tier in ("static", "focused", "journey", "breadth", "release"):
         for spec in tier_checks(tier, verification["changed_files"]):
@@ -605,9 +602,7 @@ def _validate_bound_harness(value: dict[str, Any], root: Path) -> None:
     result_path = _run_child(run_dir, declared["hosted_review_result"])
     receipt_path = _run_child(run_dir, declared["hosted_review_receipt"])
     result = load_schema_value(result_path, "hosted-review-result.schema.json", root)
-    receipt = load_schema_value(
-        receipt_path, "hosted-review-receipt.schema.json", root
-    )
+    receipt = load_schema_value(receipt_path, "hosted-review-receipt.schema.json", root)
     actionable = sorted(
         finding["finding_id"] for finding in result["findings"] if finding["actionable"]
     )
@@ -627,9 +622,7 @@ def _validate_bound_harness(value: dict[str, Any], root: Path) -> None:
     ):
         raise HarnessError("hosted review result or receipt is not exact and approving")
 
-    breadth = [
-        check for check in verification["checks"] if check["tier"] == "breadth"
-    ]
+    breadth = [check for check in verification["checks"] if check["tier"] == "breadth"]
     if not breadth:
         raise HarnessError("autonomous release has no breadth start evidence")
     actual_review_completed = _timestamp(receipt["review_completed_at"])
@@ -673,8 +666,7 @@ def queue_g002_candidate(
     outcome = load_json(run_dir / "outcome-contract.json")
     verification = load_json(run_dir / "verification-report.json")
     impacts = {
-        name: declared == "YES"
-        for name, declared in outcome["release_impacts"].items()
+        name: declared == "YES" for name, declared in outcome["release_impacts"].items()
     }
     risky = sorted(name for name in HIGH_RISK_IMPACTS if impacts[name])
     manual = manual_release_paths(verification["changed_files"])
@@ -714,7 +706,9 @@ def queue_g002_candidate(
     if status:
         raise HarnessError("G-002 queue requires a clean committed candidate checkout")
     if checkpoint["binding"]["head_sha"] != head:
-        raise HarnessError("G-002 queue run is not bound to the committed candidate head")
+        raise HarnessError(
+            "G-002 queue run is not bound to the committed candidate head"
+        )
 
     pull = _gh_json([f"repos/{repository}/pulls/{pull_request}"])
     if (
@@ -728,9 +722,7 @@ def queue_g002_candidate(
     entries_root = _ensure_private_queue_directory(
         enrolled_root / "entries", enrolled_root
     )
-    runs_root = _ensure_private_queue_directory(
-        enrolled_root / "runs", enrolled_root
-    )
+    runs_root = _ensure_private_queue_directory(enrolled_root / "runs", enrolled_root)
     resolved_output = output_path.resolve()
     if resolved_output.parent != entries_root.resolve():
         raise HarnessError("G-002 queue entry must be written under its enrolled root")
@@ -780,9 +772,7 @@ def queue_g002_candidate(
     return entry
 
 
-def validate_g002_queue(
-    queue_path: Path, root: Path | None = None
-) -> dict[str, Any]:
+def validate_g002_queue(queue_path: Path, root: Path | None = None) -> dict[str, Any]:
     """Revalidate an exact queue handoff against its checkout, run, and PR."""
 
     repository_root_path = root or repository_root()
@@ -814,8 +804,7 @@ def validate_g002_queue(
     verification = load_json(run_dir / "verification-report.json")
     bound = outcome["binding"]
     bound_impacts = {
-        name: declared == "YES"
-        for name, declared in outcome["release_impacts"].items()
+        name: declared == "YES" for name, declared in outcome["release_impacts"].items()
     }
     mismatches: list[str] = []
     if queue["run_id"] != outcome["run_id"]:
@@ -851,9 +840,7 @@ def validate_g002_queue(
         raise HarnessError(
             "G-002 queue checkout is not clean at its exact committed head"
         )
-    pull = _gh_json(
-        [f"repos/{queue['repository']}/pulls/{queue['pull_request']}"]
-    )
+    pull = _gh_json([f"repos/{queue['repository']}/pulls/{queue['pull_request']}"])
     if (
         pull.get("head", {}).get("sha") != queue["head_sha"]
         or pull.get("base", {}).get("ref") != "main"
@@ -932,9 +919,7 @@ def record_g002_operator_attempt(
             or reason_codes
         ):
             raise HarnessError("COMPLETE G-002 attempt contradicts release settlement")
-        settled = load_release_manifest(
-            settlement_manifest_path, repository_root_path
-        )
+        settled = load_release_manifest(settlement_manifest_path, repository_root_path)
         result = evaluate_release(settled)
         if (
             result["status"] != "COMPLETE"
@@ -943,8 +928,7 @@ def record_g002_operator_attempt(
             or settled["candidate"]["base_sha"] != queue["base_sha"]
             or settled["candidate"]["head_sha"] != queue["head_sha"]
             or settled["harness"]["run_id"] != queue["run_id"]
-            or settled["harness"]["binding_diff_sha256"]
-            != queue["binding_diff_sha256"]
+            or settled["harness"]["binding_diff_sha256"] != queue["binding_diff_sha256"]
             or settled.get("settlement", {}).get("merge_commit") != merge_commit
         ):
             raise HarnessError("COMPLETE attempt lacks its exact settlement manifest")
@@ -1087,10 +1071,8 @@ def _validate_g002_attempt(
         or settled["candidate"]["base_sha"] != queue["base_sha"]
         or settled["candidate"]["head_sha"] != queue["head_sha"]
         or settled["harness"]["run_id"] != queue["run_id"]
-        or settled["harness"]["binding_diff_sha256"]
-        != queue["binding_diff_sha256"]
-        or settled.get("settlement", {}).get("merge_commit")
-        != attempt["merge_commit"]
+        or settled["harness"]["binding_diff_sha256"] != queue["binding_diff_sha256"]
+        or settled.get("settlement", {}).get("merge_commit") != attempt["merge_commit"]
     ):
         raise HarnessError("COMPLETE attempt lacks its exact settlement manifest")
 
@@ -1215,7 +1197,11 @@ def _content_free_live_baseline(
     if diagnostics.get("observation_active") is not True:
         raise HarnessError("live runtime observation mode is not active")
     backup = next(
-        (check for check in checks if check.get("name") == "disk_space_and_backup_target"),
+        (
+            check
+            for check in checks
+            if check.get("name") == "disk_space_and_backup_target"
+        ),
         None,
     )
     if not isinstance(backup, dict) or backup.get("ok") is not True:
@@ -1235,9 +1221,7 @@ def _content_free_live_baseline(
     }
 
 
-def _fresh_live_baseline(
-    doctor_path: Path, diagnostics_path: Path
-) -> dict[str, Any]:
+def _fresh_live_baseline(doctor_path: Path, diagnostics_path: Path) -> dict[str, Any]:
     """Require one recent, coherent, content-free admission observation."""
 
     doctor = load_json(doctor_path)
@@ -1254,7 +1238,9 @@ def _fresh_live_baseline(
     return _content_free_live_baseline(doctor, diagnostics)
 
 
-def _latest_hosted_review(run_dir: Path, root: Path) -> tuple[Path, Path, dict[str, Any]]:
+def _latest_hosted_review(
+    run_dir: Path, root: Path
+) -> tuple[Path, Path, dict[str, Any]]:
     attempts = run_dir / "hosted-review" / "attempts"
     candidates: list[tuple[datetime, Path, Path, dict[str, Any]]] = []
     if attempts.is_dir():
@@ -1303,8 +1289,7 @@ def prepare_release_manifest(
     review = load_json(run_dir / "review-report.json")
     bound = outcome["binding"]
     bound_impacts = {
-        name: declared == "YES"
-        for name, declared in outcome["release_impacts"].items()
+        name: declared == "YES" for name, declared in outcome["release_impacts"].items()
     }
     if (
         queue["run_id"] != outcome["run_id"]
@@ -1319,8 +1304,7 @@ def prepare_release_manifest(
         raise HarnessError("G-002 queue has no canonical approving review")
 
     declared = {
-        (check["tier"], check["check_id"]): check
-        for check in verification["checks"]
+        (check["tier"], check["check_id"]): check for check in verification["checks"]
     }
     for tier in ("static", "focused", "journey", "breadth", "release"):
         from .checks import tier_checks
@@ -1333,14 +1317,14 @@ def prepare_release_manifest(
                 or check["status"] != "PASS"
                 or check["exit_code"] != 0
             ):
-                raise HarnessError(f"G-002 manifest lacks passing {tier}/{spec.check_id}")
+                raise HarnessError(
+                    f"G-002 manifest lacks passing {tier}/{spec.check_id}"
+                )
 
     result_path, receipt_path, receipt = _latest_hosted_review(
         run_dir, repository_root_path
     )
-    breadth = [
-        check for check in verification["checks"] if check["tier"] == "breadth"
-    ]
+    breadth = [check for check in verification["checks"] if check["tier"] == "breadth"]
     if not breadth:
         raise HarnessError("G-002 manifest lacks breadth timing evidence")
     baseline = _fresh_live_baseline(doctor_path, diagnostics_path)
@@ -1425,9 +1409,7 @@ def evaluate_and_record_admission(
         "target_doctor_checks": sorted(manifest["target_doctor_checks"]),
         "admitted_at": utc_now(),
     }
-    _validate_schema_value(
-        receipt, "g002-admission-receipt.schema.json", repository
-    )
+    _validate_schema_value(receipt, "g002-admission-receipt.schema.json", repository)
     _write_immutable_json(receipt_path, receipt, "G-002 admission receipt")
     return {**result, "receipt": str(receipt_path)}
 
@@ -1458,12 +1440,9 @@ def prepare_bounded_repair_policy(
         or receipt["head_sha"] != manifest["candidate"]["head_sha"]
         or receipt["manifest_sha256"] != manifest_digest
         or receipt["run_id"] != manifest["harness"]["run_id"]
-        or receipt["binding_diff_sha256"]
-        != manifest["harness"]["binding_diff_sha256"]
-        or receipt["target_degradations"]
-        != sorted(manifest["target_degradations"])
-        or receipt["target_doctor_checks"]
-        != sorted(manifest["target_doctor_checks"])
+        or receipt["binding_diff_sha256"] != manifest["harness"]["binding_diff_sha256"]
+        or receipt["target_degradations"] != sorted(manifest["target_degradations"])
+        or receipt["target_doctor_checks"] != sorted(manifest["target_doctor_checks"])
     ):
         raise HarnessError("G-002 admission receipt contradicts its repair manifest")
     if len(merge_commit) != 40 or any(
@@ -1535,8 +1514,7 @@ def prepare_observation_release_policy(
         or receipt["head_sha"] != manifest["candidate"]["head_sha"]
         or receipt["manifest_sha256"] != manifest_digest
         or receipt["run_id"] != manifest["harness"]["run_id"]
-        or receipt["binding_diff_sha256"]
-        != manifest["harness"]["binding_diff_sha256"]
+        or receipt["binding_diff_sha256"] != manifest["harness"]["binding_diff_sha256"]
         or receipt["target_degradations"]
         or receipt["target_doctor_checks"]
     ):
@@ -1601,9 +1579,7 @@ def _validate_exact_github_merge(
     main_sha = main.get("sha")
     if not isinstance(main_sha, str):
         raise HarnessError("GitHub current main SHA is unavailable")
-    containment = _gh_json(
-        [f"repos/{repository}/compare/{merge_commit}...{main_sha}"]
-    )
+    containment = _gh_json([f"repos/{repository}/compare/{merge_commit}...{main_sha}"])
     if containment.get("status") not in {"ahead", "identical"}:
         raise HarnessError("current GitHub main does not contain the G-002 merge")
     return parents
@@ -1644,13 +1620,10 @@ def complete_release_manifest(
         or receipt["base_sha"] != manifest["candidate"]["base_sha"]
         or receipt["head_sha"] != manifest["candidate"]["head_sha"]
         or receipt["run_id"] != manifest["harness"]["run_id"]
-        or receipt["binding_diff_sha256"]
-        != manifest["harness"]["binding_diff_sha256"]
+        or receipt["binding_diff_sha256"] != manifest["harness"]["binding_diff_sha256"]
         or receipt["lane"] != manifest["lane"]
-        or receipt["target_degradations"]
-        != sorted(manifest["target_degradations"])
-        or receipt["target_doctor_checks"]
-        != sorted(manifest["target_doctor_checks"])
+        or receipt["target_degradations"] != sorted(manifest["target_degradations"])
+        or receipt["target_doctor_checks"] != sorted(manifest["target_doctor_checks"])
     ):
         raise HarnessError("G-002 settlement receipt contradicts its admission")
     _validate_exact_github_merge(manifest, merge_commit)
@@ -1704,7 +1677,9 @@ def complete_release_manifest(
     )
     if needs_browser:
         if live_browser_receipt_path is None:
-            raise HarnessError("member-visible G-002 settlement lacks live browser proof")
+            raise HarnessError(
+                "member-visible G-002 settlement lacks live browser proof"
+            )
         live_browser = load_schema_value(
             live_browser_receipt_path,
             "g002-live-browser-receipt.schema.json",
@@ -1717,7 +1692,9 @@ def complete_release_manifest(
         browser = "PASS"
     else:
         if live_browser_receipt_path is not None:
-            raise HarnessError("non-visible settlement received unexpected browser proof")
+            raise HarnessError(
+                "non-visible settlement received unexpected browser proof"
+            )
         browser = "NOT_APPLICABLE"
 
     if manifest["lane"] == "bounded_repair":

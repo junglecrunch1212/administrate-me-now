@@ -44,7 +44,9 @@ def _workflow(root: Path, name: str) -> dict[str, object]:
 def _manifest(*, lane: str = "observation") -> dict[str, object]:
     targets = [] if lane == "observation" else ["adapter:calendar"]
     unhealthy = [] if lane == "observation" else ["adapter:calendar", "pipeline:noise"]
-    failed_checks = [] if lane == "observation" else ["adapter_instances", "source_assurance"]
+    failed_checks = (
+        [] if lane == "observation" else ["adapter_instances", "source_assurance"]
+    )
     target_checks = [] if lane == "observation" else ["adapter_instances"]
     runtime = "healthy" if lane == "observation" else "degraded"
     return {
@@ -107,7 +109,9 @@ def _manifest(*, lane: str = "observation") -> dict[str, object]:
     }
 
 
-def test_healthy_observation_candidate_is_admitted_without_per_sha_owner_prompt() -> None:
+def test_healthy_observation_candidate_is_admitted_without_per_sha_owner_prompt() -> (
+    None
+):
     assert evaluate_release(_manifest()) == {
         "status": "ADMIT",
         "lane": "observation",
@@ -116,7 +120,9 @@ def test_healthy_observation_candidate_is_admitted_without_per_sha_owner_prompt(
     }
 
 
-def test_bounded_repair_can_improve_one_target_while_other_degradation_remains() -> None:
+def test_bounded_repair_can_improve_one_target_while_other_degradation_remains() -> (
+    None
+):
     manifest = _manifest(lane="bounded_repair")
     manifest["settlement"] = {
         "active_head": MERGE,
@@ -156,7 +162,9 @@ def test_bounded_repair_can_improve_one_target_while_other_degradation_remains()
     ],
 )
 def test_autonomous_admission_fails_closed(mutation: str) -> None:
-    manifest = _manifest(lane="bounded_repair" if mutation == "missing-target" else "observation")
+    manifest = _manifest(
+        lane="bounded_repair" if mutation == "missing-target" else "observation"
+    )
     if mutation == "review-after-breadth":
         manifest["proof"]["review_completed_at"] = "2026-08-16T12:02:00Z"
     elif mutation == "provider-write":
@@ -321,8 +329,8 @@ def test_hosted_review_is_last_in_secret_job_and_receipts_use_fresh_job() -> Non
         for step in codex["steps"]
         if step.get("name") == "Materialize effective base-controlled review contract"
     )
-    assert "git show \"$BASE_REF:.github/codex/prompts/" in contract["run"]
-    assert "git show \"$BASE_REF:schemas/harness/" in contract["run"]
+    assert 'git show "$BASE_REF:.github/codex/prompts/' in contract["run"]
+    assert 'git show "$BASE_REF:schemas/harness/' in contract["run"]
     assert exact["needs"] == "codex-review"
     assert exact["permissions"] == {
         "contents": "read",
@@ -352,16 +360,16 @@ def test_required_g002_checks_bind_exact_head_reusable_suites() -> None:
     assert jobs["g002-deterministic-consistency"]["needs"] == (
         "deterministic-consistency"
     )
-    assert "ADMINME_CODEX_REVIEW_ENABLED" in jobs[
-        "g002-deterministic-consistency"
-    ]["if"]
+    assert (
+        "ADMINME_CODEX_REVIEW_ENABLED" in jobs["g002-deterministic-consistency"]["if"]
+    )
     assert jobs["g002-credential-free-rehearsal"]["needs"] == [
         "exact-head-review",
         "credential-free-macos-rehearsal",
     ]
-    assert "ADMINME_CODEX_REVIEW_ENABLED" in jobs[
-        "g002-credential-free-rehearsal"
-    ]["if"]
+    assert (
+        "ADMINME_CODEX_REVIEW_ENABLED" in jobs["g002-credential-free-rehearsal"]["if"]
+    )
     for name in (
         "administrateme-consistency.yml",
         "macos-bootstrap.yml",
@@ -379,7 +387,9 @@ def test_required_g002_checks_bind_exact_head_reusable_suites() -> None:
         assert checkout["with"]["persist-credentials"] == "false"
 
 
-def test_release_manifest_schema_requires_bound_harness_evidence(tmp_path: Path) -> None:
+def test_release_manifest_schema_requires_bound_harness_evidence(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest()
     path = tmp_path / "release.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -567,11 +577,7 @@ def test_queue_handoff_is_exact_content_free_immutable_and_g001_denying(
     )
     (run_dir / "verification-report.json").write_text(
         json.dumps(
-            {
-                "changed_files": [
-                    "packs/adapters/calendaring/google-calendar/adapter.py"
-                ]
-            }
+            {"changed_files": ["packs/adapters/calendaring/google-calendar/adapter.py"]}
         ),
         "utf-8",
     )
@@ -623,9 +629,12 @@ def test_queue_handoff_is_exact_content_free_immutable_and_g001_denying(
     assert Path(queued["run_directory"]).is_dir()
     assert Path(queued["run_directory"]).parent == queue_root / "runs"
     assert output.stat().st_mode & 0o777 == 0o400
-    assert validate_g002_queue(
-        output, root=Path(__file__).resolve().parents[3]
-    )["head_sha"] == HEAD
+    assert (
+        validate_g002_queue(output, root=Path(__file__).resolve().parents[3])[
+            "head_sha"
+        ]
+        == HEAD
+    )
     assert next_g002_queue(Path(__file__).resolve().parents[3])["path"] == str(
         output.resolve()
     )
@@ -731,9 +740,7 @@ def test_queue_handoff_is_exact_content_free_immutable_and_g001_denying(
     retained_settlement = Path(complete["settlement_manifest_path"])
     assert retained_settlement.parent.parent == queue_root / "settlements"
     assert retained_settlement.stat().st_mode & 0o777 == 0o400
-    assert next_g002_queue(Path(__file__).resolve().parents[3]) == {
-        "status": "NO_WORK"
-    }
+    assert next_g002_queue(Path(__file__).resolve().parents[3]) == {"status": "NO_WORK"}
     retained_settlement.chmod(0o600)
     retained_settlement.write_text("{}", "utf-8")
     with pytest.raises(HarnessError, match="settlement evidence is invalid"):
@@ -903,9 +910,7 @@ def test_release_manifest_is_derived_from_queue_harness_and_live_facts(
     monkeypatch.setattr(
         autonomous_release, "hosted_macos_required", lambda _paths: True
     )
-    monkeypatch.setattr(
-        autonomous_release, "utc_now", lambda: "2026-08-16T12:01:00Z"
-    )
+    monkeypatch.setattr(autonomous_release, "utc_now", lambda: "2026-08-16T12:01:00Z")
     output = tmp_path / "release-manifest.json"
     result = prepare_release_manifest(
         queue_path,
@@ -922,9 +927,9 @@ def test_release_manifest_is_derived_from_queue_harness_and_live_facts(
         "doctor_available": True,
         "provider_claims": 0,
     }
-    assert result["proof"]["review_completed_at"] < result["proof"][
-        "breadth_started_at"
-    ]
+    assert (
+        result["proof"]["review_completed_at"] < result["proof"]["breadth_started_at"]
+    )
     assert result["harness"]["hosted_review_result"].startswith(
         "hosted-review/attempts/"
     )
@@ -1102,9 +1107,24 @@ def test_github_evidence_is_exact_head_current_main_and_required_checks(
         if "/check-runs" in endpoint:
             return {
                 "check_runs": [
-                    {"id": 1, "name": "exact-head-review", "status": "completed", "conclusion": "success"},
-                    {"id": 2, "name": "g002-deterministic-consistency", "status": "completed", "conclusion": "success"},
-                    {"id": 3, "name": "g002-credential-free-rehearsal", "status": "completed", "conclusion": "success"},
+                    {
+                        "id": 1,
+                        "name": "exact-head-review",
+                        "status": "completed",
+                        "conclusion": "success",
+                    },
+                    {
+                        "id": 2,
+                        "name": "g002-deterministic-consistency",
+                        "status": "completed",
+                        "conclusion": "success",
+                    },
+                    {
+                        "id": 3,
+                        "name": "g002-credential-free-rehearsal",
+                        "status": "completed",
+                        "conclusion": "success",
+                    },
                 ]
             }
         if endpoint == "graphql":

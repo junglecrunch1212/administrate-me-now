@@ -47,9 +47,7 @@ class G002BoundedRepairPolicy(BaseModel):
         )
         if any(len(values) != len(set(values)) for values in collections):
             raise ValueError("G-002 repair capability and Doctor IDs must be unique")
-        if not set(self.target_degradations).issubset(
-            self.baseline_required_unhealthy
-        ):
+        if not set(self.target_degradations).issubset(self.baseline_required_unhealthy):
             raise ValueError("G-002 repair targets must be in the unhealthy baseline")
         if not set(self.target_doctor_checks).issubset(
             self.baseline_failed_doctor_checks
@@ -232,18 +230,15 @@ def validate_g002_repair_settlement(
         )
     if analysis["disallowed_capabilities"]:
         reasons.append(
-            "disallowed capabilities="
-            + ",".join(analysis["disallowed_capabilities"])
+            "disallowed capabilities=" + ",".join(analysis["disallowed_capabilities"])
         )
     if analysis["unresolved_target_checks"]:
         reasons.append(
-            "unresolved Doctor checks="
-            + ",".join(analysis["unresolved_target_checks"])
+            "unresolved Doctor checks=" + ",".join(analysis["unresolved_target_checks"])
         )
     if analysis["disallowed_doctor_checks"]:
         reasons.append(
-            "disallowed Doctor checks="
-            + ",".join(analysis["disallowed_doctor_checks"])
+            "disallowed Doctor checks=" + ",".join(analysis["disallowed_doctor_checks"])
         )
     if reasons:
         raise G002BoundedRepairError(
@@ -275,9 +270,7 @@ def analyze_g002_repair_settlement(
     unresolved_targets = sorted(targets & post_unhealthy)
     new_or_disallowed = sorted(post_unhealthy - (baseline_unhealthy - targets))
     unresolved_target_checks = sorted(target_checks & post_failed)
-    new_or_disallowed_checks = sorted(
-        post_failed - (baseline_failed - target_checks)
-    )
+    new_or_disallowed_checks = sorted(post_failed - (baseline_failed - target_checks))
     return {
         "required_unhealthy": sorted(post_unhealthy),
         "failed_doctor_checks": sorted(post_failed),

@@ -305,9 +305,7 @@ def ensure_ephemeral_run_dir(path: Path, root: Path | None = None) -> Path:
     return resolved
 
 
-def g002_queue_root(
-    root: Path | None = None, *, required: bool = True
-) -> Path | None:
+def g002_queue_root(root: Path | None = None, *, required: bool = True) -> Path | None:
     """Return a private durable queue root explicitly enrolled outside the repo."""
 
     raw = os.environ.get("ADMINME_G002_QUEUE_ROOT")
@@ -886,10 +884,7 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
         or any(
             status in {"UNDETERMINED", "NOT_CONFIGURED"} for status in check_statuses
         )
-        or (
-            needs_browser
-            and verification["browser"]["status"] == "UNDETERMINED"
-        )
+        or (needs_browser and verification["browser"]["status"] == "UNDETERMINED")
         or review["conclusion"] != "APPROVE"
         or bool(review["unresolved_evidence"])
         or any(finding["actionable"] for finding in review["findings"])
@@ -911,12 +906,16 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
                 "verification-report.json claims PASS with unresolved, failed, "
                 f"or missing proof (missing tiers: {missing_tiers})"
             )
-        if needs_browser and browser["status"] == "PASS" and (
-            browser["console_errors"]
-            or browser["page_errors"]
-            or browser["request_failures"]
-            or not browser["desktop"]
-            or not browser["narrow"]
+        if (
+            needs_browser
+            and browser["status"] == "PASS"
+            and (
+                browser["console_errors"]
+                or browser["page_errors"]
+                or browser["request_failures"]
+                or not browser["desktop"]
+                or not browser["narrow"]
+            )
         ):
             raise HarnessError("browser PASS lacks clean desktop and narrow evidence")
         if needs_browser and browser["status"] != "PASS":
@@ -1175,13 +1174,13 @@ def _validate_retained_check_attempts(run_dir: Path) -> None:
     if not attempts.is_dir():
         raise HarnessError("check-attempts is not a directory")
     receipts = sorted(attempts.glob("*/*/receipt.json"))
-    unexpected = sorted(path for path in attempts.rglob("*.json") if path not in receipts)
+    unexpected = sorted(
+        path for path in attempts.rglob("*.json") if path not in receipts
+    )
     if unexpected:
         raise HarnessError("retained check receipt has a non-canonical path")
     for receipt_path in receipts:
-        _validate_check_receipt_value(
-            run_dir, receipt_path.relative_to(run_dir)
-        )
+        _validate_check_receipt_value(run_dir, receipt_path.relative_to(run_dir))
 
 
 def _validate_retained_hosted_reviews(run_dir: Path, root: Path | None) -> None:

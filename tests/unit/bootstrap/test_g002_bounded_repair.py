@@ -92,9 +92,7 @@ def test_baseline_must_match_exact_capability_doctor_and_observation_sets() -> N
     policy = _policy()
     result = validate_g002_repair_baseline(
         policy,
-        doctor=_doctor(
-            "adapter_instances", "source_assurance_terminal_dispositions"
-        ),
+        doctor=_doctor("adapter_instances", "source_assurance_terminal_dispositions"),
         diagnostics=_diagnostics("adapter:calendar", "pipeline:noise"),
     )
     assert result["required_unhealthy"] == ["adapter:calendar", "pipeline:noise"]
@@ -134,9 +132,12 @@ def test_observation_release_policy_requires_exactly_healthy_baseline() -> None:
             "baseline_failed_doctor_checks": [],
         }
     )
-    assert validate_g002_observation_baseline(
-        policy, doctor=_doctor(), diagnostics=_diagnostics()
-    )["required_unhealthy"] == []
+    assert (
+        validate_g002_observation_baseline(
+            policy, doctor=_doctor(), diagnostics=_diagnostics()
+        )["required_unhealthy"]
+        == []
+    )
     with pytest.raises(G002BoundedRepairError, match="exactly healthy"):
         validate_g002_observation_baseline(
             policy,
@@ -161,9 +162,7 @@ def test_settlement_accepts_only_target_recovery_and_no_new_failure() -> None:
 
     cases = [
         (
-            _doctor(
-                "adapter_instances", "source_assurance_terminal_dispositions"
-            ),
+            _doctor("adapter_instances", "source_assurance_terminal_dispositions"),
             _diagnostics("adapter:calendar", "pipeline:noise"),
         ),
         (
@@ -192,13 +191,13 @@ def test_candidate_identity_requires_exact_two_parent_merge(tmp_path: Path) -> N
         cwd=tmp_path,
         check=True,
     )
-    subprocess.run(
-        ["git", "config", "user.name", "Fixture"], cwd=tmp_path, check=True
-    )
+    subprocess.run(["git", "config", "user.name", "Fixture"], cwd=tmp_path, check=True)
     (tmp_path / "base").write_text("base\n", "utf-8")
     subprocess.run(["git", "add", "base"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
-    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
     base_branch = subprocess.check_output(
         ["git", "branch", "--show-current"], cwd=tmp_path, text=True
     ).strip()
@@ -206,14 +205,18 @@ def test_candidate_identity_requires_exact_two_parent_merge(tmp_path: Path) -> N
     (tmp_path / "candidate").write_text("candidate\n", "utf-8")
     subprocess.run(["git", "add", "candidate"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "candidate"], cwd=tmp_path, check=True)
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
     subprocess.run(["git", "switch", "-q", base_branch], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "merge", "--no-ff", "-qm", "merge", "candidate"],
         cwd=tmp_path,
         check=True,
     )
-    merge = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    merge = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
 
     policy = _policy(
         merge_commit=merge,

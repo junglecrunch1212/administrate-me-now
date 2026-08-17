@@ -399,9 +399,9 @@ def test_g002_bounded_repair_revalidates_after_backup_and_accepts_monotonic_sett
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_g002_candidate_identity",
         lambda selected, candidate: (
-            selected is policy and candidate == REPO_ROOT
-        )
-        or (_ for _ in ()).throw(AssertionError()),
+            (selected is policy and candidate == REPO_ROOT)
+            or (_ for _ in ()).throw(AssertionError())
+        ),
     )
     baselines: list[object] = []
 
@@ -422,16 +422,18 @@ def test_g002_bounded_repair_revalidates_after_backup_and_accepts_monotonic_sett
         UpgradeManager,
         "_post_switch_g002_repair",
         lambda _self, _release, selected: (
-            {"status": "failed", "checks": []},
-            {
-                "required_unhealthy": ["pipeline:noise"],
-                "failed_doctor_checks": ["source_assurance"],
-                "observation_active": True,
-                "provider_effects_delta": 0,
-            },
-        )
-        if selected is policy
-        else (_ for _ in ()).throw(AssertionError()),
+            (
+                {"status": "failed", "checks": []},
+                {
+                    "required_unhealthy": ["pipeline:noise"],
+                    "failed_doctor_checks": ["source_assurance"],
+                    "observation_active": True,
+                    "provider_effects_delta": 0,
+                },
+            )
+            if selected is policy
+            else (_ for _ in ()).throw(AssertionError())
+        ),
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
@@ -493,9 +495,9 @@ def test_g002_observation_release_revalidates_healthy_baseline_after_backup(
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_g002_candidate_identity",
         lambda selected, candidate: (
-            selected is policy and candidate == REPO_ROOT
-        )
-        or (_ for _ in ()).throw(AssertionError()),
+            (selected is policy and candidate == REPO_ROOT)
+            or (_ for _ in ()).throw(AssertionError())
+        ),
     )
     baselines: list[object] = []
 
