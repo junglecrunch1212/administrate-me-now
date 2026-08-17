@@ -375,6 +375,7 @@ def test_required_g002_checks_bind_exact_head_reusable_suites() -> None:
         assert checkout["with"]["ref"] == (
             "${{ github.event.pull_request.head.sha || github.sha }}"
         )
+        assert checkout["with"]["fetch-depth"] == "0"
         assert checkout["with"]["persist-credentials"] == "false"
 
 
