@@ -1,6 +1,7 @@
 # G-001 staged control-plane recovery evidence
 
-Status: local candidate; independent exact-head review and final gates pending.
+Status: published as draft PR #344; independent exact-head review and final
+gates pending.
 
 ## Read-only post-mortem findings
 
@@ -23,6 +24,18 @@ Status: local candidate; independent exact-head review and final gates pending.
 - GitHub `main` had no branch protection. The repository had no forks, stars,
   subscribers, or Pages site and was made private on 2026-08-25 to contain
   tracked household-identity canaries without rewriting history.
+
+## Recovery publication and repository controls
+
+- Draft PR #344 is the only active non-dependency recovery PR. PRs #342 and
+  #343 were closed and labeled `superseded-recovery-evidence`; their commits,
+  discussion, and exact-head findings remain recoverable.
+- GitHub `main` now requires the strict `deterministic-consistency` status on
+  the current base and PR-based delivery, enforces the rule for administrators,
+  dismisses stale reviews, requires conversation resolution, forbids force
+  pushes and deletion, and retains merge commits for G-001.
+- The `final-gates` label exists but is not applied. The final hosted macOS job
+  therefore skips before independent review while cheap consistency runs.
 
 ## Candidate controls
 

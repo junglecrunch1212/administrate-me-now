@@ -2,6 +2,9 @@
 
 Status: candidate workflow; no merge, deployment, or live repair is authorized.
 
+Active status surface: GitHub draft PR #344. PRs #342 and #343 are closed as
+superseded recovery evidence and must not be resumed.
+
 ## For the owner
 
 Use one Codex task for implementation and one separate Codex task only when an

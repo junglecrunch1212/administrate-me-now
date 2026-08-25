@@ -43,6 +43,15 @@ action, observation change, runtime migration, history rewrite, or family-Mac
 experiment occurred. Exact-head independent review, final gates, hosted proof,
 and a fresh G-001 owner authorization remain mandatory.
 
+Draft PR #344 is now the single recovery status surface. PRs #342 and #343 were
+closed and labeled as superseded recovery evidence without deleting their
+history. GitHub `main` now requires strict current-base
+`deterministic-consistency`, PR-based delivery, administrator enforcement,
+stale-review dismissal, conversation resolution, and denial of force pushes
+and branch deletion; merge commits remain available for G-001. The final macOS
+job is label-gated and skipped until independent review permits the
+`final-gates` label.
+
 The first durable self-run stopped before review because `run-tier focused`
 selected the fallback unit suite instead of the checks implied by its bound
 changed-file inventory. The candidate now defaults focused selection to that
