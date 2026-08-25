@@ -14,6 +14,13 @@ const evidenceDir = process.env.ADMINME_GATE7_EVIDENCE_DIR
   : join(repoRoot, "docs", "refactor", "evidence", "gate-7", "visual");
 const basePort = Number.parseInt(process.env.ADMINME_GATE7_VISUAL_PORT ?? "3347", 10);
 const fixedNow = process.env.ADMINME_GATE7_VISUAL_NOW ?? "2026-08-13T14:00:00Z";
+const maxRuntimeMs = Number.parseInt(
+  process.env.ADMINME_GATE7_MAX_RUNTIME_MS ?? String(15 * 60 * 1000),
+  10,
+);
+if (!Number.isSafeInteger(maxRuntimeMs) || maxRuntimeMs <= 0) {
+  throw new Error("ADMINME_GATE7_MAX_RUNTIME_MS must be a positive integer");
+}
 const identities = {
   principal: "visual-principal.ts.net",
   adult: "visual-adult.ts.net",
@@ -48,6 +55,7 @@ const deterministicRasterArgs = [
 
 function record(name, pass, detail) {
   results.push({ name, status: pass ? "PASS" : "FAIL", detail });
+  console.log(`[Gate 7] ${pass ? "PASS" : "FAIL"}: ${name}`);
   if (!pass) throw new Error(`${name}: ${detail}`);
 }
 
@@ -61,6 +69,7 @@ async function launchEdge() {
     try {
       await access(executablePath);
       browserDescription = `${executablePath.includes("Google Chrome") ? "Google Chrome" : "Microsoft Edge"} via playwright-core@1.62.0`;
+      console.log(`[Gate 7] Launching ${browserDescription}`);
       return await chromium.launch({
         args: deterministicRasterArgs,
         executablePath,
@@ -70,6 +79,7 @@ async function launchEdge() {
     } catch {}
   }
   browserDescription = "Microsoft Edge via playwright-core@1.62.0";
+  console.log(`[Gate 7] Launching ${browserDescription}`);
   return chromium.launch({
     args: deterministicRasterArgs,
     channel: "msedge",
@@ -122,6 +132,7 @@ async function startServer(port, modelConfigured) {
     child.kill();
     throw new Error(`${error.message}\n${output.slice(-2000)}`);
   }
+  console.log(`[Gate 7] Fixture server ready at ${baseUrl}`);
   return { baseUrl, child, instance, output: () => output };
 }
 
@@ -497,13 +508,16 @@ async function auditAccessibility(page, label) {
 }
 
 async function run() {
+  console.log(`[Gate 7] Starting with a ${maxRuntimeMs} ms hard runtime bound`);
   await mkdir(evidenceDir, { recursive: true });
   const server = await startServer(basePort, true);
   let degraded;
   const browser = await launchEdge();
   browserDescription = `${browserDescription}; engine ${browser.version()}`;
+  console.log(`[Gate 7] Browser ready: ${browserDescription}`);
   try {
     await seed(server.baseUrl);
+    console.log("[Gate 7] Canonical fixtures seeded; beginning browser assertions");
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
@@ -1401,7 +1415,14 @@ async function run() {
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record("no failed browser requests", requestFailures.length === 0, requestFailures);
   } finally {
-    await browser.close();
+    console.log("[Gate 7] Closing browser and fixture servers");
+    const browserClosed = await Promise.race([
+      browser.close().then(() => true),
+      new Promise((resolveWait) => setTimeout(() => resolveWait(false), 5000)),
+    ]);
+    if (!browserClosed) {
+      console.warn("[Gate 7] Browser close exceeded 5000 ms; forcing runner exit after evidence cleanup");
+    }
     await stopServer(server);
     if (degraded) await stopServer(degraded);
   }
@@ -1433,9 +1454,27 @@ async function run() {
   if (report.status !== "PASS") process.exitCode = 1;
 }
 
-run().catch(async (error) => {
-  await mkdir(evidenceDir, { recursive: true });
-  await writeFile(join(evidenceDir, "visual-failure.txt"), `${error.stack || error}\n`);
-  console.error(error);
-  process.exitCode = 1;
-});
+let hardTimeout;
+const boundedRun = Promise.race([
+  run(),
+  new Promise((_, reject) => {
+    hardTimeout = setTimeout(
+      () => reject(new Error(`Gate 7 exceeded its ${maxRuntimeMs} ms hard runtime bound`)),
+      maxRuntimeMs,
+    );
+  }),
+]);
+
+boundedRun.then(
+  () => {
+    clearTimeout(hardTimeout);
+    process.exit(process.exitCode ?? 0);
+  },
+  async (error) => {
+    clearTimeout(hardTimeout);
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(join(evidenceDir, "visual-failure.txt"), `${error.stack || error}\n`);
+    console.error(error);
+    process.exit(1);
+  },
+);
