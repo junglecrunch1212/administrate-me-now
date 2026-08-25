@@ -48,7 +48,10 @@ closed and labeled as superseded recovery evidence without deleting their
 history. GitHub `main` now requires strict current-base
 `deterministic-consistency`, PR-based delivery, administrator enforcement,
 stale-review dismissal, conversation resolution, and denial of force pushes
-and branch deletion; merge commits remain available for G-001. The final macOS
+and branch deletion; the required status is bound to GitHub Actions app ID
+15368. Squash, rebase, and auto-merge are disabled, leaving only G-001 merge
+commits. Actions are restricted to GitHub-owned `actions/*`, and each workflow
+action is immutable-SHA pinned before repository SHA-pinning enforcement. The final macOS
 job is label-gated and skipped until independent review permits the
 `final-gates` label.
 

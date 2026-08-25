@@ -31,9 +31,13 @@ gates pending.
   #343 were closed and labeled `superseded-recovery-evidence`; their commits,
   discussion, and exact-head findings remain recoverable.
 - GitHub `main` now requires the strict `deterministic-consistency` status on
-  the current base and PR-based delivery, enforces the rule for administrators,
+  the current base, bound specifically to GitHub Actions app ID 15368, and
+  PR-based delivery, enforces the rule for administrators,
   dismisses stale reviews, requires conversation resolution, forbids force
   pushes and deletion, and retains merge commits for G-001.
+- Squash, rebase, and auto-merge are disabled. Repository Actions are limited
+  to GitHub-owned `actions/*`; every workflow action is pinned to an immutable
+  commit before repository SHA-pinning enforcement is enabled.
 - The `final-gates` label exists but is not applied. The final hosted macOS job
   therefore skips before independent review while cheap consistency runs.
 
