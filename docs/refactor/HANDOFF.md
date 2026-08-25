@@ -61,6 +61,19 @@ changed-file inventory. The candidate now defaults focused selection to that
 immutable inventory while retaining explicit override support. The earlier
 receipts remain historical and are invalid for the amended binding.
 
+Independent Codex task `01a03a52-d280-7541-bd18-ed3482f2e9d2` returned
+`CHANGES_REQUIRED`: the first published identity invariant could pass with no
+owner-private patterns configured, and its comment did not approve the current
+head. The repair keeps hosted/static scans structural and credential-free but
+makes the aggregate release tier mandatory for final harness PASS and makes
+that tier fail closed without a categorized, outside-Git, owner-owned `0600`
+profile containing name, email, and street-address canaries. A hidden-input
+configurator (`poetry run python -m
+scripts.configure_private_identity_patterns`) writes the profile without
+placing values in shell history or printing them. All earlier review and check
+evidence is rejected after the binding change; a fresh exact-head independent
+review remains required before any final gate.
+
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
 Current `origin/main` is merge `cd08b50`; active release selection and both

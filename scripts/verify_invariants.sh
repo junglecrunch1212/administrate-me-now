@@ -45,13 +45,17 @@ fi
 
 # ─── [§12.4]: no tenant identity in platform code, built-ins, or tests ───
 #
-# Household literals belong only in an optional owner-only file outside the
-# repository. The scanner emits coordinates and rule names, never matched
-# content. A generic phone check remains active in hosted CI.
+# Household literals belong only in an owner-only file outside the repository.
+# Hosted/static use stays credential-free and structural. The local release
+# tier sets ADMINME_REQUIRE_PRIVATE_IDENTITY_PATTERNS=1 and fails closed unless
+# the categorized owner profile is present. Results never echo matched content.
 
 identity_command=(poetry run python -m scripts.identity_scan --root .)
 if [ -n "${ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE:-}" ]; then
     identity_command+=(--patterns-file "$ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE")
+fi
+if [ "${ADMINME_REQUIRE_PRIVATE_IDENTITY_PATTERNS:-0}" = "1" ]; then
+    identity_command+=(--require-private-patterns)
 fi
 if ! "${identity_command[@]}"; then
     report "[§12.4] tenant identity coordinates detected"

@@ -1,7 +1,7 @@
 # G-001 staged control-plane recovery evidence
 
-Status: published as draft PR #344; independent exact-head review and final
-gates pending.
+Status: published as draft PR #344; first independent review returned
+`CHANGES_REQUIRED`; repaired exact-head review and final gates pending.
 
 ## Read-only post-mortem findings
 
@@ -50,7 +50,7 @@ gates pending.
 | Review occurs after full cost | `record-review` requires exact passing static/focused/journey receipts; CLI breadth/browser/release gates and the labeled final hosted macOS job require exact-bound approval. |
 | Green tests imply safe authority | Independent review remains a separate G-001 identity and covers all eight existing scopes. |
 | Generic degraded-baseline waiver | ADR-0012 permits only domain-specific, target-bound, monotonic, observation-safe, rollback-capable repair contracts. |
-| Identity canary leaks its subject | Repository source contains no household literal list; optional owner-private patterns are `0600`, and results are content-free coordinates. |
+| Identity gate passes without its subject | Repository source contains no household literal list. Hosted/static scans are explicitly structural; final local release proof requires categorized owner-private name/email/address patterns in an outside-Git `0600` file and emits only content-free coordinates. |
 | Multi-task loop becomes state | One recovery PR is the status surface; stalled tasks and G-002 are superseded evidence only. |
 
 The first durable self-run also caught and repaired a pre-review CLI defect:
@@ -59,6 +59,16 @@ operator repeated every path, causing fallback selection. It now defaults to
 the immutable verification scope; an explicit path list remains an intentional
 override. The pre-repair receipts are historical only and cannot be imported
 after the changed binding.
+
+Independent Codex task `01a03a52-d280-7541-bd18-ed3482f2e9d2` rejected the
+first published recovery target. Its P1 privacy finding showed that the
+identity invariant could pass with `private_pattern_count` zero. The repair
+preserves credential-free hosted scanning but makes the owner-private profile
+mandatory and categorized at the local release boundary, requires that
+release tier for final harness PASS, and provides a hidden-input configurator
+(`poetry run python -m scripts.configure_private_identity_patterns`) that
+writes no value to Git, shell history, or output. That rejected review grants
+no approval to this or any later head.
 
 No release, deployment, live Doctor, provider action, observation change,
 runtime migration, history rewrite, or family-Mac experiment was performed by

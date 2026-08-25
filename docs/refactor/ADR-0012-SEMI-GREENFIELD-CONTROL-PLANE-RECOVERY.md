@@ -55,11 +55,16 @@ Preserve V2 and replace only its engineering control plane.
    requires monotonic improvement and no new degradation; and stops on any
    mismatch. CO-017/CO-018 recovery is evidence of this shape, not generic
    authority to make a release pass.
-6. **Privacy canaries remain private.** Hosted code scans use content-free
-   structural checks. Known household literals may be supplied only through an
-   owner-only `0600` file outside Git. Scanner results contain coordinates and
-   rule names, never matched content. The GitHub repository remains private;
-   history is preserved rather than rewritten.
+6. **Privacy canaries remain private and release-critical.** Hosted code scans
+   use content-free structural checks because hosted runners receive no
+   household data. The local release tier fails closed unless a categorized
+   owner-only `0600` file outside Git supplies name, email, and street-address
+   canaries. The aggregate release tier is mandatory for a harness PASS.
+   Scanner results contain coordinates and rule names, never matched content.
+   The GitHub repository remains private; history is preserved rather than
+   rewritten. The owner creates or replaces the profile interactively with
+   `poetry run python -m scripts.configure_private_identity_patterns`; typed
+   values are hidden and never enter command arguments or process output.
 7. **One owner front door.** The active GitHub recovery PR is the status and
    decision surface. Separate Codex tasks are used only when G-001 requires
    independent review; old builder/reviewer/repair/release task chains are not

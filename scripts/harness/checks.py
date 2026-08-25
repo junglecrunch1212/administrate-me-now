@@ -107,6 +107,11 @@ BREADTH_CHECKS = (
 
 RELEASE_CHECKS = (
     CheckSpec(
+        "private-identity-release",
+        "release",
+        "ADMINME_REQUIRE_PRIVATE_IDENTITY_PATTERNS=1 bash scripts/verify_invariants.sh",
+    ),
+    CheckSpec(
         "release-candidate",
         "release",
         "bash scripts/acceptance/release-candidate.sh",
@@ -114,6 +119,21 @@ RELEASE_CHECKS = (
 )
 
 PATH_RULES: tuple[tuple[tuple[str, ...], tuple[CheckSpec, ...]], ...] = (
+    (
+        (
+            "scripts/identity_scan.py",
+            "scripts/configure_private_identity_patterns.py",
+            "scripts/verify_invariants.sh",
+            "tests/unit/test_no_hardcoded_identity.py",
+        ),
+        (
+            CheckSpec(
+                "identity-release-boundary",
+                "focused",
+                "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest -p no:cacheprovider -q tests/unit/test_no_hardcoded_identity.py",
+            ),
+        ),
+    ),
     (
         ("scripts/harness/", "schemas/harness/", ".agents/skills/adminme-"),
         (

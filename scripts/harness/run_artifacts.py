@@ -536,11 +536,7 @@ def assert_final_gate_unlocked(run_dir: Path, root: Path | None = None) -> None:
     actionable = [
         finding["finding_id"] for finding in review["findings"] if finding["actionable"]
     ]
-    if (
-        review["conclusion"] != "APPROVE"
-        or review["unresolved_evidence"]
-        or actionable
-    ):
+    if review["conclusion"] != "APPROVE" or review["unresolved_evidence"] or actionable:
         raise HarnessError(
             "final gates remain locked until independent exact-bound review approves "
             "with no actionable or unresolved findings"
@@ -563,7 +559,9 @@ def _reconcile_verification(run_dir: Path) -> None:
     unresolved: list[str] = []
     if failed_checks:
         unresolved.append(f"Failed checks: {', '.join(sorted(failed_checks))}.")
-    missing_tiers = sorted({"static", "focused", "journey", "breadth"} - passed_tiers)
+    missing_tiers = sorted(
+        {"static", "focused", "journey", "breadth", "release"} - passed_tiers
+    )
     if missing_tiers:
         unresolved.append(
             f"Required check tiers not yet passing: {', '.join(missing_tiers)}."
@@ -572,7 +570,7 @@ def _reconcile_verification(run_dir: Path) -> None:
     for check in checks:
         declared.setdefault((check["tier"], check["check_id"]), []).append(check)
     invalid_required: list[str] = []
-    for tier in ("static", "focused", "journey", "breadth"):
+    for tier in ("static", "focused", "journey", "breadth", "release"):
         for spec in tier_checks(tier, data["changed_files"]):
             matches = declared.get((spec.tier, spec.check_id), [])
             if (
@@ -685,7 +683,7 @@ def finalize_owner_handoff(
     verification = json.loads((run_dir / "verification-report.json").read_text("utf-8"))
     review = json.loads((run_dir / "review-report.json").read_text("utf-8"))
     outcome = json.loads((run_dir / "outcome-contract.json").read_text("utf-8"))
-    required_tiers = {"static", "focused", "journey", "breadth"}
+    required_tiers = {"static", "focused", "journey", "breadth", "release"}
     passed_tiers = {
         check["tier"] for check in verification["checks"] if check["status"] == "PASS"
     }

@@ -563,6 +563,7 @@ def test_finalize_owner_restores_artifacts_after_post_write_failure(
             ("focused", "focused-fixture"),
             ("journey", "navigation-production-composition"),
             ("breadth", "breadth-fixture"),
+            ("release", "release-fixture"),
         )
     ]
     write_json(verification_path, verification)
@@ -634,7 +635,7 @@ def test_fabricated_green_checks_without_bound_receipts_are_rejected(
             "evidence_class": "local_candidate",
             "receipt": f"missing-{tier}.json",
         }
-        for tier in ("static", "focused", "journey", "breadth")
+        for tier in ("static", "focused", "journey", "breadth", "release")
     ]
     report["status"] = "PASS"
     report["unresolved"] = []
@@ -660,7 +661,7 @@ def test_self_consistent_arbitrary_commands_cannot_replace_reviewed_checks(
         "binding"
     ]
     receipts: list[dict[str, object]] = []
-    for tier in ("static", "focused", "journey", "breadth"):
+    for tier in ("static", "focused", "journey", "breadth", "release"):
         check = {
             "check_id": (
                 "navigation-production-composition"
@@ -920,7 +921,7 @@ def test_rerun_receipts_replace_binding_invalidation_with_current_gaps(
     report = json.loads((run_dir / "verification-report.json").read_text("utf-8"))
     assert not any("binding changed" in item for item in report["unresolved"])
     assert report["unresolved"][0] == (
-        "Required check tiers not yet passing: breadth, focused, journey."
+        "Required check tiers not yet passing: breadth, focused, journey, release."
     )
 
 

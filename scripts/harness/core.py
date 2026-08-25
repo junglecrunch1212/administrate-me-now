@@ -894,7 +894,7 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
         _validate_browser_evidence(run_dir, canonical_binding, browser)
     if verification["status"] == "PASS":
         _validate_required_check_specs(verification)
-        required_tiers = {"static", "focused", "journey", "breadth"}
+        required_tiers = {"static", "focused", "journey", "breadth", "release"}
         passed_tiers = {
             check["tier"]
             for check in verification["checks"]
@@ -983,7 +983,7 @@ def _validate_required_check_specs(verification: dict[str, Any]) -> None:
     declared: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for check in verification["checks"]:
         declared.setdefault((check["tier"], check["check_id"]), []).append(check)
-    required_tiers = ("static", "focused", "journey", "breadth")
+    required_tiers = ("static", "focused", "journey", "breadth", "release")
     for tier in required_tiers:
         specs = tier_checks(tier, verification["changed_files"])
         for spec in specs:
