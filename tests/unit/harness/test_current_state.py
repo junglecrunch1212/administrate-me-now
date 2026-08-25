@@ -12,6 +12,7 @@ from scripts.harness.current_state import (
     all_findings,
     cascade_findings,
     check_current_state,
+    current_capabilities,
     generate_current_state,
     known_contradictions,
 )
@@ -36,12 +37,13 @@ def test_current_state_contains_exact_inventories_and_evidence_boundaries() -> N
     assert "Nothing in this index grants merge" in content
 
 
-def test_known_contradictions_are_presented_not_resolved() -> None:
-    findings = known_contradictions(repository_root())
-    assert {(item.finding_id, item.status) for item in findings} == {
-        ("KNOWN-PRODUCT-COUNT", "UNDETERMINED"),
-        ("KNOWN-CO016-STATUS", "UNDETERMINED"),
-    }
+def test_resolved_product_and_co016_status_have_no_known_contradiction() -> None:
+    assert known_contradictions(repository_root()) == []
+    assert (
+        "CO-016 Triage queue continuity",
+        "RELEASED_IN_OBSERVATION",
+        "docs/refactor/CHANGE-ORDER-016-TRIAGE-QUEUE-CONTINUITY.md",
+    ) in current_capabilities()
 
 
 def test_consistency_has_no_unexpected_failure() -> None:

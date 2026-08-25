@@ -45,7 +45,7 @@ class Violation:
 
 
 def default_private_patterns_file() -> Path:
-    """Return the owner-local canary path without creating or reading it."""
+    """Return the lexical owner-local path so symlink checks remain possible."""
 
     if sys.platform == "darwin":
         return (
@@ -54,10 +54,12 @@ def default_private_patterns_file() -> Path:
             / "Application Support"
             / "AdministrateMe"
             / "private-identity-patterns.txt"
-        ).resolve()
+        )
     config_home = os.environ.get("XDG_CONFIG_HOME")
     base = Path(config_home).expanduser() if config_home else Path.home() / ".config"
-    return (base / "administrateme" / "private-identity-patterns.txt").resolve()
+    if not base.is_absolute():
+        raise ValueError("XDG_CONFIG_HOME must be an absolute path")
+    return base / "administrateme" / "private-identity-patterns.txt"
 
 
 def _categorized_patterns(lines: list[str]) -> tuple[tuple[str, ...], frozenset[str]]:
@@ -88,6 +90,14 @@ def _categorized_patterns(lines: list[str]) -> tuple[tuple[str, ...], frozenset[
     return tuple(patterns), frozenset(categories)
 
 
+def path_has_symlink_component(path: Path) -> bool:
+    """Return true when the lexical file path or an existing parent is a link."""
+
+    expanded = path.expanduser()
+    lexical = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    return any(candidate.is_symlink() for candidate in (lexical, *lexical.parents))
+
+
 def load_private_patterns(
     path: Path | None,
     *,
@@ -101,8 +111,12 @@ def load_private_patterns(
             raise ValueError("private identity release profile is not configured")
         return ()
     expanded = path.expanduser()
+    if path_has_symlink_component(expanded):
+        if require_release_profile:
+            raise ValueError("private identity release profile is not configured")
+        raise ValueError("private identity pattern path must be a real file")
     resolved = expanded.resolve()
-    if expanded.is_symlink() or not resolved.is_file():
+    if not resolved.is_file():
         if require_release_profile:
             raise ValueError("private identity release profile is not configured")
         raise ValueError("private identity pattern path must be a real file")
@@ -184,9 +198,9 @@ def main(argv: list[str] | None = None) -> int:
     configured = args.patterns_file
     if configured is None and os.environ.get("ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE"):
         configured = Path(os.environ["ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE"])
-    if configured is None and args.require_private_patterns:
-        configured = default_private_patterns_file()
     try:
+        if configured is None and args.require_private_patterns:
+            configured = default_private_patterns_file()
         patterns = load_private_patterns(
             configured,
             repository_root=args.root,

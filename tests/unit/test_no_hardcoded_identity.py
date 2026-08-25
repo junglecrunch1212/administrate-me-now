@@ -7,8 +7,14 @@ from pathlib import Path
 
 import pytest
 
+from scripts import identity_scan
 from scripts.configure_private_identity_patterns import _write_profile
-from scripts.identity_scan import load_private_patterns, main, scan_repository
+from scripts.identity_scan import (
+    default_private_patterns_file,
+    load_private_patterns,
+    main,
+    scan_repository,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -118,6 +124,58 @@ def test_release_scan_fails_closed_without_private_profile(
     output = capsys.readouterr().out
     assert '"status": "ERROR"' in output
     assert "release profile" in output
+
+
+def test_default_release_profile_path_preserves_and_rejects_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_home = tmp_path / "owner-home"
+    monkeypatch.setattr(identity_scan.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        identity_scan.Path,
+        "home",
+        classmethod(lambda _cls: fake_home),
+    )
+    canonical = default_private_patterns_file()
+    canonical.parent.mkdir(parents=True)
+    target = tmp_path / "private-patterns-target.txt"
+    target.write_text(
+        "name:private fixture\n"
+        "email:fixture@example.invalid\n"
+        "address:100 Fixture Way\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o600)
+    canonical.symlink_to(target)
+    repository = tmp_path / "repository"
+    (repository / "adminme").mkdir(parents=True)
+
+    assert canonical.is_symlink()
+    assert main(["--root", str(repository), "--require-private-patterns"]) == 2
+    output = capsys.readouterr().out
+    assert '"status": "ERROR"' in output
+    assert "release profile" in output
+    assert "private fixture" not in output
+
+
+def test_release_profile_rejects_symlinked_parent_directory(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    patterns_file = real_parent / "private-patterns.txt"
+    patterns_file.write_text(
+        "name:private fixture\n"
+        "email:fixture@example.invalid\n"
+        "address:100 Fixture Way\n",
+        encoding="utf-8",
+    )
+    patterns_file.chmod(0o600)
+
+    with pytest.raises(ValueError, match="real file"):
+        load_private_patterns(linked_parent / patterns_file.name)
 
 
 def test_private_pattern_file_requires_exact_0600_mode(tmp_path: Path) -> None:

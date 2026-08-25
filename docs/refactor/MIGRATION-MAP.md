@@ -621,8 +621,8 @@ projection, scheduler, workflow, or copied record store.
 | Live deployment | KEEP/HARDEN ACTIVE IN OBSERVATION | Central Tailscale/Gateway/provider reads are live; member bridges and optional provider grants remain explicit per-member activation work. The 3.14/24 cutover requires a new rehearsal. |
 
 Gate 6 update (2026-08-03): the remaining retained domain code is converged on
-the Gate 2–5 runtime. All six products, thirteen domain projections, and the
-derived Triage projection are composed;
+the Gate 2–5 runtime. All six product functions plus the member portal router,
+thirteen domain projections, and the derived Triage projection are composed;
 member knowledge and scoped vector search are distinct; workbooks, profiles,
 personas, packs, bridge sources, durable cursors, notification policy,
 capability registry, contextual what-now, and activity feed have executable
@@ -735,6 +735,7 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Degraded baseline | A desire to escape live degradation encouraged a general repair/governance layer. | Only domain-specific exact-baseline/target/operation/cap contracts may repair; monotonic improvement, no new degradation, observation, backup, rollback, privacy, and zero effects remain conjunctive. | PRESERVE/HARDEN CO-017/CO-018 shape |
 | Privacy | Household literals were reversibly assembled in tracked public canaries; the first recovery candidate could also report identity PASS with no owner-private patterns configured. | GitHub is private; the candidate tip removes tracked literals. Hosted/static checks remain structural and content-free, while the mandatory local release tier fails closed unless an outside-Git, categorized owner-only `0600` profile supplies name, email, and street-address canaries. History is retained, not rewritten. | HARDEN |
 | GitHub delivery | `main` was unprotected; squash/rebase and unbound status contexts could bypass G-001 merge shape or provenance. | Administrator-enforced PR protection requires a strict GitHub-Actions-bound consistency check, resolved conversations, and current base; force push/deletion, squash/rebase/auto-merge, and non-GitHub Actions are disabled; workflow actions are immutable-SHA pinned. | HARDEN |
+| Canonical status | AC-02 called seven composed routes “six product routers,” while merged-and-active CO-016 retained candidate-only headings; generated consistency therefore carried two permanent `UNDETERMINED` findings. | The contract now distinguishes six product-function routers from the member portal router. CO-016 records exact PR/head/merge ancestry into the active observation release. No runtime behavior changes. | MODERNIZE documentation truth; PRESERVE runtime |
 | Owner interaction | Builder/reviewer/repair/release task chains became an informal state machine. | One recovery PR is the status surface; the owner supplies only separate exact-head review, exact G-001 authorization, and unavoidable physical/permission steps. | SUPERSEDE task-loop control plane |
 
 ## G-001 release-governance migration delta

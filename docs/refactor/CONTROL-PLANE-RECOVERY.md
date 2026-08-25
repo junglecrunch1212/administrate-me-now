@@ -43,7 +43,20 @@ be hidden, waived, or folded into unrelated release work.
 
 ## Private identity patterns
 
-The optional `ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE` is an absolute, owner-only
-`0600` text file outside the repository with one literal per line. It is never
-committed, uploaded, quoted in evidence, or copied into a task prompt. Hosted CI
-runs the content-free structural scanner without this private file.
+Hosted CI runs the content-free structural scanner without household values.
+After exact-head review approves and before local final gates, Codex asks the
+owner to run:
+
+```bash
+poetry run python -m scripts.configure_private_identity_patterns
+```
+
+The hidden-input configurator creates the canonical owner-only `0600` file
+outside the repository. It requires one or more entries in each categorized
+form—`name:<literal>`, `email:<literal>`, and `address:<literal>`—and accepts
+additional entries in each category. Values never belong in a task prompt,
+command argument, Git, hosted CI, logs, receipts, or PR comments. The local
+aggregate release tier fails closed when the profile is missing, empty,
+uncategorized, symlinked, repository-contained, mispermissioned, or not owned
+by the current user. `ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE` is only an expert
+manual override and does not weaken those checks.

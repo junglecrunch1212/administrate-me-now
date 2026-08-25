@@ -12,6 +12,7 @@ from scripts.identity_scan import (
     REQUIRED_RELEASE_CATEGORIES,
     default_private_patterns_file,
     load_private_patterns,
+    path_has_symlink_component,
 )
 
 
@@ -55,6 +56,8 @@ def _write_profile(
     repository_root: Path | None = None,
 ) -> None:
     expanded = path.expanduser()
+    if path_has_symlink_component(expanded):
+        raise ValueError("profile destination must be a real file path")
     resolved = expanded.resolve()
     if resolved.name != "private-identity-patterns.txt":
         raise ValueError("profile filename must be private-identity-patterns.txt")
@@ -65,7 +68,7 @@ def _write_profile(
         pass
     else:
         raise ValueError("private identity release profile must stay outside Git")
-    if expanded.is_symlink() or (resolved.exists() and not resolved.is_file()):
+    if resolved.exists() and not resolved.is_file():
         raise ValueError("profile destination must be a real file path")
     if resolved.exists() and not replace:
         raise ValueError("profile already exists; rerun with --replace to replace it")
@@ -97,8 +100,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--patterns-file", type=Path)
     parser.add_argument("--replace", action="store_true")
     args = parser.parse_args(argv)
-    destination = args.patterns_file or default_private_patterns_file()
     try:
+        destination = args.patterns_file or default_private_patterns_file()
         values = _collect()
         _write_profile(destination, values, replace=args.replace)
         load_private_patterns(destination, require_release_profile=True)

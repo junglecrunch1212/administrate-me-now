@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +72,11 @@ def current_capabilities() -> tuple[tuple[str, str, str], ...]:
             "docs/refactor/UX-BEHAVIOR-CONTRACT.md",
         ),
         (
+            "CO-016 Triage queue continuity",
+            "RELEASED_IN_OBSERVATION",
+            "docs/refactor/CHANGE-ORDER-016-TRIAGE-QUEUE-CONTINUITY.md",
+        ),
+        (
             "CO-017 source-assessment recovery",
             "RELEASED_IN_OBSERVATION",
             "docs/refactor/CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md",
@@ -102,10 +108,7 @@ def known_contradictions(root: Path) -> list[ConsistencyFinding]:
         )
     co16 = _read(root, "docs/refactor/CHANGE-ORDER-016-TRIAGE-QUEUE-CONTINUITY.md")
     crosswalk = _read(root, "docs/refactor/CONSTITUTIONAL-CROSSWALK.md")
-    if (
-        "implementation candidate; not merged or deployed" in co16
-        and "C112" in crosswalk
-    ):
+    if "C112" in crosswalk and "MERGED AND ACTIVE IN OBSERVATION" not in co16:
         findings.append(
             ConsistencyFinding(
                 "KNOWN-CO016-STATUS",
@@ -114,6 +117,38 @@ def known_contradictions(root: Path) -> list[ConsistencyFinding]:
             )
         )
     return findings
+
+
+def _runtime_product_names(root: Path) -> tuple[str, ...]:
+    source = _read(root, "adminme/runtime/application.py")
+    if not source:
+        return ()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name != "AdministrateMeRuntime":
+            continue
+        for statement in node.body:
+            if not isinstance(statement, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "PRODUCT_NAMES"
+                for target in statement.targets
+            ):
+                continue
+            if not isinstance(statement.value, (ast.Tuple, ast.List)):
+                return ()
+            values: list[str] = []
+            for item in statement.value.elts:
+                if not isinstance(item, ast.Constant) or not isinstance(
+                    item.value, str
+                ):
+                    return ()
+                values.append(item.value)
+            return tuple(values)
+    return ()
 
 
 def active_legacy_paths(root: Path) -> list[str]:
@@ -141,10 +176,29 @@ def _inventory_assertions(root: Path) -> list[ConsistencyFinding]:
                     f"{name} count is {actual}; constitutional floor is {expected}",
                 )
             )
+    expected_products = (
+        "core",
+        "comms",
+        "capture",
+        "automation",
+        "bridge",
+        "member",
+        "system",
+    )
+    actual_products = _runtime_product_names(root)
+    if actual_products != expected_products:
+        findings.append(
+            ConsistencyFinding(
+                "COUNT-PRODUCT-ROUTERS",
+                "FAIL",
+                "runtime product routers do not equal the reviewed six-function "
+                "plus member-portal topology",
+            )
+        )
     acceptance = _read(root, "docs/refactor/ACCEPTANCE-CONTRACT.md")
     required_phrases = (
         "exactly fifteen registered projections",
-        "six product routers",
+        "six product-function routers plus the member portal router",
         "Six pack kinds",
         "five profiles",
         "four personas",
@@ -273,7 +327,7 @@ def generate_current_state(root: Path | None = None) -> str:
     lines.extend(
         [
             "",
-            "The constitutional product count and runtime namespace count are kept separate; see contradictions below.",
+            "Six product functions and the seventh member portal router are explicitly distinguished by AC-02.",
             "",
             "## Governing current sources",
             "",

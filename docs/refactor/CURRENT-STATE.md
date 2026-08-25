@@ -10,6 +10,7 @@ This index points to current governing evidence without replacing historical doc
 |---|---|---|
 | v2 constitutional composition | ACCEPTED | [docs/refactor/ADR-0000-CONSTITUTIONAL-RECONCILIATION.md](ADR-0000-CONSTITUTIONAL-RECONCILIATION.md) |
 | ten adult surfaces and three experience modes | ACCEPTED | [docs/refactor/UX-BEHAVIOR-CONTRACT.md](UX-BEHAVIOR-CONTRACT.md) |
+| CO-016 Triage queue continuity | RELEASED_IN_OBSERVATION | [docs/refactor/CHANGE-ORDER-016-TRIAGE-QUEUE-CONTINUITY.md](CHANGE-ORDER-016-TRIAGE-QUEUE-CONTINUITY.md) |
 | CO-017 source-assessment recovery | RELEASED_IN_OBSERVATION | [docs/refactor/CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md](CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md) |
 | CO-018 source time and context correction | CANDIDATE_ONLY | [docs/refactor/CHANGE-ORDER-018-SOURCE-TIME-AND-CONTEXT-CORRECTION.md](CHANGE-ORDER-018-SOURCE-TIME-AND-CONTEXT-CORRECTION.md) |
 | staged durable Outcome Harness recovery | CANDIDATE_ONLY | [docs/refactor/ADR-0012-SEMI-GREENFIELD-CONTROL-PLANE-RECOVERY.md](ADR-0012-SEMI-GREENFIELD-CONTROL-PLANE-RECOVERY.md) |
@@ -23,7 +24,7 @@ This index points to current governing evidence without replacing historical doc
 - Built-in profiles (5): adhd_executive, ambient_entity, kid_scoreboard, minimalist_parent, power_user
 - Built-in personas (4): butler_classic, friendly_robot, poopsy, quiet_assistant
 
-The constitutional product count and runtime namespace count are kept separate; see contradictions below.
+Six product functions and the seventh member portal router are explicitly distinguished by AC-02.
 
 ## Governing current sources
 
@@ -37,8 +38,7 @@ The constitutional product count and runtime namespace count are kept separate; 
 
 ## Known contradictions
 
-- **UNDETERMINED — KNOWN-PRODUCT-COUNT:** Runtime PRODUCT_NAMES contains seven names including system, while AC-02 says six product routers; both paths remain current.
-- **UNDETERMINED — KNOWN-CO016-STATUS:** CO-016 retains candidate-only status text while current crosswalk C112 incorporates its semantics; release state as a separately named unit is UNDETERMINED.
+- None detected by the reviewed checks.
 
 ## Active legacy automation
 

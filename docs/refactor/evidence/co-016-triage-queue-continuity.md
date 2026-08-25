@@ -1,7 +1,9 @@
 # CO-016 Triage queue-continuity evidence
 
-Status: local candidate evidence complete; independent review and hosted gates
-pending; not merged or deployed.
+Status: **RELEASED IN OBSERVATION.** Independent exact-head review passed on PR
+#334; candidate `40f1c27a1259b35c263cf980fbbb9cf3e4f5d239` merged as
+`2d739ad2e89a49bf330a854317326482907b956d` and is contained by active
+observation release `d181fad24ef488a71ce5568cc40fb81309cb3817`.
 
 ## Reproduction
 
@@ -86,7 +88,7 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 - the previously proven exact destination receipt and resolved deep-link
   behavior.
 
-## Local candidate results
+## Reviewed candidate results
 
 ```text
 Focused Triage/projection/pipeline/production-composition tests
@@ -115,6 +117,10 @@ resolved to macOS system Python. Binding `python3` to the clean Poetry Python
 3.14 environment produced the passing result above. No test was waived and no
 installed runtime was touched.
 
-Hosted checks, an independent exact-head review, and release evidence will be
-added only when obtained. G-001 continues to prohibit merge or deployment
-without a fresh exact-head authorization.
+Hosted checks and the independent exact-head human review were subsequently
+obtained on PR #334 for head
+`40f1c27a1259b35c263cf980fbbb9cf3e4f5d239`. G-001 authorized its merge as
+`2d739ad2e89a49bf330a854317326482907b956d`; active observation release
+`d181fad24ef488a71ce5568cc40fb81309cb3817` contains that merge. This retained
+evidence records the completed historical transaction and grants no authority
+for a new merge, deployment, provider action, or live change.

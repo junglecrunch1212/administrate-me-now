@@ -15,7 +15,8 @@ Tailscale, or family-Mac success is claimed.
 
 The final inventory contains 645 relevant first-party Python/type-stub,
 TypeScript/JavaScript, SQL, shell, YAML, JSON, and package-manifest files. The
-runtime exposes six product namespaces, exactly thirteen projection
+runtime exposes six product-function namespaces plus the member portal router,
+exactly thirteen projection
 capabilities, six reactive pipelines, five OpenClaw-scheduled proactive
 programs, ten skill packs, five profile packs, four persona packs, two
 bidirectional workbooks, and the Cat-A–E adapter taxonomy.

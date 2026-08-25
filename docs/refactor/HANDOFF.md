@@ -74,6 +74,17 @@ placing values in shell history or printing them. All earlier review and check
 evidence is rejected after the binding change; a fresh exact-head independent
 review remains required before any final gate.
 
+The next independent task rejected exact head
+`f406816ede4fa1bc0efbf28202aec625e8f96848`: the default profile helper had
+resolved away the canonical symlink before validation, and the owner front
+door still described uncategorized entries. The repair retains the lexical
+default path until the symlink check, adds the exact default-path regression,
+and documents the categorized hidden-input format. It also closes two
+pre-existing generated `UNDETERMINED` items without changing behavior: the
+runtime has six product-function routers plus the member portal router, and
+CO-016 was merged by PR #334 and is contained by active observation release
+`d181fad`. All evidence for the rejected head is invalid for the new binding.
+
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
 Current `origin/main` is merge `cd08b50`; active release selection and both
@@ -2515,9 +2526,12 @@ and zero review threads remained. The guarded merge produced immutable
   was zero before activation and remained zero after deployment, Doctor, and
   browser acceptance; no decision or provider action was performed.
 
-## CO-016 candidate handoff — Triage queue continuity
+## CO-016 released handoff — Triage queue continuity
 
-Status: implementation candidate; not merged or deployed.
+Status: released in observation. PR #334 exact head
+`40f1c27a1259b35c263cf980fbbb9cf3e4f5d239` merged as
+`2d739ad2e89a49bf330a854317326482907b956d`; active release
+`d181fad24ef488a71ce5568cc40fb81309cb3817` contains that merge.
 
 Authenticated live reproduction found that one Acorns spam dismissal did not
 create a global sender rule and did not remove the unresolved inventory. The

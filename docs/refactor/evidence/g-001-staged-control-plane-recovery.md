@@ -70,6 +70,18 @@ release tier for final harness PASS, and provides a hidden-input configurator
 writes no value to Git, shell history, or output. That rejected review grants
 no approval to this or any later head.
 
+Independent Codex task `01a03a80-6e81-76e2-9ae7-3ab0159ee6bf` then rejected
+exact head `f406816ede4fa1bc0efbf28202aec625e8f96848`. It proved that resolving
+the canonical default profile path erased the lexical symlink before the
+scanner could reject it, and found that the owner front door still described
+the obsolete uncategorized format. The repair preserves the lexical default
+path through validation, adds a canonical-default symlink regression, and
+documents the categorized hidden-input flow. The same review surfaced two
+pre-existing canonical status contradictions: AC-02 now distinguishes six
+product-function routers from the member portal router, and CO-016 records its
+exact PR #334 merge ancestry into active observation release `d181fad`. These
+are documentation-truth corrections only; runtime behavior is unchanged.
+
 No release, deployment, live Doctor, provider action, observation change,
 runtime migration, history rewrite, or family-Mac experiment was performed by
 this candidate.
