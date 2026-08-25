@@ -398,6 +398,19 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 
 | AC-45 | ADR-0012; `AGENTS.md`; `scripts/harness/{core,workspace,run_artifacts,cli}.py`; `scripts/{identity_scan,configure_private_identity_patterns}.py`; `tests/unit/harness/test_workspace.py`; harness artifact-flow and tenant-neutrality tests; recovery PR settings/check receipts | A local candidate starts only in one saved `codex/` worktree that contains the exact remotely observed GitHub `main`; stale tracking refs, direct `main`, or non-current ancestry fail read-only workspace attestation. Harness evidence defaults outside Git and system temp to a private durable host-local root while explicit disposable test roots remain supported. Static, focused, and production-journey receipts must be exact and passing before independent review may be imported; breadth, browser, and release CLI gates stay locked until exact-bound review approves with no actionable or unresolved finding. The aggregate release tier is required for final harness PASS and fails closed unless a categorized owner-only `0600` file outside Git contains name, email, and street-address canaries; hosted/static scanning stays credential-free and structural, and all results remain content-free. Missing, empty, mispermissioned, uncategorized, symlinked, repository-contained, or wrong-owner private profiles cannot grant release proof. Binding or repository-state change invalidates proof. GitHub permits only merge commits, binds the strict required check to GitHub Actions, applies protection to administrators, restricts Actions to GitHub-owned `actions/*`, and requires immutable action SHAs. Known degraded baselines never become a generic waiver: any repair remains domain-specific, immutable-baseline/target/operation/cap bound, monotonic, observation-safe, backup/rollback protected, private, and zero-provider-effect. G-001 exact-PR/head authority and Phase A/Phase B separation remain unchanged. |
 
+AC-45 recovery amendment (2026-08-25): the private release scan enumerates
+Git's tracked and untracked non-ignored path set across every file type, with a
+complete-tree fallback for non-Git fixtures. Exact owner canaries remain active
+in documentation, scripts, OpenClaw sources, extensionless files, redacted
+private pathnames, and symlink text without following links. Only the generic phone heuristic excludes the
+historical console reference and vendored provider examples. Harness run roots
+retain lexical identity and reject any existing symlink component before
+resolution or directory creation. Canonical release isolation carries the
+private-profile path plus existing Gate 7 controls while removing credentials,
+OpenClaw authority, live selectors, and every other non-allowlisted
+`ADMINME_*` variable. Regressions reproduce the three third-review findings;
+the rejected exact head and receipts confer no later-gate authority.
+
 AC-43 exactness amendment: invalid Gmail source time quarantines without a
 wall-clock fallback. Each related source records its actual admitting source
 edge, and a later same-thread anchor cannot undo the pair's rejection. Gmail

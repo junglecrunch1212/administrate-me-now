@@ -51,6 +51,15 @@ owner to run:
 poetry run python -m scripts.configure_private_identity_patterns
 ```
 
+The scanner enumerates every tracked and untracked non-ignored Git path and
+every file type; non-Git test fixtures receive an equivalent complete-tree
+walk. Exact owner canaries therefore cover documentation, scripts, OpenClaw
+sources, extensionless files, private pathnames, and Git symlink text without
+following a link. A private pathname is reported only as a redacted coordinate.
+The generic phone heuristic alone excludes the historical console reference
+and vendored provider specifications, whose published examples are not
+household canaries; exact owner canaries remain active in those paths.
+
 The hidden-input configurator creates the canonical owner-only `0600` file
 outside the repository. It requires one or more entries in each categorized
 form—`name:<literal>`, `email:<literal>`, and `address:<literal>`—and accepts
@@ -59,4 +68,7 @@ command argument, Git, hosted CI, logs, receipts, or PR comments. The local
 aggregate release tier fails closed when the profile is missing, empty,
 uncategorized, symlinked, repository-contained, mispermissioned, or not owned
 by the current user. `ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE` is only an expert
-manual override and does not weaken those checks.
+manual override and does not weaken those checks. Canonical release isolation
+preserves this path without logging it while stripping credentials, OpenClaw
+authority, live instance selectors, and all other non-allowlisted
+`ADMINME_*` variables.

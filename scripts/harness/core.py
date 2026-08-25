@@ -278,7 +278,7 @@ def default_run_root() -> Path:
         candidate = Path(configured).expanduser()
         if not candidate.is_absolute():
             raise HarnessError("ADMINME_HARNESS_RUN_ROOT must be an absolute path")
-        return candidate.resolve()
+        return candidate
     if sys.platform == "darwin":
         return (
             Path.home()
@@ -286,15 +286,27 @@ def default_run_root() -> Path:
             / "Application Support"
             / "AdministrateMe"
             / "Harness Runs"
-        ).resolve()
+        )
     state_home = os.environ.get("XDG_STATE_HOME")
     base = Path(state_home).expanduser() if state_home else Path.home() / ".local/state"
-    return (base / "administrateme" / "harness-runs").resolve()
+    if not base.is_absolute():
+        raise HarnessError("XDG_STATE_HOME must be an absolute path")
+    return base / "administrateme" / "harness-runs"
+
+
+def _path_has_symlink_component(path: Path) -> bool:
+    """Return true when a lexical path or any existing parent is a symlink."""
+
+    expanded = path.expanduser()
+    lexical = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    return any(candidate.is_symlink() for candidate in (lexical, *lexical.parents))
 
 
 def ensure_run_dir(path: Path, root: Path | None = None) -> Path:
     """Accept a private run outside the repository, including durable runs."""
 
+    if _path_has_symlink_component(path):
+        raise HarnessError("harness run path must be a real directory, not a link")
     resolved = path.resolve()
     repo = (root or repository_root()).resolve()
     try:
@@ -307,7 +319,7 @@ def ensure_run_dir(path: Path, root: Path | None = None) -> Path:
         raise HarnessError(
             "harness run directory must start with administrateme-harness-"
         )
-    if path.is_symlink() or (path.exists() and not path.is_dir()):
+    if path.exists() and not path.is_dir():
         raise HarnessError("harness run path must be a real directory, not a link")
     return resolved
 
@@ -324,7 +336,7 @@ def new_run_directory(
         + uuid.uuid4().hex[:8]
     )
     raw_destination = (run_root or default_run_root()).expanduser()
-    if raw_destination.is_symlink():
+    if _path_has_symlink_component(raw_destination):
         raise HarnessError("harness run root must be a real directory, not a link")
     destination = raw_destination.resolve()
     repo = (repository or repository_root()).resolve()
@@ -1225,6 +1237,7 @@ def clean_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
         "ADMINME_GATE7_EVIDENCE_DIR",
         "ADMINME_GATE7_PYTHON",
         "ADMINME_GATE7_VISUAL_NOW",
+        "ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE",
     }
     credential_names = {
         "ANTHROPIC_API_KEY",

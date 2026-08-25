@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,80 @@ def test_scanner_detects_private_values_without_echoing_them(tmp_path: Path) -> 
         "owner_private_literal",
     ]
     assert all(private_literal not in repr(item) for item in violations)
+
+
+def test_scanner_covers_every_git_eligible_path_and_suffix(tmp_path: Path) -> None:
+    scan_root = tmp_path / "scan-root"
+    scan_root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=scan_root, check=True)
+    private_literal = "PRIVATE" + "-TREE-CANARY"
+    paths = [
+        scan_root / "docs/tracked.md",
+        scan_root / "openclaw/tracked.ts",
+        scan_root / "scripts/tracked.py",
+        scan_root / "adminme/excluded.txt",
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(private_literal + "\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "docs/tracked.md", "openclaw/tracked.ts"],
+        cwd=scan_root,
+        check=True,
+    )
+
+    violations = scan_repository(scan_root, private_patterns=(private_literal,))
+
+    assert [item.path for item in violations] == [
+        "adminme/excluded.txt",
+        "docs/tracked.md",
+        "openclaw/tracked.ts",
+        "scripts/tracked.py",
+    ]
+    assert {item.rule for item in violations} == {"owner_private_literal"}
+    assert all(private_literal not in repr(item) for item in violations)
+
+
+def test_scanner_excludes_git_ignored_files(tmp_path: Path) -> None:
+    scan_root = tmp_path / "scan-root"
+    scan_root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=scan_root, check=True)
+    (scan_root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    private_literal = "PRIVATE" + "-IGNORED-CANARY"
+    (scan_root / "ignored.txt").write_text(private_literal, encoding="utf-8")
+
+    assert not scan_repository(scan_root, private_patterns=(private_literal,))
+
+
+def test_reference_phone_exemption_never_exempts_owner_private_literals(
+    tmp_path: Path,
+) -> None:
+    scan_root = tmp_path / "scan-root"
+    reference = scan_root / "docs/reference/vendor-example.txt"
+    reference.parent.mkdir(parents=True)
+    private_literal = "PRIVATE" + "-REFERENCE-CANARY"
+    reference_phone = "1-415" + "-867-5309"
+    reference.write_text(reference_phone + "\n" + private_literal, encoding="utf-8")
+
+    violations = scan_repository(scan_root, private_patterns=(private_literal,))
+
+    assert [(item.path, item.rule) for item in violations] == [
+        ("docs/reference/vendor-example.txt", "owner_private_literal")
+    ]
+
+
+def test_scanner_redacts_owner_private_file_names(tmp_path: Path) -> None:
+    scan_root = tmp_path / "scan-root"
+    scan_root.mkdir()
+    private_literal = "PRIVATE" + "-PATH-CANARY"
+    (scan_root / f"{private_literal}.txt").write_text("safe fixture", encoding="utf-8")
+
+    violations = scan_repository(scan_root, private_patterns=(private_literal,))
+
+    assert [(item.path, item.line, item.rule) for item in violations] == [
+        ("<owner-private-path>", 0, "owner_private_path")
+    ]
+    assert private_literal not in repr(violations)
 
 
 def test_release_profile_requires_name_email_and_address_categories(

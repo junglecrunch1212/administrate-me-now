@@ -7,26 +7,12 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-PLATFORM_ROOTS = ("adminme", "bootstrap", "bridge", "packs", "tests")
-SCANNED_SUFFIXES = {
-    ".css",
-    ".html",
-    ".js",
-    ".json",
-    ".md",
-    ".py",
-    ".sh",
-    ".sql",
-    ".toml",
-    ".ts",
-    ".yaml",
-    ".yml",
-}
 PHONE_RE = re.compile(
     r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-](\d{3})[ .-](\d{4})(?!\d)"
 )
@@ -35,6 +21,8 @@ HARDCODED_INSTANCE_RE = re.compile(
     re.IGNORECASE,
 )
 REQUIRED_RELEASE_CATEGORIES = frozenset({"name", "email", "address"})
+GENERIC_PHONE_REFERENCE_PREFIXES = ("docs/reference/",)
+GENERIC_PHONE_REFERENCE_FILES = frozenset({"ADMINISTRATEME_CONSOLE_REFERENCE.html"})
 
 
 @dataclass(frozen=True)
@@ -145,23 +133,68 @@ def load_private_patterns(
     return patterns
 
 
-def _line_rules(line: str, private_patterns: tuple[str, ...]) -> set[str]:
+def _line_rules(
+    line: str,
+    private_patterns: tuple[str, ...],
+    *,
+    check_generic_phone: bool = True,
+) -> set[str]:
     rules: set[str] = set()
     lowered = line.casefold()
     if any(pattern.casefold() in lowered for pattern in private_patterns):
         rules.add("owner_private_literal")
     if HARDCODED_INSTANCE_RE.search(line):
         rules.add("hardcoded_instance_path")
-    for match in PHONE_RE.finditer(line):
-        digits = "".join(
-            character for character in match.group(0) if character.isdigit()
-        )
-        national = (
-            digits[1:] if len(digits) == 11 and digits.startswith("1") else digits
-        )
-        if not national.startswith("555"):
-            rules.add("non_synthetic_phone")
+    if check_generic_phone:
+        for match in PHONE_RE.finditer(line):
+            digits = "".join(
+                character for character in match.group(0) if character.isdigit()
+            )
+            national = (
+                digits[1:] if len(digits) == 11 and digits.startswith("1") else digits
+            )
+            if not national.startswith("555"):
+                rules.add("non_synthetic_phone")
     return rules
+
+
+def _fallback_repository_paths(root: Path) -> list[Path]:
+    """Return every file-like path below a non-Git fixture, excluding Git internals."""
+
+    paths: list[Path] = []
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if ".git" in relative.parts:
+            continue
+        if path.is_symlink() or path.is_file():
+            paths.append(path)
+    return sorted(paths, key=lambda item: item.relative_to(root).as_posix())
+
+
+def _repository_paths(root: Path) -> list[Path]:
+    """Return tracked and untracked non-ignored paths for an exact Git worktree."""
+
+    worktree = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+    )
+    if worktree.returncode != 0:
+        return _fallback_repository_paths(root)
+    top_level = Path(os.fsdecode(worktree.stdout).strip()).resolve()
+    if top_level != root.resolve():
+        return _fallback_repository_paths(root)
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"],
+        check=False,
+        capture_output=True,
+    )
+    if listed.returncode != 0:
+        return _fallback_repository_paths(root)
+    return [
+        root / os.fsdecode(encoded)
+        for encoded in sorted(item for item in listed.stdout.split(b"\0") if item)
+    ]
 
 
 def scan_repository(
@@ -169,23 +202,41 @@ def scan_repository(
     *,
     private_patterns: tuple[str, ...] = (),
 ) -> list[Violation]:
-    """Return only content-free coordinates; never echo a matched value."""
+    """Scan the complete Git-eligible tree and return content-free coordinates."""
 
     violations: list[Violation] = []
-    for root_name in PLATFORM_ROOTS:
-        source_root = root / root_name
-        if not source_root.exists():
-            continue
-        for path in sorted(item for item in source_root.rglob("*") if item.is_file()):
-            if path.suffix.lower() not in SCANNED_SUFFIXES:
+    for path in _repository_paths(root):
+        relative = path.relative_to(root).as_posix()
+        private_path = any(
+            pattern.casefold() in relative.casefold() for pattern in private_patterns
+        )
+        reported_path = "<owner-private-path>" if private_path else relative
+        if private_path:
+            violations.append(Violation(reported_path, 0, "owner_private_path"))
+        check_generic_phone = not (
+            relative in GENERIC_PHONE_REFERENCE_FILES
+            or relative.startswith(GENERIC_PHONE_REFERENCE_PREFIXES)
+        )
+        try:
+            if path.is_symlink():
+                lines = os.readlink(path).splitlines()
+            elif path.is_file():
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            else:
+                # A tracked deletion or submodule has no candidate-tip file content.
                 continue
-            relative = path.relative_to(root).as_posix()
-            for line_number, line in enumerate(
-                path.read_text(encoding="utf-8", errors="replace").splitlines(),
-                start=1,
+        except OSError:
+            violations.append(Violation(reported_path, 0, "unreadable_repository_file"))
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            for rule in sorted(
+                _line_rules(
+                    line,
+                    private_patterns,
+                    check_generic_phone=check_generic_phone,
+                )
             ):
-                for rule in sorted(_line_rules(line, private_patterns)):
-                    violations.append(Violation(relative, line_number, rule))
+                violations.append(Violation(reported_path, line_number, rule))
     return violations
 
 

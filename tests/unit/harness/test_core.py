@@ -222,6 +222,34 @@ def test_new_run_directory_uses_private_configured_root(
     assert configured.stat().st_mode & 0o077 == 0
 
 
+def test_new_run_directory_rejects_configured_symlink_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "private-evidence-target"
+    target.mkdir()
+    configured = tmp_path / "private-evidence-link"
+    configured.symlink_to(target, target_is_directory=True)
+    monkeypatch.setenv("ADMINME_HARNESS_RUN_ROOT", str(configured))
+
+    assert default_run_root() == configured
+    with pytest.raises(HarnessError, match="not a link"):
+        new_run_directory(repository=repository_root())
+
+
+def test_new_run_directory_rejects_symlinked_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "private-parent-target"
+    target.mkdir()
+    linked_parent = tmp_path / "private-parent-link"
+    linked_parent.symlink_to(target, target_is_directory=True)
+    configured = linked_parent / "private-evidence"
+    monkeypatch.setenv("ADMINME_HARNESS_RUN_ROOT", str(configured))
+
+    with pytest.raises(HarnessError, match="not a link"):
+        new_run_directory(repository=repository_root())
+
+
 def test_binding_base_is_the_candidate_merge_base_not_a_moving_remote_tip() -> None:
     root = repository_root()
     remote_main = subprocess.run(
@@ -986,12 +1014,18 @@ def test_clean_environment_removes_live_authority_even_from_overrides(
         {
             **{name: "override-live-value" for name in unsafe},
             "ADMINME_GATE7_EVIDENCE_DIR": "/tmp/fixture-evidence",
+            "ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE": (
+                "/private/owner/private-identity-patterns.txt"
+            ),
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
 
     assert unsafe.isdisjoint(environment)
     assert environment["ADMINME_GATE7_EVIDENCE_DIR"] == "/tmp/fixture-evidence"
+    assert environment["ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE"] == (
+        "/private/owner/private-identity-patterns.txt"
+    )
     assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
 
 

@@ -85,6 +85,26 @@ runtime has six product-function routers plus the member portal router, and
 CO-016 was merged by PR #334 and is contained by active observation release
 `d181fad`. All evidence for the rejected head is invalid for the new binding.
 
+The third independent task rejected exact head
+`a9ab5e59be3485d4474cf2c0dacb05c067bdade8`. Its review proved that the
+owner-private scan still traversed only five source roots and selected
+suffixes, that `ADMINME_HARNESS_RUN_ROOT` resolution erased a configured
+symlink before validation, and that canonical release isolation stripped the
+documented private-profile override. The amended scan enumerates Git's complete
+tracked-plus-untracked, non-ignored candidate tree (with a complete non-Git
+fixture fallback), scans owner canaries in every file type without following
+links, and retains only narrow generic-phone heuristic exceptions for the
+historical console reference and vendored provider specifications. Those
+exceptions never apply to owner canaries. Durable run validation now retains
+the lexical root and rejects a link at any existing path component before
+resolution. Canonical release subprocess isolation preserves only the private
+profile path in addition to the existing Gate 7 controls while still removing
+credentials, OpenClaw authority, live instance selectors, and every other
+unapproved `ADMINME_*` variable. Regression fixtures reproduce each review
+finding. The third review artifact is retained as rejected evidence and grants
+no final-gate, merge, or release authority; the amended head requires a fourth
+independent exact-head review.
+
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
 Current `origin/main` is merge `cd08b50`; active release selection and both
