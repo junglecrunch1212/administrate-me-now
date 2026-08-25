@@ -43,6 +43,12 @@ action, observation change, runtime migration, history rewrite, or family-Mac
 experiment occurred. Exact-head independent review, final gates, hosted proof,
 and a fresh G-001 owner authorization remain mandatory.
 
+The first durable self-run stopped before review because `run-tier focused`
+selected the fallback unit suite instead of the checks implied by its bound
+changed-file inventory. The candidate now defaults focused selection to that
+immutable inventory while retaining explicit override support. The earlier
+receipts remain historical and are invalid for the amended binding.
+
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
 Current `origin/main` is merge `cd08b50`; active release selection and both

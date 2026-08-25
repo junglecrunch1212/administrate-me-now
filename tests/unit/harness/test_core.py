@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from scripts.harness import core as harness_core
+from scripts.harness.cli import _changed_paths_for_run
 from scripts.harness.checks import (
     CheckSpec,
     _browser_summary,
@@ -175,6 +176,21 @@ def test_unknown_markers_are_normalized_recursively() -> None:
     assert normalize_undetermined(
         {"top": "UNKNOWN", "items": ["TRACE_BREAK", {"kept": "PASS"}]}
     ) == {"top": "UNDETERMINED", "items": ["UNDETERMINED", {"kept": "PASS"}]}
+
+
+def test_run_tier_defaults_to_bound_candidate_paths(tmp_path: Path) -> None:
+    run_dir = tmp_path / "administrateme-harness-bound-paths"
+    run_dir.mkdir()
+    (run_dir / "verification-report.json").write_text(
+        json.dumps({"changed_files": ["scripts/harness/cli.py", "AGENTS.md"]}),
+        encoding="utf-8",
+    )
+
+    assert _changed_paths_for_run(run_dir, []) == [
+        "scripts/harness/cli.py",
+        "AGENTS.md",
+    ]
+    assert _changed_paths_for_run(run_dir, ["explicit.py"]) == ["explicit.py"]
 
 
 def test_runs_refuse_repository_paths() -> None:

@@ -18,6 +18,7 @@ from .core import (
     HarnessError,
     applicable_instructions,
     executable_inventory,
+    load_json,
     repository_root,
     run_diff_hygiene,
     validate_artifact,
@@ -41,6 +42,15 @@ from .run_artifacts import (
 )
 from .skill_references import check_skill_references, update_skill_references
 from .workspace import workspace_status
+
+
+def _changed_paths_for_run(run_dir: Path, explicit: list[str]) -> list[str]:
+    """Use the bound candidate scope unless an exact explicit scope is supplied."""
+
+    if explicit:
+        return explicit
+    verification = load_json(run_dir / "verification-report.json")
+    return list(verification["changed_files"])
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -207,7 +217,10 @@ def main(argv: list[str] | None = None) -> int:
                 root,
                 args.run_dir,
                 args.tier,
-                changed_paths=args.changed_path,
+                changed_paths=_changed_paths_for_run(
+                    args.run_dir,
+                    args.changed_path,
+                ),
                 node_bin=args.node_bin,
             )
             record_checks(args.run_dir, receipts)

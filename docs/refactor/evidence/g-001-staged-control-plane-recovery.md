@@ -36,6 +36,13 @@ Status: local candidate; independent exact-head review and final gates pending.
 | Identity canary leaks its subject | Repository source contains no household literal list; optional owner-private patterns are `0600`, and results are content-free coordinates. |
 | Multi-task loop becomes state | One recovery PR is the status surface; stalled tasks and G-002 are superseded evidence only. |
 
+The first durable self-run also caught and repaired a pre-review CLI defect:
+`run-tier focused` had ignored the bound changed-file inventory unless the
+operator repeated every path, causing fallback selection. It now defaults to
+the immutable verification scope; an explicit path list remains an intentional
+override. The pre-repair receipts are historical only and cannot be imported
+after the changed binding.
+
 No release, deployment, live Doctor, provider action, observation change,
 runtime migration, history rewrite, or family-Mac experiment was performed by
 this candidate.
