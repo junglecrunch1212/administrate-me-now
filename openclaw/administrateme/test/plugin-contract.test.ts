@@ -102,8 +102,8 @@ function toolContext(overrides: Partial<OpenClawPluginToolContext> = {}): OpenCl
 
 describe("native OpenClaw contract fixture", () => {
   it("matches Python approval fingerprints for Unicode and exponent values", () => {
-    expect(approvalRequestFingerprint({ text: "Laura’s café ☕" })).toBe(
-      "0bd47ff5a452c7769bc25c29e33b1f3cfa8c3b966e58caa91c856b66f3d9a02e",
+    expect(approvalRequestFingerprint({ text: "member-fixture’s café ☕" })).toBe(
+      "560b5f9157897df23b027a410d40b2b93d8586b6bd3a8ed62891b29d20f473c6",
     );
     expect(approvalRequestFingerprint({ text: "emoji 😀" })).toBe(
       "b63e44cf7a757490e5fc318b0140a209ebc306955926e0f608d86c612f7ec2d8",

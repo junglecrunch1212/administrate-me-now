@@ -1,8 +1,10 @@
 # Migration map
 
-CO-018 mixed-backlog amendment (2026-08-15): current `origin/main` is
-`cd08b50`, including PR #339's forward repair and PR #340's Outcome Harness,
-while the active release remains `d181fad`. Content-free read-only diagnosis
+Control-plane reboot amendment (2026-08-25): ADR-0013 retires G-001, the Outcome Harness, proposed G-002/ADR-0012, and the earlier executor instructions. Current delivery uses one protected GitHub pull request with ordinary CI and optional advisory review. Historical process descriptions below record past events only; they are not current instructions. V2 runtime, product, privacy, observation, backup, rollback, and provider-write boundaries are unchanged.
+
+CO-018 mixed-backlog amendment (2026-08-15, historical): `origin/main` was
+`cd08b50`, including PR #339's forward repair and PR #340. The active release
+remained `d181fad`. Content-free read-only diagnosis
 proved restored noise-filtering v20 is durably poisoned at
 `ev_01KZP8DCKX0000` behind checkpoint `ev_01KZP8DCKK0000`; five repeatable
 idempotency conflicts prevent checkpoint advance, leave five recovery commands
@@ -723,18 +725,14 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Assurance freshness | Any running refresh was labeled stale; the first correction still age-rescanned a settled immutable revision every 30 seconds. | Refresh activity is independent. An exact current revision with zero pending obligations remains settled without a wall-clock rescan. Revision changes refresh immediately; pending obligations recheck every 30 seconds; refresh exception fails immediately and an unsettled proof fails stale after five minutes. | SUPERSEDE |
 | Doctor settlement | Required healthy, exact terminal counts, zero pending/missing/failed, and a fresh proof. | Preserved and tightened: the explicit bounded-watermark proof must also match the current event/checkpoint revision; its age and refresh activity are separately visible. | PRESERVE/HARDEN |
 
-## G-001 release-governance migration delta
+## Simple GitHub delivery migration delta
 
-| Release stage | Before G-001 | Controlled result | Classification |
+| Delivery stage | Retired process | Current result | Classification |
 |---|---|---|---|
-| Default authority | “Do not merge” correctly prevented silent activation but left no bounded path from a green reviewed PR to Phase B; older blanket chat overrides were not bound to a release object. | Merge and Phase B remain denied unless one current-task owner instruction names one PR and exact 40-character head under the merged G-001 policy. The G-001 PR cannot authorize itself. | PRESERVE deny-by-default; SUPERSEDE blanket overrides |
-| Review identity | Implementation review, hosted checks, and owner intent could exist without one auditable independent-review receipt. | A non-author human approval or separate user-visible, non-implementing Codex task comment binds review scope, commands, findings, conclusion, and task/thread to the exact head; an implementation subagent is insufficient. Any head change invalidates it. | HARDEN |
-| Base drift | A PR could remain green while `main` advanced, leaving ambiguity about which combined tree was authorized. | Current `origin/main` must be contained. Drift is merged without rebase/force/history rewrite; the new head receives complete review, gates, and new exact-head owner authorization. | HARDEN |
-| Merge | The implementation task had no permitted merge path. | Only a GitHub merge commit for the named PR at the authorized head may change `main`; direct push and protection bypass remain forbidden. | MODERNIZE |
-| Phase B | Reviewed merge, backup, guarded update, Doctor, and live evidence were required operationally but were not one explicit authority transaction. | The merged immutable SHA enters observation-only guarded activation after baseline and verified encrypted backup, with automatic rollback, bounded settlement, full Doctor, isolation/privacy, authenticated read-only browser proof, and zero unintended provider effects. | PRESERVE/HARDEN |
-| Adjacent changes | A pressure to finish could invite opportunistic runtime, dependency, permission, provider, or installed-release repair. | Those changes require separate named approval; any mismatch stops or rolls back without improvisation. | HARDEN |
-| Closure | Live evidence was commonly recorded by a later PR without explicit continuation of the release authority. | One exact governing-docs-only, hosted-green evidence PR may close the transaction; executable/configuration changes require a new ordinary authorization. | MODERNIZE |
-
+| Change flow | G-001 and the Outcome Harness bound work to exact phrases, separate reviewer tasks, generated artifacts, staged labels, and repeated proof invalidation. | One branch from current `main`, one pull request, required GitHub CI, optional bounded advisory review, and ordinary owner merge language. Failures are fixed on the same branch. | SUPERSEDE |
+| Merge | The implementation task had no ordinary completion path. | Protected GitHub merge commits are the only path to `main`; direct push, force-push, history rewrite, and protection bypass remain forbidden. | MODERNIZE |
+| Deployment | Process evidence and live safety were coupled into one transaction. | Deployment is separately requested after merge and retains the immutable revision, observation, encrypted backup, rollback, Doctor/settlement, privacy/isolation, browser, and zero-provider-effect gates. | PRESERVE/HARDEN |
+| Product coverage | Harness artifacts wrapped genuine navigation and browser assertions. | The useful checks remain as ordinary unit, production-composition, and Gate 7 browser tests. | PRESERVE |
 ## Gate 2 migration delta
 
 | Subsystem | Gate 2 result | Remaining boundary |
@@ -775,14 +773,13 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Scoreboard next steps | Canonical Tasks appeared without a path back to the managing surface. | Active Tasks carry an exact Reminders item link; terminal evidence remains distinct. | MODERNIZE |
 | Surface contract | Typed paths covered only six stable routes. | `surface-link-v1` covers all ten adult routes and remains non-authorizing. | HARDEN |
 | Runtime/domain topology | Fifteen projections and existing sources, models, write gates. | Unchanged: no projection, source store, graph, provider SDK, model router, write path, or external effect added. | PRESERVE |
-| Release activation | CO-015 behavior existed only in isolated candidate evidence. | PR #331 merge `2fede3f` is active after encrypted backup and guarded same-runtime upgrade; Doctor is healthy, authenticated exact-focus and phone review pass, observation remains active, and the provider-called count remains zero. | PRESERVE guarded G-001 release and observation boundaries |
+| Release activation | CO-015 behavior existed only in isolated candidate evidence. | PR #331 merge `2fede3f` became active after encrypted backup and guarded same-runtime upgrade; Doctor was healthy, authenticated exact-focus and phone review passed, observation remained active, and the provider-called count remained zero. | PRESERVE guarded deployment and observation boundaries |
 
-## Outcome Harness and legacy-executor migration delta
+## Staged control-plane retirement delta
 
-| Subsystem | Before | Local candidate result | Classification |
+| Subsystem | Retired state | Current result | Classification |
 |---|---|---|---|
-| Change contract | Prompt-era executor roles and commit stages mixed scope, implementation, Git operations, and provider authentication. | A temporary exact-bound run separates owner outcome, evidence inventory, preservation manifest, verification, read-only review, and owner handoff. It requires all eight outcome states and review scopes, exact reviewed command identities, complete candidate-path coverage including deletions, committed-range diff hygiene, content-free protected-work content/mode/type/link-target fingerprints, independently bound staged and unstaged state with task/protected boundary enforcement even when index/worktree deltas cancel, invalidation on protected or repository-state refresh, transactional current-state preflight plus tested byte restoration after post-write failure, untracked mode/file type/symlink identity, and same-dimension semantic browser equivalence with rendering variance bounded to channel delta two and 0.25% changed pixels. Browser capture first asserts production rail/chat position and viewport geometry, then freezes only those observed geometries during full-page expansion. | HARDEN |
-| Member navigation seam | Registry, authorization, mode, and experience semantics lived inside the broad member surface module. | A focused navigation module owns those deterministic functions while `surfaces.py` preserves existing public imports. An immutable archive of the candidate merge base and the current candidate each run the same production-composition navigation case. Routes, labels, order, payloads, authorization, modes, observation, events, and provider behavior are unchanged. | PRESERVE behavior; MODERNIZE module seam |
-| Constitutional consistency | A prompt-era workflow checked historical documents and prompt-sequence cascade rules. | Current `docs/refactor/` governing changes require crosswalk, migration, acceptance, and handoff updates; executable inventory and generated-reference drift fail deterministically. | SUPERSEDE active historical authority |
-| Executor automation | Claude workflows, settings, MCP registration, hooks, agents, and Codespace setup checks were present but were not current Codex authority. | After two rejected attempts, retained run `20260813t182422z-739bfefa-22y57puv` bound all eighteen still-present paths and passed supported-toolchain static, focused, immutable-baseline, current production-composition, browser, breadth, and independent read-only review. The subsequent local patch removes only those eighteen paths; history and useful-behavior mapping remain in `LEGACY-EXECUTOR-HISTORY.md`. | CONSOLIDATE/SUPERSEDE COMPLETE IN LOCAL CANDIDATE |
-| Release/runtime | Local tooling could imply branch, PR, or credential authority. | No commit, push, PR, merge, deployment, runtime migration, household access, provider write, or G-001 authority is introduced. | PRESERVE |
+| Process authority | Claude executor instructions, G-001, the Outcome Harness, and proposed G-002/ADR-0012 created overlapping task loops. | Active executor instructions, repository workflow skills, harness schemas/code/tests, generated state, and exact-head authority are removed. Git history retains provenance without making it current authority. | SUPERSEDE |
+| Member navigation seam | The focused navigation module landed in the mixed Outcome Harness merge. | `navigation.py`, compatibility imports, and behavior coverage remain as ordinary product code and tests. Routes, labels, authorization, modes, observation, events, and provider behavior are unchanged. | PRESERVE behavior; MODERNIZE tests |
+| CI | Harness consistency and artifact validation occupied the required status context. | The same protected `deterministic-consistency` context now runs ordinary tests, lint, types, invariants, dependency-lock validation, OpenClaw checks, and Git diff hygiene. | MODERNIZE |
+| Runtime and providers | Delivery tooling could be confused with live authority. | The reboot changes no runtime state, household data, credential, provider, observation setting, or deployment. Live changes remain separately requested and guarded. | PRESERVE |

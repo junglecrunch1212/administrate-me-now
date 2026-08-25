@@ -1,6 +1,8 @@
 # Change Order 016 — Triage queue continuity
 
-Status: implementation candidate; not merged or deployed.
+Status: PR #334 candidate `40f1c27a1259b35c263cf980fbbb9cf3e4f5d239`
+merged as `2d739ad2e89a49bf330a854317326482907b956d` and is an ancestor
+of active observation release `d181fad24ef488a71ce5568cc40fb81309cb3817`.
 
 Governing sources: product thesis; CO-014 and CO-015; C097, C101, C107,
 C110–C112; UX-49–UX-59; AC-39–AC-41.

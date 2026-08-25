@@ -1,5 +1,9 @@
 # Bootstrap read-along code review
 
+Historical receipt notice: this report records PR #248 under the delivery
+procedure active at that time. Its independent-review instructions are
+superseded by ADR-0013 and do not create a current reviewer task.
+
 Date: 2026-08-04
 Reviewed branch: `codex/administrateme-v2-runtime`
 Pull request: [#248](https://github.com/junglecrunch1212/administrate-me-now/pull/248)
@@ -13,9 +17,10 @@ working release candidate. The audit also found that `openclaw@2026.7.2` is not
 published on npm; bootstrap now installs the exact reviewed GitHub source
 commit from a pinned SHA-256 archive instead of failing or floating.
 
-This is code readiness, not deployment authorization. PR #248 still requires
-independent review, a green merged SHA, and the disposable Apple-silicon live
-gate. The family Mac remains off limits until those steps complete.
+This is code readiness, not deployment authorization. Under current ADR-0013,
+delivery requires protected GitHub CI and merge, while deployment separately
+requires owner direction and the disposable Apple-silicon live gate. The family
+Mac remains off limits until those steps complete.
 
 ## Review ratings
 

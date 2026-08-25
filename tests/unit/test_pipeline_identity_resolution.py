@@ -147,11 +147,11 @@ def test_email_classification() -> None:
 
 def test_imessage_classification() -> None:
     event = _messaging_received_event(
-        source_channel="imessage_adminme", from_id="Ada@me.COM"
+        source_channel="imessage_adminme", from_id="Ada@Example.COM"
     )
     _, kind, value_normalized = _classify_identifier(event["type"], event["payload"])
     assert kind == "imessage_handle"
-    assert value_normalized == "ada@me.com"
+    assert value_normalized == "ada@example.com"
 
 
 def test_phone_classification() -> None:

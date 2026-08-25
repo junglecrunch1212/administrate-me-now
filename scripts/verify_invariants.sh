@@ -8,9 +8,8 @@
 # Checks:
 #   [§8] / [D6]    — no LLM/embedding SDK imports in adminme/
 #                    (anthropic, openai, sentence_transformers)
-#   [§15] / [D15]  — no hardcoded instance paths (~/.adminme, /.adminme)
-#                    in adminme/, bootstrap/, packs/
-#   [§12.4]        — no protected tenant identity in code, built-ins, or tests
+#   [§15] / [D15]  — no machine-specific instance paths in the Git tree
+#   [§12.4]        — no identity leaks or non-synthetic contact/address fixtures
 #   [§2.2]         — projections emit only allowed SYSTEM events, and only
 #                    from allowed files
 #   pipeline→projection — no direct projection writes from adminme/pipelines/
@@ -61,38 +60,15 @@ if grep -iE "^(anthropic|openai|sentence-transformers)\s*=|^(anthropic|openai|se
     report "[§8] / [D6] LLM/embedding SDK declared as adminme dependency"
 fi
 
-# ─── [§15] / [D15]: no hardcoded instance paths ─────────────────────────
+# ─── [§15] / [D15] and [§12.4]: content-free identity scan ──────────────
 #
-# Every instance-directory path must resolve through InstanceConfig.
-# Bootstrap scripts and docs are allowed to mention ~/.adminme (bootstrap
-# is the thing that *creates* the instance dir; docs describe it). Code
-# under adminme/, bootstrap/*.py (non-install scripts), and packs/ is not.
-
-hardcoded=$(grep -rnE "(~/\.adminme|'/\.adminme|\"/\.adminme)" \
-    adminme/ bootstrap/ packs/ \
-    --include='*.py' --include='*.sh' 2>/dev/null \
-    | grep -v "bootstrap/install\.sh" \
-    | grep -v "bootstrap/wizard\.py" \
-    || true)
-if [ -n "$hardcoded" ]; then
-    report "[§15] / [D15] hardcoded instance path:"
-    printf '%s\n' "$hardcoded" | awk '{print "    " $0}'
+# The scanner examines tracked and untracked, non-ignored repository files.
+# It reports only path, line, and rule. An owner-local literal list may be
+# supplied through ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE, but it is optional
+# and never creates a per-change setup or release ceremony.
+if ! python3 scripts/identity_scan.py --root .; then
+    report "[§15] / [D15] / [§12.4] identity or instance leak"
 fi
-
-# ─── [§12.4]: no tenant identity in platform code ────────────────────────
-#
-# Assemble the protected terms at runtime so the canary does not itself
-# embed tenant data in a tracked test or script.
-tenant_pattern="(ja""mes|jim""my|lau""ra|char""lie|est""her|sti""ce|morn""ingside|hol""land|jrs""tice|lchol""land12)"
-tenant_hits=$(grep -rniE "\b${tenant_pattern}\b" adminme/ bootstrap/ bridge/ packs/ tests/ \
-    --include='*.py' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.sql' --include='*.ts' 2>/dev/null \
-    | grep -v "tests/unit/test_no_hardcoded_identity.py" \
-    || true)
-if [ -n "$tenant_hits" ]; then
-    report "[§12.4] tenant identity in platform code:"
-    printf '%s\n' "$tenant_hits" | awk '{print "    " $0}'
-fi
-
 # ─── [§2.2]: projections emit only allowed system events ────────────────
 #
 # Maintenance-driven allowlists. When a projection earns the right to emit,

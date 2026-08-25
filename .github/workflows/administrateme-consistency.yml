@@ -3,9 +3,6 @@ name: AdministrateMe consistency
 on:
   pull_request:
     branches: [main]
-  push:
-    branches:
-      - codex/administrateme-v2-runtime
 
 permissions:
   contents: read
@@ -15,56 +12,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep this job name stable because protected main requires it.
   deterministic-consistency:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14.6"
 
-      - name: Install reviewed Poetry
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.19.0"
+          cache: npm
+          cache-dependency-path: openclaw/administrateme/package-lock.json
+
+      - name: Install Poetry
         run: pipx install poetry==2.4.1
 
       - name: Install locked dependencies
         run: poetry sync --with dev
 
-      - name: Validate harness and preservation flow
-        env:
-          PYTHONPATH: bridge
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: >-
+      - name: Validate Python behavior
+        run: |
           poetry run pytest -p no:cacheprovider -q
-          tests/unit/harness
-          tests/integration/test_harness_artifact_flow.py
-          tests/integration/test_harness_member_navigation.py
+          poetry run pytest -p no:cacheprovider tests/acceptance --runxfail -q
 
-      - name: Validate current constitution, inventories, and generated references
-        if: github.event_name == 'pull_request'
+      - name: Validate bridge package
+        run: |
+          poetry -C bridge sync --with dev --no-interaction
+          poetry -C bridge run pytest -p no:cacheprovider -q
+          poetry -C bridge run ruff check adminme_bridge tests
+          poetry -C bridge run mypy adminme_bridge
+
+      - name: Validate architecture, style, and types
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run mypy adminme bridge/adminme_bridge bootstrap
+          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
+          bash scripts/verify_invariants.sh
+          poetry check --lock
+
+      - name: Validate OpenClaw plugin
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+
+      - name: Validate candidate diff
         env:
-          PYTHONPATH: bridge
           ADMINME_BASE_REF: origin/${{ github.base_ref }}
-        run: >-
-          poetry run python -m scripts.harness.cli consistency
-          --base-ref "$ADMINME_BASE_REF"
-          --check-generated
-
-      - name: Validate branch current state
-        if: github.event_name != 'pull_request'
-        env:
-          PYTHONPATH: bridge
-        run: poetry run python -m scripts.harness.cli consistency --check-generated
-
-      - name: Enforce diff hygiene
-        env:
-          PYTHONPATH: bridge
-        run: poetry run python -m scripts.harness.cli diff-hygiene
-
-# Hosted model review is intentionally NOT CONFIGURED here. It may be added
-# only after an OpenAI secret and repository policy already exist under the
-# read-only, key-isolated boundary in docs/refactor/CURRENT-STATE.md.
+        run: |
+          git diff --check "$ADMINME_BASE_REF...HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"

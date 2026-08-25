@@ -138,7 +138,7 @@ vulnerabilities.
 
 ## Phase-B requirement
 
-After independent review and merge, use only the guarded updater. Verify the
+After protected merge and a separate owner deployment request, use only the guarded updater. Verify the
 pre-switch encrypted backup and observation mode, allow the versioned
 subscribers to replay, then require:
 
