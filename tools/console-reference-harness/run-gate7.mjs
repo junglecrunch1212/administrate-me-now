@@ -31,6 +31,7 @@ const results = [];
 const consoleErrors = [];
 const pageErrors = [];
 const requestFailures = [];
+const closingPages = new WeakSet();
 const screenshots = {};
 let expected404Console = 0;
 let observedExpected404Console = 0;
@@ -329,8 +330,17 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
     consoleErrors.push(message.text());
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  page.on("requestfailed", (request) => requestFailures.push(`${request.url()} ${request.failure()?.errorText}`));
+  page.on("requestfailed", (request) => {
+    const errorText = request.failure()?.errorText;
+    if (closingPages.has(page) && errorText === "net::ERR_ABORTED") return;
+    requestFailures.push(`${request.url()} ${errorText}`);
+  });
   return { context, page };
+}
+
+async function closePageContext(pageContext) {
+  closingPages.add(pageContext.page);
+  await pageContext.context.close();
 }
 
 async function screenshot(page, name) {
@@ -1086,7 +1096,7 @@ async function run() {
     record("A system dismissal cannot impersonate the member's interrupted dismissal receipt", (await principal.page.locator("#state-banner").textContent()).includes("Reload this page before continuing") && !(await principal.page.locator("#state-banner").textContent()).includes("reconciled this exact candidate as dismissed") && await principal.page.getByRole("button", { name: /^Ready/ }).isDisabled(), await principal.page.locator("#state-banner").textContent());
     await principal.page.unroute("**/api/member/v1/triage/gate7-visual-system-dismiss-task/dismiss", systemDismissDecisionRoute);
     await principal.page.unroute("**/api/member/v1/surfaces/triage?*", systemDismissSurfaceRoute);
-    await principal.context.close();
+    await closePageContext(principal);
 
     const principalPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
     for (const [surface, label] of Object.entries(surfaceLabels)) {
@@ -1112,7 +1122,7 @@ async function run() {
       const screenshotName = surface === "comms" ? "surface-comms-focus-narrow.png" : surface === "settings" ? "surface-settings-connections-narrow.png" : `surface-${surface}-narrow.png`;
       await screenshot(principalPhone.page, screenshotName);
     }
-    await principalPhone.context.close();
+    await closePageContext(principalPhone);
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await adult.page.goto(`${server.baseUrl}/member/today`);
@@ -1349,7 +1359,7 @@ async function run() {
     const promotedContext = await newContext(browser, identities.principal, { width: 1280, height: 900 });
     await visit(promotedContext.page, server.baseUrl, `/member/quests/${questId}`, "30-day Garage Quest");
     await screenshot(promotedContext.page, "quest-promoted-carousel.png");
-    await promotedContext.context.close();
+    await closePageContext(promotedContext);
     await jsonRequest(server.baseUrl, `/api/member/v1/temporary-surfaces/${questId}/archive`, identities.adult, "POST");
     expected404Console += 1;
     await adult.page.goto(`${server.baseUrl}/member/quests/${questId}`, { waitUntil: "networkidle" });
@@ -1379,7 +1389,7 @@ async function run() {
     await adult.page.locator(".state-card").waitFor();
     record("expired quest has no navigation entry", await adult.page.locator(`a[href='/member/quests/${expiringQuestId}']`).count() === 0, await adult.page.locator("#primary-nav").textContent());
     await screenshot(adult.page, "quest-expired-bookmark.png");
-    await adult.context.close();
+    await closePageContext(adult);
 
     const child = await newContext(browser, identities.child, { width: 390, height: 844 }, "reduce");
     await visit(child.page, server.baseUrl, "/member/today", "Today");
@@ -1390,13 +1400,13 @@ async function run() {
     await auditAccessibility(child.page, "narrow child");
     const childFinance = await jsonRequest(server.baseUrl, "/member/finance", identities.child);
     record("child direct finance denial", childFinance.response.status === 404, childFinance.response.status);
-    await child.context.close();
+    await closePageContext(child);
 
     const screen = await newContext(browser, identities.screen, { width: 1024, height: 768 });
     await visit(screen.page, server.baseUrl, "/member/scoreboard", "Scoreboard");
     record("shared screen has scoreboard only", await screen.page.locator("#primary-nav .nav-link").count() === 1, await screen.page.locator("#primary-nav").textContent());
     await screenshot(screen.page, "shared-screen-scoreboard.png");
-    await screen.context.close();
+    await closePageContext(screen);
 
     degraded = await startServer(basePort + 1, false);
     const degradedAdult = await newContext(browser, identities.adult, { width: 1280, height: 900 });
@@ -1407,7 +1417,7 @@ async function run() {
     record("degraded chat explicit", (await degradedAdult.page.locator("#chat-state").textContent()).includes("no model provider"), await degradedAdult.page.locator("#chat-state").textContent());
     record("domain view remains usable during model loss", await degradedAdult.page.locator("#surface > *").count() >= 2, await degradedAdult.page.locator("#surface").textContent());
     await screenshot(degradedAdult.page, "adult-chat-degraded-domain-healthy.png");
-    await degradedAdult.context.close();
+    await closePageContext(degradedAdult);
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
