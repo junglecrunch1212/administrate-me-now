@@ -4,7 +4,7 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 
 ## Working rules
 
-- v2 integration work belongs on `codex/administrateme-v2-runtime`, based on `main`. Never rewrite published history or weaken tests.
+- Until the recovery PR is merged, v2 integration work belongs only in the saved `codex/v2-control-plane-recovery` worktree based on current GitHub `main`. The older `codex/administrateme-v2-runtime` branch and its open G-002 draft are superseded recovery evidence, not an integration base. After recovery merge, start each product candidate from current protected `main`; never revive a stalled task or rewrite published history.
 - Release authority is deny-by-default: do not merge a pull request, push directly to `main`, or begin Phase B unless the exact G-001 controlled-release procedure below is active and satisfied.
 - Preserve unrelated changes. Never place household names, emails, phone numbers, addresses, credentials, or tokens in platform code, bootstrap code, built-ins, or tests.
 - Keep the dependency direction: adapters -> encrypted append-only event log/durable bus -> deterministic projections -> pipelines -> family surfaces. Sources emit events; projections are never a source of truth.
@@ -89,7 +89,10 @@ itself by observing that the file changed.
 ## Outcome Harness
 
 - Start current local change work from `docs/refactor/CURRENT-STATE.md` and the repository skills `adminme-outcome`, `adminme-change`, `adminme-review`, `adminme-frontend-qa`, and `adminme-evidence` under `.agents/skills/`.
-- Use `python -m scripts.harness.cli` for bound run artifacts, reviewed check selection, consistency validation, browser proof, and owner evidence. A changed binding invalidates earlier receipts and review.
+- Before work, require `poetry run python -m scripts.harness.cli workspace-status --check`. A stale local `origin/main`, direct work on `main`, detached checkout, non-`codex/` branch, or candidate that omits current GitHub `main` fails closed.
+- Use `poetry run python -m scripts.harness.cli` for bound run artifacts, reviewed check selection, consistency validation, browser proof, and owner evidence. Runs default to a private durable host-local directory; system temp is allowed only when explicitly chosen for disposable tests. A changed binding invalidates earlier receipts and review.
+- Run `static`, `focused`, and `journey` first. `record-review` is unavailable until those exact receipts pass. Cheap hosted consistency may run on every PR; after an independent exact-bound approval with no unresolved/actionable finding, run breadth, browser, release, final hosted macOS, and clean-copy gates. Do not spend final-gate time on a candidate that independent review has not accepted.
+- A known degraded live baseline never grants generic repair authority. Any repair exception must be domain-specific and reviewed, bind the exact immutable baseline and target set, retain observation, backup, privacy and zero-provider-effect boundaries, prove monotonic improvement with no new degradation, and roll back on mismatch. G-001 authorization does not absorb an unrelated repair.
 - A retirement or removal proof must bind every path whose continued presence is a prerequisite. Task bindings include tracked mode changes and untracked file mode, file type, and symlink target; a same-content executable or link change is not equivalent evidence.
 - Every OpenClaw breadth receipt and browser receipt must attest the exact supported Python 3.14, Node >=24.15,<25, and npm >=11.6,<12 executables in its hashed log. A green command under the live Node 22 rollback runtime is not candidate evidence.
 - `docs/refactor/CURRENT-STATE.md` reports whether legacy Claude executor surfaces are still present pending a parity gate or have been retired. They are never current Codex authority. `docs/refactor/LEGACY-EXECUTOR-HISTORY.md` preserves their provenance; an absent path must not be restored by inference.

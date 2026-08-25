@@ -17,6 +17,32 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-25 semi-greenfield control-plane recovery candidate
+
+The product/runtime rewrite is rejected. A clean saved worktree was created
+from exact GitHub `main` on `codex/v2-control-plane-recovery`; the original
+stale workspace and its protected untracked user state were not modified.
+Read-only post-mortem work found that PRs #342/#343 and their task chain mixed
+useful V2 fixes with an unmerged G-002 governance expansion, repeated expensive
+green suites before semantic review, and left the latest large repair without a
+durable commit or surviving temp evidence. Neither PR nor G-002 is active.
+
+The GitHub repository had no public dependents or Pages site and was changed
+from public to private on 2026-08-25 to contain reversible household-identity
+canaries. The recovery candidate removes those literals from the tip, replaces
+them with content-free coordinates and an optional owner-only pattern file,
+defaults harness runs to durable private host-local storage, adds a read-only
+remote-main workspace check, and enforces early static/focused/journey proof
+before independent review and review approval before expensive final gates.
+ADR-0012 preserves ADR-0009/G-001 and permits no generic degraded-baseline
+waiver: a repair remains domain-specific, target/cap bound, monotonic,
+observation-safe, backed up, private, zero-effect, and rollback capable.
+
+This is a Phase A candidate only. No merge, deployment, live Doctor, provider
+action, observation change, runtime migration, history rewrite, or family-Mac
+experiment occurred. Exact-head independent review, final gates, hosted proof,
+and a fresh G-001 owner authorization remain mandatory.
+
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
 Current `origin/main` is merge `cd08b50`; active release selection and both

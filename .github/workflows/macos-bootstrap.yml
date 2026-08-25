@@ -2,6 +2,7 @@ name: macOS bootstrap contract
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "bootstrap/**"
       - "adminme/**"
@@ -9,6 +10,7 @@ on:
       - "openclaw/administrateme/**"
       - "scripts/acceptance/**"
       - "scripts/verify_invariants.sh"
+      - "scripts/identity_scan.py"
       - "tests/acceptance/test_macos_bootstrap_operations.py"
       - "tests/integration/test_adapter_supervisor_gmail.py"
       - "tests/unit/bootstrap/**"
@@ -20,6 +22,9 @@ permissions:
 
 jobs:
   credential-free-rehearsal:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'final-gates')
     runs-on: macos-15
     timeout-minutes: 90
     env:

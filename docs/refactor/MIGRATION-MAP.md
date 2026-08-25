@@ -723,6 +723,19 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Assurance freshness | Any running refresh was labeled stale; the first correction still age-rescanned a settled immutable revision every 30 seconds. | Refresh activity is independent. An exact current revision with zero pending obligations remains settled without a wall-clock rescan. Revision changes refresh immediately; pending obligations recheck every 30 seconds; refresh exception fails immediately and an unsettled proof fails stale after five minutes. | SUPERSEDE |
 | Doctor settlement | Required healthy, exact terminal counts, zero pending/missing/failed, and a fresh proof. | Preserved and tightened: the explicit bounded-watermark proof must also match the current event/checkpoint revision; its age and refresh activity are separately visible. | PRESERVE/HARDEN |
 
+## ADR-0012 semi-greenfield control-plane recovery delta
+
+| Control-plane concern | Failed/stalled state | Recovery result | Classification |
+|---|---|---|---|
+| Product/runtime base | Pressure to restart the project conflated delivery failure with V2 architecture. | Preserve current GitHub `main`, active immutable release, all product functions/projections/adapters/packs, and the existing OpenClaw boundary. | PRESERVE; SUPERSEDE full greenfield rewrite |
+| Workspace | The original local `main` workspace lagged GitHub and retained protected untracked user material; multiple task worktrees obscured authority. | One clean saved `codex/v2-control-plane-recovery` worktree starts at exact GitHub `main`; read-only status compares remote/local main, branch, HEAD, and ancestry. | MODERNIZE/HARDEN |
+| Evidence | Harness output defaulted to system temp and the latest uncommitted repair evidence disappeared. | Runs default to a private durable host-local root outside Git; explicit temp roots remain only for disposable tests. | HARDEN |
+| Gate order | Full suites and browser work repeated before semantic governance review, so green checks amplified rather than stopped flawed designs. | Static/focused/journey proof unlocks independent exact-bound review; only approval unlocks breadth/browser/release work. | MODERNIZE |
+| Release authority | Unmerged G-002 expanded release orchestration and introduced semantic authority defects. | ADR-0009/G-001 remains the only merge/deploy authority; no autonomous merger, deployer, credential broker, or second router is added. | PRESERVE G-001; SUPERSEDE G-002 |
+| Degraded baseline | A desire to escape live degradation encouraged a general repair/governance layer. | Only domain-specific exact-baseline/target/operation/cap contracts may repair; monotonic improvement, no new degradation, observation, backup, rollback, privacy, and zero effects remain conjunctive. | PRESERVE/HARDEN CO-017/CO-018 shape |
+| Privacy | Household literals were reversibly assembled in tracked public canaries. | GitHub is private; the candidate tip removes those literals and uses an optional owner-only `0600` file plus content-free coordinates. History is retained, not rewritten. | HARDEN |
+| Owner interaction | Builder/reviewer/repair/release task chains became an informal state machine. | One recovery PR is the status surface; the owner supplies only separate exact-head review, exact G-001 authorization, and unavoidable physical/permission steps. | SUPERSEDE task-loop control plane |
+
 ## G-001 release-governance migration delta
 
 | Release stage | Before G-001 | Controlled result | Classification |

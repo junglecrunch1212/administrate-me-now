@@ -2,35 +2,12 @@
 #
 # scripts/verify_invariants.sh — canonical invariant-grep script.
 #
-# Run by every build prompt's Commit 4 verification block. Replaces the
-# ~8–12 lines of inline invariant greps each prompt used to duplicate.
-#
-# Checks:
-#   [§8] / [D6]    — no LLM/embedding SDK imports in adminme/
-#                    (anthropic, openai, sentence_transformers)
-#   [§15] / [D15]  — no hardcoded instance paths (~/.adminme, /.adminme)
-#                    in adminme/, bootstrap/, packs/
-#   [§12.4]        — no protected tenant identity in code, built-ins, or tests
-#   [§2.2]         — projections emit only allowed SYSTEM events, and only
-#                    from allowed files
-#   pipeline→projection — no direct projection writes from adminme/pipelines/
-#
-# Exit 0 if clean; exit 1 on any violation. Prints the offending lines so
-# the operator can see what failed.
-#
-# Maintenance:
-#   - When a new system event type is registered (e.g. xlsx.reverse_skipped
-#     in 07c), append to ALLOWED_EMITS below.
-#   - When a new projection earns the right to emit, append its file path
-#     to ALLOWED_EMIT_FILES.
-#   - When a new inviolable invariant is introduced, add a section here.
-#     This script is the canonical place; do not duplicate checks in a
-#     prompt's Verification block.
+# Checks the single OpenClaw LLM seam, instance-path discipline, content-free
+# tenant-neutrality scanning, projection emit allowlists, and the prohibition
+# on direct pipeline writes into projections.
 
-set -u  # undefined-variable = error. No `set -e`: we want to run every
-        # check and aggregate, not fail-fast on the first violation.
+set -u
 
-# Run from repo root. If invoked elsewhere, make it explicit.
 if [ ! -f "pyproject.toml" ] || [ ! -d "adminme" ]; then
     echo "verify_invariants.sh: must be run from repo root" >&2
     exit 2
@@ -44,29 +21,16 @@ report() {
 }
 
 # ─── [§8] / [D6]: no LLM / embedding SDK imports in adminme/ ─────────────
-#
-# Pattern anchors on legal Python import continuations (`.`, `,`, ` as `,
-# ` import `, trailing ` #`, or end-of-line). This prevents docstring prose
-# like "pipelines NEVER import anthropic / openai / any provider SDK" from
-# tripping the canary, while still catching every syntactically valid
-# import of a banned SDK.
 
 if grep -rnE "^\s*(import|from)\s+(anthropic|openai|sentence_transformers)(\.|,|\s+as\s+|\s+import\s+|\s*#|\s*$)" adminme/ 2>/dev/null; then
     report "[§8] / [D6] LLM/embedding SDK import in adminme/"
 fi
 
-# Also fail if the banned SDKs appear as declared dependencies. OpenClaw is
-# the only LLM client on the host — adminme/ takes no direct SDK dep.
 if grep -iE "^(anthropic|openai|sentence-transformers)\s*=|^(anthropic|openai|sentence-transformers)\s*>=" pyproject.toml 2>/dev/null; then
     report "[§8] / [D6] LLM/embedding SDK declared as adminme dependency"
 fi
 
 # ─── [§15] / [D15]: no hardcoded instance paths ─────────────────────────
-#
-# Every instance-directory path must resolve through InstanceConfig.
-# Bootstrap scripts and docs are allowed to mention ~/.adminme (bootstrap
-# is the thing that *creates* the instance dir; docs describe it). Code
-# under adminme/, bootstrap/*.py (non-install scripts), and packs/ is not.
 
 hardcoded=$(grep -rnE "(~/\.adminme|'/\.adminme|\"/\.adminme)" \
     adminme/ bootstrap/ packs/ \
@@ -79,42 +43,31 @@ if [ -n "$hardcoded" ]; then
     printf '%s\n' "$hardcoded" | awk '{print "    " $0}'
 fi
 
-# ─── [§12.4]: no tenant identity in platform code ────────────────────────
+# ─── [§12.4]: no tenant identity in platform code, built-ins, or tests ───
 #
-# Assemble the protected terms at runtime so the canary does not itself
-# embed tenant data in a tracked test or script.
-tenant_pattern="(ja""mes|jim""my|lau""ra|char""lie|est""her|sti""ce|morn""ingside|hol""land|jrs""tice|lchol""land12)"
-tenant_hits=$(grep -rniE "\b${tenant_pattern}\b" adminme/ bootstrap/ bridge/ packs/ tests/ \
-    --include='*.py' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.sql' --include='*.ts' 2>/dev/null \
-    | grep -v "tests/unit/test_no_hardcoded_identity.py" \
-    || true)
-if [ -n "$tenant_hits" ]; then
-    report "[§12.4] tenant identity in platform code:"
-    printf '%s\n' "$tenant_hits" | awk '{print "    " $0}'
+# Household literals belong only in an optional owner-only file outside the
+# repository. The scanner emits coordinates and rule names, never matched
+# content. A generic phone check remains active in hosted CI.
+
+identity_command=(poetry run python -m scripts.identity_scan --root .)
+if [ -n "${ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE:-}" ]; then
+    identity_command+=(--patterns-file "$ADMINME_PRIVATE_IDENTITY_PATTERNS_FILE")
+fi
+if ! "${identity_command[@]}"; then
+    report "[§12.4] tenant identity coordinates detected"
 fi
 
 # ─── [§2.2]: projections emit only allowed system events ────────────────
-#
-# Maintenance-driven allowlists. When a projection earns the right to emit,
-# add its file to ALLOWED_EMIT_FILES and its type string to ALLOWED_EMITS.
 
-# When the reverse xlsx daemon (07c-β) lands, it lives at
-# adminme/daemons/xlsx_sync/reverse.py — that path is OUTSIDE
-# adminme/projections/, so ALLOWED_EMIT_FILES does NOT extend for it.
-# This script only audits projection emits; the daemon's emits are
-# governed by the schemas it appends, not by its file location. The
-# allowlist below names the system event types a projection MAY emit.
 ALLOWED_EMITS='xlsx\.regenerated|xlsx\.reverse_projected|xlsx\.reverse_skipped_during_forward'
 ALLOWED_EMIT_FILES=(
     "adminme/projections/xlsx_workbooks/__init__.py"
 )
 
-# Find every projection file that contains an event-log append.
 emit_files=$(grep -rlE "log\.append\(|append\(\s*EventEnvelope" adminme/projections/ 2>/dev/null || true)
 
 if [ -n "$emit_files" ]; then
     while IFS= read -r f; do
-        # Is this file in the allowed set?
         allowed=false
         for af in "${ALLOWED_EMIT_FILES[@]}"; do
             if [ "$f" = "$af" ]; then
@@ -126,8 +79,6 @@ if [ -n "$emit_files" ]; then
             report "[§2.2] projection emitting events from disallowed file: $f"
             continue
         fi
-        # File is allowed to emit. Confirm every type="..." in the file
-        # matches ALLOWED_EMITS. Any other type= literal is a violation.
         bad_types=$(grep -nE 'type\s*=\s*"[^"]+"' "$f" 2>/dev/null \
             | grep -vE "type\s*=\s*\"($ALLOWED_EMITS)\"" \
             || true)
@@ -139,12 +90,6 @@ if [ -n "$emit_files" ]; then
 fi
 
 # ─── Skill-runner single-seam emits (09a) ───────────────────────────────
-#
-# The skill runner wrapper at adminme/lib/skill_runner/wrapper.py is the
-# ONE file allowed to append `skill.call.recorded`, `skill.call.failed`,
-# or `skill.call.suppressed`. Same single-seam pattern as the xlsx forward
-# projector for `xlsx.regenerated` etc. — pipelines / surfaces / adapters
-# call run_skill() and never construct skill.call.* envelopes themselves.
 
 SKILL_EMITS='skill\.call\.recorded|skill\.call\.failed|skill\.call\.suppressed'
 
@@ -158,16 +103,11 @@ if [ -n "$skill_violations" ]; then
 fi
 
 # ─── Pipeline → projection direct writes ────────────────────────────────
-#
-# Lights up at prompt 10a. Vacuous until then (adminme/pipelines/ has no
-# real code). Kept now so the check is in place when pipelines arrive.
 
 if grep -rnE "INSERT INTO.*projection|projection_db.*write|from adminme\.projections\.[a-z_]+\.handlers" \
     adminme/pipelines/ --include='*.py' 2>/dev/null > /dev/null; then
     report "pipeline writing projection directly (use events, not direct writes)"
 fi
-
-# ─── Summary ────────────────────────────────────────────────────────────
 
 if [ "$violations" -gt 0 ]; then
     echo ""

@@ -81,9 +81,9 @@ def current_capabilities() -> tuple[tuple[str, str, str], ...]:
             "docs/refactor/CHANGE-ORDER-018-SOURCE-TIME-AND-CONTEXT-CORRECTION.md",
         ),
         (
-            "AdministrateMe Outcome Harness",
-            "LOCAL_CANDIDATE",
-            "docs/refactor/CURRENT-STATE.md",
+            "staged durable Outcome Harness recovery",
+            "CANDIDATE_ONLY",
+            "docs/refactor/ADR-0012-SEMI-GREENFIELD-CONTROL-PLANE-RECOVERY.md",
         ),
     )
 

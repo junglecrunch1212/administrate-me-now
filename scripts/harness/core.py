@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import uuid
 from collections.abc import Iterable, Mapping
@@ -269,16 +270,33 @@ Remaining decision: {remaining}
 """
 
 
-def ensure_ephemeral_run_dir(path: Path, root: Path | None = None) -> Path:
+def default_run_root() -> Path:
+    """Return the durable, host-local evidence root without touching it."""
+
+    configured = os.environ.get("ADMINME_HARNESS_RUN_ROOT")
+    if configured:
+        candidate = Path(configured).expanduser()
+        if not candidate.is_absolute():
+            raise HarnessError("ADMINME_HARNESS_RUN_ROOT must be an absolute path")
+        return candidate.resolve()
+    if sys.platform == "darwin":
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "AdministrateMe"
+            / "Harness Runs"
+        ).resolve()
+    state_home = os.environ.get("XDG_STATE_HOME")
+    base = Path(state_home).expanduser() if state_home else Path.home() / ".local/state"
+    return (base / "administrateme" / "harness-runs").resolve()
+
+
+def ensure_run_dir(path: Path, root: Path | None = None) -> Path:
+    """Accept a private run outside the repository, including durable runs."""
+
     resolved = path.resolve()
     repo = (root or repository_root()).resolve()
-    temp = Path(tempfile.gettempdir()).resolve()
-    try:
-        resolved.relative_to(temp)
-    except ValueError as exc:
-        raise HarnessError(
-            f"harness run must be under the system temp directory: {temp}"
-        ) from exc
     try:
         resolved.relative_to(repo)
     except ValueError:
@@ -289,16 +307,45 @@ def ensure_ephemeral_run_dir(path: Path, root: Path | None = None) -> Path:
         raise HarnessError(
             "harness run directory must start with administrateme-harness-"
         )
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise HarnessError("harness run path must be a real directory, not a link")
     return resolved
 
 
-def new_run_directory(run_id: str | None = None) -> Path:
+def new_run_directory(
+    run_id: str | None = None,
+    *,
+    run_root: Path | None = None,
+    repository: Path | None = None,
+) -> Path:
     identifier = run_id or (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         + "-"
         + uuid.uuid4().hex[:8]
     )
-    return Path(tempfile.mkdtemp(prefix=f"administrateme-harness-{identifier}-"))
+    raw_destination = (run_root or default_run_root()).expanduser()
+    if raw_destination.is_symlink():
+        raise HarnessError("harness run root must be a real directory, not a link")
+    destination = raw_destination.resolve()
+    repo = (repository or repository_root()).resolve()
+    try:
+        destination.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise HarnessError("harness run root must not be stored inside the repository")
+    if destination.exists() and not destination.is_dir():
+        raise HarnessError("harness run root must be a real directory, not a link")
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    destination.chmod(0o700)
+    created = Path(
+        tempfile.mkdtemp(
+            prefix=f"administrateme-harness-{identifier}-",
+            dir=destination,
+        )
+    )
+    created.chmod(0o700)
+    return created
 
 
 def _git_commit_exists(root: Path, revision: str) -> bool:
@@ -785,7 +832,7 @@ def executable_inventory(root: Path | None = None) -> dict[str, list[str]]:
 
 
 def validate_run(run_dir: Path, root: Path | None = None) -> None:
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     for artifact_name in ARTIFACT_SCHEMAS:
         artifact = run_dir / artifact_name
         if not artifact.is_file():

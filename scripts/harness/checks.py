@@ -24,7 +24,7 @@ from .core import (
     assert_task_scope_covers_candidate_diff,
     binding,
     clean_environment,
-    ensure_ephemeral_run_dir,
+    ensure_run_dir,
     load_json,
     sha256_file,
     utc_now,
@@ -204,7 +204,7 @@ def run_check(
     environment: dict[str, str] | None = None,
     toolchain: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     logs = run_dir / "check-logs"
     logs.mkdir(exist_ok=True)
     receipt_path = run_dir / "check-receipts" / f"{spec.tier}-{spec.check_id}.json"
@@ -316,7 +316,7 @@ def run_browser(
 ) -> dict[str, Any]:
     """Run the existing credential-free Gate 7 harness into this temp run."""
 
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     if not label.replace("-", "").isalnum():
         raise HarnessError(f"invalid browser evidence label: {label}")
     evidence_dir = run_dir / ("browser" if label == "current" else f"browser-{label}")
@@ -539,7 +539,7 @@ def compare_browser_evidence(
 ) -> dict[str, Any]:
     """Compare semantic results and pixels while ignoring report timestamps."""
 
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     before_dir = run_dir / (
         "browser" if before_label == "current" else f"browser-{before_label}"
     )

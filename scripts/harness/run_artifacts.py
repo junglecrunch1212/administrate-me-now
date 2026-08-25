@@ -13,7 +13,7 @@ from .core import (
     assert_task_scope_covers_tracked_changes,
     binding,
     complete_task_scope,
-    ensure_ephemeral_run_dir,
+    ensure_run_dir,
     executable_inventory,
     load_json,
     new_run_directory,
@@ -46,11 +46,12 @@ def create_run(
     task_paths: list[str],
     protected_paths: list[str],
     run_dir: Path | None = None,
+    run_root: Path | None = None,
 ) -> Path:
     task_paths = complete_task_scope(root, task_paths)
     assert_task_scope_covers_tracked_changes(root, task_paths, protected_paths)
-    directory = run_dir or new_run_directory()
-    ensure_ephemeral_run_dir(directory, root)
+    directory = run_dir or new_run_directory(run_root=run_root, repository=root)
+    ensure_run_dir(directory, root)
     directory.mkdir(parents=True, exist_ok=True)
     run_id = _run_id(directory)
     current_binding = binding(root, task_paths)
@@ -272,7 +273,7 @@ Build a thin deterministic harness from versioned schemas, repository-local skil
 
 ## Failure and rollback
 
-Stop on any unexplained behavior difference. Preserve logs in this temporary run and reverse only the task-owned patch after checking for concurrent overlap. Never reset, clean, stash, rewrite, release, or touch household state.
+Stop on any unexplained behavior difference. Preserve logs in this private run and reverse only the task-owned patch after checking for concurrent overlap. Never reset, clean, stash, rewrite, release, or touch household state.
 """,
     )
     write_json(
@@ -363,7 +364,7 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
 
 
 def refresh_bindings(root: Path, run_dir: Path, task_paths: list[str]) -> None:
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     task_paths = complete_task_scope(root, task_paths)
     evidence_path = run_dir / "evidence-inventory.json"
     evidence = json.loads(evidence_path.read_text("utf-8"))
@@ -480,6 +481,72 @@ def record_browser(run_dir: Path, result: dict[str, Any]) -> None:
     _reconcile_verification(run_dir)
 
 
+def review_readiness(run_dir: Path, root: Path | None = None) -> dict[str, Any]:
+    """Derive whether cheap exact-bound proof is ready for independent review."""
+
+    from .checks import tier_checks
+
+    ensure_run_dir(run_dir, root)
+    if root is not None:
+        validate_run(run_dir, root)
+    verification = load_json(run_dir / "verification-report.json")
+    declared: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for check in verification["checks"]:
+        declared.setdefault((check["tier"], check["check_id"]), []).append(check)
+    missing: list[str] = []
+    for tier in ("static", "focused", "journey"):
+        for spec in tier_checks(tier, verification["changed_files"]):
+            matches = declared.get((spec.tier, spec.check_id), [])
+            if (
+                len(matches) != 1
+                or matches[0]["command"] != spec.command
+                or matches[0]["status"] != "PASS"
+                or matches[0]["exit_code"] != 0
+            ):
+                missing.append(f"{spec.tier}/{spec.check_id}")
+    return {
+        "binding": load_json(run_dir / "outcome-contract.json")["binding"],
+        "status": "PASS" if not missing else "NOT_READY",
+        "required_tiers": ["static", "focused", "journey"],
+        "missing_or_failed": missing,
+        "next_step": (
+            "Import an independent exact-bound review."
+            if not missing
+            else "Finish only the listed early gates before independent review."
+        ),
+    }
+
+
+def assert_review_ready(run_dir: Path, root: Path | None = None) -> None:
+    readiness = review_readiness(run_dir, root)
+    if readiness["status"] != "PASS":
+        raise HarnessError(
+            "independent review is premature; early gates missing or failed: "
+            + ", ".join(readiness["missing_or_failed"])
+        )
+
+
+def assert_final_gate_unlocked(run_dir: Path, root: Path | None = None) -> None:
+    """Require approved exact-bound review before expensive final gates."""
+
+    ensure_run_dir(run_dir, root)
+    if root is not None:
+        validate_run(run_dir, root)
+    review = load_json(run_dir / "review-report.json")
+    actionable = [
+        finding["finding_id"] for finding in review["findings"] if finding["actionable"]
+    ]
+    if (
+        review["conclusion"] != "APPROVE"
+        or review["unresolved_evidence"]
+        or actionable
+    ):
+        raise HarnessError(
+            "final gates remain locked until independent exact-bound review approves "
+            "with no actionable or unresolved findings"
+        )
+
+
 def _reconcile_verification(run_dir: Path) -> None:
     """Derive the current conclusion from current-bound proof, never stale prose."""
 
@@ -568,7 +635,7 @@ def _reconcile_verification(run_dir: Path) -> None:
 def record_review(run_dir: Path, review_path: Path, root: Path | None = None) -> None:
     """Import an independently produced review only when it matches this run."""
 
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     if root is not None:
         assert_current_run_state(run_dir, root)
     candidate = validate_artifact_value(
@@ -581,6 +648,7 @@ def record_review(run_dir: Path, review_path: Path, root: Path | None = None) ->
         raise HarnessError("independent review belongs to a different harness run")
     if candidate["binding"] != outcome["binding"]:
         raise HarnessError("independent review is bound to a different candidate")
+    assert_review_ready(run_dir, root)
     canonical_review = run_dir / "review-report.json"
     verification_path = run_dir / "verification-report.json"
     previous_review = canonical_review.read_bytes()
@@ -609,7 +677,7 @@ def finalize_owner_handoff(
 ) -> None:
     """Derive the owner handoff from current-bound PASS evidence."""
 
-    ensure_ephemeral_run_dir(run_dir, root)
+    ensure_run_dir(run_dir, root)
     if root is not None:
         assert_current_run_state(run_dir, root)
     if release_status not in {"NOT_RELEASED", "CANDIDATE_ONLY"}:

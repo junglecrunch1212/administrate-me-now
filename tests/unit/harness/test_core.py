@@ -35,9 +35,11 @@ from scripts.harness.core import (
     candidate_diff_paths,
     clean_environment,
     complete_task_scope,
-    ensure_ephemeral_run_dir,
+    default_run_root,
+    ensure_run_dir,
     executable_inventory,
     normalize_undetermined,
+    new_run_directory,
     protected_path_binding,
     repository_root,
     repository_state,
@@ -175,10 +177,33 @@ def test_unknown_markers_are_normalized_recursively() -> None:
     ) == {"top": "UNDETERMINED", "items": ["UNDETERMINED", {"kept": "PASS"}]}
 
 
-def test_ephemeral_runs_refuse_repository_paths() -> None:
+def test_runs_refuse_repository_paths() -> None:
     root = repository_root()
-    with pytest.raises(HarnessError, match="system temp"):
-        ensure_ephemeral_run_dir(root / "administrateme-harness-invalid", root)
+    with pytest.raises(HarnessError, match="inside the repository"):
+        ensure_run_dir(root / "administrateme-harness-invalid", root)
+
+
+def test_default_run_root_can_be_owner_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = (tmp_path / "private-evidence").resolve()
+    monkeypatch.setenv("ADMINME_HARNESS_RUN_ROOT", str(configured))
+
+    assert default_run_root() == configured
+
+
+def test_new_run_directory_uses_private_configured_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = (tmp_path / "private-evidence").resolve()
+    monkeypatch.setenv("ADMINME_HARNESS_RUN_ROOT", str(configured))
+
+    run_dir = new_run_directory(repository=repository_root())
+
+    assert run_dir.parent == configured
+    assert run_dir.name.startswith("administrateme-harness-")
+    assert run_dir.stat().st_mode & 0o077 == 0
+    assert configured.stat().st_mode & 0o077 == 0
 
 
 def test_binding_base_is_the_candidate_merge_base_not_a_moving_remote_tip() -> None:

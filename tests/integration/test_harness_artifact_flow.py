@@ -22,6 +22,7 @@ from scripts.harness.core import (
 )
 from scripts.harness import run_artifacts
 from scripts.harness.run_artifacts import (
+    assert_final_gate_unlocked,
     create_run,
     finalize_owner_handoff,
     record_browser,
@@ -316,7 +317,7 @@ def test_record_review_rejects_another_binding_without_overwriting(
 
 
 def test_record_review_accepts_exact_binding_and_reconciles(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = Path(__file__).resolve().parents[2]
     run_dir = tmp_path / "administrateme-harness-review-reconcile"
@@ -338,6 +339,7 @@ def test_record_review_accepts_exact_binding_and_reconciles(
     external = tmp_path / "approved-review.json"
     external.write_text(json.dumps(review), "utf-8")
 
+    monkeypatch.setattr(run_artifacts, "assert_review_ready", lambda *_: None)
     record_review(run_dir, external, root)
 
     canonical = json.loads((run_dir / "review-report.json").read_text("utf-8"))
@@ -345,6 +347,46 @@ def test_record_review_accepts_exact_binding_and_reconciles(
     assert canonical["conclusion"] == "APPROVE"
     assert verification["status"] == "UNDETERMINED"
     assert not any("Independent review" in gap for gap in verification["unresolved"])
+
+
+def test_record_review_refuses_before_early_gates(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-review-too-early"
+    create_run(
+        root,
+        requested_outcome="Require early proof before independent review.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    review = load_json(run_dir / "review-report.json")
+    review.update(
+        {
+            "reviewer": "independent-reviewer",
+            "unresolved_evidence": [],
+            "conclusion": "APPROVE",
+        }
+    )
+    external = tmp_path / "premature-review.json"
+    write_json(external, review)
+
+    with pytest.raises(HarnessError, match="independent review is premature"):
+        record_review(run_dir, external, root)
+
+
+def test_expensive_final_gates_are_locked_before_review(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-final-gates-locked"
+    create_run(
+        root,
+        requested_outcome="Lock expensive final gates before review.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+
+    with pytest.raises(HarnessError, match="final gates remain locked"):
+        assert_final_gate_unlocked(run_dir, root)
 
 
 def test_record_review_rejects_stale_repository_state_without_overwriting(
@@ -425,6 +467,7 @@ def test_record_review_restores_artifacts_after_post_write_failure(
         raise HarnessError("forced post-write reconciliation failure")
 
     monkeypatch.setattr(run_artifacts, "_reconcile_verification", fail_after_write)
+    monkeypatch.setattr(run_artifacts, "assert_review_ready", lambda *_: None)
 
     with pytest.raises(HarnessError, match="forced post-write"):
         record_review(run_dir, external, root)

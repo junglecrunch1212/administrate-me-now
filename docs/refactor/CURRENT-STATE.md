@@ -12,7 +12,7 @@ This index points to current governing evidence without replacing historical doc
 | ten adult surfaces and three experience modes | ACCEPTED | [docs/refactor/UX-BEHAVIOR-CONTRACT.md](UX-BEHAVIOR-CONTRACT.md) |
 | CO-017 source-assessment recovery | RELEASED_IN_OBSERVATION | [docs/refactor/CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md](CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md) |
 | CO-018 source time and context correction | CANDIDATE_ONLY | [docs/refactor/CHANGE-ORDER-018-SOURCE-TIME-AND-CONTEXT-CORRECTION.md](CHANGE-ORDER-018-SOURCE-TIME-AND-CONTEXT-CORRECTION.md) |
-| AdministrateMe Outcome Harness | LOCAL_CANDIDATE | [docs/refactor/CURRENT-STATE.md](CURRENT-STATE.md) |
+| staged durable Outcome Harness recovery | CANDIDATE_ONLY | [docs/refactor/ADR-0012-SEMI-GREENFIELD-CONTROL-PLANE-RECOVERY.md](ADR-0012-SEMI-GREENFIELD-CONTROL-PLANE-RECOVERY.md) |
 
 ## Executable inventories
 

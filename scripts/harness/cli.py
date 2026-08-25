@@ -29,15 +29,18 @@ from .current_state import (
     write_current_state,
 )
 from .run_artifacts import (
+    assert_final_gate_unlocked,
     create_run,
     finalize_owner_handoff,
     record_browser,
     record_checks,
     record_review,
     refresh_bindings,
+    review_readiness,
     sync_owner_handoff,
 )
 from .skill_references import check_skill_references, update_skill_references
+from .workspace import workspace_status
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -59,13 +62,20 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--requested-outcome", required=True)
     create.add_argument("--task-path", action="append", default=[])
     create.add_argument("--protected-path", action="append", default=[])
+    create.add_argument("--run-root", type=Path)
 
     refresh = subparsers.add_parser("refresh-bindings")
     refresh.add_argument("run_dir", type=Path)
     refresh.add_argument("--task-path", action="append", default=[])
 
+    review_ready = subparsers.add_parser("review-readiness")
+    review_ready.add_argument("run_dir", type=Path)
+
     current = subparsers.add_parser("current-state")
     current.add_argument("--check", action="store_true")
+
+    workspace = subparsers.add_parser("workspace-status")
+    workspace.add_argument("--check", action="store_true")
 
     consistency = subparsers.add_parser("consistency")
     consistency.add_argument("--base-ref")
@@ -141,18 +151,29 @@ def main(argv: list[str] | None = None) -> int:
                 requested_outcome=args.requested_outcome,
                 task_paths=args.task_path,
                 protected_paths=args.protected_path,
+                run_root=args.run_root,
             )
             print(directory)
         elif args.command == "refresh-bindings":
             refresh_bindings(root, args.run_dir, args.task_path)
             validate_run(args.run_dir, root)
             print(f"PASS {args.run_dir}")
+        elif args.command == "review-readiness":
+            readiness = review_readiness(args.run_dir, root)
+            print(json.dumps(readiness, indent=2, sort_keys=True))
+            if readiness["status"] != "PASS":
+                return 1
         elif args.command == "current-state":
             if args.check:
                 check_current_state(root)
                 print("PASS docs/refactor/CURRENT-STATE.md")
             else:
                 print(write_current_state(root))
+        elif args.command == "workspace-status":
+            status = workspace_status(root)
+            print(json.dumps(status, indent=2, sort_keys=True))
+            if args.check and status["status"] != "PASS":
+                return 1
         elif args.command == "consistency":
             if args.check_generated:
                 check_current_state(root)
@@ -180,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "select-checks":
             print(checks_as_json(tier_checks(args.tier, args.paths)))
         elif args.command == "run-tier":
+            if args.tier in {"breadth", "release"}:
+                assert_final_gate_unlocked(args.run_dir, root)
             receipts = run_tier(
                 root,
                 args.run_dir,
@@ -192,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             if any(receipt["status"] != "PASS" for receipt in receipts):
                 return 1
         elif args.command == "browser":
+            assert_final_gate_unlocked(args.run_dir, root)
             result = run_browser(
                 root,
                 args.run_dir,
