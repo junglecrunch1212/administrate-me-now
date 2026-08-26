@@ -80,7 +80,15 @@ selection.
 - The production-composition assertion proves no `skill.call.recorded` event
   for the older non-anchor and a recorded call for the actual latest anchor.
 - Focused release-repair policy suite: 12 passed.
+- Full configured Python suite: 1,750 passed, one expected skip.
+- Strict acceptance with `--runxfail`: 66 passed, one expected skip.
+- Aggregate release command: PASS. Its clean-worktree run included 1,919
+  root/package tests, 60 bridge tests, Ruff/format/mypy/Pyright, performance and
+  fast source-pipeline stress budgets, architecture checks, clean install,
+  tenant isolation, backup/restore, exact OpenClaw build/contract/17 tests,
+  shell/invariant hygiene, and the 690-assertion credential-free Gate 7 browser
+  matrix under Node 24 and Google Chrome 151.
 
-Full aggregate, hosted, guarded retry, Doctor, authenticated browser, backup,
-privacy/isolation, and zero-provider-effect evidence remain pending and must be
-added before Phase B can be declared complete.
+Hosted checks, guarded retry, live Doctor, authenticated read-only browser,
+live backup, privacy/isolation, and zero-provider-effect evidence remain
+pending and must be added before Phase B can be declared complete.
