@@ -95,6 +95,28 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
+def _expose_spawn_fixture_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the stable process-target module importable in fresh children."""
+
+    repository_root = str(Path(__file__).resolve().parents[3])
+    # ``multiprocessing.spawn`` serializes the parent's current ``sys.path``
+    # into preparation data, so update that path as well as the environment
+    # inherited by deeper guardian/worker interpreters.
+    monkeypatch.syspath_prepend(repository_root)
+    current = os.environ.get("PYTHONPATH", "")
+    entries = [entry for entry in current.split(os.pathsep) if entry]
+    if repository_root not in entries:
+        entries.insert(0, repository_root)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(entries))
+
+
+@pytest.fixture(autouse=True)
+def _stable_spawn_fixture_imports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every process fixture importable under pytest import modes."""
+
+    _expose_spawn_fixture_module(monkeypatch)
+
+
 def _marked_stage(
     parent: Path,
     *,
