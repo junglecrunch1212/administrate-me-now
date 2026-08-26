@@ -136,7 +136,14 @@ different version, blocked state, or any unrelated degradation still aborts
 before release selection; post-switch settlement still requires fully healthy
 Doctor.
 
-Focused proof currently records 18 passing cursor-store and guarded-baseline
-tests, targeted Ruff, and targeted mypy. Full release and hosted checks, guarded
-retry, live Doctor, authenticated read-only browser, backup verification, and
-zero-provider-effect closure remain pending.
+Focused proof records 358 passing adapter/bootstrap/process tests, including
+the exact v21-column migration, predecessor column shape, retry-state
+preservation, current live baseline acceptance, and changed-error rejection.
+The clean aggregate release command passed with 1,921 root/package tests, 60
+bridge tests, 66 strict acceptance tests and one documented skip, Ruff/format/
+mypy/Pyright, performance and fixed-point source stress, package builds,
+architecture checks, clean install, tenant isolation, backup/restore, exact
+OpenClaw contract/build and 17 plugin tests, and the 690-assertion credential-
+free Gate 7 browser matrix with no unexpected console, HTTP, page, or transport
+failure. Hosted checks, guarded retry, live Doctor, authenticated read-only
+browser, backup verification, and zero-provider-effect closure remain pending.
