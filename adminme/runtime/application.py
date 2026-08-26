@@ -634,6 +634,7 @@ class AdministrateMeRuntime:
             # All subscriptions are explicit before the one bus owner starts.
             await self.projections.start(start_bus=False)
             await self.pipelines.start(start_bus=False)
+            await self.pipelines.reconcile_pending_source_assessment_recoveries()
             await self.adapters.start()
             await asyncio.sleep(0)
             await self.bus.start()

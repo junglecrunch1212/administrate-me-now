@@ -90,9 +90,14 @@ def _source(
     member: str = MEMBER,
     sensitivity: str = "normal",
     tenant_id: str = TENANT,
+    native_message_id: str | None = None,
+    thread_id: str = "recovery-thread",
+    event_at_ms: int = 1_786_400_000_000,
+    received_at: str = "2026-08-11T12:00:00Z",
 ) -> EventEnvelope:
+    message_id = native_message_id or f"recovery-message:{member}:{sensitivity}"
     return EventEnvelope(
-        event_at_ms=1_786_400_000_000,
+        event_at_ms=event_at_ms,
         tenant_id=tenant_id,
         type="messaging.received",
         schema_version=3,
@@ -102,20 +107,20 @@ def _source(
         owner_scope=f"private:{member}",
         visibility_scope=f"private:{member}",
         sensitivity=sensitivity,  # type: ignore[arg-type]
-        idempotency_key=f"recovery-source:{tenant_id}:{member}:{sensitivity}",
+        idempotency_key=f"recovery-source:{tenant_id}:{message_id}",
         payload={
             "provider": "gmail",
             "provider_account_id": "fixture-account",
             "member_id": member,
             "source_channel": "gmail",
-            "native_message_id": f"recovery-message:{member}:{sensitivity}",
-            "thread_id": "recovery-thread",
+            "native_message_id": message_id,
+            "thread_id": thread_id,
             "from_identifier": "sender@example.invalid",
             "to_identifier": "member@example.invalid",
             "workspace": "personal",
             "subject": "Fixture recovery",
             "body_text": "A private fixture message with no actionable request.",
-            "received_at": "2026-08-11T12:00:00Z",
+            "received_at": received_at,
             "provider_labels": ["INBOX"],
             "attachments": [],
         },
@@ -289,6 +294,57 @@ async def test_recovery_appends_newer_success_and_preserves_failed_history(
         assert audit["content_exposed"] is False
         assert audit["recovery"]["content_exposed"] is False
         assert "private fixture message" not in str(audit).lower()
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_of_non_anchor_emits_request_linked_terminal_assessment(
+    tmp_path: Path,
+) -> None:
+    """A later thread message must not strand an authorized recovery command."""
+
+    log = EventLog(tmp_path / "non-anchor.db", b"n" * 32)
+    try:
+        source_id = await log.append(
+            _source(native_message_id="recovery-message:older")
+        )
+        failed_id = await _failed_assessment(log, source_id)
+        request = await _append_request(
+            log, source_id, failed_id, "request-non-anchor-1"
+        )
+        await log.append(
+            _source(
+                native_message_id="recovery-message:newer",
+                event_at_ms=1_786_400_100_000,
+                received_at="2026-08-11T12:01:40Z",
+            )
+        )
+        calls = 0
+
+        async def unexpected_skill(*_args: Any, **_kwargs: Any) -> SkillResult:
+            nonlocal calls
+            calls += 1
+            return _successful_result()
+
+        invalidate_cache()
+        pipeline: Any = load_pipeline_pack(PACK_ROOT).instance
+        await pipeline.handle(
+            request,
+            _context(log, _Sink(log), unexpected_skill, request["event_id"]),
+        )
+
+        latest = await latest_source_assessment(log, source_id)
+        assert latest is not None
+        assert latest["schema_version"] == 4
+        assert latest["payload"]["assessment_outcome"] == "no_candidate"
+        assert latest["payload"]["supersedes_assessment_event_id"] == failed_id
+        assert latest["payload"]["recovery_request_event_id"] == request["event_id"]
+        assert (
+            "language_assessment_deferred_to_latest_thread_message"
+            in latest["payload"]["reason_codes"]
+        )
+        assert calls == 0
     finally:
         await log.close()
 

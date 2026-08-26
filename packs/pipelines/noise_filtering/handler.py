@@ -59,6 +59,8 @@ from adminme.source_assessment_recovery import (
     SourceAssessmentRecoveryRefused,
     assessment_outcome,
     latest_source_assessment,
+    recovery_assessment_idempotency_key,
+    recovery_refusal_idempotency_key,
     target_from_request_event,
     validate_recovery_target,
 )
@@ -357,11 +359,11 @@ class NoiseFilteringPipeline:
 
     @staticmethod
     def _recovery_assessment_key(request_event_id: str, source_event_id: str) -> str:
-        return f"triage:message-features:recovery:{request_event_id}:{source_event_id}"
+        return recovery_assessment_idempotency_key(request_event_id, source_event_id)
 
     @staticmethod
     def _recovery_refusal_key(request_event_id: str) -> str:
-        return f"source-assessment-recovery-refused:{request_event_id}"
+        return recovery_refusal_idempotency_key(request_event_id)
 
     @staticmethod
     def _derived_event_at_ms(event: dict[str, Any]) -> int:
@@ -570,6 +572,7 @@ class NoiseFilteringPipeline:
                 candidates=[],
                 outcome="quarantined",
                 reason_codes=["privileged_source_not_sent_to_language_seam"],
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
 
@@ -583,6 +586,7 @@ class NoiseFilteringPipeline:
                 candidates=[],
                 outcome="quarantined",
                 reason_codes=["source_scope_is_not_private_member"],
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
         member_id = owner_scope.removeprefix("private:")
@@ -595,6 +599,7 @@ class NoiseFilteringPipeline:
                 candidates=[],
                 outcome="quarantined",
                 reason_codes=["payload_member_scope_mismatch"],
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
         if not member_id:
@@ -605,6 +610,7 @@ class NoiseFilteringPipeline:
                 candidates=[],
                 outcome="quarantined",
                 reason_codes=["source_member_missing"],
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
         policy_source_id = source_id_for_event(event) or "adapter:gmail"
@@ -630,6 +636,7 @@ class NoiseFilteringPipeline:
                 candidates=[],
                 outcome="quarantined",
                 reason_codes=["context_pack_missing_current_source"],
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
         if not current_context_message.authored_text_reliable:
@@ -643,6 +650,7 @@ class NoiseFilteringPipeline:
                     current_context_message.authored_text_reason_codes
                     or ("authored_text_uncertain",)
                 ),
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             await self._supersede_unreliable_source_proposals(
                 event=event,
@@ -663,6 +671,7 @@ class NoiseFilteringPipeline:
                 candidates=[],
                 outcome="no_candidate",
                 reason_codes=["source_has_no_authored_text"],
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
         source_text, inputs = prepared
@@ -696,6 +705,7 @@ class NoiseFilteringPipeline:
                     policy_rule,
                 ],
                 extractor_id=_DEFERRED_THREAD_ASSESSOR_ID,
+                recovery=recovery if isinstance(recovery, dict) else None,
             )
             return
         inputs["body_text"] = current_context_message.body_text

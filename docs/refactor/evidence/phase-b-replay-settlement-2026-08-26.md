@@ -147,3 +147,57 @@ OpenClaw contract/build and 17 plugin tests, and the 690-assertion credential-
 free Gate 7 browser matrix with no unexpected console, HTTP, page, or transport
 failure. Hosted checks, guarded retry, live Doctor, authenticated read-only
 browser, backup verification, and zero-provider-effect closure remain pending.
+
+## Protected rollback-schema activation and terminal-ledger hold
+
+PR #348 passed `deterministic-consistency` and
+`credential-free-rehearsal`, then merged normally as
+`cfde6b631edd034633e8dc63a0204d06de363ac3`. The governed updater attested that
+exact merge and returned `status=upgraded`, `controller_attested=true`, and
+`rollback_available=true` without a Python, Node, OpenClaw, credential,
+permission, provider-enrollment, checkpoint, or observation-mode migration.
+It retained encrypted backup
+`administrateme-20260826T124523Z.ambackup`, mode 0600, size 2,681,146,284
+bytes, SHA-256
+`3a62130b4d1ee3292bdbb6867028f9fc749621b8304e5768ad6f2a4271f93778`.
+
+Final readiness was observation-only and release-ready with safe reads, write
+admission `observation_suppressed`, all eight pipelines and fifteen projections
+healthy, all configured provider adapters running with durable watermarks and
+closed circuits, and current-process OpenClaw healthy. Source assurance settled
+65,685/65,685 obligations with zero pending, missing, or failed source
+dispositions. Full Doctor passed every check and recorded
+`live_provider_claims: []`. Authenticated read-only browser acceptance traversed
+all ten adult routes; each had the required scoped shell, current navigation,
+observation indicator, and no catastrophic error or horizontal overflow. The
+console recorded zero warnings/errors. No write control was used and no
+household content entered this receipt.
+
+The separate recovery ledger reported thirteen requested, five succeeded,
+four refused, and four pending. Exact content-free inspection proved each new
+request existed but had neither `recovery_request_event_id` linkage nor a
+refusal. The same sources had ordinary successful v22 assessments, so source
+disposition health was truthful while command terminality remained incomplete.
+The active release was left healthy and observation-only; Phase B completion
+was withheld.
+
+## Recovery-terminality forward repair candidate
+
+The v22 non-anchor early branch called the terminal assessment emitter without
+the request recovery context. The repair passes that context through every
+early terminal branch. Pipeline startup additionally scans only
+`source.assessment.recovery_requested` metadata through one fixed log head,
+checks the two exact idempotent terminal identities per request, refuses more
+than 64 pending commands, invokes the normal production callback for each
+selected command, and verifies an exact terminal afterward. It does not reset,
+advance, or synthesize a subscriber checkpoint and does not replay the source
+log.
+
+Local proof currently records 21 passing focused tests: an older non-anchor
+creates one request-linked v4 assessment without a skill call; runner
+reconciliation is bounded, idempotent, and checkpoint-free; and the production
+runtime composition converts a checkpointed stale command into exactly one
+`failed_assessment_not_current` refusal with zero recovery commands pending.
+Targeted Ruff, format, and mypy checks pass. Aggregate release, protected hosted
+checks/merge, governed upgrade, final live ledger/Doctor/browser/effect proof,
+and a documentation-only closure receipt remain pending.

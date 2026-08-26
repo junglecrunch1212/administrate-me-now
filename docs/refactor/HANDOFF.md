@@ -3,18 +3,55 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: PHASE_B_ROLLBACK_SCHEMA_COMPAT_LOCAL_CANDIDATE
+gate_result: PHASE_B_RECOVERY_TERMINALITY_LOCAL_CANDIDATE
 verified_local_date: 2026-08-26
 verified_github_date: pending
-branch: codex/administrateme-v2-rollback-schema-compat
-candidate_commit_resolution: pull_request_348_pending_required_github_checks
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/348
+branch: codex/administrateme-v2-recovery-terminality
+candidate_commit_resolution: local_candidate_pending_protected_pull_request
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: ordinary_pr_merge_then_guarded_phase_b_retry
+next_phase: aggregate_release_then_protected_merge_and_guarded_forward_repair
 ---
 # Release handoff
+
+## 2026-08-26 Phase B recovery-command terminality repair
+
+Rollback-schema repair PR #348 passed both required hosted checks and merged
+normally as `cfde6b631edd034633e8dc63a0204d06de363ac3`. The governed updater
+attested that exact merge, created and retained an encrypted mode-0600 backup,
+selected the immutable release, and completed v22 settlement. Final Doctor was
+fully healthy, all 65,685 source obligations were accounted with zero source
+pending/missing/failed, all eight pipelines and fifteen projections were
+healthy, all configured adapters had closed circuits and durable watermarks,
+OpenClaw was current-process healthy, observation remained active, and write
+admission remained `observation_suppressed`. Authenticated read-only browser
+acceptance traversed every adult surface with the required scoped shell and no
+warning/error console entry. No provider-called terminal effect occurred.
+
+A final content-free command-ledger audit then found thirteen source-recovery
+requests but only five linked successes and four refusals: four new requests
+had no exact terminal receipt. Their sources were already successfully
+assessed, so ordinary source assurance was healthy, but AC-42 command
+terminality was not complete. The v22 non-anchor early return appended a normal
+assessment without carrying the request linkage. Other early terminal branches
+had the same latent omission. Phase B therefore remains open despite the
+otherwise healthy live release.
+
+This candidate **PRESERVES/HARDENS** the append-only recovery contract. Every
+early terminal assessment retains the exact recovery request and predecessor
+link. Before normal bus delivery, the production pipeline runner reads only
+content-free recovery controls through one fixed encrypted-log watermark,
+selects commands lacking either exact terminal idempotency identity, and
+delivers at most 64 through the ordinary production callback. It neither moves
+a checkpoint nor replays source facts, and startup fails closed unless every
+selected command becomes an exact linked assessment or refusal. The direct
+non-anchor regression, bounded runner proof, and production composition startup
+proof pass with 21 tests; targeted Ruff, format, and mypy checks also pass. A
+protected merge, governed forward upgrade, zero-pending live ledger, final
+Doctor/browser/effect proof, and documentation-only closure receipt remain
+required.
 
 ## 2026-08-26 guarded Phase B rollback and replay-settlement repair
 
