@@ -719,19 +719,28 @@ async function auditAccessibility(page, label) {
   });
   const observedFocusOrder = [];
   const traversalStates = [];
-  await page.evaluate(() => {
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  const initialFocusIndex = await page.evaluate(async () => {
+    // A dialog close restores focus to its opener, and Chromium retains that
+    // element as the sequential-navigation origin even after blur(). Start the
+    // audit from an explicit, settled first control so the result describes
+    // document tab order rather than the prior interaction's focus history.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const first = document.querySelector("[data-gate7-focus-order='0']");
+    if (!(first instanceof HTMLElement)) return -1;
+    first.focus();
+    return Number(document.activeElement?.dataset?.gate7FocusOrder ?? -1);
   });
+  traversalStates.push(initialFocusIndex);
+  if (initialFocusIndex >= 0) observedFocusOrder.push(initialFocusIndex);
   for (let attempt = 0; attempt < Math.min(208, focusOrder.length + 48) && observedFocusOrder.length < focusOrder.length; attempt += 1) {
     await page.keyboard.press("Tab");
     const index = await page.evaluate(() => Number(document.activeElement?.dataset?.gate7FocusOrder ?? -1));
     traversalStates.push(index);
     if (index >= 0 && observedFocusOrder.at(-1) !== index) observedFocusOrder.push(index);
   }
-  const firstObserved = observedFocusOrder[0] ?? 0;
   const focusOrderPass = focusOrder.length <= 160
     && observedFocusOrder.length === focusOrder.length
-    && observedFocusOrder.every((value, index) => value === (firstObserved + index) % focusOrder.length);
+    && observedFocusOrder.every((value, index) => value === index);
   const keyboard = await page.evaluate(() => {
     const active = document.activeElement;
     if (!(active instanceof HTMLElement)) return { tag: "none", visible: false, outline: 0 };
