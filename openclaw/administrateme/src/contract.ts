@@ -34,6 +34,11 @@ export type PluginConfig = {
   bridgeChannels: readonly string[];
   bridgeEventKinds: readonly BridgeEventKind[];
   modelSessionPrefix: string;
+  dmScope: "per_account_channel_peer";
+  memberAgentIds: readonly string[];
+  bindingFingerprints: readonly string[];
+  uniqueAgents: boolean;
+  uniqueAccounts: boolean;
 };
 
 export type IntegrationState = "healthy" | "degraded" | "unavailable" | "incompatible";

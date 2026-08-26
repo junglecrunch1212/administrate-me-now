@@ -258,12 +258,14 @@ describe("native OpenClaw contract fixture", () => {
       .update(`portal-session|${peer}`)
       .digest("hex")
       .slice(0, 32);
-    const sessionKey = `agent:main:administrateme-portal-${peer}-${signature}`;
+    const agentId = "adminme-0123456789abcdef";
+    const sessionKey = `agent:${agentId}:administrateme-portal-${peer}-${signature}`;
     const runtime = fakeApi();
     const factory = runtime.tools.get("administrateme_state");
     const context = toolContext({
       sessionKey,
       messageChannel: "gateway",
+      agentId,
     });
     delete context.requesterSenderId;
     delete context.agentAccountId;
@@ -275,6 +277,7 @@ describe("native OpenClaw contract fixture", () => {
       session_key: sessionKey,
       channel_id: "administrateme-portal",
       account_id: "member-portal",
+      agent_id: agentId,
       call_kind: "tool",
     });
     expect(JSON.stringify(requestBody(fetchMock))).not.toContain(
@@ -282,7 +285,8 @@ describe("native OpenClaw contract fixture", () => {
     );
 
     const forgedContext = toolContext({
-      sessionKey: `agent:main:administrateme-portal-${peer}-${"0".repeat(32)}`,
+      sessionKey: `agent:${agentId}:administrateme-portal-${peer}-${"0".repeat(32)}`,
+      agentId,
     });
     delete forgedContext.requesterSenderId;
     const forged = factory?.(forgedContext) as AnyAgentTool;

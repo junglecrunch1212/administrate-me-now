@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -598,8 +599,10 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
     report = json.loads(paths.public_config_path.read_text("utf-8"))
     assert report["bootstrap_complete"] is False
     assert report["bridge_enrollment"]["credential_free_fixture"] is True
+    submitted_enrollment: dict[str, object] = {}
 
     def submitter(transfer: dict, envelope: dict) -> str:
+        submitted_enrollment.update(envelope)
         references = json.loads(
             (paths.instance_dir / "config" / "secret-references.json").read_text(
                 "utf-8"
@@ -619,6 +622,19 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
             member_roles={"member_fixture_principal_a": "principal"},
         )
         with TestClient(create_application(settings)) as client:
+            denied = client.post(
+                "/api/bridge/ingest",
+                json={
+                    **envelope,
+                    "source_adapter": "ordinary-bridge-adapter",
+                    "idempotency_key": "ordinary-before-finalize",
+                },
+                headers={"Tailscale-User-Login": transfer["tailscale_identity"]},
+            )
+            assert denied.status_code == 403, denied.text
+            assert denied.json()["detail"]["error"] == (
+                "provisional_enrollment_contract_denied"
+            )
             response = client.post(
                 "/api/bridge/ingest",
                 json=envelope,
@@ -644,6 +660,34 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
     assert finalized["bootstrap_material_revoked"] is True
     index = json.loads(manager.index_path.read_text("utf-8"))
     assert index["principal-a@example.invalid"]["status"] == "active"
+    active_settings = RuntimeSettings.credential_free(
+        paths.instance_dir,
+        encryption_key=secret_store(paths, test_mode=True).get(
+            json.loads(
+                (paths.instance_dir / "config" / "secret-references.json").read_text(
+                    "utf-8"
+                )
+            )["references"]["event_log"]
+        ),
+        repository_root=REPO_ROOT,
+        member_identities={"principal-a@example.invalid": "member_fixture_principal_a"},
+        bridge_enrollments=index,
+        member_roles={"member_fixture_principal_a": "principal"},
+    )
+    active_event = {
+        **submitted_enrollment,
+        "event_at_ms": int(time.time() * 1000),
+        "source_adapter": "ordinary-bridge-adapter",
+        "source_account_id": "ordinary-bridge-source",
+        "idempotency_key": "ordinary-after-finalize",
+    }
+    with TestClient(create_application(active_settings)) as client:
+        active_response = client.post(
+            "/api/bridge/ingest",
+            json=active_event,
+            headers={"Tailscale-User-Login": "principal-a@example.invalid"},
+        )
+    assert active_response.status_code == 202, active_response.text
     assert (
         json.loads(paths.public_config_path.read_text("utf-8"))["bootstrap_complete"]
         is False

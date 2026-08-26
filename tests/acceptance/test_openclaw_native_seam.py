@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from adminme.demo import FIXTURE_MEMBER_ID
 from adminme.openclaw_approvals import sign_approval_receipt
+from adminme.openclaw_topology import binding_fingerprints, member_agent_id
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 
@@ -83,6 +84,33 @@ def _post(
     response = client.post(path, json=body, headers=OPENCLAW_HEADERS)
     assert response.status_code == status, response.text
     return response.json()
+
+
+def _health_report(
+    state: str,
+    reason: str,
+    *,
+    version: str = OPENCLAW_VERSION,
+    commit: str = OPENCLAW_COMMIT,
+) -> dict[str, Any]:
+    actors = {
+        "discord|account-a|actor-a": PRINCIPAL,
+        "discord|account-c|actor-child": CHILD,
+        "openclaw-dashboard|dashboard-a|actor-a": PRINCIPAL,
+        "openclaw-dashboard|dashboard-c|actor-child": CHILD,
+    }
+    members = set(actors.values())
+    return {
+        "state": state,
+        "reason": reason,
+        "openclaw_version": version,
+        "openclaw_commit": commit,
+        "dm_scope": "per_account_channel_peer",
+        "member_agent_ids": sorted(member_agent_id(member) for member in members),
+        "binding_fingerprints": list(binding_fingerprints(actors, frozenset())),
+        "unique_agents": True,
+        "unique_accounts": True,
+    }
 
 
 def _allow_once(
@@ -538,12 +566,7 @@ def test_openclaw_outage_restart_and_incompatible_upgrade_preserve_truth(
         unavailable = _post(
             client,
             "/api/openclaw/v1/health/report",
-            {
-                "state": "unavailable",
-                "reason": "fixture gateway stopped",
-                "openclaw_version": OPENCLAW_VERSION,
-                "openclaw_commit": OPENCLAW_COMMIT,
-            },
+            _health_report("unavailable", "fixture gateway stopped"),
         )
         assert unavailable["state"] == "unavailable"
         diagnostics = client.get("/api/system/ready").json()
@@ -565,12 +588,9 @@ def test_openclaw_outage_restart_and_incompatible_upgrade_preserve_truth(
         incompatible = _post(
             client,
             "/api/openclaw/v1/health/report",
-            {
-                "state": "healthy",
-                "reason": "future fixture",
-                "openclaw_version": "2099.1.0",
-                "openclaw_commit": "f" * 40,
-            },
+            _health_report(
+                "healthy", "future fixture", version="2099.1.0", commit="f" * 40
+            ),
             status=409,
         )
         assert incompatible["detail"]["code"] == "incompatible_openclaw"
@@ -608,24 +628,14 @@ def test_openclaw_healthy_state_requires_a_current_process_heartbeat(
         reported = _post(
             client,
             "/api/openclaw/v1/health/report",
-            {
-                "state": "healthy",
-                "reason": "fixture gateway heartbeat",
-                "openclaw_version": OPENCLAW_VERSION,
-                "openclaw_commit": OPENCLAW_COMMIT,
-            },
+            _health_report("healthy", "fixture gateway heartbeat"),
         )
         assert reported["state"] == "healthy"
         assert first.state.runtime.effective_openclaw_state() == "healthy"
         heartbeat = _post(
             client,
             "/api/openclaw/v1/health/report",
-            {
-                "state": "healthy",
-                "reason": "fixture gateway heartbeat",
-                "openclaw_version": OPENCLAW_VERSION,
-                "openclaw_commit": OPENCLAW_COMMIT,
-            },
+            _health_report("healthy", "fixture gateway heartbeat"),
         )
         assert heartbeat["event_id"] is None
         states = client.portal.call(
@@ -646,12 +656,7 @@ def test_openclaw_healthy_state_requires_a_current_process_heartbeat(
         _post(
             client,
             "/api/openclaw/v1/health/report",
-            {
-                "state": "healthy",
-                "reason": "fixture gateway heartbeat after restart",
-                "openclaw_version": OPENCLAW_VERSION,
-                "openclaw_commit": OPENCLAW_COMMIT,
-            },
+            _health_report("healthy", "fixture gateway heartbeat after restart"),
         )
         assert runtime.effective_openclaw_state() == "healthy"
 

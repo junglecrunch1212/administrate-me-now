@@ -26,6 +26,7 @@ def test_activity_and_capabilities_derive_from_real_wiring(tmp_path: Path) -> No
         encryption_key=b"g" * 32,
         repository_root=REPO_ROOT,
         member_identities={"a.ts.net": "member-a", "b.ts.net": "member-b"},
+        bridge_enrollments={"a.ts.net": {"member_id": "member-a", "status": "active"}},
         member_roles={"member-a": "principal", "member-b": "principal"},
         deterministic_openclaw_fixture=True,
         fixture_member_id="member-a",

@@ -13,12 +13,22 @@ def session_from_request(request: Request) -> Session:
     if host not in {"127.0.0.1", "::1", "testclient"}:
         raise HTTPException(403, "identity header accepted only from trusted ingress")
     login = request.headers.get("Tailscale-User-Login")
-    member_id = settings.member_identities.get(login or "")
-    if not member_id:
+    normalized_login = login.strip().casefold() if isinstance(login, str) else ""
+    matches = [
+        member
+        for identity, member in settings.member_identities.items()
+        if identity.casefold() == normalized_login
+    ]
+    if len(matches) != 1:
         raise HTTPException(401, "missing or unknown Tailscale identity")
-    role = settings.member_roles.get(member_id, "principal")
+    member_id = matches[0]
+    role = settings.member_roles.get(member_id)
+    if role not in {"principal", "child", "ambient", "device"}:
+        raise HTTPException(403, "portal identity has no interactive member role")
     view_member = request.headers.get("X-AdminMe-View-Member") or member_id
-    view_role = settings.member_roles.get(view_member, "principal")
+    view_role = settings.member_roles.get(view_member)
+    if view_role not in {"principal", "child", "ambient", "device"}:
+        raise HTTPException(403, "view target is not an interactive household member")
     if view_member != member_id and role != "principal":
         raise HTTPException(403, "only principals may view as another member")
     return Session(
@@ -27,7 +37,7 @@ def session_from_request(request: Request) -> Session:
         auth_role=role,
         view_member_id=view_member,
         view_role=view_role,
-        dm_scope="per_channel_peer",
+        dm_scope="per_account_channel_peer",
         source="member_portal",
         correlation_id=request.headers.get("X-Correlation-Id"),
     )

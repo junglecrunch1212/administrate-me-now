@@ -11,6 +11,9 @@ from typing import Any
 
 import yaml
 
+from adminme.openclaw_topology import binding_fingerprints, member_agent_id
+from adminme.deployment_readiness import REQUIRED_DM_SCOPE
+
 from bootstrap.contracts import (
     DeploymentPaths,
     atomic_write,
@@ -42,6 +45,105 @@ def model_provider_configured(paths: DeploymentPaths) -> bool:
         and data.get("workspace_configured") is True
         and data.get("cron_reconciled") is True
     )
+
+
+def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
+    """Write exact per-member agents, actor bindings, and DM isolation."""
+
+    adapter_config = json.loads(
+        (paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
+    )
+    actor_identities = adapter_config.get("openclaw_actor_identities") or {}
+    chat_members = frozenset(adapter_config.get("member_chat_enabled_members") or [])
+    if not isinstance(actor_identities, dict) or not all(
+        isinstance(route, str) and isinstance(member, str)
+        for route, member in actor_identities.items()
+    ):
+        raise RuntimeError("OpenClaw actor identity map is invalid")
+    members = sorted(set(actor_identities.values()) | set(chat_members))
+    config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    config = json.loads(config_path.read_text("utf-8")) if config_path.is_file() else {}
+    if not isinstance(config, dict):
+        raise RuntimeError("OpenClaw configuration root is invalid")
+    agents = config.setdefault("agents", {})
+    existing_agents = agents.get("list") or []
+    if not isinstance(existing_agents, list):
+        raise RuntimeError("OpenClaw agents.list is invalid")
+    retained_agents = [
+        row
+        for row in existing_agents
+        if not (
+            isinstance(row, dict) and str(row.get("id") or "").startswith("adminme-")
+        )
+    ]
+    workspace = str(paths.instance_dir / "openclaw" / "workspace")
+    member_agents: list[dict[str, Any]] = [
+        {"id": member_agent_id(member), "workspace": workspace} for member in members
+    ]
+    if not retained_agents and member_agents:
+        member_agents[0]["default"] = True
+    agents["list"] = retained_agents + member_agents
+
+    existing_bindings = config.get("bindings") or []
+    if not isinstance(existing_bindings, list):
+        raise RuntimeError("OpenClaw bindings are invalid")
+    retained_bindings = [
+        row
+        for row in existing_bindings
+        if not (
+            isinstance(row, dict)
+            and str(row.get("agentId") or "").startswith("adminme-")
+        )
+    ]
+    member_bindings: list[dict[str, Any]] = []
+    account_owners: dict[tuple[str, str], str] = {}
+    for route, member in sorted(actor_identities.items()):
+        parts = route.split("|", 2)
+        if len(parts) != 3 or not all(parts):
+            raise RuntimeError("OpenClaw actor route must be channel|account|actor")
+        channel, account, actor = parts
+        owner = account_owners.setdefault(
+            (channel.casefold(), account.casefold()), member
+        )
+        if owner != member:
+            raise RuntimeError("OpenClaw channel account is shared across members")
+        member_bindings.append(
+            {
+                "agentId": member_agent_id(member),
+                "match": {
+                    "channel": channel,
+                    "accountId": account,
+                    "peer": {"kind": "direct", "id": actor},
+                },
+            }
+        )
+    config["bindings"] = retained_bindings + member_bindings
+    config.setdefault("session", {})["dmScope"] = "per-account-channel-peer"
+
+    plugins = config.setdefault("plugins", {})
+    entries = plugins.setdefault("entries", {})
+    plugin = entries.setdefault("administrateme", {})
+    plugin_config = plugin.setdefault("config", {})
+    plugin_config.update(
+        {
+            "dmScope": REQUIRED_DM_SCOPE,
+            "memberAgentIds": [member_agent_id(member) for member in members],
+            "bindingFingerprints": list(
+                binding_fingerprints(actor_identities, chat_members)
+            ),
+        }
+    )
+    atomic_write(
+        config_path,
+        json.dumps(config, indent=2, sort_keys=True).encode("utf-8"),
+        mode=0o600,
+    )
+    return {
+        "member_agent_count": len(member_agents),
+        "binding_count": len(member_bindings) + len(chat_members),
+        "dm_scope": REQUIRED_DM_SCOPE,
+        "content_exposed": False,
+    }
 
 
 def activate(
@@ -97,6 +199,7 @@ def activate(
         check=True,
         env=environment,
     )
+    topology = reconcile_member_topology(paths)
     subprocess.run([executable, "config", "validate"], check=True, env=environment)
     subprocess.run(
         [executable, "models", "status", "--probe"], check=True, env=environment
@@ -140,6 +243,7 @@ def activate(
         "cron_jobs": len(cron["jobs"]),
         "configured_at": datetime.now(timezone.utc).isoformat(),
         "contains_credentials": False,
+        "member_topology": topology,
     }
     atomic_write(
         activation_path(paths),
@@ -149,4 +253,9 @@ def activate(
     return marker
 
 
-__all__ = ["activate", "activation_path", "model_provider_configured"]
+__all__ = [
+    "activate",
+    "activation_path",
+    "model_provider_configured",
+    "reconcile_member_topology",
+]

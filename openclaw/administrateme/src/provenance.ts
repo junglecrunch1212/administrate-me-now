@@ -38,10 +38,11 @@ export function provenanceFromTool(
   sharedSecretEnv = "ADMINME_OPENCLAW_SHARED_SECRET",
 ): Provenance {
   const sessionKey = context.sessionKey ?? "";
-  const portal = /^agent:main:administrateme-portal-([0-9a-f]{20})-([0-9a-f]{32})$/.exec(sessionKey);
+  const portal = /^agent:(adminme-[0-9a-f]{16}):administrateme-portal-([0-9a-f]{20})-([0-9a-f]{32})$/.exec(sessionKey);
   if (portal && callKind === "tool") {
-    const peer = portal[1]!;
-    const signature = portal[2]!;
+    const agentId = portal[1]!;
+    const peer = portal[2]!;
+    const signature = portal[3]!;
     const secret = process.env[sharedSecretEnv];
     if (!secret || secret.length < 24) {
       throw new Error("AdministrateMe portal provenance credential is unavailable");
@@ -58,8 +59,11 @@ export function provenanceFromTool(
     const result = base("tool", `portal:${peer}`, "administrateme-portal");
     result.account_id = "member-portal";
     result.session_key = sessionKey;
+    result.agent_id = agentId;
     if (context.sessionId) result.session_id = context.sessionId;
-    if (context.agentId) result.agent_id = context.agentId;
+    if (context.agentId && context.agentId !== agentId) {
+      throw new Error("AdministrateMe portal agent provenance is contradictory");
+    }
     return result;
   }
   const delivery = context.deliveryContext;

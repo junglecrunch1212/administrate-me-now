@@ -18,11 +18,25 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from adminme.adapters.base import Adapter
+from adminme.provider_bindings import validate_provider_bindings
 
 
 def load_builtin_adapters(
-    config: dict[str, Any], *, repository_root: Path
+    config: dict[str, Any],
+    *,
+    repository_root: Path,
+    member_roles: dict[str, str] | None = None,
+    household_mapping: dict[str, Any] | None = None,
+    service_principal_ids: set[str] | None = None,
+    validate_bindings: bool = False,
 ) -> list[Adapter]:
+    if validate_bindings:
+        validate_provider_bindings(
+            config,
+            member_roles=member_roles or {},
+            household_mapping=household_mapping or {},
+            service_principal_ids=service_principal_ids or set(),
+        )
     catalog = _catalog(repository_root / "packs" / "adapters")
     adapters: list[Adapter] = []
     for index, entry in enumerate(config.get("adapters") or []):

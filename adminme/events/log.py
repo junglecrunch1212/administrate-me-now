@@ -53,6 +53,10 @@ from typing import TYPE_CHECKING, Any
 import sqlcipher3
 
 from adminme.events.envelope import EventEnvelope
+from adminme.events.invariants import (
+    EnvelopeInvariantError,
+    validate_envelope_invariants,
+)
 from adminme.events.registry import (
     EventValidationError,
     SchemaNotFound,
@@ -358,6 +362,11 @@ class EventLog:
             raise AppendValidationError(str(exc)) from exc
 
         try:
+            validate_envelope_invariants(envelope)
+        except EnvelopeInvariantError as exc:
+            raise AppendValidationError(str(exc)) from exc
+
+        try:
             payload_json = json.dumps(
                 envelope.payload, separators=(",", ":"), sort_keys=False
             )
@@ -558,7 +567,49 @@ class EventLog:
                     "type": row["type"],
                     "occurred_at": row["occurred_at"],
                     "recorded_at": row["recorded_at"],
+                    "causation_id": row["causation_id"],
                     "payload": json.loads(payload) if payload is not None else None,
+                }
+            last = rows[-1]["event_id"]
+            if len(rows) < batch_size:
+                return
+
+    async def read_attribution_metadata_since(
+        self,
+        cursor: str | None = None,
+        *,
+        through: str | None = None,
+        limit: int = 5000,
+        types: list[str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Read content-free ownership/provenance coordinates for an audit."""
+
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if not types:
+            raise ValueError("attribution reads require an explicit type allowlist")
+        requested_types = tuple(dict.fromkeys(types))
+        last = cursor
+        batch_size = max(limit, 500)
+        while True:
+            rows = await self._run_locked(
+                self._read_attribution_page,
+                last,
+                through,
+                batch_size,
+                requested_types,
+            )
+            if not rows:
+                return
+            for row in rows:
+                yield {
+                    "event_id": row["event_id"],
+                    "type": row["type"],
+                    "occurred_at": row["occurred_at"],
+                    "recorded_at": row["recorded_at"],
+                    "owner_scope": row["owner_scope"],
+                    "source_adapter": row["source_adapter"],
+                    "source_account_id": row["source_account_id"],
                 }
             last = rows[-1]["event_id"]
             if len(rows) < batch_size:
@@ -621,14 +672,15 @@ class EventLog:
         if metadata_types:
             metadata_where, metadata_params = branch_where(metadata_types)
             branches.append(
-                "SELECT event_id, type, occurred_at, recorded_at, NULL AS payload "
+                "SELECT event_id, type, occurred_at, recorded_at, causation_id, "
+                "NULL AS payload "
                 "FROM events INDEXED BY idx_events_type_id_time WHERE " + metadata_where
             )
             params.extend(metadata_params)
         if payload_types:
             payload_where, payload_params = branch_where(payload_types)
             branches.append(
-                "SELECT event_id, type, occurred_at, recorded_at, payload "
+                "SELECT event_id, type, occurred_at, recorded_at, causation_id, payload "
                 "FROM events WHERE " + payload_where
             )
             params.extend(payload_params)
@@ -639,6 +691,31 @@ class EventLog:
         params.append(limit)
         cur = self._conn.cursor()
         return list(cur.execute(sql, params))
+
+    def _read_attribution_page(
+        self,
+        after_id: str | None,
+        through: str | None,
+        limit: int,
+        types: tuple[str, ...],
+    ) -> list[sqlcipher3.Row]:
+        placeholders = ",".join("?" for _ in types)
+        where = [f"type IN ({placeholders})"]
+        params: list[Any] = list(types)
+        if after_id is not None:
+            where.append("event_id > ?")
+            params.append(after_id)
+        if through is not None:
+            where.append("event_id <= ?")
+            params.append(through)
+        params.append(limit)
+        sql = (
+            "SELECT event_id, type, occurred_at, recorded_at, owner_scope, "
+            "source_adapter, source_account_id FROM events WHERE "
+            + " AND ".join(where)
+            + " ORDER BY event_id ASC LIMIT ?"
+        )
+        return list(self._conn.execute(sql, params))
 
     async def get(self, event_id: str) -> dict[str, Any] | None:
         row = await self._run_locked(self._get_one, event_id)

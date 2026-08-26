@@ -28,6 +28,7 @@ from adminme.products.bridge.auth import (
     MemberIdResolver,
     resolve_member_id,
     resolve_tailscale_identity,
+    unexpired_exported_enrollment,
 )
 
 router = APIRouter(prefix="/api/bridge", tags=["bridge"])
@@ -101,6 +102,64 @@ def _expected_tenant_id(request: Request) -> str | None:
     return str(value) if value else None
 
 
+def _resolve_single_ingest_member(
+    request: Request, tailscale_identity: str, raw: dict[str, Any]
+) -> str:
+    """Authorize active ingest or the one provisional enrollment proof."""
+
+    active_member = _get_resolver(request).resolve(tailscale_identity)
+    if active_member is not None:
+        return active_member
+    records = getattr(request.app.state, "bridge_enrollments", {})
+    record = unexpired_exported_enrollment(records, tailscale_identity)
+    if record is None:
+        return resolve_member_id(tailscale_identity, _get_resolver(request))
+    try:
+        envelope = EventEnvelope.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"error": "envelope_validation_failed", "errors": exc.errors()},
+        ) from exc
+    member_id = record.get("member_id")
+    enrollment_id = record.get("enrollment_id")
+    expected_scope = f"private:{member_id}"
+    event_payload = envelope.payload
+    violations: list[str] = []
+    if envelope.type != "bridge.enrolled" or envelope.schema_version != 1:
+        violations.append("event_type")
+    if envelope.source_adapter != "member-bridge-bootstrap":
+        violations.append("source_adapter")
+    if (
+        not isinstance(enrollment_id, str)
+        or envelope.source_account_id != enrollment_id
+    ):
+        violations.append("source_account_id")
+    if envelope.idempotency_key != f"bridge-enrollment:{enrollment_id}":
+        violations.append("idempotency_key")
+    if envelope.owner_scope != expected_scope:
+        violations.append("owner_scope")
+    if envelope.visibility_scope != expected_scope:
+        violations.append("visibility_scope")
+    if event_payload.get("member_id") != member_id:
+        violations.append("payload.member_id")
+    claimed_identity = event_payload.get("tailscale_identity")
+    if not isinstance(claimed_identity, str) or (
+        claimed_identity.casefold() != tailscale_identity.casefold()
+    ):
+        violations.append("payload.tailscale_identity")
+    if violations:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "provisional_enrollment_contract_denied",
+                "violations": violations,
+            },
+        )
+    assert isinstance(member_id, str)
+    return member_id
+
+
 def _enforce_member_knowledge_contract(
     request: Request,
     envelope: EventEnvelope,
@@ -148,7 +207,7 @@ def _enforce_member_knowledge_contract(
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, str]:
     tailscale_identity = resolve_tailscale_identity(request)
-    member_id = resolve_member_id(tailscale_identity, _get_resolver(request))
+    member_id = _resolve_single_ingest_member(request, tailscale_identity, payload)
     envelope = _stamp_owner_scope(payload, member_id, _expected_tenant_id(request))
     _enforce_member_knowledge_contract(request, envelope, member_id)
     try:
@@ -198,10 +257,30 @@ async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, 
 
 @router.get("/health")
 async def health(request: Request) -> dict[str, Any]:
+    records = getattr(request.app.state, "bridge_enrollments", {})
+    statuses = [
+        record.get("status") for record in records.values() if isinstance(record, dict)
+    ]
+    active = statuses.count("active")
+    provisional = sum(
+        status in {"package-created-not-live", "package-exported"}
+        for status in statuses
+    )
     return {
         "status": "ok",
+        "endpoint_available": True,
         "bridge_endpoint": "/api/bridge/ingest",
         "ingest_count": int(getattr(request.app.state, "ingest_count", 0)),
+        "enrollment_state": (
+            "none"
+            if not statuses
+            else "ready"
+            if active + statuses.count("revoked") == len(statuses)
+            else "provisional"
+        ),
+        "enrollment_count": len(statuses),
+        "active_count": active,
+        "provisional_count": provisional,
     }
 
 
@@ -244,7 +323,13 @@ async def pending_commands(
             and payload["provider"] in selected
             and payload["member_id"] == member_id
         ):
-            commands.append({"event_id": event["event_id"], **payload})
+            commands.append(
+                {
+                    "event_id": event["event_id"],
+                    "schema_version": event.get("schema_version", 1),
+                    **payload,
+                }
+            )
             if len(commands) >= limit:
                 break
 
@@ -255,12 +340,38 @@ async def pending_commands(
         sink = _get_event_sink(request)
         for command in commands:
             now = EventEnvelope.now_utc_iso()
+            is_v2 = int(command.get("schema_version") or 1) >= 2
+            result_payload: dict[str, Any] = {
+                "command_id": command["command_id"],
+                "member_id": member_id,
+                "provider": command["provider"],
+                "operation": command["operation"],
+                "external_id": None,
+                "provider_revision": None,
+                "result": {"reason": "observation_mode_active"},
+                "completed_at": now,
+                "suppressed": True,
+            }
+            if is_v2:
+                result_payload.update(
+                    {
+                        "command_event_id": command["event_id"],
+                        "domain_approval_event_id": command["domain_approval_event_id"],
+                        "openclaw_approval_event_id": command[
+                            "openclaw_approval_event_id"
+                        ],
+                        "provider_account_id": command["provider_account_id"],
+                        "request_fingerprint": command["request_fingerprint"],
+                        "provider_called": False,
+                        "origin_proposal_id": command.get("origin_proposal_id"),
+                    }
+                )
             await sink.write(
                 EventEnvelope(
                     event_at_ms=int(time.time() * 1000),
                     tenant_id=_expected_tenant_id(request) or "tenant-default",
                     type="external_sync.write_completed",
-                    schema_version=1,
+                    schema_version=2 if is_v2 else 1,
                     occurred_at=now,
                     source_adapter="bridge-command-observation-gate",
                     source_account_id=str(command["provider_account_id"]),
@@ -269,17 +380,7 @@ async def pending_commands(
                     sensitivity="normal",
                     causation_id=str(command["event_id"]),
                     idempotency_key=f"external-sync-result:{command['command_id']}",
-                    payload={
-                        "command_id": command["command_id"],
-                        "member_id": member_id,
-                        "provider": command["provider"],
-                        "operation": command["operation"],
-                        "external_id": None,
-                        "provider_revision": None,
-                        "result": {"reason": "observation_mode_active"},
-                        "completed_at": now,
-                        "suppressed": True,
-                    },
+                    payload=result_payload,
                 )
             )
         commands = []

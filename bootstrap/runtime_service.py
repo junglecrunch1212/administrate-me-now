@@ -9,9 +9,17 @@ from pathlib import Path
 import uvicorn
 
 from adminme.runtime.application import RuntimeSettings, create_application
+from bootstrap.attest_deployment_readiness import (
+    ReadinessAttestationError,
+    build_deployment_binding,
+)
 from bootstrap.contracts import DeploymentPaths, repository_root
 from bootstrap.openclaw_activation import model_provider_configured
 from bootstrap.secrets import secret_store
+from bootstrap.topology_readiness import (
+    load_deployment_evidence,
+    sample_host_topology,
+)
 
 
 def main() -> None:
@@ -60,6 +68,17 @@ def main() -> None:
     chat_members = frozenset(adapter_config.get("member_chat_enabled_members", []))
     store = secret_store(paths)
     shared = store.get(references["openclaw_shared"]).decode("ascii")
+    host_topology = sample_host_topology(
+        paths,
+        member_identities=member_identities,
+    )
+    try:
+        host_topology["deployment_binding"] = build_deployment_binding(paths)
+    except ReadinessAttestationError:
+        # Missing/invalid immutable-release evidence blocks activation through
+        # the shared readiness dimension; it does not suppress safe reads.
+        host_topology["deployment_binding"] = {}
+    deployment_evidence = load_deployment_evidence(paths)
     settings = RuntimeSettings.credential_free(
         paths.instance_dir,
         encryption_key=store.get(references["event_log"]),
@@ -76,11 +95,17 @@ def main() -> None:
         openclaw_actor_identities=actor_identities,
         openclaw_gateway_token=shared,
         openclaw_model_configured=model_provider_configured(paths),
+        openclaw_runtime_config_path=(
+            paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+        ),
         member_chat_enabled_members=chat_members,
         child_chat_enabled_members=frozenset(
             adapter_config.get("child_chat_enabled_members", [])
         ),
         adapter_config=adapter_config,
+        host_topology=host_topology,
+        deployment_evidence=deployment_evidence,
+        deployment_evidence_required=True,
     )
     uvicorn.run(
         create_application(settings),

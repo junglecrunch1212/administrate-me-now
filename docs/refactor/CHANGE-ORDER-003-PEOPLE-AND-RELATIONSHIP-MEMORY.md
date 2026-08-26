@@ -466,8 +466,14 @@ write was enabled by activation.
   provider edit, deletion, or sharing change.
 - No provider contact, interaction body, or relationship note is copied to
   generic OpenClaw memory or another member's source.
-- No Apple ID is added to the central service account for this feature; Apple
-  Contacts runs through a separately enrolled member bridge with OS consent.
+- No member or personal Apple identity is added to the central service account
+  for this feature; member Apple Contacts runs only through that member's
+  separately enrolled bridge with OS consent. This narrowly supersedes any
+  blanket reading of the prior sentence: a future household-owned **CoS Apple
+  service identity** may support CoS-addressed communications, but it is a
+  separate non-human service/channel principal, grants no member-source access,
+  and requires its own reviewed account, recovery, transport, permissions,
+  enrollment, observation, and send-activation gates.
 - No contact-provider capability is fabricated. Unsupported fields remain
   provider-specific, visible as limitations, and protected from destructive
   round trips.

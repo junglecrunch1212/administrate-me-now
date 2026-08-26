@@ -141,12 +141,137 @@ def _is_overdue(event: dict[str, Any], *, grace_seconds: int = 300) -> bool:
         return True
 
 
+def _aware_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
+
+
+def _event_at_or_after(event: dict[str, Any], boundary: datetime) -> bool:
+    occurred = _aware_datetime(event.get("recorded_at") or event.get("occurred_at"))
+    return occurred is not None and occurred >= boundary
+
+
+def _provider_effect_counts(
+    source_events: list[dict[str, Any]],
+    terminal_events: dict[str, list[dict[str, Any]]],
+) -> dict[str, int]:
+    requests: dict[str, list[dict[str, Any]]] = {}
+    malformed_request_count = 0
+    for event in source_events:
+        if event.get("type") != "external_sync.write_requested":
+            continue
+        command_id = str((event.get("payload") or {}).get("command_id") or "")
+        if not command_id:
+            malformed_request_count += 1
+            continue
+        requests.setdefault(command_id, []).append(event)
+    request_ids = set(requests)
+    counts = {
+        "write_requests": sum(len(rows) for rows in requests.values())
+        + malformed_request_count,
+        "terminal_results": sum(len(rows) for rows in terminal_events.values()),
+        "provider_called_true": 0,
+        "provider_called_false": 0,
+        "provider_called_unknown": 0,
+        "suppressed_true": 0,
+        "suppressed_false_or_unknown": 0,
+        "missing_terminal": 0,
+        "duplicate_terminal": 0,
+        "approval_correlation_missing": 0,
+        "duplicate_request": sum(max(0, len(rows) - 1) for rows in requests.values()),
+        "malformed_request": malformed_request_count,
+        "orphan_terminal": 0,
+    }
+    for command_id in request_ids:
+        request = requests[command_id][0]
+        request_payload = request.get("payload") or {}
+        rows = terminal_events.get(command_id, [])
+        if not rows:
+            counts["missing_terminal"] += 1
+            continue
+        if len(rows) > 1:
+            counts["duplicate_terminal"] += len(rows) - 1
+        for event in rows:
+            payload = event.get("payload") or {}
+            provider_called = payload.get("provider_called")
+            if provider_called is True:
+                counts["provider_called_true"] += 1
+            elif provider_called is False:
+                counts["provider_called_false"] += 1
+            else:
+                counts["provider_called_unknown"] += 1
+            if payload.get("suppressed") is True:
+                counts["suppressed_true"] += 1
+            elif provider_called is not False:
+                counts["suppressed_false_or_unknown"] += 1
+            correlation_pairs = (
+                (payload.get("command_event_id"), request.get("event_id")),
+                (
+                    payload.get("domain_approval_event_id"),
+                    request_payload.get("domain_approval_event_id"),
+                ),
+                (
+                    payload.get("openclaw_approval_event_id"),
+                    request_payload.get("openclaw_approval_event_id"),
+                ),
+                (
+                    payload.get("request_fingerprint"),
+                    request_payload.get("request_fingerprint"),
+                ),
+                (
+                    payload.get("provider_account_id"),
+                    request_payload.get("provider_account_id"),
+                ),
+                (event.get("causation_id"), request.get("event_id")),
+            )
+            if any(
+                not isinstance(actual, str) or not actual or actual != expected
+                for actual, expected in correlation_pairs
+            ):
+                counts["approval_correlation_missing"] += 1
+    counts["orphan_terminal"] = sum(
+        len(rows)
+        for command_id, rows in terminal_events.items()
+        if command_id not in request_ids
+    )
+    return counts
+
+
+def _provider_effect_integrity_healthy(counts: dict[str, int]) -> bool:
+    return not any(
+        counts[key]
+        for key in (
+            "provider_called_unknown",
+            "missing_terminal",
+            "duplicate_terminal",
+            "approval_correlation_missing",
+            "duplicate_request",
+            "malformed_request",
+            "orphan_terminal",
+        )
+    )
+
+
+def _zero_provider_effects(counts: dict[str, int]) -> bool:
+    return (
+        _provider_effect_integrity_healthy(counts)
+        and counts["provider_called_true"] == 0
+        and counts["suppressed_false_or_unknown"] == 0
+    )
+
+
 async def audit_source_assurance(
     event_log: EventLog,
     *,
     repository_root: Path,
     capabilities: dict[str, Any],
     through_event_id: str | None = None,
+    provider_effect_window_started_at: str | None = None,
 ) -> dict[str, Any]:
     """Return secret-free source accounting suitable for Doctor and Settings."""
 
@@ -187,6 +312,7 @@ async def audit_source_assurance(
 
     assessments: dict[str, dict[str, Any]] = {}
     action_terminals: set[str] = set()
+    action_terminal_events: dict[str, list[dict[str, Any]]] = {}
     recovery_requests: dict[str, dict[str, Any]] = {}
     recovery_assessments: dict[str, dict[str, Any]] = {}
     recovery_refusals: set[str] = set()
@@ -214,7 +340,9 @@ async def audit_source_assurance(
             "external_sync.write_completed",
             "external_sync.write_failed",
         }:
-            action_terminals.add(str(payload.get("command_id") or ""))
+            command_id = str(payload.get("command_id") or "")
+            action_terminals.add(command_id)
+            action_terminal_events.setdefault(command_id, []).append(event)
         if event.get("type") in by_type:
             source_events.append(event)
 
@@ -376,9 +504,41 @@ async def audit_source_assurance(
             recovery_counts["refused"] += 1
         else:
             recovery_counts["pending"] += 1
+    effect_counts = _provider_effect_counts(source_events, action_terminal_events)
+    effects_healthy = _provider_effect_integrity_healthy(effect_counts)
+    zero_effects = _zero_provider_effects(effect_counts)
+    window_start = _aware_datetime(provider_effect_window_started_at)
+    if window_start is None:
+        window_counts = _provider_effect_counts([], {})
+        window_state = "missing"
+        window_zero_effects = False
+    else:
+        window_sources = [
+            event for event in source_events if _event_at_or_after(event, window_start)
+        ]
+        window_terminals = {
+            command_id: [
+                event for event in rows if _event_at_or_after(event, window_start)
+            ]
+            for command_id, rows in action_terminal_events.items()
+        }
+        window_terminals = {
+            command_id: rows for command_id, rows in window_terminals.items() if rows
+        }
+        window_counts = _provider_effect_counts(window_sources, window_terminals)
+        window_zero_effects = _zero_provider_effects(window_counts)
+        window_state = (
+            "healthy"
+            if _provider_effect_integrity_healthy(window_counts) and window_zero_effects
+            else "degraded"
+        )
     return {
         "contract": "source-assurance-v1",
-        "state": ("degraded" if counts["missing"] or counts["failed"] else "healthy"),
+        "state": (
+            "degraded"
+            if counts["missing"] or counts["failed"] or not effects_healthy
+            else "healthy"
+        ),
         "counts": counts,
         "missing": missing,
         "missing_summary": {
@@ -398,6 +558,19 @@ async def audit_source_assurance(
             "counts": recovery_counts,
             "attempt_limit": 3,
             "max_concurrency": 2,
+            "content_exposed": False,
+        },
+        "provider_effects": {
+            "contract": "provider-effect-accounting-v1",
+            "state": "healthy" if effects_healthy else "degraded",
+            "counts": effect_counts,
+            "zero_effect_state": "healthy" if zero_effects else "nonzero",
+            "observation_window": {
+                "state": window_state,
+                "started_at_configured": window_start is not None,
+                "counts": window_counts,
+                "content_exposed": False,
+            },
             "content_exposed": False,
         },
         "watermark_event_id": watermark_event_id,

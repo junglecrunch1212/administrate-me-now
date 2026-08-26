@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 import sqlcipher3
 
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import EventLog
 from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap.contracts import PROJECTION_NAMES
 
@@ -138,20 +136,12 @@ def test_real_process_boot_ingest_diagnostics_and_shutdown(tmp_path: Path) -> No
             json=envelope.model_dump(mode="json"),
             headers={"Tailscale-User-Login": "acceptance-member.ts.net"},
         )
-        assert result.status_code == 202, result.text
-        event_id = result.json()["event_id"]
-
-    async def read_back() -> dict[str, object] | None:
-        reopened = EventLog(settings.instance, TEST_KEY)
-        try:
-            return await reopened.get(event_id)
-        finally:
-            await reopened.close()
-
-    stored = asyncio.run(read_back())
-    assert stored is not None
-    assert stored["owner_scope"] == "private:acceptance-member"
-    assert stored["source_adapter"] == "acceptance-bridge"
+        assert result.status_code == 403
+        assert result.json()["detail"] == "unknown_tailscale_identity"
+        health = client.get("/api/bridge/health").json()
+        assert health["endpoint_available"] is True
+        assert health["enrollment_state"] == "none"
+        assert health["enrollment_count"] == 0
 
 
 def test_real_process_upgrades_existing_triage_projection_before_indexing(
@@ -164,6 +154,7 @@ def test_real_process_upgrades_existing_triage_projection_before_indexing(
         encryption_key=TEST_KEY,
         repository_root=REPO_ROOT,
         member_identities={"acceptance-member.ts.net": "acceptance-member"},
+        member_roles={"acceptance-member": "principal"},
     )
     _seed_v2_triage_projection(settings)
 

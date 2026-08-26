@@ -25,6 +25,7 @@ from adminme.lib.scope import filter_rows
 from adminme.lib.session import Session, Source
 from adminme.lib.skill_runner.wrapper import SkillContext
 from adminme.openclaw_approvals import ApprovalReceiptError
+from adminme.openclaw_topology import binding_fingerprints, member_agent_id
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import build_surface
@@ -218,6 +219,11 @@ class HealthReport(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
     openclaw_version: str = Field(min_length=1)
     openclaw_commit: str = Field(min_length=7)
+    dm_scope: Literal["per_account_channel_peer"]
+    member_agent_ids: list[str] = Field(max_length=50)
+    binding_fingerprints: list[str] = Field(max_length=200)
+    unique_agents: bool
+    unique_accounts: bool
 
 
 def _runtime(request: Request) -> Any:
@@ -252,9 +258,13 @@ def _session(request: Request, provenance: Provenance) -> Session:
         candidate = runtime.resolve_member_chat_actor(provenance.actor_id)
         if candidate is not None:
             expected_actor, expected_session = runtime.member_chat_binding(candidate)
-            if hmac.compare_digest(
-                provenance.actor_id, expected_actor
-            ) and hmac.compare_digest(provenance.session_key or "", expected_session):
+            if (
+                hmac.compare_digest(provenance.actor_id, expected_actor)
+                and hmac.compare_digest(provenance.session_key or "", expected_session)
+                and hmac.compare_digest(
+                    provenance.agent_id or "", member_agent_id(candidate)
+                )
+            ):
                 member_id = candidate
     if not member_id:
         raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
@@ -278,7 +288,7 @@ def _session(request: Request, provenance: Provenance) -> Session:
         auth_role=role,
         view_member_id=member_id,
         view_role=role,
-        dm_scope="per_channel_peer",
+        dm_scope="per_account_channel_peer",
         source=source,
         correlation_id=provenance.correlation_id,
     )
@@ -534,7 +544,41 @@ async def report_health(body: HealthReport, request: Request) -> dict[str, Any]:
         body.openclaw_version == OPENCLAW_VERSION
         and body.openclaw_commit == OPENCLAW_COMMIT
     )
+    expected_members = set(runtime.settings.member_chat_enabled_members) | set(
+        runtime.settings.openclaw_actor_identities.values()
+    )
+    expected_agents = {member_agent_id(member) for member in expected_members}
+    expected_bindings = set(
+        binding_fingerprints(
+            runtime.settings.openclaw_actor_identities,
+            runtime.settings.member_chat_enabled_members,
+        )
+    )
+    topology_compatible = (
+        set(body.member_agent_ids) == expected_agents
+        and len(body.member_agent_ids) == len(expected_agents)
+        and set(body.binding_fingerprints) == expected_bindings
+        and len(body.binding_fingerprints) == len(expected_bindings)
+        and body.unique_agents
+        and body.unique_accounts
+    )
+    compatible = compatible and topology_compatible
     state = body.state if compatible else "incompatible"
+    runtime.openclaw_topology_report = {
+        "dm_scope": body.dm_scope,
+        "member_ids_with_agents": sorted(expected_members)
+        if set(body.member_agent_ids) == expected_agents
+        else [],
+        "member_ids_with_account_bindings": sorted(expected_members)
+        if set(body.binding_fingerprints) == expected_bindings
+        else [],
+        "unique_agents": body.unique_agents
+        and len(body.member_agent_ids) == len(set(body.member_agent_ids)),
+        "unique_accounts": body.unique_accounts
+        and len(body.binding_fingerprints) == len(set(body.binding_fingerprints)),
+        "tested_at": EventEnvelope.now_utc_iso(),
+        "content_exposed": False,
+    }
     event_id: str | None = None
     if (
         runtime.openclaw_last_report_monotonic is None

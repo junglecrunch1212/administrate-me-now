@@ -373,6 +373,9 @@ class BootstrapWizard:
                 macos_version=self.preflight_overrides.get("macos_version"),
                 require_dependencies=not self.test_mode,
                 check_filevault=not self.test_mode,
+                # Disposable tests do not emulate the target macOS account
+                # directory. Production always samples the real group list.
+                group_names=frozenset() if self.test_mode else None,
             )
             self.paths.create()
             bootstrap_reference = self.store.put("bootstrap-state", os.urandom(32))

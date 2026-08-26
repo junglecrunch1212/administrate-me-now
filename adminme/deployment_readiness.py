@@ -1,0 +1,460 @@
+"""One secret-safe readiness contract shared by API, Settings, and Doctor."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+
+CENTRAL_HOST_TAG = "tag:administrateme-central"
+REQUIRED_DM_SCOPE = "per_account_channel_peer"
+
+
+def _dimension(
+    state: str,
+    reason: str,
+    *,
+    required: bool = True,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "required": required,
+        "reason": reason,
+        "evidence": evidence or {},
+        "content_exposed": False,
+    }
+
+
+def _recent_iso(value: Any, *, max_age_days: int = 31) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        return False
+    age = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    return 0 <= age.total_seconds() <= max_age_days * 86400
+
+
+def evaluate_deployment_readiness(
+    *,
+    required: bool,
+    host_topology: dict[str, Any],
+    deployment_evidence: dict[str, Any],
+    member_roles: dict[str, str],
+    portal_member_ids: set[str],
+    portal_identity_count: int,
+    provider_bindings: tuple[Any, ...],
+    service_channel_accounts: tuple[Any, ...],
+    bridge_enrollments: dict[str, dict[str, Any]],
+    openclaw_enabled: bool,
+    openclaw_member_ids: set[str],
+    openclaw_topology: dict[str, Any],
+    observation_active: bool,
+    source_assurance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate independent activation axes without exposing identities."""
+
+    if not required:
+        return {
+            "contract": "deployment-readiness-v1",
+            "state": "not_required",
+            "ready": True,
+            "dimensions": {},
+            "content_exposed": False,
+        }
+
+    topology_ok = all(
+        (
+            host_topology.get("tailscale_node_online") is True,
+            host_topology.get("central_host_tag") == CENTRAL_HOST_TAG,
+            host_topology.get("central_identity_kind") == "infrastructure_tag",
+            host_topology.get("central_identity_collides_with_member") is False,
+            host_topology.get("serve_is_sole_edge") is True,
+            host_topology.get("python_runtime_count") == 1,
+            host_topology.get("openclaw_gateway_count") == 1,
+        )
+    )
+    dimensions: dict[str, dict[str, Any]] = {
+        "topology": _dimension(
+            "healthy" if topology_ok else "blocked",
+            "central host is a tagged infrastructure node behind the one reviewed edge"
+            if topology_ok
+            else "central host infrastructure identity or singleton topology is unproved",
+            evidence={
+                "required_tag": CENTRAL_HOST_TAG,
+                "tag_present": host_topology.get("central_host_tag")
+                == CENTRAL_HOST_TAG,
+                "node_online": host_topology.get("tailscale_node_online") is True,
+                "identity_kind": host_topology.get("central_identity_kind", "unknown"),
+                "member_collision": host_topology.get(
+                    "central_identity_collides_with_member"
+                ),
+                "serve_is_sole_edge": host_topology.get("serve_is_sole_edge"),
+                "python_runtime_count": host_topology.get("python_runtime_count"),
+                "openclaw_gateway_count": host_topology.get("openclaw_gateway_count"),
+            },
+        )
+    }
+
+    attested_binding = deployment_evidence.get("deployment_binding") or {}
+    current_binding = host_topology.get("deployment_binding") or {}
+    binding_fields = {
+        "release_commit",
+        "instance_fingerprint",
+        "host_fingerprint",
+        "configuration_fingerprint",
+    }
+    binding_ok = (
+        isinstance(attested_binding, dict)
+        and isinstance(current_binding, dict)
+        and all(
+            isinstance(attested_binding.get(field), str)
+            and bool(attested_binding[field])
+            and attested_binding.get(field) == current_binding.get(field)
+            for field in binding_fields
+        )
+    )
+    dimensions["attestation_binding"] = _dimension(
+        "healthy" if binding_ok else "blocked",
+        "physical attestations match this host, instance, configuration, and release"
+        if binding_ok
+        else "physical attestations are absent, stale, or belong to another deployment",
+        evidence={
+            "release_matches": bool(
+                attested_binding.get("release_commit")
+                and attested_binding.get("release_commit")
+                == current_binding.get("release_commit")
+            ),
+            "instance_matches": bool(
+                attested_binding.get("instance_fingerprint")
+                and attested_binding.get("instance_fingerprint")
+                == current_binding.get("instance_fingerprint")
+            ),
+            "host_matches": bool(
+                attested_binding.get("host_fingerprint")
+                and attested_binding.get("host_fingerprint")
+                == current_binding.get("host_fingerprint")
+            ),
+            "configuration_matches": bool(
+                attested_binding.get("configuration_fingerprint")
+                and attested_binding.get("configuration_fingerprint")
+                == current_binding.get("configuration_fingerprint")
+            ),
+        },
+    )
+
+    recovery = deployment_evidence.get("recovery") or {}
+    service_account_ok = host_topology.get("service_account_standard") is True
+    recovery_ok = all(
+        (
+            service_account_ok,
+            recovery.get("separate_admin_available") is True,
+            recovery.get("filevault_unlock_tested") is True,
+            recovery.get("automatic_login_disabled") is True,
+            _recent_iso(recovery.get("tested_at")),
+        )
+    )
+    dimensions["service_account_recovery"] = _dimension(
+        "healthy" if recovery_ok else "blocked",
+        "standard service account and recent tested recovery path are ready"
+        if recovery_ok
+        else "standard-account or anti-lockout recovery evidence is missing",
+        evidence={
+            "service_account_standard": service_account_ok,
+            "separate_admin_available": recovery.get("separate_admin_available")
+            is True,
+            "filevault_unlock_tested": recovery.get("filevault_unlock_tested") is True,
+            "automatic_login_disabled": recovery.get("automatic_login_disabled")
+            is True,
+            "recent_test": _recent_iso(recovery.get("tested_at")),
+        },
+    )
+
+    interactive_members = set(portal_member_ids)
+    identity = deployment_evidence.get("identity_acceptance") or {}
+    accepted = set(identity.get("member_ids") or [])
+    identity_ok = (
+        bool(interactive_members)
+        and accepted == interactive_members
+        and portal_identity_count == len(interactive_members)
+    )
+    dimensions["identity_acceptance"] = _dimension(
+        "healthy" if identity_ok else "blocked",
+        "each enabled interactive member passed the real trusted-ingress path"
+        if identity_ok
+        else "real trusted-ingress acceptance is incomplete or contradictory",
+        evidence={
+            "required_member_count": len(interactive_members),
+            "trusted_identity_count": portal_identity_count,
+            "accepted_member_count": len(accepted & interactive_members),
+            "unknown_acceptance_count": len(accepted - interactive_members),
+            "distinct_identity_proof": identity.get("distinct_identities") is True,
+            "tested_at_recent": _recent_iso(identity.get("tested_at")),
+        },
+    )
+    if not (
+        identity.get("distinct_identities") is True
+        and _recent_iso(identity.get("tested_at"))
+    ):
+        dimensions["identity_acceptance"]["state"] = "blocked"
+
+    dimensions["provider_bindings"] = _dimension(
+        "healthy",
+        "enabled provider bindings passed global ownership validation",
+        evidence={
+            "binding_count": len(provider_bindings),
+            "owner_kind_counts": {
+                owner_kind: sum(
+                    binding.owner_kind == owner_kind for binding in provider_bindings
+                )
+                for owner_kind in ("member", "service_principal")
+            },
+            "workspace_counts": {
+                workspace: sum(
+                    binding.workspace == workspace for binding in provider_bindings
+                )
+                for workspace in ("personal", "work", "service")
+            },
+        },
+    )
+
+    channel_state_counts = {
+        state: sum(channel.state == state for channel in service_channel_accounts)
+        for state in (
+            "planned",
+            "account_not_created",
+            "account_created",
+            "channel_not_enrolled",
+            "observation",
+            "healthy",
+            "degraded",
+            "disabled",
+            "revoked",
+        )
+    }
+    required_channels = [
+        channel
+        for channel in service_channel_accounts
+        if channel.required_for_activation
+    ]
+    required_channels_ready = all(
+        channel.state == "healthy" for channel in required_channels
+    )
+    if required_channels and not required_channels_ready:
+        channel_state = "blocked"
+        channel_reason = "a required service channel is not healthy"
+    elif channel_state_counts["degraded"]:
+        channel_state = "degraded"
+        channel_reason = "a service channel is degraded"
+    elif channel_state_counts["observation"]:
+        channel_state = "observation"
+        channel_reason = "a service channel is enrolled in observation mode"
+    elif channel_state_counts["channel_not_enrolled"]:
+        channel_state = "channel_not_enrolled"
+        channel_reason = "a service account exists but its channel is not enrolled"
+    elif channel_state_counts["account_created"]:
+        channel_state = "account_created"
+        channel_reason = "a service account exists without channel readiness"
+    elif channel_state_counts["planned"] or channel_state_counts["account_not_created"]:
+        channel_state = "planned"
+        channel_reason = (
+            "the future service channel is planned and no account is claimed"
+        )
+    elif service_channel_accounts:
+        channel_state = "healthy"
+        channel_reason = "configured service-channel states are explicit"
+    else:
+        channel_state = "disabled"
+        channel_reason = "no service channel is selected"
+    dimensions["service_channel_identities"] = _dimension(
+        channel_state,
+        channel_reason,
+        required=bool(required_channels),
+        evidence={
+            "principal_count": len(
+                {channel.service_principal_id for channel in service_channel_accounts}
+            ),
+            "channel_count": len(service_channel_accounts),
+            "required_channel_count": len(required_channels),
+            "state_counts": channel_state_counts,
+            "account_reference_count": sum(
+                channel.provider_account_reference is not None
+                for channel in service_channel_accounts
+            ),
+            "enrolled_count": sum(
+                channel.enrolled for channel in service_channel_accounts
+            ),
+            "sending_enabled_count": sum(
+                channel.sending_enabled for channel in service_channel_accounts
+            ),
+        },
+    )
+
+    if not bridge_enrollments:
+        dimensions["bridges"] = _dimension(
+            "not_applicable",
+            "no member bridge is selected",
+            required=False,
+            evidence={"enrollment_count": 0},
+        )
+    else:
+        statuses = [record.get("status") for record in bridge_enrollments.values()]
+        bridges_ok = all(status in {"active", "revoked"} for status in statuses)
+        dimensions["bridges"] = _dimension(
+            "healthy" if bridges_ok else "blocked",
+            "every selected bridge is active or explicitly revoked"
+            if bridges_ok
+            else "a selected bridge remains provisional, expired, or ambiguous",
+            evidence={
+                "enrollment_count": len(statuses),
+                "active_count": statuses.count("active"),
+                "revoked_count": statuses.count("revoked"),
+                "provisional_count": len(statuses)
+                - statuses.count("active")
+                - statuses.count("revoked"),
+            },
+        )
+
+    openclaw = openclaw_topology
+    if not openclaw_enabled:
+        dimensions["openclaw"] = _dimension(
+            "blocked",
+            "the required pinned OpenClaw Gateway is disabled",
+        )
+    else:
+        agent_members = set(openclaw.get("member_ids_with_agents") or [])
+        account_members = set(openclaw.get("member_ids_with_account_bindings") or [])
+        expected = set(openclaw_member_ids)
+        openclaw_ok = all(
+            (
+                openclaw.get("dm_scope") == REQUIRED_DM_SCOPE,
+                agent_members == expected,
+                account_members == expected,
+                openclaw.get("unique_agents") is True,
+                openclaw.get("unique_accounts") is True,
+                _recent_iso(openclaw.get("tested_at")),
+            )
+        )
+        dimensions["openclaw"] = _dimension(
+            "healthy" if openclaw_ok else "blocked",
+            "member agents, accounts, actor bindings, and session scope are isolated"
+            if openclaw_ok
+            else "OpenClaw member isolation topology is incomplete",
+            evidence={
+                "required_dm_scope": REQUIRED_DM_SCOPE,
+                "dm_scope_matches": openclaw.get("dm_scope") == REQUIRED_DM_SCOPE,
+                "member_agent_count": len(agent_members),
+                "account_binding_count": len(account_members),
+                "unique_agents": openclaw.get("unique_agents") is True,
+                "unique_accounts": openclaw.get("unique_accounts") is True,
+                "recent_test": _recent_iso(openclaw.get("tested_at")),
+            },
+        )
+
+    backup = deployment_evidence.get("backup_rollback") or {}
+    backup_ok = all(
+        (
+            backup.get("encrypted_backup_authenticated") is True,
+            backup.get("restore_rehearsed") is True,
+            backup.get("prior_release_retained") is True,
+            backup.get("automatic_rollback_eligible") is True,
+            _recent_iso(backup.get("tested_at")),
+        )
+    )
+    dimensions["backup_rollback"] = _dimension(
+        "healthy" if backup_ok else "blocked",
+        "authenticated backup, disposable restore, and rollback predecessor are ready"
+        if backup_ok
+        else "backup authentication, restore rehearsal, or rollback evidence is missing",
+        evidence={
+            "encrypted_backup_authenticated": backup.get(
+                "encrypted_backup_authenticated"
+            )
+            is True,
+            "restore_rehearsed": backup.get("restore_rehearsed") is True,
+            "prior_release_retained": backup.get("prior_release_retained") is True,
+            "automatic_rollback_eligible": backup.get("automatic_rollback_eligible")
+            is True,
+            "recent_test": _recent_iso(backup.get("tested_at")),
+        },
+    )
+
+    effects = (source_assurance or {}).get("provider_effects") or {}
+    effect_counts = effects.get("counts") or {}
+    window = effects.get("observation_window") or {}
+    window_counts = window.get("counts") or {}
+    window_evidence = deployment_evidence.get("provider_effect_window") or {}
+    integrity_ok = effects.get("state") == "healthy"
+    window_recent = _recent_iso(window_evidence.get("started_at"))
+    effects_ok = integrity_ok and (
+        not observation_active or (window.get("state") == "healthy" and window_recent)
+    )
+    dimensions["observation_effects"] = _dimension(
+        "healthy" if effects_ok else "blocked",
+        (
+            "terminal-effect accounting is complete and the current observation "
+            "window proves zero provider calls"
+            if observation_active
+            else "terminal-effect accounting is complete for governed live operation"
+        )
+        if effects_ok
+        else "provider-effect accounting is missing, ambiguous, or violates the active observation window",
+        evidence={
+            "observation_active": observation_active,
+            "integrity_state": effects.get("state", "missing"),
+            "window_state": window.get("state", "missing"),
+            "window_recent": window_recent,
+            "provider_called_true": int(effect_counts.get("provider_called_true") or 0),
+            "provider_called_false": int(
+                effect_counts.get("provider_called_false") or 0
+            ),
+            "provider_called_unknown": int(
+                effect_counts.get("provider_called_unknown") or 0
+            ),
+            "suppressed_false_or_unknown": int(
+                effect_counts.get("suppressed_false_or_unknown") or 0
+            ),
+            "missing_terminal": int(effect_counts.get("missing_terminal") or 0),
+            "duplicate_terminal": int(effect_counts.get("duplicate_terminal") or 0),
+            "approval_correlation_missing": int(
+                effect_counts.get("approval_correlation_missing") or 0
+            ),
+            "duplicate_request": int(effect_counts.get("duplicate_request") or 0),
+            "malformed_request": int(effect_counts.get("malformed_request") or 0),
+            "orphan_terminal": int(effect_counts.get("orphan_terminal") or 0),
+            "window_provider_called_true": int(
+                window_counts.get("provider_called_true") or 0
+            ),
+            "window_provider_called_unknown": int(
+                window_counts.get("provider_called_unknown") or 0
+            ),
+            "window_suppressed_false_or_unknown": int(
+                window_counts.get("suppressed_false_or_unknown") or 0
+            ),
+        },
+    )
+
+    blocking = [
+        name
+        for name, dimension in dimensions.items()
+        if dimension["required"] and dimension["state"] != "healthy"
+    ]
+    return {
+        "contract": "deployment-readiness-v1",
+        "state": "healthy" if not blocking else "blocked",
+        "ready": not blocking,
+        "blocking_dimensions": blocking,
+        "dimensions": dimensions,
+        "content_exposed": False,
+    }
+
+
+__all__ = [
+    "CENTRAL_HOST_TAG",
+    "REQUIRED_DM_SCOPE",
+    "evaluate_deployment_readiness",
+]

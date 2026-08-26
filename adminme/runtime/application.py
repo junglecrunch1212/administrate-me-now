@@ -53,6 +53,7 @@ from adminme.lib.session import Session, build_internal_session
 from adminme.lib.skill_runner import build_skill_runtime, set_default_event_sink
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
 from adminme.lib.skill_runner.wrapper import run_skill
+from adminme.historical_attribution import audit_historical_attribution
 from adminme.member_chat import (
     DeterministicOpenClawChatTransport,
     MemberChatTransport,
@@ -60,6 +61,14 @@ from adminme.member_chat import (
     UnavailableMemberChatTransport,
 )
 from adminme.openclaw_approvals import OpenClawApprovalStore
+from adminme.openclaw_topology import inspect_runtime_topology, member_agent_id
+from adminme.provider_bindings import ProviderBinding, validate_provider_bindings
+from adminme.service_identities import (
+    ServiceChannelAccount,
+    ServicePrincipal,
+    validate_service_identity_config,
+)
+from adminme.deployment_readiness import evaluate_deployment_readiness
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
 from adminme.products.bridge.auth import (
@@ -111,12 +120,25 @@ class RuntimeSettings:
     openclaw_gateway_url: str = "ws://127.0.0.1:18789"
     openclaw_gateway_token: str | None = field(default=None, repr=False)
     openclaw_model_configured: bool = False
+    openclaw_runtime_config_path: Path | None = None
     member_chat_enabled_members: frozenset[str] = field(default_factory=frozenset)
     child_chat_enabled_members: frozenset[str] = field(default_factory=frozenset)
     deterministic_member_chat_fixture: bool = False
     deterministic_openclaw_fixture: bool = False
     member_roles: dict[str, str] = field(default_factory=dict)
     fixture_member_id: str | None = None
+    host_topology: dict[str, Any] = field(default_factory=dict)
+    deployment_evidence: dict[str, Any] = field(default_factory=dict)
+    deployment_evidence_required: bool = False
+    provider_bindings: tuple[ProviderBinding, ...] = field(
+        default_factory=tuple, init=False
+    )
+    service_principals: tuple[ServicePrincipal, ...] = field(
+        default_factory=tuple, init=False
+    )
+    service_channel_accounts: tuple[ServiceChannelAccount, ...] = field(
+        default_factory=tuple, init=False
+    )
 
     def __post_init__(self) -> None:
         if len(self.encryption_key) != 32:
@@ -128,6 +150,48 @@ class RuntimeSettings:
         if not isinstance(adapters, list):
             raise ValueError("adapter_config.adapters must be a list")
         self._validate_household_mapping()
+        self._validate_identity_bindings()
+        known_members = set(self.member_roles) | set(self.member_identities.values())
+        known_members.update(
+            str(member["member_id"])
+            for member in self.household_mapping.get("members", [])
+            if isinstance(member, dict) and isinstance(member.get("member_id"), str)
+        )
+        household_party_ids = set(known_members)
+        household_party_ids.update(
+            str(party["party_id"])
+            for party in self.household_mapping.get("parties", [])
+            if isinstance(party, dict) and isinstance(party.get("party_id"), str)
+        )
+        service_principals, service_channels = validate_service_identity_config(
+            self.adapter_config.get("service_identities"),
+            member_ids=known_members,
+            household_party_ids=household_party_ids,
+        )
+        service_coordinates = {
+            value
+            for principal in service_principals
+            for value in (principal.service_principal_id, principal.party_id)
+        }
+        if service_coordinates & set(self.member_identities.values()):
+            raise ValueError("service principals cannot resolve through member ingress")
+        object.__setattr__(self, "service_principals", service_principals)
+        object.__setattr__(self, "service_channel_accounts", service_channels)
+        bindings: tuple[ProviderBinding, ...] = ()
+        if self.deployment_evidence_required:
+            bindings = validate_provider_bindings(
+                self.adapter_config,
+                member_roles=self.member_roles,
+                household_mapping=self.household_mapping,
+                service_principal_ids={
+                    principal.service_principal_id for principal in service_principals
+                },
+            )
+            if self.host_topology.get("central_identity_collides_with_member") is True:
+                raise ValueError(
+                    "central infrastructure identity must not map to a household member"
+                )
+        object.__setattr__(self, "provider_bindings", bindings)
         valid_bridge_states = {
             "package-created-not-live",
             "package-exported",
@@ -144,6 +208,19 @@ class RuntimeSettings:
             for identity, record in self.bridge_enrollments.items()
         ):
             raise ValueError("bridge enrollment mapping is invalid")
+        normalized_bridge_identities = [
+            identity.strip().casefold() for identity in self.bridge_enrollments
+        ]
+        bridge_members = [
+            str(record["member_id"]) for record in self.bridge_enrollments.values()
+        ]
+        if self.deployment_evidence_required and (
+            len(normalized_bridge_identities) != len(set(normalized_bridge_identities))
+            or len(bridge_members) != len(set(bridge_members))
+        ):
+            raise ValueError(
+                "strict topology requires one unambiguous bridge identity per member"
+            )
         if self.openclaw_enabled:
             if not self.openclaw_shared_secret or len(self.openclaw_shared_secret) < 24:
                 raise ValueError(
@@ -157,11 +234,29 @@ class RuntimeSettings:
             mapped_members = set(self.openclaw_actor_identities.values()) | set(
                 self.member_chat_enabled_members
             )
+            if mapped_members & service_coordinates:
+                raise ValueError(
+                    "service principals cannot share household-member OpenClaw bindings"
+                )
             unmapped_roles = mapped_members - set(self.member_roles)
             if unmapped_roles:
                 raise ValueError(
                     "enabled OpenClaw transport requires a role for every mapped member"
                 )
+            account_owners: dict[tuple[str, str], str] = {}
+            for route, member in self.openclaw_actor_identities.items():
+                parts = route.split("|", 2)
+                if len(parts) != 3 or not all(parts):
+                    raise ValueError(
+                        "OpenClaw actor identity must be channel|account|actor"
+                    )
+                account = (parts[0].casefold(), parts[1].casefold())
+                owner = account_owners.setdefault(account, member)
+                if owner != member:
+                    raise ValueError("OpenClaw channel account cannot be shared")
+            agent_ids = {member_agent_id(member) for member in mapped_members}
+            if len(agent_ids) != len(mapped_members):
+                raise ValueError("OpenClaw member agent identities must be unique")
         if not self.child_chat_enabled_members.issubset(
             self.member_chat_enabled_members
         ):
@@ -264,6 +359,46 @@ class RuntimeSettings:
             ):
                 raise ValueError("household relationship is invalid")
 
+    def _validate_identity_bindings(self) -> None:
+        normalized: dict[str, str] = {}
+        identities_by_member: dict[str, set[str]] = {}
+        household_roles = {
+            str(member.get("member_id")): str(member.get("role"))
+            for member in self.household_mapping.get("members", [])
+            if isinstance(member, dict)
+            and isinstance(member.get("member_id"), str)
+            and isinstance(member.get("role"), str)
+        }
+        for identity, member_id in self.member_identities.items():
+            if (
+                not isinstance(identity, str)
+                or not identity.strip()
+                or not isinstance(member_id, str)
+                or not member_id.strip()
+            ):
+                raise ValueError("portal identity bindings must be non-empty strings")
+            key = identity.strip().casefold()
+            prior = normalized.setdefault(key, member_id)
+            if prior != member_id or identity != identity.strip():
+                raise ValueError(
+                    "portal identity bindings are ambiguous after normalization"
+                )
+            identities_by_member.setdefault(member_id, set()).add(key)
+            if self.deployment_evidence_required and member_id not in self.member_roles:
+                raise ValueError(
+                    "every portal identity requires an explicit member role"
+                )
+        if self.deployment_evidence_required and any(
+            len(identities) != 1 for identities in identities_by_member.values()
+        ):
+            raise ValueError(
+                "strict topology requires exactly one trusted ingress identity per member"
+            )
+        for member_id, role in self.member_roles.items():
+            mapped_role = household_roles.get(member_id)
+            if mapped_role is not None and mapped_role != role:
+                raise ValueError("member role map contradicts the household mapping")
+
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
         instance = load_instance_config(resolve_instance_dir())
@@ -353,10 +488,14 @@ class RuntimeSettings:
         openclaw_gateway_url: str = "ws://127.0.0.1:18789",
         openclaw_gateway_token: str | None = None,
         openclaw_model_configured: bool = False,
+        openclaw_runtime_config_path: Path | None = None,
         member_chat_enabled_members: frozenset[str] | None = None,
         child_chat_enabled_members: frozenset[str] | None = None,
         deterministic_member_chat_fixture: bool = False,
         adapter_config: dict[str, Any] | None = None,
+        host_topology: dict[str, Any] | None = None,
+        deployment_evidence: dict[str, Any] | None = None,
+        deployment_evidence_required: bool = False,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -378,12 +517,16 @@ class RuntimeSettings:
             openclaw_gateway_url=openclaw_gateway_url,
             openclaw_gateway_token=openclaw_gateway_token,
             openclaw_model_configured=openclaw_model_configured,
+            openclaw_runtime_config_path=openclaw_runtime_config_path,
             member_chat_enabled_members=frozenset(member_chat_enabled_members or ()),
             child_chat_enabled_members=frozenset(child_chat_enabled_members or ()),
             deterministic_member_chat_fixture=deterministic_member_chat_fixture,
             adapter_config=dict(
                 adapter_config or {"adapter_supervisor_port": 0, "adapters": []}
             ),
+            host_topology=dict(host_topology or {}),
+            deployment_evidence=dict(deployment_evidence or {}),
+            deployment_evidence_required=deployment_evidence_required,
         )
 
 
@@ -397,6 +540,10 @@ class CapabilityRecord:
 
     def public(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class DeploymentReadinessBlocked(RuntimeError):
+    """A provider command reached dispatch while deployment admission was closed."""
 
 
 class AdministrateMeRuntime:
@@ -446,7 +593,7 @@ class AdministrateMeRuntime:
         self.member_id_resolver = (
             EnrollmentMemberIdResolver(settings.bridge_enrollments)
             if settings.bridge_enrollments
-            else DictMemberIdResolver(settings.member_identities)
+            else DictMemberIdResolver({})
         )
         self.extensions = ExtensionCatalog(
             settings.repository_root, settings.instance.instance_dir
@@ -472,6 +619,7 @@ class AdministrateMeRuntime:
         self._observation_active = True
         self.openclaw_state = "degraded" if settings.openclaw_enabled else "unavailable"
         self.openclaw_last_report_monotonic: float | None = None
+        self.openclaw_topology_report: dict[str, Any] = {}
         self.openclaw_last_reported_at: str | None = None
 
     async def start(self) -> None:
@@ -607,7 +755,15 @@ class AdministrateMeRuntime:
                     self.settings.adapter_config
                 ),
                 adapter_loader=lambda config: load_builtin_adapters(
-                    config, repository_root=self.settings.repository_root
+                    config,
+                    repository_root=self.settings.repository_root,
+                    member_roles=self.settings.member_roles,
+                    household_mapping=self.settings.household_mapping,
+                    service_principal_ids={
+                        principal.service_principal_id
+                        for principal in self.settings.service_principals
+                    },
+                    validate_bindings=self.settings.deployment_evidence_required,
                 ),
                 ctx_factory=lambda: AdapterContext(
                     event_sink=self._require_events(),
@@ -935,6 +1091,44 @@ class AdministrateMeRuntime:
                 )
             )
         try:
+            if self.settings.deployment_evidence_required:
+                observation_active = (
+                    await self.observation.is_active()
+                    if self.observation is not None
+                    else True
+                )
+                readiness = self._deployment_readiness(
+                    observation_active=observation_active
+                )
+                if not readiness["ready"]:
+                    dimensions = ",".join(readiness.get("blocking_dimensions") or [])
+                    raise DeploymentReadinessBlocked(
+                        f"deployment readiness blocked provider dispatch: {dimensions}"
+                    )
+                provider_kind_token = {
+                    "google_calendar": "calendar",
+                    "google_tasks": "tasks",
+                    "gmail": "gmail",
+                    "microsoft_graph": "microsoft",
+                    "bluebubbles": "bluebubbles",
+                    "twilio_sms": "twilio",
+                    "twilio_whatsapp": "twilio",
+                }.get(str(provider), str(provider))
+                command_binding = next(
+                    (
+                        binding
+                        for binding in self.settings.provider_bindings
+                        if binding.member_id == payload.get("member_id")
+                        and binding.provider_account_id.casefold()
+                        == str(payload.get("provider_account_id") or "").casefold()
+                        and provider_kind_token in binding.kind.casefold()
+                    ),
+                    None,
+                )
+                if command_binding is None:
+                    raise DeploymentReadinessBlocked(
+                        "provider command has no exact reviewed member/account binding"
+                    )
             if provider in communication_providers:
                 command_body = {
                     **dict(payload.get("payload") or {}),
@@ -1021,7 +1215,7 @@ class AdministrateMeRuntime:
                 "suppressed": suppressed,
             }
         except Exception as exc:  # provider failures are terminal, typed evidence
-            if isinstance(exc, (LookupError, ValueError)):
+            if isinstance(exc, (DeploymentReadinessBlocked, LookupError, ValueError)):
                 provider_called = False
             result_type = "external_sync.write_failed"
             result_payload = {
@@ -1033,12 +1227,16 @@ class AdministrateMeRuntime:
                     "conflict"
                     if getattr(getattr(exc, "resp", None), "status", None) == 412
                     or "conflict" in type(exc).__name__.casefold()
+                    else "permission"
+                    if isinstance(exc, DeploymentReadinessBlocked)
                     else "not_found"
                     if isinstance(exc, LookupError)
                     else "provider"
                 ),
                 "message": f"{type(exc).__name__}: {exc}",
-                "retryable": not isinstance(exc, (LookupError, ValueError)),
+                "retryable": not isinstance(
+                    exc, (DeploymentReadinessBlocked, LookupError, ValueError)
+                ),
                 "failed_at": now,
             }
         finally:
@@ -1092,7 +1290,10 @@ class AdministrateMeRuntime:
         signature = hmac.new(
             material, f"portal-session|{peer}".encode(), hashlib.sha256
         ).hexdigest()[:32]
-        return f"portal:{peer}", f"agent:main:administrateme-portal-{peer}-{signature}"
+        return (
+            f"portal:{peer}",
+            f"agent:{member_agent_id(member_id)}:administrateme-portal-{peer}-{signature}",
+        )
 
     def resolve_member_chat_actor(self, actor_id: str) -> str | None:
         for member_id in sorted(self.settings.member_chat_enabled_members):
@@ -1623,6 +1824,10 @@ class AdministrateMeRuntime:
                 repository_root=self.settings.repository_root,
                 capabilities=capabilities,
                 through_event_id=revision[0],
+                provider_effect_window_started_at=(
+                    self.settings.deployment_evidence.get("provider_effect_window")
+                    or {}
+                ).get("started_at"),
             )
         except asyncio.CancelledError:
             raise
@@ -1755,6 +1960,46 @@ class AdministrateMeRuntime:
             return {"name": product, "state": "blocked", "reason": "not registered"}
         return record.public()
 
+    def _deployment_readiness(self, *, observation_active: bool) -> dict[str, Any]:
+        reported_topology = dict(self.openclaw_topology_report)
+        if (
+            self.settings.deployment_evidence_required
+            and self.settings.openclaw_enabled
+        ):
+            current_topology = inspect_runtime_topology(
+                self.settings.openclaw_runtime_config_path,
+                actor_identities=self.settings.openclaw_actor_identities,
+                member_chat_enabled_members=self.settings.member_chat_enabled_members,
+            )
+            if current_topology.get("state") != "healthy":
+                reported_topology.update(
+                    {
+                        "member_ids_with_agents": [],
+                        "member_ids_with_account_bindings": [],
+                        "unique_agents": False,
+                        "unique_accounts": False,
+                        "runtime_config_state": current_topology.get("state"),
+                        "runtime_config_reason": current_topology.get("reason"),
+                    }
+                )
+        return evaluate_deployment_readiness(
+            required=self.settings.deployment_evidence_required,
+            host_topology=self.settings.host_topology,
+            deployment_evidence=self.settings.deployment_evidence,
+            member_roles=self.settings.member_roles,
+            portal_member_ids=set(self.settings.member_identities.values()),
+            portal_identity_count=len(self.settings.member_identities),
+            provider_bindings=self.settings.provider_bindings,
+            service_channel_accounts=self.settings.service_channel_accounts,
+            bridge_enrollments=self.settings.bridge_enrollments,
+            openclaw_enabled=self.settings.openclaw_enabled,
+            openclaw_member_ids=set(self.settings.member_chat_enabled_members)
+            | set(self.settings.openclaw_actor_identities.values()),
+            openclaw_topology=reported_topology,
+            observation_active=observation_active,
+            source_assurance=self._source_assurance_cache,
+        )
+
     async def diagnostics(self) -> dict[str, Any]:
         if self.started:
             await self._refresh_capability_registry()
@@ -1767,12 +2012,23 @@ class AdministrateMeRuntime:
         event_ingest_ready = bool(self.events and self.events.accepting)
         service_ready = self.started and state != "blocked"
         safe_reads = self.started and self.projections is not None
-        release_ready = (
+        runtime_release_ready = (
             service_ready
             and event_ingest_ready
             and state in {"healthy", "observation_only"}
         )
-        if not event_ingest_ready or not self.started:
+        deployment_readiness = self._deployment_readiness(
+            observation_active=observation_active
+        )
+        release_ready = runtime_release_ready and deployment_readiness["ready"]
+        if (
+            not event_ingest_ready
+            or not self.started
+            or (
+                self.settings.deployment_evidence_required
+                and not deployment_readiness["ready"]
+            )
+        ):
             write_admission = "blocked"
         elif observation_active:
             write_admission = "observation_suppressed"
@@ -1794,7 +2050,11 @@ class AdministrateMeRuntime:
             # ``ready`` remains the backward-compatible service/readiness bit.
             # Explicit fields prevent a degraded HTTP 200 from being mistaken
             # for release or activation approval.
-            "ready": service_ready,
+            "ready": (
+                release_ready
+                if self.settings.deployment_evidence_required
+                else service_ready
+            ),
             "service_ready": service_ready,
             "release_ready": release_ready,
             "activation_eligible": release_ready,
@@ -1803,6 +2063,7 @@ class AdministrateMeRuntime:
             "accepting_writes": event_ingest_ready,
             "event_ingest_ready": event_ingest_ready,
             "observation_active": observation_active,
+            "deployment_readiness": deployment_readiness,
             "openclaw_health": {
                 "state": self.effective_openclaw_state(),
                 "reported_state": self.openclaw_state,
@@ -1848,6 +2109,30 @@ async def ready(request: Request) -> JSONResponse:
     runtime: AdministrateMeRuntime = request.app.state.runtime
     payload = await runtime.diagnostics()
     return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
+
+
+@system_router.get("/historical-attribution")
+async def historical_attribution(
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Return HMAC-pseudonymized attribution counts; never provider content."""
+
+    require_principal(session)
+    runtime: AdministrateMeRuntime = request.app.state.runtime
+    if runtime.event_log is None:
+        raise HTTPException(503, "historical attribution is unavailable")
+    hash_key = hmac.new(
+        runtime.settings.encryption_key,
+        b"administrateme-historical-attribution-v1",
+        hashlib.sha256,
+    ).digest()
+    return await audit_historical_attribution(
+        runtime.event_log,
+        repository_root=runtime.settings.repository_root,
+        provider_bindings=runtime.settings.provider_bindings,
+        hash_key=hash_key,
+    )
 
 
 @system_router.post("/source-assessment-recoveries", status_code=202)
@@ -1927,6 +2212,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
         app.state.event_log = runtime.event_log
         app.state.event_sink = runtime.events
         app.state.member_id_resolver = runtime.member_id_resolver
+        app.state.bridge_enrollments = settings.bridge_enrollments
         app.state.ingest_count = 0
         try:
             yield

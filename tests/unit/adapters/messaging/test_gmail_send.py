@@ -216,7 +216,10 @@ def _make_adapter(
     adapter = GmailAdapter(
         config={
             "service_account_key_ref": "op://test/v/i/f",
+            "member_id": "member-fixture",
+            "provider_account_id": user_email,
             "user_email": user_email,
+            "workspace": "personal",
         },
         observation_session=(
             object()

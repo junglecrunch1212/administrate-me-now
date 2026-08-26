@@ -209,8 +209,8 @@ def test_bridge_resolver_expires_exports_and_keeps_active_records() -> None:
         },
     }
     resolver = EnrollmentMemberIdResolver(records, now=lambda: NOW)
-    assert resolver.resolve("pending@example.invalid") == "member-pending"
-    assert resolver.resolve("PENDING@example.invalid") == "member-pending"
+    assert resolver.resolve("pending@example.invalid") is None
+    assert resolver.resolve("PENDING@example.invalid") is None
     assert resolver.resolve("active@example.invalid") == "member-active"
     assert resolver.resolve("revoked@example.invalid") is None
 

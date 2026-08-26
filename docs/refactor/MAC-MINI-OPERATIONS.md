@@ -222,6 +222,21 @@ state is automatically put back.
 
 ## Upgrade and rollback
 
+An upgrade is not topology repair. Before invoking it, require the Central
+Host to be a tagged non-member infrastructure node, the runtime user to be a
+dedicated Standard account with a separately tested recovery administrator,
+every interactive member to pass a distinct trusted-ingress acceptance, every
+enabled provider account to have an explicit owner/workspace/scope/provenance
+binding, and current authenticated backup/restore/rollback evidence. Runtime,
+Settings, Doctor, and `/api/system/ready` must agree on the shared content-free
+readiness dimensions. Do not edit installed releases or live configuration to
+turn a blocked dimension green.
+
+The planned CoS Apple service identity is not part of a central upgrade. It
+remains `planned` / `account_not_created` unless the owner separately
+authorizes each account, recovery, host, permission, transport, enrollment,
+observation, and sending gate. It never grants member Apple-source access.
+
 Never run a floating OpenClaw upgrade. Prepare and review a candidate checkout,
 then run:
 

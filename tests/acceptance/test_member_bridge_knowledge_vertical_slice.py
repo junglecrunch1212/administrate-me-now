@@ -76,6 +76,7 @@ def _settings(instance_dir: Path, key: bytes) -> RuntimeSettings:
             AMBIENT: "ambient",
             DEVICE: "device",
         },
+        bridge_enrollments={LOGIN_A: {"member_id": MEMBER_A, "status": "active"}},
     )
 
 

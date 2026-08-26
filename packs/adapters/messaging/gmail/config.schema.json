@@ -3,7 +3,7 @@
   "title": "Gmail adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["user_email", "member_id"],
+  "required": ["user_email", "provider_account_id", "member_id", "workspace", "permission_scope", "binding_provenance", "ownership_attested"],
   "oneOf": [
     { "required": ["oauth_credentials_ref"] },
     { "required": ["service_account_key_ref"] }
@@ -24,6 +24,11 @@
       "format": "email",
       "description": "The Gmail address being polled (subject of service-account domain-wide delegation)."
     },
+    "provider_account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact reviewed provider account coordinate; must match user_email."
+    },
     "member_id": {
       "type": "string",
       "minLength": 1,
@@ -32,8 +37,23 @@
     "workspace": {
       "type": "string",
       "enum": ["personal", "work"],
-      "default": "personal",
       "description": "Isolation coordinate retained on every message fact."
+    },
+    "permission_scope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Exact provider permission set reviewed for this account binding."
+    },
+    "binding_provenance": {
+      "type": "string",
+      "enum": ["oauth-subject", "service-account-delegation"],
+      "description": "How the provider account subject was established."
+    },
+    "ownership_attested": {
+      "const": true,
+      "description": "Explicit owner attestation that this account belongs to member_id in workspace."
     },
     "account_label": {
       "type": "string",
