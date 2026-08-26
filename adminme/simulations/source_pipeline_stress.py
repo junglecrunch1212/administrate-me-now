@@ -322,7 +322,9 @@ async def _wait_for_assessment(runtime: Any, source_event_id: str) -> dict[str, 
         if latest is not None and latest.get("schema_version") == 4:
             return latest
         await asyncio.sleep(0.02)
-    raise TimeoutError(f"source assessment recovery did not settle for {source_event_id}")
+    raise TimeoutError(
+        f"source assessment recovery did not settle for {source_event_id}"
+    )
 
 
 async def _wait_for_subscriber(
@@ -360,8 +362,7 @@ async def _wait_for_composition_quiescence(
         ]
         if degraded:
             raise RuntimeError(
-                "composition subscriber degraded while settling: "
-                + ", ".join(degraded)
+                "composition subscriber degraded while settling: " + ", ".join(degraded)
             )
         watermark = await runtime.event_log.latest_event_id()
         if (
@@ -432,7 +433,9 @@ def run_source_pipeline_stress(
                     "pipeline:pipeline:noise_filtering",
                 )
                 if current["degraded"] or current["poison_event_id"] is not None:
-                    raise AssertionError("v21 startup did not clear the v20 poison state")
+                    raise AssertionError(
+                        "v21 startup did not clear the v20 poison state"
+                    )
                 fingerprint = hashlib.sha256(
                     f"{poison_source_id}:{failed_assessment_id}".encode("utf-8")
                 ).hexdigest()
@@ -474,9 +477,7 @@ def run_source_pipeline_stress(
                     recovery_id,
                     15,
                 )
-                recovered = portal.call(
-                    _wait_for_assessment, runtime, poison_source_id
-                )
+                recovered = portal.call(_wait_for_assessment, runtime, poison_source_id)
                 if recovered["payload"]["assessment_outcome"] == "failed":
                     raise AssertionError("exact poison-source recovery remained failed")
 
@@ -501,7 +502,10 @@ def run_source_pipeline_stress(
                     if envelope.type in {"messaging.received", "messaging.sent"}:
                         prepared[index] = envelope.model_copy(
                             update={
-                                "payload": {**envelope.payload, "thread_id": prior_thread}
+                                "payload": {
+                                    **envelope.payload,
+                                    "thread_id": prior_thread,
+                                }
                             }
                         )
                         break
@@ -516,7 +520,12 @@ def run_source_pipeline_stress(
                 )
                 probe = prepared.pop(probe_index)
                 probe = probe.model_copy(
-                    update={"payload": {**probe.payload, "thread_id": "stress-thread-correction"}}
+                    update={
+                        "payload": {
+                            **probe.payload,
+                            "thread_id": "stress-thread-correction",
+                        }
+                    }
                 )
                 append_started = time.perf_counter()
                 probe_id = portal.call(runtime.events.write, probe)
@@ -616,9 +625,7 @@ def run_source_pipeline_stress(
             rebuild_equal[projection_name] = before == after
         event_count = portal.call(runtime.event_log.count)
         storage_bytes = sum(
-            path.stat().st_size
-            for path in instance_dir.rglob("*")
-            if path.is_file()
+            path.stat().st_size for path in instance_dir.rglob("*") if path.is_file()
         )
         _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -655,7 +662,10 @@ def run_source_pipeline_stress(
     failures: list[str] = []
     if elapsed > selected.maximum_seconds:
         failures.append("maximum_seconds")
-    if metrics["throughput_source_facts_per_second"] < selected.minimum_throughput_per_second:
+    if (
+        metrics["throughput_source_facts_per_second"]
+        < selected.minimum_throughput_per_second
+    ):
         failures.append("minimum_throughput_per_second")
     if metrics["append_p95_ms_per_source"] > selected.maximum_append_p95_ms:
         failures.append("maximum_append_p95_ms")

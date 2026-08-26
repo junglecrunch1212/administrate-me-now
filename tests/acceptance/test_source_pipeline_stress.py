@@ -30,8 +30,9 @@ def test_fast_source_pipeline_stress_production_composition(tmp_path: Path) -> N
 
     assert result["status"] == "PASS", result
     assert result["metrics"]["source_facts"] == PROFILES["fast"].source_facts
-    assert result["source_assurance_counts"]["accounted"] == (
-        result["source_assurance_counts"]["obligations"]
+    assert (
+        result["source_assurance_counts"]["accounted"]
+        == (result["source_assurance_counts"]["obligations"])
     )
     assert result["failures"] == []
 

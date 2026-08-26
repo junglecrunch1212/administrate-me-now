@@ -304,9 +304,7 @@ async def test_indexed_history_keeps_edges_from_every_native_thread_source() -> 
         "source-index-anchor",
         "source-index-related",
     ]
-    assert pack.messages[-1].relationship_source_event_ids == (
-        "source-index-first",
-    )
+    assert pack.messages[-1].relationship_source_event_ids == ("source-index-first",)
 
 
 @pytest.mark.asyncio
@@ -332,9 +330,7 @@ async def test_related_cross_thread_source_does_not_expand_authority_transitivel
         references=["<source-index-one-hop@example.invalid>"],
     )
 
-    pack = await build_message_context_pack(
-        anchor, _Log([anchor, related, transitive])
-    )
+    pack = await build_message_context_pack(anchor, _Log([anchor, related, transitive]))
 
     assert [message.source_event_id for message in pack.messages] == [
         "source-index-root",

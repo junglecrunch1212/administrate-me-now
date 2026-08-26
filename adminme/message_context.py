@@ -93,9 +93,7 @@ class _ContextInputHistory:
     messages_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
     messages_by_thread: dict[tuple[str, ...], set[str]] = field(default_factory=dict)
     messages_by_rfc_id: dict[tuple[str, ...], set[str]] = field(default_factory=dict)
-    messages_by_reference: dict[tuple[str, ...], set[str]] = field(
-        default_factory=dict
-    )
+    messages_by_reference: dict[tuple[str, ...], set[str]] = field(default_factory=dict)
     messages_by_attachment: dict[tuple[str, ...], set[str]] = field(
         default_factory=dict
     )
@@ -520,9 +518,7 @@ def _context_coordinate_key(event: Mapping[str, Any]) -> tuple[str, ...] | None:
     )
 
 
-def _index_context_event(
-    history: _ContextInputHistory, event: dict[str, Any]
-) -> None:
+def _index_context_event(history: _ContextInputHistory, event: dict[str, Any]) -> None:
     if event.get("type") not in MESSAGE_EVENT_TYPES:
         history.corrections.append(event)
         return
@@ -539,12 +535,12 @@ def _index_context_event(
         )
     rfc_message_id = str(payload.get("rfc_message_id") or "").strip()
     if rfc_message_id:
-        history.messages_by_rfc_id.setdefault(
-            (*coordinate, rfc_message_id), set()
-        ).add(event_id)
-    for reference in (
-        list(payload.get("references") or []) + [payload.get("in_reply_to")]
-    ):
+        history.messages_by_rfc_id.setdefault((*coordinate, rfc_message_id), set()).add(
+            event_id
+        )
+    for reference in list(payload.get("references") or []) + [
+        payload.get("in_reply_to")
+    ]:
         if isinstance(reference, str) and reference.strip():
             history.messages_by_reference.setdefault(
                 (*coordinate, reference.strip()), set()
@@ -589,25 +585,18 @@ def _indexed_context_inputs(
         primary_rfc_id = str(primary_payload.get("rfc_message_id") or "").strip()
         if primary_rfc_id:
             candidate_ids.update(
-                history.messages_by_reference.get(
-                    (*coordinate, primary_rfc_id), ()
-                )
+                history.messages_by_reference.get((*coordinate, primary_rfc_id), ())
             )
-        for reference in (
-            list(primary_payload.get("references") or [])
-            + [primary_payload.get("in_reply_to")]
-        ):
+        for reference in list(primary_payload.get("references") or []) + [
+            primary_payload.get("in_reply_to")
+        ]:
             if isinstance(reference, str) and reference.strip():
                 candidate_ids.update(
-                    history.messages_by_rfc_id.get(
-                        (*coordinate, reference.strip()), ()
-                    )
+                    history.messages_by_rfc_id.get((*coordinate, reference.strip()), ())
                 )
         for attachment_id in _attachment_identities(primary_payload):
             candidate_ids.update(
-                history.messages_by_attachment.get(
-                    (*coordinate, attachment_id), ()
-                )
+                history.messages_by_attachment.get((*coordinate, attachment_id), ())
             )
 
     # Explicit confirmations are strong edges even when the provider has no

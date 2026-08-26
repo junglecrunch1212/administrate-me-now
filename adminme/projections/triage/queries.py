@@ -260,9 +260,7 @@ def _queue_revision(
     return digest.hexdigest()
 
 
-def _cursor_encode(
-    revision: str, rank: int, proposed_at: str, proposal_id: str
-) -> str:
+def _cursor_encode(revision: str, rank: int, proposed_at: str, proposal_id: str) -> str:
     raw = json.dumps(
         [1, revision, rank, proposed_at, proposal_id], separators=(",", ":")
     ).encode()

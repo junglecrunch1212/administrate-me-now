@@ -145,9 +145,7 @@ def test_cursor_refuses_root_promotion_after_concurrent_resolution() -> None:
             for candidate in matter["candidates"]
         )
     )
-    assert [item["proposal_id"] for item in matter_a["candidates"]] == [
-        "proposal-0010"
-    ]
+    assert [item["proposal_id"] for item in matter_a["candidates"]] == ["proposal-0010"]
 
 
 def test_cursor_refuses_concurrent_scoped_insert_but_ignores_other_member() -> None:
