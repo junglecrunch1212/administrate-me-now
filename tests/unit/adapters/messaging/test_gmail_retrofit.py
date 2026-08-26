@@ -180,14 +180,9 @@ def test_validator_returns_no_errors_for_retrofitted_pack() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_no_longer_raises_not_implemented() -> None:
-    """Prompt 11a c2 replaced the 11r-a ``NotImplementedError`` stub
-    with a real Gmail v1 ``users.messages.send`` implementation. The
-    Phase-A path (observation seams unset) calls the Gmail service
-    directly. The deep-coverage assertions live in
-    ``test_gmail_send.py``; this test pins the retrofit advisory's
-    closure — :meth:`send` no longer raises ``NotImplementedError`` from
-    the framework's perspective."""
+async def test_send_requires_the_observation_seam() -> None:
+    """The retrofit is implemented, but missing outbound safety wiring
+    must fail closed before the provider boundary is reached."""
     adapter = _make_adapter()
     captured_send: list[dict[str, Any]] = []
 
@@ -216,15 +211,10 @@ async def test_send_no_longer_raises_not_implemented() -> None:
         metadata={"subject": "ping"},
     )
 
-    result = await adapter.send(message)
+    with pytest.raises(RuntimeError, match="observation seam"):
+        await adapter.send(message)
 
-    # No NotImplementedError. Gmail API was actually called.
-    assert len(captured_send) == 1
-    assert captured_send[0]["userId"] == "me"
-    assert "raw" in captured_send[0]["body"]
-    assert result.delivered is True
-    assert result.external_id == "gmail-msg-r1"
-    assert result.suppressed is False
+    assert captured_send == []
 
 
 @pytest.mark.asyncio

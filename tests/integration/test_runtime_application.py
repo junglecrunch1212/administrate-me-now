@@ -132,6 +132,11 @@ def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
         assert response.status_code == 200
         body = response.json()
         assert body["ready"] is True
+        assert body["service_ready"] is True
+        assert body["release_ready"] is False
+        assert body["activation_eligible"] is False
+        assert body["safe_reads"] is True
+        assert body["write_admission"] == "observation_suppressed"
         assert body["status"] == "degraded"
         assert body["capabilities"]["openclaw:member-chat"]["state"] == "blocked"
 

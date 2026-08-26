@@ -50,6 +50,7 @@ poetry run ruff format --check adminme bootstrap bridge packs scripts tests tool
 poetry run mypy adminme bridge/adminme_bridge bootstrap
 poetry run pyright adminme bridge/adminme_bridge bootstrap packs
 poetry run python scripts/acceptance/performance-smoke.py
+poetry run python scripts/acceptance/source-pipeline-stress.py --profile fast
 poetry check --lock
 poetry build
 poetry -C bridge check --lock

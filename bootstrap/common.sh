@@ -95,6 +95,24 @@ configure_active_runtime_path() {
   fi
 }
 
+resolve_formula_node() {
+  local formula="$1"
+  local expected_version="$2"
+  [[ "$formula" =~ ^node@[0-9]+$ ]] || fail "the reviewed Node formula is invalid"
+  [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || fail "the reviewed Node version is invalid"
+  command -v brew >/dev/null 2>&1 || fail "Homebrew is unavailable"
+  local node_prefix node_bin actual_version
+  node_prefix="$(brew --prefix "$formula" 2>/dev/null || true)"
+  node_bin="$node_prefix/bin/node"
+  [[ -n "$node_prefix" && -x "$node_bin" ]] \
+    || fail "the reviewed Node formula $formula is unavailable"
+  actual_version="$("$node_bin" --version)"
+  [[ "$actual_version" == "v$expected_version" ]] \
+    || fail "resolved Node runtime $actual_version does not match reviewed manifest v$expected_version"
+  printf '%s\n' "$node_bin"
+}
+
 select_python() {
   if [[ -n "${ADMINME_PYTHON:-}" && -x "$ADMINME_PYTHON" ]]; then
     printf '%s\n' "$ADMINME_PYTHON"

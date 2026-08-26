@@ -33,8 +33,16 @@ def test_cursor_lease_dedupe_circuit_and_restart(tmp_path: Path) -> None:
     assert opened.error_count == 3
     assert opened.circuit_state == "open"
     assert not store.claim("watcher", "worker-a", ttl_ms=100, now_ms=2_000)
-    assert store.begin_recovery("watcher").circuit_state == "half_open"
-    assert store.claim("watcher", "worker-a", ttl_ms=100, now_ms=2_001)
+    eligible = store.begin_recovery("watcher")
+    assert eligible.circuit_state == "open"
+    assert eligible.retry_not_before_ms is not None
+    assert store.claim(
+        "watcher",
+        "worker-a",
+        ttl_ms=100,
+        now_ms=eligible.retry_not_before_ms,
+    )
+    assert store.get("watcher").circuit_state == "half_open"
     store.record_success("watcher", provider_watermark="provider-page-8")
     assert store.get("watcher").circuit_state == "closed"
     assert store.get("watcher").error_count == 0
@@ -64,5 +72,70 @@ def test_cursor_success_requires_complete_dedupe_identity(tmp_path: Path) -> Non
             assert "supplied together" in str(exc)
         else:
             raise AssertionError("partial dedupe identity was accepted")
+    finally:
+        store.close()
+
+
+def test_expired_lease_owner_cannot_commit_after_takeover(tmp_path: Path) -> None:
+    store = AdapterCursorStore(tmp_path / "cursor-fencing.db")
+    try:
+        assert store.claim("watcher", "worker-a", ttl_ms=100, now_ms=1_000)
+        assert store.claim("watcher", "worker-b", ttl_ms=100, now_ms=1_101)
+
+        assert (
+            store.record_error(
+                "watcher",
+                lease_owner="worker-a",
+                now_ms=1_102,
+            )
+            is False
+        )
+        assert store.get("watcher").lease_owner == "worker-b"
+        assert store.get("watcher").error_count == 0
+
+        assert not store.record_success(
+            "watcher",
+            lease_owner="worker-a",
+            now_ms=1_102,
+            provider_watermark="stale-page",
+        )
+        assert store.get("watcher").provider_watermark is None
+
+        assert store.record_success(
+            "watcher",
+            lease_owner="worker-b",
+            now_ms=1_102,
+            provider_watermark="current-page",
+        )
+        assert store.get("watcher").provider_watermark == "current-page"
+    finally:
+        store.close()
+
+
+def test_open_circuit_admits_one_bounded_half_open_probe(tmp_path: Path) -> None:
+    store = AdapterCursorStore(tmp_path / "cursor-recovery.db")
+    try:
+        store.record_error("watcher", open_after=3, recovery_after_ms=100, now_ms=2_000)
+        store.record_error("watcher", open_after=3, recovery_after_ms=100, now_ms=2_001)
+        opened = store.record_error(
+            "watcher", open_after=3, recovery_after_ms=100, now_ms=2_002
+        )
+        assert opened.circuit_state == "open"
+        assert opened.retry_not_before_ms == 2_102
+
+        assert not store.claim("watcher", "worker-a", ttl_ms=100, now_ms=2_101)
+        assert store.claim("watcher", "worker-a", ttl_ms=100, now_ms=2_102)
+        assert store.get("watcher").circuit_state == "half_open"
+        assert not store.claim("watcher", "worker-b", ttl_ms=100, now_ms=2_102)
+
+        assert store.record_success(
+            "watcher",
+            lease_owner="worker-a",
+            now_ms=2_103,
+            provider_watermark="recovered-page",
+        )
+        recovered = store.get("watcher")
+        assert recovered.circuit_state == "closed"
+        assert recovered.retry_not_before_ms is None
     finally:
         store.close()

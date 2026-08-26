@@ -404,6 +404,7 @@ class AdministrateMeRuntime:
 
     SOURCE_ASSURANCE_REFRESH_SECONDS = 30.0
     SOURCE_ASSURANCE_MAX_STALE_SECONDS = 300.0
+    OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS = 90.0
 
     PRODUCT_NAMES = (
         "core",
@@ -470,6 +471,8 @@ class AdministrateMeRuntime:
         self.startup_error: str | None = None
         self._observation_active = True
         self.openclaw_state = "degraded" if settings.openclaw_enabled else "unavailable"
+        self.openclaw_last_report_monotonic: float | None = None
+        self.openclaw_last_reported_at: str | None = None
 
     async def start(self) -> None:
         if self.started:
@@ -1138,11 +1141,12 @@ class AdministrateMeRuntime:
                 "enabled": True,
                 "reason": "openclaw_chat_transport_not_configured",
             }
-        if self.openclaw_state != "healthy":
+        openclaw_state = self.effective_openclaw_state()
+        if openclaw_state != "healthy":
             return {
                 "state": "degraded",
                 "enabled": True,
-                "reason": f"openclaw_{self.openclaw_state}",
+                "reason": f"openclaw_{openclaw_state}",
             }
         return {"state": "healthy", "enabled": True, "transport": "openclaw-gateway"}
 
@@ -1316,8 +1320,30 @@ class AdministrateMeRuntime:
             latest = event
         if latest is not None:
             state = latest["payload"].get("state")
-            if state in {"healthy", "degraded", "unavailable", "incompatible"}:
+            # A prior process's healthy report is not evidence that the current
+            # Gateway process is alive. Require a fresh heartbeat after every
+            # Python runtime start; durable non-healthy states remain truthful.
+            if state == "healthy":
+                self.openclaw_state = "degraded"
+            elif state in {"degraded", "unavailable", "incompatible"}:
                 self.openclaw_state = state
+
+    def record_openclaw_health_report(self, state: str) -> None:
+        self.openclaw_state = state
+        self.openclaw_last_report_monotonic = time.monotonic()
+        self.openclaw_last_reported_at = EventEnvelope.now_utc_iso()
+
+    def effective_openclaw_state(self) -> str:
+        if self.openclaw_state != "healthy":
+            return self.openclaw_state
+        last_report = self.openclaw_last_report_monotonic
+        if (
+            last_report is None
+            or time.monotonic() - last_report
+            > self.OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS
+        ):
+            return "degraded"
+        return "healthy"
 
     async def _refresh_capability_registry(self) -> None:
         assert self.projections is not None
@@ -1427,11 +1453,12 @@ class AdministrateMeRuntime:
             ),
             details=source_assurance,
         )
+        effective_openclaw_state = self.effective_openclaw_state()
         if not self.settings.openclaw_enabled:
             standing_state: CapabilityState = "blocked"
-        elif self.openclaw_state == "healthy":
+        elif effective_openclaw_state == "healthy":
             standing_state = "healthy"
-        elif self.openclaw_state == "incompatible":
+        elif effective_openclaw_state == "incompatible":
             standing_state = "blocked"
         else:
             standing_state = "degraded"
@@ -1439,7 +1466,7 @@ class AdministrateMeRuntime:
             None
             if standing_state == "healthy"
             else (
-                f"OpenClaw integration state: {self.openclaw_state}"
+                f"OpenClaw integration state: {effective_openclaw_state}"
                 if self.settings.openclaw_enabled
                 else "required OpenClaw gateway intentionally absent in credential-free mode"
             )
@@ -1542,7 +1569,8 @@ class AdministrateMeRuntime:
             chat_state = "healthy"
             chat_reason = None
         elif (
-            not self.settings.openclaw_gateway_token or self.openclaw_state != "healthy"
+            not self.settings.openclaw_gateway_token
+            or effective_openclaw_state != "healthy"
         ):
             chat_state = "degraded"
             chat_reason = "OpenClaw chat transport is unavailable or degraded"
@@ -1735,11 +1763,55 @@ class AdministrateMeRuntime:
         state = self.overall_state()
         if observation_active and state == "healthy":
             state = "observation_only"
+        event_ingest_ready = bool(self.events and self.events.accepting)
+        service_ready = self.started and state != "blocked"
+        safe_reads = self.started and self.projections is not None
+        release_ready = (
+            service_ready
+            and event_ingest_ready
+            and state in {"healthy", "observation_only"}
+        )
+        if not event_ingest_ready or not self.started:
+            write_admission = "blocked"
+        elif observation_active:
+            write_admission = "observation_suppressed"
+        elif state in {"degraded", "blocked"}:
+            write_admission = "blocked"
+        else:
+            write_admission = "governed_per_request"
+        openclaw_age = (
+            None
+            if self.openclaw_last_report_monotonic is None
+            else max(0.0, time.monotonic() - self.openclaw_last_report_monotonic)
+        )
+        openclaw_fresh = (
+            openclaw_age is not None
+            and openclaw_age <= self.OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS
+        )
         return {
             "status": state,
-            "ready": self.started and state != "blocked",
-            "accepting_writes": bool(self.events and self.events.accepting),
+            # ``ready`` remains the backward-compatible service/readiness bit.
+            # Explicit fields prevent a degraded HTTP 200 from being mistaken
+            # for release or activation approval.
+            "ready": service_ready,
+            "service_ready": service_ready,
+            "release_ready": release_ready,
+            "activation_eligible": release_ready,
+            "safe_reads": safe_reads,
+            "write_admission": write_admission,
+            "accepting_writes": event_ingest_ready,
+            "event_ingest_ready": event_ingest_ready,
             "observation_active": observation_active,
+            "openclaw_health": {
+                "state": self.effective_openclaw_state(),
+                "reported_state": self.openclaw_state,
+                "fresh": openclaw_fresh,
+                "last_reported_at": self.openclaw_last_reported_at,
+                "stale_seconds": None
+                if openclaw_age is None
+                else round(openclaw_age, 3),
+                "max_stale_seconds": self.OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS,
+            },
             "capabilities": {
                 key: value.public() for key, value in sorted(self.capabilities.items())
             },

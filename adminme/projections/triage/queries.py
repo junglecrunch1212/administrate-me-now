@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from typing import Any
 
@@ -212,24 +213,86 @@ def matter_for_proposal(
     }
 
 
-def _cursor_encode(rank: int, proposed_at: str, proposal_id: str) -> str:
-    raw = json.dumps([rank, proposed_at, proposal_id], separators=(",", ":")).encode()
+def _queue_revision(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+) -> str:
+    """Fingerprint the exact scoped unresolved inventory behind a cursor.
+
+    A context root can change when another browser resolves one of its children.
+    Binding continuation to this revision makes that concurrent change explicit
+    instead of allowing keyset traversal to repeat or skip the promoted matter.
+    """
+
+    private_scope = f"private:{member_id}"
+    rows = conn.execute(
+        """SELECT proposal_id, context_id, queue_lane, proposed_at,
+                  decision_disposition, state, last_event_id,
+                  owner_scope, visibility_scope, sensitivity
+             FROM triage_items
+            WHERE tenant_id=? AND owner_member_id=?
+              AND owner_scope=? AND visibility_scope=?
+              AND state IN ('pending_interpretation','pending_review')
+            ORDER BY proposal_id""",
+        (session.tenant_id, member_id, private_scope, private_scope),
+    ).fetchall()
+    visible = filter_rows(session, [dict(row) for row in rows])
+    digest = hashlib.sha256()
+    for row in visible:
+        digest.update(
+            json.dumps(
+                [
+                    row["proposal_id"],
+                    row["context_id"],
+                    row["queue_lane"],
+                    row["proposed_at"],
+                    row["decision_disposition"],
+                    row["state"],
+                    row["last_event_id"],
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode()
+        )
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _cursor_encode(revision: str, rank: int, proposed_at: str, proposal_id: str) -> str:
+    raw = json.dumps(
+        [1, revision, rank, proposed_at, proposal_id], separators=(",", ":")
+    ).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _cursor_decode(value: str | None) -> tuple[int, str, str] | None:
+def _cursor_decode(value: str | None) -> tuple[str | None, int, str, str] | None:
     if not value:
         return None
     try:
         padded = value + "=" * (-len(value) % 4)
         decoded = json.loads(base64.urlsafe_b64decode(padded).decode())
-        if (
-            isinstance(decoded, list)
-            and len(decoded) == 3
-            and isinstance(decoded[0], int)
-            and all(isinstance(item, str) for item in decoded[1:])
-        ):
-            return decoded[0], decoded[1], decoded[2]
+        if isinstance(decoded, list) and len(decoded) == 5 and decoded[0] == 1:
+            revision, rank, proposed_at, proposal_id = decoded[1:]
+            if (
+                isinstance(revision, str)
+                and isinstance(rank, int)
+                and isinstance(proposed_at, str)
+                and isinstance(proposal_id, str)
+            ):
+                return revision, rank, proposed_at, proposal_id
+        # Pre-revision cursors cannot prove a stable continuation after an
+        # upgrade. Decode them only far enough to return the explicit stale
+        # contract instead of treating a once-valid cursor as malformed.
+        if isinstance(decoded, list) and len(decoded) == 3:
+            rank, proposed_at, proposal_id = decoded
+            if (
+                isinstance(rank, int)
+                and isinstance(proposed_at, str)
+                and isinstance(proposal_id, str)
+            ):
+                return None, rank, proposed_at, proposal_id
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
     raise ValueError("invalid triage cursor")
@@ -290,6 +353,9 @@ def triage_page_for_member(
     limit = max(1, min(limit, 100))
     decoded = _cursor_decode(cursor)
     private_scope = f"private:{member_id}"
+    queue_revision = _queue_revision(conn, session, member_id=member_id)
+    if decoded is not None and decoded[0] != queue_revision:
+        raise ValueError("stale triage cursor")
     lens_sql, lens_params = _lens_where(lens)
     lane_case = (
         "CASE queue_lane "
@@ -302,7 +368,7 @@ def triage_page_for_member(
     cursor_sql = ""
     cursor_params: list[Any] = []
     if decoded is not None:
-        rank, proposed_at, proposal_id = decoded
+        _, rank, proposed_at, proposal_id = decoded
         cursor_sql = (
             "AND (lane_rank > ? OR (lane_rank=? AND (proposed_at > ? OR "
             "(proposed_at=? AND proposal_id>?))))"
@@ -419,8 +485,13 @@ def triage_page_for_member(
     if has_more and roots:
         last = roots[-1]
         next_cursor = _cursor_encode(
-            int(last["lane_rank"]), str(last["proposed_at"]), str(last["proposal_id"])
+            queue_revision,
+            int(last["lane_rank"]),
+            str(last["proposed_at"]),
+            str(last["proposal_id"]),
         )
+    if _queue_revision(conn, session, member_id=member_id) != queue_revision:
+        raise ValueError("stale triage cursor")
     return {
         "lens": lens,
         "inventory": {

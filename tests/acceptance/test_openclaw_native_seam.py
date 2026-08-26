@@ -594,3 +594,71 @@ def test_openclaw_outage_restart_and_incompatible_upgrade_preserve_truth(
     final_restart = create_application(settings)
     with TestClient(final_restart):
         assert final_restart.state.runtime.openclaw_state == "incompatible"
+
+
+def test_openclaw_healthy_state_requires_a_current_process_heartbeat(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    settings = _settings(instance_dir)
+
+    first = create_application(settings)
+    with TestClient(first) as client:
+        reported = _post(
+            client,
+            "/api/openclaw/v1/health/report",
+            {
+                "state": "healthy",
+                "reason": "fixture gateway heartbeat",
+                "openclaw_version": OPENCLAW_VERSION,
+                "openclaw_commit": OPENCLAW_COMMIT,
+            },
+        )
+        assert reported["state"] == "healthy"
+        assert first.state.runtime.effective_openclaw_state() == "healthy"
+        heartbeat = _post(
+            client,
+            "/api/openclaw/v1/health/report",
+            {
+                "state": "healthy",
+                "reason": "fixture gateway heartbeat",
+                "openclaw_version": OPENCLAW_VERSION,
+                "openclaw_commit": OPENCLAW_COMMIT,
+            },
+        )
+        assert heartbeat["event_id"] is None
+        states = client.portal.call(
+            _events,
+            first.state.runtime,
+            "openclaw.integration.state_changed",
+        )
+        assert [row["payload"]["state"] for row in states] == ["healthy"]
+
+    restarted = create_application(settings)
+    with TestClient(restarted) as client:
+        runtime = restarted.state.runtime
+        assert runtime.openclaw_state == "degraded"
+        assert runtime.effective_openclaw_state() == "degraded"
+        diagnostics = client.get("/api/system/ready").json()
+        assert diagnostics["release_ready"] is False
+
+        _post(
+            client,
+            "/api/openclaw/v1/health/report",
+            {
+                "state": "healthy",
+                "reason": "fixture gateway heartbeat after restart",
+                "openclaw_version": OPENCLAW_VERSION,
+                "openclaw_commit": OPENCLAW_COMMIT,
+            },
+        )
+        assert runtime.effective_openclaw_state() == "healthy"
+
+        runtime.openclaw_last_report_monotonic -= (
+            runtime.OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS + 1
+        )
+        diagnostics = client.get("/api/system/ready").json()
+        assert runtime.effective_openclaw_state() == "degraded"
+        assert diagnostics["release_ready"] is False
+        assert diagnostics["openclaw_health"]["fresh"] is False

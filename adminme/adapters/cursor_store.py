@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, overload
 
 
 CircuitState = Literal["closed", "open", "half_open"]
@@ -21,6 +21,7 @@ class AdapterCursor:
     lease_until_ms: int | None
     error_count: int
     circuit_state: CircuitState
+    retry_not_before_ms: int | None
     updated_at_ms: int
 
     def public(self) -> dict[str, object]:
@@ -55,6 +56,7 @@ class AdapterCursorStore:
                 error_count INTEGER NOT NULL DEFAULT 0,
                 circuit_state TEXT NOT NULL DEFAULT 'closed'
                     CHECK (circuit_state IN ('closed','open','half_open')),
+                retry_not_before_ms INTEGER,
                 updated_at_ms INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS adapter_dedupe (
@@ -69,6 +71,14 @@ class AdapterCursorStore:
                 ON adapter_dedupe(adapter_id, seen_at_ms);
             """
         )
+        columns = {
+            str(row[1])
+            for row in self._conn.execute("PRAGMA table_info(adapter_cursors)")
+        }
+        if "retry_not_before_ms" not in columns:
+            self._conn.execute(
+                "ALTER TABLE adapter_cursors ADD COLUMN retry_not_before_ms INTEGER"
+            )
 
     @staticmethod
     def _now_ms() -> int:
@@ -111,20 +121,37 @@ class AdapterCursorStore:
             try:
                 self._ensure(adapter_id, now)
                 row = self._conn.execute(
-                    "SELECT lease_owner, lease_until_ms, circuit_state "
+                    "SELECT lease_owner, lease_until_ms, circuit_state, "
+                    "retry_not_before_ms "
                     "FROM adapter_cursors WHERE adapter_id=?",
                     (adapter_id,),
                 ).fetchone()
                 assert row is not None
-                available = row["circuit_state"] != "open" and (
+                lease_available = (
                     row["lease_owner"] in {None, lease_owner}
                     or int(row["lease_until_ms"] or 0) <= now
                 )
+                circuit_state = str(row["circuit_state"])
+                recovery_due = (
+                    circuit_state != "open"
+                    or row["retry_not_before_ms"] is None
+                    or int(row["retry_not_before_ms"]) <= now
+                )
+                available = lease_available and recovery_due
                 if available:
+                    next_circuit_state = (
+                        "half_open" if circuit_state == "open" else circuit_state
+                    )
                     self._conn.execute(
                         "UPDATE adapter_cursors SET lease_owner=?, lease_until_ms=?, "
-                        "updated_at_ms=? WHERE adapter_id=?",
-                        (lease_owner, now + ttl_ms, now, adapter_id),
+                        "circuit_state=?, updated_at_ms=? WHERE adapter_id=?",
+                        (
+                            lease_owner,
+                            now + ttl_ms,
+                            next_circuit_state,
+                            now,
+                            adapter_id,
+                        ),
                     )
                 self._conn.execute("COMMIT")
                 return available
@@ -169,28 +196,61 @@ class AdapterCursorStore:
         self,
         adapter_id: str,
         *,
+        lease_owner: str | None = None,
+        now_ms: int | None = None,
+        mark_healthy: bool = True,
         provider_watermark: str | None = None,
         external_id: str | None = None,
         fingerprint: str | None = None,
         event_id: str | None = None,
-    ) -> None:
-        now = self._now_ms()
+    ) -> bool:
+        """Atomically commit provider progress and optional dedupe identity.
+
+        When ``lease_owner`` is supplied, the mutation is fenced by both the
+        current owner and the unexpired lease. A worker that finishes after a
+        takeover cannot advance the provider watermark or dedupe ledger.
+        """
+
+        now = self._now_ms() if now_ms is None else now_ms
+        supplied = (external_id, fingerprint, event_id)
+        if any(value is not None for value in supplied) and not all(
+            value is not None for value in supplied
+        ):
+            raise ValueError(
+                "external_id, fingerprint, and event_id must be supplied together"
+            )
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 self._ensure(adapter_id, now)
-                self._conn.execute(
-                    "UPDATE adapter_cursors SET provider_watermark=COALESCE(?, provider_watermark), "
-                    "error_count=0, circuit_state='closed', updated_at_ms=? "
-                    "WHERE adapter_id=?",
-                    (provider_watermark, now, adapter_id),
-                )
-                supplied = (external_id, fingerprint, event_id)
-                if any(value is not None for value in supplied) and not all(
-                    value is not None for value in supplied
-                ):
-                    raise ValueError(
-                        "external_id, fingerprint, and event_id must be supplied together"
+                if lease_owner is not None:
+                    lease = self._conn.execute(
+                        "SELECT lease_owner, lease_until_ms FROM adapter_cursors "
+                        "WHERE adapter_id=?",
+                        (adapter_id,),
+                    ).fetchone()
+                    assert lease is not None
+                    if (
+                        lease["lease_owner"] != lease_owner
+                        or int(lease["lease_until_ms"] or 0) <= now
+                    ):
+                        self._conn.execute("ROLLBACK")
+                        return False
+                if mark_healthy:
+                    self._conn.execute(
+                        "UPDATE adapter_cursors SET "
+                        "provider_watermark=COALESCE(?, provider_watermark), "
+                        "error_count=0, circuit_state='closed', "
+                        "retry_not_before_ms=NULL, updated_at_ms=? "
+                        "WHERE adapter_id=?",
+                        (provider_watermark, now, adapter_id),
+                    )
+                else:
+                    self._conn.execute(
+                        "UPDATE adapter_cursors SET "
+                        "provider_watermark=COALESCE(?, provider_watermark), "
+                        "updated_at_ms=? WHERE adapter_id=?",
+                        (provider_watermark, now, adapter_id),
                     )
                 if external_id is not None:
                     self._conn.execute(
@@ -200,33 +260,123 @@ class AdapterCursorStore:
                         (adapter_id, external_id, fingerprint, event_id, now),
                     )
                 self._conn.execute("COMMIT")
+                return True
             except BaseException:
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def record_error(self, adapter_id: str, *, open_after: int = 3) -> AdapterCursor:
+    def clear_watermark(
+        self,
+        adapter_id: str,
+        *,
+        lease_owner: str,
+        now_ms: int | None = None,
+    ) -> bool:
+        """Clear an invalid provider watermark under an active lease."""
+
+        now = self._now_ms() if now_ms is None else now_ms
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE adapter_cursors SET provider_watermark=NULL, updated_at_ms=? "
+                "WHERE adapter_id=? AND lease_owner=? AND lease_until_ms>?",
+                (now, adapter_id, lease_owner, now),
+            )
+            return cur.rowcount == 1
+
+    @overload
+    def record_error(
+        self,
+        adapter_id: str,
+        *,
+        open_after: int = 3,
+        recovery_after_ms: int = 30_000,
+        lease_owner: None = None,
+        now_ms: int | None = None,
+    ) -> AdapterCursor: ...
+
+    @overload
+    def record_error(
+        self,
+        adapter_id: str,
+        *,
+        open_after: int = 3,
+        recovery_after_ms: int = 30_000,
+        lease_owner: str,
+        now_ms: int | None = None,
+    ) -> AdapterCursor | Literal[False]: ...
+
+    def record_error(
+        self,
+        adapter_id: str,
+        *,
+        open_after: int = 3,
+        recovery_after_ms: int = 30_000,
+        lease_owner: str | None = None,
+        now_ms: int | None = None,
+    ) -> AdapterCursor | Literal[False]:
         if open_after <= 0:
             raise ValueError("open_after must be positive")
-        now = self._now_ms()
+        if recovery_after_ms < 0:
+            raise ValueError("recovery_after_ms must not be negative")
+        now = self._now_ms() if now_ms is None else now_ms
         with self._lock:
-            self._ensure(adapter_id, now)
-            self._conn.execute(
-                "UPDATE adapter_cursors SET error_count=error_count+1, "
-                "circuit_state=CASE WHEN error_count+1>=? THEN 'open' "
-                "ELSE circuit_state END, updated_at_ms=? WHERE adapter_id=?",
-                (open_after, now, adapter_id),
-            )
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._ensure(adapter_id, now)
+                row = self._conn.execute(
+                    "SELECT error_count, circuit_state, lease_owner, lease_until_ms "
+                    "FROM adapter_cursors "
+                    "WHERE adapter_id=?",
+                    (adapter_id,),
+                ).fetchone()
+                assert row is not None
+                if lease_owner is not None and (
+                    row["lease_owner"] != lease_owner
+                    or int(row["lease_until_ms"] or 0) <= now
+                ):
+                    self._conn.execute("ROLLBACK")
+                    return False
+                error_count = int(row["error_count"]) + 1
+                should_open = (
+                    str(row["circuit_state"]) == "half_open"
+                    or error_count >= open_after
+                )
+                self._conn.execute(
+                    "UPDATE adapter_cursors SET error_count=?, circuit_state=?, "
+                    "retry_not_before_ms=?, "
+                    "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
+                    "lease_until_ms=CASE WHEN ? THEN NULL ELSE lease_until_ms END, "
+                    "updated_at_ms=? WHERE adapter_id=?",
+                    (
+                        error_count,
+                        "open" if should_open else str(row["circuit_state"]),
+                        now + recovery_after_ms if should_open else None,
+                        should_open,
+                        should_open,
+                        now,
+                        adapter_id,
+                    ),
+                )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
         return self.get(adapter_id)
 
     def begin_recovery(self, adapter_id: str) -> AdapterCursor:
+        """Make an open circuit immediately probe-eligible.
+
+        The next :meth:`claim` still performs the atomic open-to-half-open
+        transition and assigns the sole probe lease owner.
+        """
+
         now = self._now_ms()
         with self._lock:
             self._ensure(adapter_id, now)
             self._conn.execute(
-                "UPDATE adapter_cursors SET circuit_state='half_open', "
-                "lease_owner=NULL, lease_until_ms=NULL, updated_at_ms=? "
-                "WHERE adapter_id=?",
-                (now, adapter_id),
+                "UPDATE adapter_cursors SET retry_not_before_ms=?, updated_at_ms=? "
+                "WHERE adapter_id=? AND circuit_state='open'",
+                (now, now, adapter_id),
             )
         return self.get(adapter_id)
 

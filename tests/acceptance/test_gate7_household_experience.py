@@ -798,9 +798,13 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         workbook.save(workbook_path)
         workbook.close()
         client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
-        budget_events = client.portal.call(_events, runtime, "finance.budget_set")
+        published_events = client.portal.call(
+            _events, runtime, "finance.workbook_published"
+        )
         client.portal.call(
-            runtime.wait_for_projection, "money", budget_events[-1]["event_id"]
+            runtime.wait_for_projection,
+            "money",
+            published_events[-1]["event_id"],
         )
         after_valid_save = client.get(
             "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
@@ -893,9 +897,13 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         workbook.save(workbook_path)
         workbook.close()
         client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
-        budget_events = client.portal.call(_events, runtime, "finance.budget_set")
+        published_events = client.portal.call(
+            _events, runtime, "finance.workbook_published"
+        )
         client.portal.call(
-            runtime.wait_for_projection, "money", budget_events[-1]["event_id"]
+            runtime.wait_for_projection,
+            "money",
+            published_events[-1]["event_id"],
         )
         after_correction = client.get(
             "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
@@ -1522,6 +1530,7 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
             },
         )
         assert snoozed.status_code == 200, snoozed.text
+        assert snoozed.json()["interaction"]["snoozed_until"] == wake
         updated = client.get(
             "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
         ).json()["cockpit"]

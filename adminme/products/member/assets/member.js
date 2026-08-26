@@ -15,6 +15,7 @@ const state = {
   triageBannerKind: null,
   triageRefreshRequired: false,
   triageLoadGeneration: 0,
+  triageCursorRefreshPending: false,
   triageOperationGeneration: 0,
   triageOperationPending: false,
   addForReviewOperationGeneration: 0,
@@ -50,6 +51,7 @@ const state = {
   settingsSection: "overview",
 };
 const $ = (selector) => document.querySelector(selector);
+const dialogReturnFocus = new WeakMap();
 const text = (tag, value, className) => {
   const node = document.createElement(tag);
   node.textContent = value == null ? "" : String(value);
@@ -198,7 +200,7 @@ async function reloadActiveSurface({ triageOperationToken = null, triageFocus = 
 }
 
 function triageInteractionLocked() {
-  return state.triageOperationPending || state.triageRefreshRequired;
+  return state.triageOperationPending || state.triageCursorRefreshPending || state.triageRefreshRequired;
 }
 
 function triageLockControls() {
@@ -1001,7 +1003,46 @@ async function loadMoreTriage(data) {
     for (const item of next.items || []) if (!knownItems.has(item.proposal_id)) data.items.push(item);
     data.triage.next_cursor = next.triage?.next_cursor || null; data.triage.has_more = Boolean(next.triage?.has_more);
     renderSurface(data);
-  } catch (error) { if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return; state.triageBannerKind = "error"; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { delete button.dataset.triageLoading; button.disabled = false; button.textContent = "Load next matters"; } }
+  } catch (error) {
+    if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return;
+    if (error.status === 422 && error.message === "stale triage cursor") {
+      state.triageCursorRefreshPending = true;
+      state.triageLoadGeneration += 1;
+      applyTriageInteractionLock();
+      const root = $("#surface");
+      root.setAttribute("aria-busy", "true");
+      const notice = document.createElement("section");
+      notice.className = "state-card";
+      notice.setAttribute("role", "status");
+      notice.append(text("h2", "Triage changed while you were reviewing it."), text("p", "Refreshing the complete scoped queue before showing another matter."));
+      root.replaceChildren(notice);
+      try {
+        const refreshed = await reloadActiveSurface({ triageReconcileExact: Boolean(state.triageSelected) });
+        if (!refreshed) throw new Error("The refreshed queue was not available.");
+        state.triageCursorRefreshPending = false;
+        releaseTriageInteractionLock();
+        state.triageBannerKind = "status";
+        const banner = $("#state-banner");
+        banner.hidden = false;
+        banner.textContent = "Triage changed in another view, so the queue was refreshed before pagination continued.";
+      } catch (refreshError) {
+        state.triageCursorRefreshPending = false;
+        root.setAttribute("aria-busy", "false");
+        const failure = document.createElement("section");
+        failure.className = "state-card";
+        failure.setAttribute("role", "alert");
+        failure.append(text("h2", "Triage needs an authoritative reload."), text("p", "The stale page was removed. Reload this page before reviewing another candidate."));
+        root.replaceChildren(failure);
+        latchTriageRefreshFailure(`Triage changed and the authoritative refresh failed: ${refreshError.message} Reload this page before continuing.`);
+      }
+      return;
+    }
+    state.triageBannerKind = "error";
+    const banner = $("#state-banner");
+    banner.hidden = false;
+    banner.textContent = error.message;
+    if (button) { delete button.dataset.triageLoading; button.disabled = false; button.textContent = "Load next matters"; }
+  }
 }
 
 async function approveTriageSuggestion(suggestion, button) {
@@ -1803,13 +1844,23 @@ function commsReadingPane(thread) {
   const compose = document.createElement("form"); compose.className = "comms-compose";
   const replyLabel = text("label", "Reply in this thread"); replyLabel.htmlFor = "comms-reply";
   const input = document.createElement("textarea"); input.id = "comms-reply"; input.rows = 4; input.maxLength = 20000; input.placeholder = "Write the reply you intend to send…"; compose.append(replyLabel, input);
+  input.addEventListener("input", () => {
+    input.removeAttribute("aria-invalid");
+    input.removeAttribute("aria-describedby");
+  });
   if (thread.capabilities.reply) {
     compose.append(text("p", "This saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.", "state-note"));
     const send = text("button", "Save reply for approval", "button button-primary"); send.type = "submit";
     compose.append(send);
     compose.addEventListener("submit", (event) => {
       event.preventDefault();
-      if (!input.value.trim()) { setBanner("Write the reply you want approved. Nothing was sent."); return; }
+      if (!input.value.trim()) {
+        input.setAttribute("aria-invalid", "true");
+        input.setAttribute("aria-describedby", "state-banner");
+        setBanner("Write the reply you want approved. Nothing was sent.");
+        input.focus();
+        return;
+      }
       runCommsCommand(thread, "reply", { body: input.value.trim() });
     });
   } else {
@@ -2219,6 +2270,7 @@ function abandonTaskDialog(item) {
 
 function openActionDialog(title, content) {
   const dialog = $("#action-dialog");
+  if (document.activeElement instanceof HTMLElement) dialogReturnFocus.set(dialog, document.activeElement);
   $("#action-title").textContent = title;
   $("#action-content").replaceChildren(content);
   dialog.showModal();
@@ -3775,6 +3827,7 @@ function renderFailure(error) {
 
 async function showEvidence(eventId) {
   const dialog = $("#evidence-dialog"); const content = $("#evidence-content");
+  if (document.activeElement instanceof HTMLElement) dialogReturnFocus.set(dialog, document.activeElement);
   content.replaceChildren(text("p", "Loading evidence…")); dialog.showModal();
   try {
     const value = await api(`/api/member/v1/evidence/${encodeURIComponent(eventId)}`);
@@ -3851,12 +3904,25 @@ function configureChat(policy) {
 }
 
 async function initialize() {
-  $("#chat-close").addEventListener("click", () => { $("#chat-panel").classList.remove("open"); $("#chat-open").setAttribute("aria-expanded", "false"); });
+  const closeChat = () => {
+    $("#chat-panel").classList.remove("open");
+    $("#chat-open").setAttribute("aria-expanded", "false");
+    $("#chat-open").focus();
+  };
+  $("#chat-close").addEventListener("click", closeChat);
   $("#chat-open").addEventListener("click", () => { $("#chat-panel").classList.add("open"); $("#chat-open").setAttribute("aria-expanded", "true"); $("#chat-input").focus(); });
+  $("#chat-panel").addEventListener("keydown", (event) => { if (event.key === "Escape" && $("#chat-panel").classList.contains("open")) { event.preventDefault(); closeChat(); } });
   $("#chat-form").addEventListener("submit", sendChat);
   $("#chat-stop").addEventListener("click", async () => { state.controller?.abort(); await fetch("/api/member/v1/chat/abort", { method: "POST", credentials: "same-origin" }); });
   $("[data-close-dialog]").addEventListener("click", () => $("#evidence-dialog").close());
   $("[data-close-action]").addEventListener("click", closeActionDialog);
+  for (const dialog of [$("#evidence-dialog"), $("#action-dialog")]) {
+    dialog.addEventListener("close", () => {
+      const target = dialogReturnFocus.get(dialog);
+      dialogReturnFocus.delete(dialog);
+      if (target?.isConnected && !target.matches(":disabled")) target.focus();
+    });
+  }
   $("#action-dialog").addEventListener("cancel", (event) => {
     if (addForReviewInteractionLocked() && event.currentTarget.querySelector(".add-for-review-form")) event.preventDefault();
   });

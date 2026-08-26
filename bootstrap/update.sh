@@ -86,8 +86,9 @@ active_python="$ACTIVE_RELEASE_ROOT/.venv/bin/python"
 if [[ -n "$approve_flag" ]]; then
   command -v brew >/dev/null 2>&1 || fail "Homebrew is unavailable"
   controller_python="$(brew --prefix "$python_formula")/bin/python$python_minor"
-  node_bin_dir="$(brew --prefix "$node_formula")/bin"
-  [[ -x "$controller_python" && -x "$node_bin_dir/node" ]] \
+  reviewed_node="$(resolve_formula_node "$node_formula" "$node_preferred")"
+  node_bin_dir="$(cd "$(dirname "$reviewed_node")" && pwd -P)"
+  [[ -x "$controller_python" ]] \
     || fail "install the candidate Python and Node formulae side by side before migration"
 else
   # A same-runtime update must not use candidate tooling merely because it is
@@ -122,9 +123,10 @@ PY
     && "$node_compatible" == "$active_node_compatible" ]] \
     || fail "candidate changes the Python/Node runtime baseline; rerun only after the clean migration rehearsal and explicit --approve-runtime-migration"
   controller_python="$active_python"
-  active_node="$(command -v node || true)"
-  [[ -x "$active_node" ]] || fail "active release Node is unavailable"
-  node_bin_dir="$(cd "$(dirname "$active_node")" && pwd -P)"
+  reviewed_node="$(
+    resolve_formula_node "$active_node_formula" "$active_node_preferred"
+  )"
+  node_bin_dir="$(cd "$(dirname "$reviewed_node")" && pwd -P)"
 fi
 
 poetry_venv="$ADMINME_INSTANCE_ROOT/app/tooling/poetry-$poetry_version"

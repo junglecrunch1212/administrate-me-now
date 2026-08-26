@@ -106,6 +106,13 @@ _TRANSIENT_SKILL_FAILURE_TYPES = (OpenClawTimeout, OpenClawUnreachable)
 _TRANSIENT_RECOVERY_DELAYS_SECONDS = (0.5, 2.0)
 
 
+class _ProposalInputHistory:
+    def __init__(self) -> None:
+        self.cursor: str | None = None
+        self.by_source_event_id: dict[str, list[dict[str, Any]]] = {}
+        self.lock = asyncio.Lock()
+
+
 def _versioned_idempotency_keys(prefix: str, source_event_id: str) -> list[str]:
     """Return the historical baseline plus reviewed replay generations."""
 
@@ -296,6 +303,56 @@ class NoiseFilteringPipeline:
         self._recovery_source_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
+        self._proposal_histories: weakref.WeakKeyDictionary[
+            Any, dict[str, _ProposalInputHistory]
+        ] = weakref.WeakKeyDictionary()
+
+    async def _proposals_for_sources(
+        self,
+        *,
+        event_log: Any,
+        owner_scope: str,
+        source_event_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        """Read each immutable proposal once, then serve exact source buckets."""
+
+        try:
+            owner_histories = self._proposal_histories.setdefault(event_log, {})
+        except TypeError:
+            return [
+                proposal
+                async for proposal in event_log.read_since(
+                    owner_scope=owner_scope,
+                    types=["triage.item.proposed"],
+                )
+                if str((proposal.get("payload") or {}).get("source_event_id") or "")
+                in source_event_ids
+            ]
+        history = owner_histories.setdefault(owner_scope, _ProposalInputHistory())
+        async with history.lock:
+            suffix = [
+                proposal
+                async for proposal in event_log.read_since(
+                    cursor=history.cursor,
+                    owner_scope=owner_scope,
+                    types=["triage.item.proposed"],
+                )
+            ]
+            for proposal in suffix:
+                source_event_id = str(
+                    (proposal.get("payload") or {}).get("source_event_id") or ""
+                )
+                if source_event_id:
+                    history.by_source_event_id.setdefault(source_event_id, []).append(
+                        proposal
+                    )
+            if suffix:
+                history.cursor = str(suffix[-1]["event_id"])
+            return [
+                proposal
+                for source_event_id in source_event_ids
+                for proposal in history.by_source_event_id.get(source_event_id, ())
+            ]
 
     @staticmethod
     def _recovery_assessment_key(request_event_id: str, source_event_id: str) -> str:
@@ -1166,9 +1223,10 @@ class NoiseFilteringPipeline:
         decided_titles: set[tuple[str, str]] = set()
         replaced_proposal_event_ids: set[str] = set()
         prior_proposals: list[dict[str, Any]] = []
-        async for prior in ctx.event_log.read_since(
+        for prior in await self._proposals_for_sources(
+            event_log=ctx.event_log,
             owner_scope=str(event.get("owner_scope") or ""),
-            types=["triage.item.proposed"],
+            source_event_ids=thread_source_ids,
         ):
             payload = prior.get("payload") or {}
             if prior.get("source_adapter") not in {
@@ -1176,8 +1234,6 @@ class NoiseFilteringPipeline:
                 "noise_filtering",
                 "legacy-message-extractor",
             }:
-                continue
-            if str(payload.get("source_event_id") or "") not in thread_source_ids:
                 continue
             interpretation = payload.get("interpretation")
             if (

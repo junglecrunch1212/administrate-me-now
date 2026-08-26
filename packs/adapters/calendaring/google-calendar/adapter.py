@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ClassVar, Literal
 
@@ -42,6 +43,15 @@ _FLOOR_RANK: dict[str, int] = {"normal": 0, "privileged": 1}
 
 _DEFAULT_POLL_INTERVAL_S: int = 60
 _DEFAULT_PAGE_SIZE: int = 250
+
+
+class _ExpiredSyncToken(RuntimeError):
+    """Provider rejected an incremental token and requires a full resync."""
+
+
+class _CalendarLeaseLost(RuntimeError):
+    """The poll may no longer commit provider progress."""
+
 
 CredentialsResolver = Callable[[str], dict[str, Any]]
 """``op://`` ref → service-account JSON. Tests inject a stub; production
@@ -340,6 +350,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._ctx: AdapterContext | None = None
         self._stop_requested: bool = False
         self._max_poll_cycles: int | None = max_poll_cycles
+        self._lease_owner = f"google-calendar-{uuid.uuid4()}"
         # Dedupe by stable event id; tracks ``updated`` so future
         # event_updated (out of scope) can diff without a re-fetch.
         self._seen_inbound: dict[str, str] = {}
@@ -350,7 +361,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._seen_calendar_sources: dict[str, str] = {}
         self._known_events: dict[str, dict[str, Any]] = {}
         self._elapsed_outcomes: set[str] = set()
-        # [§6.20, PM-27] observation seam slots; Phase A leaves unset.
+        # [§6.20, PM-27] required fail-closed observation seam slots.
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
         self._observation_event_log: Any = observation_event_log
@@ -421,6 +432,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         while not self._stop_requested:
             if self._max_poll_cycles is not None and cycles >= self._max_poll_cycles:
                 return
+            sleep_s = float(self._poll_interval_s)
             try:
                 await self._poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
@@ -436,9 +448,19 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     self._status.state = "crashed"
                     return
                 self._status.state = "backoff"
+                sleep_s = self._bounded_retry_delay(
+                    retry_after_s=retry_after_s,
+                )
+            else:
+                lease_state = self._status.extra.get("cursor_lease")
+                self._status.state = (
+                    "backoff"
+                    if lease_state in {"circuit_open", "held_by_another_runtime"}
+                    else "running"
+                )
             cycles += 1
             try:
-                await asyncio.sleep(self._poll_interval_s)
+                await asyncio.sleep(sleep_s)
             except asyncio.CancelledError:
                 return
 
@@ -481,6 +503,27 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 ),
             )
         return emitted
+
+    def _cursor_id(self) -> str:
+        return str(
+            getattr(self, "instance_name", None) or self._config.get("id") or self.name
+        )
+
+    def _calendar_cursor_id(self, calendar_id: str) -> str:
+        calendar_digest = hashlib.sha256(calendar_id.encode("utf-8")).hexdigest()
+        return f"{self._cursor_id()}:calendar:{calendar_digest}"
+
+    def _lease_ttl_ms(self) -> int:
+        return max(30_000, self._poll_interval_s * 2000)
+
+    def _durable_status(self, ctx: AdapterContext, cursor_id: str) -> None:
+        if ctx.cursor_store is None:
+            return
+        durable = ctx.cursor_store.get(cursor_id).public()
+        durable["provider_watermark"] = (
+            "present" if durable.get("provider_watermark") else None
+        )
+        self._status.extra["durable_cursor"] = durable
 
     def _fetch_calendar_entries(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -605,6 +648,86 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     async def _poll_calendar_once(
         self, *, ctx: AdapterContext, calendar_id: str, calendar_name: str
     ) -> int:
+        store = ctx.cursor_store
+        cursor_id = self._calendar_cursor_id(calendar_id)
+        if store is not None and not store.claim(
+            cursor_id,
+            self._lease_owner,
+            ttl_ms=self._lease_ttl_ms(),
+        ):
+            cursor = store.get(cursor_id)
+            self._status.state = "backoff"
+            self._status.extra["cursor_lease"] = (
+                "circuit_open"
+                if cursor.circuit_state == "open"
+                else "held_by_another_runtime"
+            )
+            self._durable_status(ctx, cursor_id)
+            return 0
+        try:
+            if store is not None:
+                durable_token = store.get(cursor_id).provider_watermark
+                if durable_token:
+                    self._sync_tokens[calendar_id] = durable_token
+                    self._initial_sync_calendars.add(calendar_id)
+                    if not self._config.get("discover_calendars"):
+                        self._sync_token = durable_token
+                        self._initial_sync_complete = True
+            try:
+                emitted = await self._poll_calendar_once_owned(
+                    ctx=ctx,
+                    calendar_id=calendar_id,
+                    calendar_name=calendar_name,
+                )
+            except _ExpiredSyncToken:
+                if store is not None and not store.clear_watermark(
+                    cursor_id,
+                    lease_owner=self._lease_owner,
+                ):
+                    raise _CalendarLeaseLost(
+                        "Google Calendar lease lost while resetting sync state"
+                    )
+                self._sync_tokens.pop(calendar_id, None)
+                self._initial_sync_calendars.discard(calendar_id)
+                if not self._config.get("discover_calendars"):
+                    self._sync_token = None
+                    self._initial_sync_complete = False
+                self._status.extra["sync_reset"] = "provider_token_expired"
+                emitted = await self._poll_calendar_once_owned(
+                    ctx=ctx,
+                    calendar_id=calendar_id,
+                    calendar_name=calendar_name,
+                )
+            self._status.state = "running"
+            self._status.extra["cursor_lease"] = "owned"
+            return emitted
+        except BaseException as exc:
+            if store is not None:
+                _severity, _kind, retry_after_s = self._classify_calendar_error(exc)
+                error_cursor = store.record_error(
+                    cursor_id,
+                    lease_owner=self._lease_owner,
+                    recovery_after_ms=int(
+                        self._bounded_retry_delay(retry_after_s=retry_after_s) * 1000
+                    ),
+                )
+                if error_cursor is False:
+                    self._status.extra["cursor_lease"] = "lost_before_error_commit"
+                    self._durable_status(ctx, cursor_id)
+                else:
+                    durable = error_cursor.public()
+                    durable["provider_watermark"] = (
+                        "present" if durable.get("provider_watermark") else None
+                    )
+                    self._status.extra["durable_cursor"] = durable
+            raise
+        finally:
+            if store is not None:
+                store.release(cursor_id, self._lease_owner)
+
+    async def _poll_calendar_once_owned(
+        self, *, ctx: AdapterContext, calendar_id: str, calendar_name: str
+    ) -> int:
         sync_token = self._sync_tokens.get(calendar_id)
         if not self._config.get("discover_calendars") and self._sync_token:
             sync_token = self._sync_token
@@ -717,6 +840,17 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     self._elapsed_outcomes.add(known_id)
                     emitted += 1
         if next_sync_token:
+            if ctx.cursor_store is not None:
+                cursor_id = self._calendar_cursor_id(calendar_id)
+                if not ctx.cursor_store.record_success(
+                    cursor_id,
+                    lease_owner=self._lease_owner,
+                    provider_watermark=next_sync_token,
+                ):
+                    raise _CalendarLeaseLost(
+                        "Google Calendar lease lost before sync-token commit"
+                    )
+                self._durable_status(ctx, cursor_id)
             self._sync_tokens[calendar_id] = next_sync_token
         self._initial_sync_calendars.add(calendar_id)
         if not self._config.get("discover_calendars"):
@@ -824,12 +958,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             except BaseException as exc:
                 status = getattr(getattr(exc, "resp", None), "status", None)
                 if status == 410 and sync_token is not None:
-                    self._sync_tokens.pop(calendar_id, None)
-                    if not self._config.get("discover_calendars"):
-                        self._sync_token = None
-                    return self._fetch_event_changes(
-                        calendar_id=calendar_id, now=now, sync_token=None
-                    )
+                    raise _ExpiredSyncToken(
+                        f"Google Calendar sync token expired for {calendar_id}"
+                    ) from exc
                 raise
             records.extend(response.get("items") or [])
             page_token = response.get("nextPageToken")
@@ -1032,9 +1163,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         return f"google-calendar:provider-revision:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
     async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
-        """[UT-27] gate already checked ``operation.kind``. Phase B routes
-        ``events.insert`` through :func:`observation_outbound` per
-        [§6.20]; Phase A direct-calls when seams are unset."""
+        """Dispatch a declared operation through the required observation seam."""
         if operation.kind not in self.write_capabilities:
             raise WriteCapabilityError(
                 f"unsupported calendar operation {operation.kind!r}"
@@ -1125,32 +1254,30 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         session = self._observation_session
         manager = self._observation_manager
         event_log = self._observation_event_log
+        if session is None or manager is None or event_log is None:
+            raise RuntimeError(
+                "Google Calendar observation seam is required for external writes"
+            )
 
         response: dict[str, Any] = {}
         try:
-            if session is not None and manager is not None and event_log is not None:
-                # [§6.20] Phase B: observation seam wraps events.insert.
-                outbound_result = await observation_outbound(
-                    session,
-                    f"calendar.{operation.kind}",
-                    {
-                        "calendar_id": calendar_id,
-                        "event_id": event_id or None,
-                        "summary": payload.get("summary", ""),
-                    },
-                    _do_write,
-                    manager=manager,
-                    event_sink=event_log,
-                    target_channel="calendaring-google-calendar",
-                    target_identifier=calendar_id,
-                )
-                if outbound_result.suppressed:
-                    # F-3 (HARD): suppressed → unapplied; caller does NOT
-                    # emit externally-visible side effects.
-                    return WriteResult(applied=False, external_id=None, suppressed=True)
-                response = outbound_result.result or {}
-            else:
-                response = await _do_write()
+            outbound_result = await observation_outbound(
+                session,
+                f"calendar.{operation.kind}",
+                {
+                    "calendar_id": calendar_id,
+                    "event_id": event_id or None,
+                    "summary": payload.get("summary", ""),
+                },
+                _do_write,
+                manager=manager,
+                event_sink=event_log,
+                target_channel="calendaring-google-calendar",
+                target_identifier=calendar_id,
+            )
+            if outbound_result.suppressed:
+                return WriteResult(applied=False, external_id=None, suppressed=True)
+            response = outbound_result.result or {}
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             ctx = self._ctx
             severity, error_kind, retry_after_s = self._classify_calendar_error(exc)
@@ -1273,6 +1400,11 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return ("transient", "network", retry_after)
         return ("transient", "unknown", retry_after)
+
+    def _bounded_retry_delay(self, *, retry_after_s: int | None) -> float:
+        base = max(1.0, float(self._poll_interval_s))
+        requested = float(retry_after_s or 0)
+        return min(max(base, requested), max(base, 900.0))
 
 
 __all__ = [

@@ -3,18 +3,62 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CONTROL_PLANE_REBOOT_LOCAL_CANDIDATE
-verified_local_date: pending
+gate_result: PHASE_A_RUNTIME_REPAIR_LOCAL_CANDIDATE
+verified_local_date: 2026-08-25
 verified_github_date: pending
-branch: codex/v2-control-plane-reboot
+branch: codex/administrateme-v2-runtime
 candidate_commit_resolution: local_candidate_pending_ordinary_ci_and_pull_request
 pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: resume_product_delivery_under_simple_github_workflow
+next_phase: owner_review_merge_then_separately_authorized_phase_b
 ---
 # Release handoff
+
+## 2026-08-25 Phase A runtime, source, and browser repair
+
+Phase A was performed only on `codex/administrateme-v2-runtime` in a
+credential-free disposable environment based on current `main`. The selected
+active-family release identifier `d181fad24ef488a71ce5568cc40fb81309cb3817`
+was verified as repository ancestry only. Content-free, read-only diagnostics
+informed the repair; no release selector, service, credential, household fact,
+provider state, or family-Mac process was changed. Phase B has not started.
+
+The candidate hardens four connected failure classes. First, its source stress
+harness uses a whole-composition fixed-point barrier before every restart and
+proves all 24 durable subscribers at zero lag. The 8,760-source profile
+accounted for 8,760/8,760 obligations with zero missing, failed, or pending
+dispositions and equal rebuild digests. Second, Gmail, Google Calendar, and
+Google Tasks use durable, leased, fenced progress and automatic single-probe
+circuit recovery; incomplete observation composition fails closed for writes.
+Third, OpenClaw health expires without a current-process heartbeat, readiness
+separates service availability from release eligibility, and bootstrap always
+uses and verifies the manifest-selected Homebrew Node formula. Fourth, Triage
+pagination is revision-bound and stale cross-context continuation performs an
+authoritative reload; real 520-item traversal, exact focus, isolation, keyboard,
+responsive, reflow, target, contrast, and transport/console behavior pass the
+690-assertion Gate 7 fixture. The clean aggregate additionally exposed and
+closed a Comms settlement race: the fixture now waits for semantic processing,
+and a local command reports success only when its intended projection state is
+observable; a losing concurrent revision returns a truthful conflict.
+
+This work **PRESERVES** append-only facts, deterministic replay, member scope,
+human decisions, observation mode, governance, provider-write boundaries, and
+the single Python/OpenClaw topology. It **MODERNIZES/HARDENS** cursor schema and
+leases, provider progress, retry/circuit recovery, health freshness/readiness,
+bounded history indexing, quiescence proof, and snapshot-safe pagination. It
+**SUPERSEDES** memory-only provider progress, unrecoverable open circuits,
+fail-open write seams, ambient Node selection, indefinitely stale healthy
+state, snapshotless cursors, and full-history rescans. No required product
+behavior is deferred; deployment is a separate authorization boundary.
+
+The content-free receipt, verification matrix, rollback notes, and bounded
+remaining risk are recorded in
+`docs/refactor/evidence/phase-a-runtime-repair-2026-08-25.md`. An ordinary pull
+request and required GitHub CI remain the publication boundary. Merge,
+activation, live recovery, runtime migration, and provider writes remain
+unperformed and unauthorized.
 
 ## 2026-08-25 control-plane reboot
 

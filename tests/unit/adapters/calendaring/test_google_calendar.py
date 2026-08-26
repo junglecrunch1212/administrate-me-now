@@ -76,6 +76,21 @@ GoogleCalendarAdapter: Any = _adapter_mod.GoogleCalendarAdapter
 
 
 _FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
+_OBSERVATION_DEFAULT = object()
+
+
+@pytest.fixture(autouse=True)
+def _inactive_observation_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def call_through(
+        _session: Any,
+        _action: str,
+        _payload: dict[str, Any],
+        action_fn: Any,
+        **_kwargs: Any,
+    ) -> OutboundResult:
+        return OutboundResult(suppressed=False, result=await action_fn())
+
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", call_through)
 
 
 class _FakeEventLog:
@@ -162,7 +177,7 @@ class _FakeCalendarService:
     def __init__(
         self,
         *,
-        list_pages: list[dict[str, Any]] | None = None,
+        list_pages: list[dict[str, Any] | BaseException] | None = None,
         calendar_list_pages: list[dict[str, Any]] | None = None,
         insert_response: dict[str, Any] | None = None,
         raises: BaseException | None = None,
@@ -222,7 +237,10 @@ class _FakeListRequest:
         if self._service._raises is not None:
             raise self._service._raises
         if self._service._list_pages:
-            return dict(self._service._list_pages.pop(0))
+            page = self._service._list_pages.pop(0)
+            if isinstance(page, BaseException):
+                raise page
+            return dict(page)
         return {"items": []}
 
 
@@ -239,9 +257,9 @@ class _FakeInsertRequest:
 def _make_adapter(
     *,
     service: _FakeCalendarService | None = None,
-    observation_session: Any = None,
-    observation_manager: Any = None,
-    observation_event_log: Any = None,
+    observation_session: Any = _OBSERVATION_DEFAULT,
+    observation_manager: Any = _OBSERVATION_DEFAULT,
+    observation_event_log: Any = _OBSERVATION_DEFAULT,
     calendar_id: str = "primary@example.test",
 ) -> Any:
     """Construct a GoogleCalendarAdapter with a fake service. Mirrors the
@@ -253,9 +271,21 @@ def _make_adapter(
             "calendar_id": calendar_id,
             "user_email": "operator@example.test",
         },
-        observation_session=observation_session,
-        observation_manager=observation_manager,
-        observation_event_log=observation_event_log,
+        observation_session=(
+            object()
+            if observation_session is _OBSERVATION_DEFAULT
+            else observation_session
+        ),
+        observation_manager=(
+            object()
+            if observation_manager is _OBSERVATION_DEFAULT
+            else observation_manager
+        ),
+        observation_event_log=(
+            object()
+            if observation_event_log is _OBSERVATION_DEFAULT
+            else observation_event_log
+        ),
     )
     if service is not None:
         adapter._service = service
@@ -384,8 +414,8 @@ async def test_apply_write_routes_through_observation_outbound(
     observation-mode seam slots are populated. The adapter imports the
     function under the alias ``observation_outbound`` in its own module
     namespace; monkeypatching THAT name records the wrap without needing
-    real session / manager / event-log instances. The Phase A path leaves
-    the seams unset and bypasses the wrap (see the next test)."""
+    real session / manager / event-log instances. Missing seams are covered
+    separately as a fail-closed configuration error."""
     service = _FakeCalendarService(insert_response={"id": "gcal-evt-wrapped-001"})
     session_sentinel = object()
     manager_sentinel = object()
@@ -504,15 +534,16 @@ async def test_apply_write_observation_suppressed_returns_unapplied(
     assert service.insert_calls == []
 
 
-async def test_apply_write_direct_call_when_seams_unset_returns_applied() -> None:
-    """Phase A (today): the supervisor's adapter loader does NOT yet
-    populate the observation-seam slots, so :meth:`_apply_write_impl`
-    falls through the wrap branch and direct-calls
-    ``service.events().insert(...)``. The 11r-c / 11a Phase-A-conditional
-    pattern. ``WriteResult(applied=True, ...)`` returns with the Google
-    event id."""
+async def test_apply_write_fails_closed_when_seams_unset() -> None:
+    """Missing observation dependencies must not bypass the final
+    outbound side-effect guard."""
     service = _FakeCalendarService(insert_response={"id": "gcal-evt-direct-001"})
-    adapter = _make_adapter(service=service)  # seams default to None
+    adapter = _make_adapter(
+        service=service,
+        observation_session=None,
+        observation_manager=None,
+        observation_event_log=None,
+    )
 
     op = WriteOperation(
         kind="create_event",
@@ -524,12 +555,10 @@ async def test_apply_write_direct_call_when_seams_unset_returns_applied() -> Non
             "end": {"dateTime": "2026-05-18T16:00:00Z"},
         },
     )
-    result = await adapter.apply_write(op)
+    with pytest.raises(RuntimeError, match="observation"):
+        await adapter.apply_write(op)
 
-    assert len(service.insert_calls) == 1
-    assert result.applied is True
-    assert result.external_id == "gcal-evt-direct-001"
-    assert result.suppressed is False
+    assert service.insert_calls == []
 
 
 # ===========================================================================
@@ -825,7 +854,8 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
     }
     cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
     first_service = _FakeCalendarService(
-        calendar_list_pages=[{"items": [entry]}], list_pages=[{"items": []}]
+        calendar_list_pages=[{"items": [entry]}],
+        list_pages=[{"items": [], "nextSyncToken": "sync-page-1"}],
     )
     first = GoogleCalendarAdapter(config=config)
     first.instance_name = "google-calendar-primary"
@@ -855,7 +885,7 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
 
     restarted_service = _FakeCalendarService(
         calendar_list_pages=[{"items": [entry]}],
-        list_pages=[{"items": []}],
+        list_pages=[{"items": [], "nextSyncToken": "sync-page-2"}],
     )
     restarted = GoogleCalendarAdapter(config=config)
     restarted.instance_name = "google-calendar-primary"
@@ -872,13 +902,200 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
         )
         == 0
     )
-    assert restarted.status().extra["durable_cursor"]["provider_watermark"] is None
+    calendar_cursor_id = restarted._calendar_cursor_id("calendar-a")
+    assert cursor_store.get(calendar_cursor_id).provider_watermark == "sync-page-2"
+    assert restarted_service.list_calls[0]["syncToken"] == "sync-page-1"
+    assert restarted.status().extra["durable_cursor"]["provider_watermark"] == "present"
     assert not [
         call
         for call in restarted_log.calls
         if call["type"] == "calendar.source_observed"
     ]
     cursor_store.close()
+
+
+async def test_calendar_sync_token_does_not_advance_on_partial_page_failure(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[
+            {"items": [], "nextPageToken": "page-2"},
+            ConnectionResetError("fixture page failed"),
+        ]
+    )
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    adapter.instance_name = "google-calendar-primary"
+    adapter._service = service
+    store = AdapterCursorStore(tmp_path / "partial-calendar.sqlite3")
+    try:
+        with pytest.raises(ConnectionResetError, match="page failed"):
+            await adapter._poll_calendar_once(
+                ctx=_seed_ctx(adapter, _FakeEventLog(), cursor_store=store),
+                calendar_id="calendar-a",
+                calendar_name="Personal",
+            )
+        assert (
+            store.get(adapter._calendar_cursor_id("calendar-a")).provider_watermark
+            is None
+        )
+    finally:
+        store.close()
+
+
+async def test_calendar_expired_sync_token_resets_and_full_resyncs(
+    tmp_path: Path,
+) -> None:
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    adapter.instance_name = "google-calendar-primary"
+    store = AdapterCursorStore(tmp_path / "expired-calendar.sqlite3")
+    cursor_id = adapter._calendar_cursor_id("calendar-a")
+    store.record_success(cursor_id, provider_watermark="expired-sync")
+    service = _FakeCalendarService(
+        list_pages=[
+            _FakeHttpError(_FakeHttpResponse(status=410)),
+            {"items": [], "nextSyncToken": "fresh-sync"},
+        ]
+    )
+    adapter._service = service
+    try:
+        assert (
+            await adapter._poll_calendar_once(
+                ctx=_seed_ctx(adapter, _FakeEventLog(), cursor_store=store),
+                calendar_id="calendar-a",
+                calendar_name="Personal",
+            )
+            == 0
+        )
+        assert service.list_calls[0]["syncToken"] == "expired-sync"
+        assert "syncToken" not in service.list_calls[1]
+        assert store.get(cursor_id).provider_watermark == "fresh-sync"
+    finally:
+        store.close()
+
+
+async def test_calendar_duplicate_runtime_cannot_poll_same_calendar(
+    tmp_path: Path,
+) -> None:
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    adapter.instance_name = "google-calendar-primary"
+    service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "must-not-be-read"}]
+    )
+    adapter._service = service
+    store = AdapterCursorStore(tmp_path / "calendar-owner.sqlite3")
+    cursor_id = adapter._calendar_cursor_id("calendar-a")
+    assert store.claim(cursor_id, "other-runtime", ttl_ms=60_000)
+    try:
+        assert (
+            await adapter._poll_calendar_once(
+                ctx=_seed_ctx(adapter, _FakeEventLog(), cursor_store=store),
+                calendar_id="calendar-a",
+                calendar_name="Personal",
+            )
+            == 0
+        )
+        assert service.list_calls == []
+        assert adapter.status().extra["cursor_lease"] == "held_by_another_runtime"
+    finally:
+        store.close()
+
+
+async def test_calendar_provider_failures_open_durable_circuit(
+    tmp_path: Path,
+) -> None:
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+            "poll_interval_s": 0,
+        }
+    )
+    adapter.instance_name = "google-calendar-primary"
+    store = AdapterCursorStore(tmp_path / "calendar-circuit.sqlite3")
+    ctx = _seed_ctx(adapter, _FakeEventLog(), cursor_store=store)
+    cursor_id = adapter._calendar_cursor_id("calendar-a")
+    try:
+        for _attempt in range(3):
+            adapter._service = _FakeCalendarService(
+                list_pages=[ConnectionResetError("fixture provider failure")]
+            )
+            with pytest.raises(ConnectionResetError):
+                await adapter._poll_calendar_once(
+                    ctx=ctx,
+                    calendar_id="calendar-a",
+                    calendar_name="Personal",
+                )
+        assert store.get(cursor_id).circuit_state == "open"
+        blocked = _FakeCalendarService(list_pages=[{"items": []}])
+        adapter._service = blocked
+        assert (
+            await adapter._poll_calendar_once(
+                ctx=ctx,
+                calendar_id="calendar-a",
+                calendar_name="Personal",
+            )
+            == 0
+        )
+        assert blocked.list_calls == []
+        assert adapter.status().extra["cursor_lease"] == "circuit_open"
+    finally:
+        store.close()
+
+
+async def test_calendar_poll_loop_recovers_health_and_honors_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _make_adapter()
+    adapter._max_poll_cycles = 2
+    adapter._poll_interval_s = 0
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def poll_once(*, ctx: AdapterContext) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise _FakeHttpError(
+                _FakeHttpResponse(status=429, headers={"Retry-After": "45"})
+            )
+        return 0
+
+    async def record_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    adapter._poll_once = poll_once
+    monkeypatch.setattr(_adapter_mod.asyncio, "sleep", record_sleep)
+
+    await adapter._poll_loop(ctx=ctx)
+
+    assert attempts == 2
+    assert sleeps[0] == 45
+    assert adapter.status().state == "running"
 
 
 async def test_initial_sync_does_not_backfill_elapsed_outcomes() -> None:

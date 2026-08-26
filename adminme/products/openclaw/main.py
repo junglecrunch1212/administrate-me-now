@@ -535,32 +535,37 @@ async def report_health(body: HealthReport, request: Request) -> dict[str, Any]:
         and body.openclaw_commit == OPENCLAW_COMMIT
     )
     state = body.state if compatible else "incompatible"
-    session = Session(
-        tenant_id=runtime.settings.instance.tenant_id,
-        auth_member_id="openclaw-plugin",
-        auth_role="device",
-        view_member_id="openclaw-plugin",
-        view_role="device",
-        dm_scope="shared",
-        source="openclaw_plugin",
-        correlation_id=f"openclaw-health:{int(time.time())}",
-    )
-    event_id, _ = await _append(
-        runtime,
-        session,
-        event_type="openclaw.integration.state_changed",
-        source_account_id="health",
-        owner_scope="shared:household",
-        visibility_scope="shared:household",
-        payload={
-            "state": state,
-            "observed_at": EventEnvelope.now_utc_iso(),
-            "openclaw_version": body.openclaw_version,
-            "openclaw_commit": body.openclaw_commit,
-            "reason": body.reason,
-        },
-    )
-    runtime.openclaw_state = state
+    event_id: str | None = None
+    if (
+        runtime.openclaw_last_report_monotonic is None
+        or runtime.openclaw_state != state
+    ):
+        session = Session(
+            tenant_id=runtime.settings.instance.tenant_id,
+            auth_member_id="openclaw-plugin",
+            auth_role="device",
+            view_member_id="openclaw-plugin",
+            view_role="device",
+            dm_scope="shared",
+            source="openclaw_plugin",
+            correlation_id=f"openclaw-health:{int(time.time())}",
+        )
+        event_id, _ = await _append(
+            runtime,
+            session,
+            event_type="openclaw.integration.state_changed",
+            source_account_id="health",
+            owner_scope="shared:household",
+            visibility_scope="shared:household",
+            payload={
+                "state": state,
+                "observed_at": EventEnvelope.now_utc_iso(),
+                "openclaw_version": body.openclaw_version,
+                "openclaw_commit": body.openclaw_commit,
+                "reason": body.reason,
+            },
+        )
+    runtime.record_openclaw_health_report(state)
     await runtime._refresh_capability_registry()
     if not compatible:
         raise HTTPException(
@@ -1424,7 +1429,7 @@ async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, 
     _require_adult(session)
     runtime = _runtime(request)
     result = {
-        "openclaw_state": runtime.openclaw_state,
+        "openclaw_state": runtime.effective_openclaw_state(),
         "compatibility": {
             "version": OPENCLAW_VERSION,
             "commit": OPENCLAW_COMMIT,

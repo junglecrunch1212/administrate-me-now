@@ -43,6 +43,22 @@ FIXTURES = GMAIL_PACK_ROOT / "tests" / "fixtures"
 _FROZEN_NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _inactive_observation_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adminme.lib.observation import OutboundResult
+
+    async def call_through(
+        _session: Any,
+        _action: str,
+        _payload: dict[str, Any],
+        action_fn: Any,
+        **_kwargs: Any,
+    ) -> OutboundResult:
+        return OutboundResult(suppressed=False, result=await action_fn())
+
+    monkeypatch.setattr(_gmail_mod, "outbound", call_through)
+
+
 def _load_gmail_module() -> Any:
     """Load ``adapter.py`` from the Gmail pack root by file path.
 
@@ -215,6 +231,7 @@ def _build_gmail_adapter(
     historical_seed_queries: list[str] | None = None,
     historical_seed_max_messages_per_query: int = 100,
     historical_related_max_participants: int = 20,
+    observation_seams: bool = True,
 ) -> Any:
     """Construct a real ``GmailAdapter`` with an injected fake service +
     deterministic credentials resolver. The adapter is otherwise the
@@ -250,6 +267,9 @@ def _build_gmail_adapter(
         credentials_resolver=_resolver,
         service_factory=_factory,
         max_poll_cycles=max_poll_cycles,
+        observation_session=object() if observation_seams else None,
+        observation_manager=object() if observation_seams else None,
+        observation_event_log=object() if observation_seams else None,
     )
     # Per-instance override of the class attr — adapter reads
     # ``self.POLL_INTERVAL_S`` so this shadows the 120s production value.
@@ -499,6 +519,46 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
     finally:
         await second.stop()
         cursor_store.close()
+
+
+async def test_gmail_restart_takes_single_half_open_probe_and_recovers(
+    tmp_path: Path,
+) -> None:
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+    store = AdapterCursorStore(tmp_path / "gmail-recovery.sqlite3")
+    cursor_id = "messaging-gmail-api:unbound:sandbox@example.test"
+    store.record_success(cursor_id, provider_watermark="9000")
+    for now_ms in (1_000, 1_001, 1_002):
+        store.record_error(
+            cursor_id,
+            recovery_after_ms=0,
+            now_ms=now_ms,
+        )
+    assert store.get(cursor_id).circuit_state == "open"
+
+    service = _FakeGmailService(
+        history_pages=[{"historyId": "9001", "history": []}],
+    )
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=1)
+    event_log = _RecordingEventLog()
+    supervisor = _supervisor(
+        config_path=channels,
+        event_log=event_log,
+        adapters=[adapter],
+        cursor_store=store,
+    )
+    await supervisor.start()
+    try:
+        await _wait_for(lambda: len(service.history_list_calls) == 1)
+        recovered = store.get(cursor_id)
+        assert recovered.circuit_state == "closed"
+        assert recovered.provider_watermark == "9001"
+        assert adapter.status().state == "running"
+        assert adapter.status().extra["cursor_recovery"] == "half_open_succeeded"
+    finally:
+        await supervisor.stop()
+        store.close()
 
 
 async def test_durable_cursor_and_dedupe_survive_supervisor_restart(
@@ -1019,9 +1079,8 @@ async def test_retrofit_validator_clean_after_supervisor_lifecycle(
 # ---------------------------------------------------------------------------
 # 7) Cohort D step 1 (prompt 11a) — real Gmail outbound replaces the 11r-a
 #    `send` stub. These three tests exercise the supervisor-loaded
-#    GmailAdapter's real send path end-to-end (Phase A, no observation
-#    seams propagated by the loader yet; Phase B is the future loader
-#    extension covered by the @skip test below).
+#    GmailAdapter's real send path end-to-end through an explicitly inactive
+#    observation seam.
 # ---------------------------------------------------------------------------
 
 
@@ -1122,6 +1181,7 @@ async def test_supervisor_seam_slots_propagate_through_loader(
     adapter = _build_gmail_adapter(
         service=_FakeGmailService(profile=_fixture("profile_response.json")),
         max_poll_cycles=0,
+        observation_seams=False,
     )
     session = object()
     manager = object()
@@ -1145,24 +1205,20 @@ async def test_supervisor_seam_slots_propagate_through_loader(
         await sup.stop()
 
 
-async def test_supervisor_observation_off_send_calls_gmail_directly(
+async def test_supervisor_missing_observation_seams_fail_closed(
     tmp_path: Path,
 ) -> None:
-    """The Phase-A-conditional contract: when the supervisor-loaded
-    adapter has no observation-mode seams populated (today's loader
-    behavior), :meth:`send` MUST call the Gmail API directly rather
-    than routing through :func:`adminme.lib.observation.outbound`. This
-    pins the Phase A behavior at the integration seam — sister of the
-    Phase B branch covered by the framework-level
-    ``test_send_happy_path_with_seams_populated`` and the @skip Phase B
-    integration test above."""
+    """An incompletely wired supervisor-loaded adapter refuses the write
+    before either the observation function or Gmail provider is called."""
     from adminme.lib.adapters import OutboundMessage
 
     channels = tmp_path / "channels.yaml"
     _write_channels_yaml(channels)
 
     service = _FakeGmailService(profile=_fixture("profile_response.json"))
-    adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
+    adapter = _build_gmail_adapter(
+        service=service, max_poll_cycles=0, observation_seams=False
+    )
 
     # Sanity check: the supervisor-loaded adapter does NOT have
     # observation-mode seams populated. If a future loader change
@@ -1208,24 +1264,24 @@ async def test_supervisor_observation_off_send_calls_gmail_directly(
         await _wait_for(lambda: len(event_log.by_type("adapter.authenticated")) == 1)
 
         adapter._service = _SendService()
-        # Patch via the adapter's loaded module (file-path importlib
-        # creates a fresh module instance per _load_gmail_module).
         original_outbound = _gmail_mod.outbound
         _gmail_mod.outbound = _recording_outbound
         try:
-            await adapter.send(
-                OutboundMessage(
-                    channel="gmail",
-                    recipient="alice@example.test",
-                    body="Phase A direct call",
-                    metadata={"subject": "Direct"},
+            with pytest.raises(RuntimeError, match="observation"):
+                await adapter.send(
+                    OutboundMessage(
+                        channel="gmail",
+                        recipient="alice@example.test",
+                        body="missing-seam fail-closed call",
+                        metadata={"subject": "Direct"},
+                    )
                 )
-            )
         finally:
             _gmail_mod.outbound = original_outbound
 
-        # Gmail API hit; outbound() not.
-        assert len(captured_send) == 1
+        # Neither the provider nor the observation function is invoked when
+        # the seam is incomplete.
+        assert captured_send == []
         assert outbound_called == []
     finally:
         await sup.stop()
