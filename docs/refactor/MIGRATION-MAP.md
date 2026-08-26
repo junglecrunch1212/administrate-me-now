@@ -1,5 +1,16 @@
 # Migration map
 
+Phase B live-closure amendment (2026-08-26): protected merge
+`7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7` is active after an ordinary
+same-runtime governed upgrade. Startup appended four exact refusals for the
+previously non-terminal recovery controls; final recovery counts are 13
+requested, 5 succeeded, 8 refused, 0 failed, and 0 pending. Full Doctor,
+65,691/65,691 source settlement, all durable consumers, exact OpenClaw,
+authenticated read-only browser scope, backup, rollback, observation, and zero
+provider-effect proofs pass. This is **HARDEN COMPLETE LIVE** and introduces no
+fact rewrite, checkpoint move, source replay, event/schema, projection,
+canonical, credential, provider, Python, Node, or OpenClaw migration.
+
 Phase B recovery-terminality amendment (2026-08-26): active merge
 `cfde6b631edd034633e8dc63a0204d06de363ac3` completed v22 settlement with
 65,685/65,685 source obligations accounted, zero source pending/missing/failed,

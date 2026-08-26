@@ -207,3 +207,54 @@ and 17 plugin tests, and all 690 credential-free Gate 7 assertions under Node
 24 and Chrome 151. Protected hosted checks/merge, governed upgrade, final live
 ledger/Doctor/browser/effect proof, and a documentation-only closure receipt
 remain pending.
+
+## Protected terminality merge and final live closure
+
+PR #349 passed `deterministic-consistency` in 6m30s and
+`credential-free-rehearsal` in 19m32s at exact head
+`771ea70c6b7e2088c77bc246183d49c79778d4ca`, then merged normally as
+`7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7`. A clean detached checkout and
+`origin/main` resolved to that merge. The updater was invoked without either
+optional approval flag and returned `status=upgraded`, controller attested,
+rollback available, source repair null, and runtime/OpenClaw migration null.
+Exact OpenClaw remains 2026.7.2 at
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`.
+
+Before normal bus delivery, candidate startup selected the four non-terminal
+requests and appended exactly these content-free refusals:
+
+| Request | Refusal | Reason |
+|---|---|---|
+| `ev_01M0Z1V92S0000` | `ev_01M0Z7BMSK0000` | `failed_assessment_not_current` |
+| `ev_01M0Z1V92S0001` | `ev_01M0Z7BMSQ0000` | `failed_assessment_not_current` |
+| `ev_01M0Z1V92S0002` | `ev_01M0Z7BMSS0000` | `failed_assessment_not_current` |
+| `ev_01M0Z1V92S0003` | `ev_01M0Z7BMSV0000` | `failed_assessment_not_current` |
+
+The final recovery ledger is thirteen requested, five succeeded, eight
+refused, zero failed, and zero pending. No selected request gained both terminal
+forms. Noise filtering remains v22 with zero lag, zero consecutive failures,
+and no poison; no subscriber checkpoint was reset or advanced by startup
+reconciliation.
+
+Final full Doctor reports healthy and safe to attach in observation mode. The
+encrypted log opens under SQLCipher with 118,791 events; 65,691/65,691 source
+obligations are accounted with zero pending, missing, or failed; all eight
+required pipelines and fifteen projections are healthy; exact OpenClaw source,
+plugin discovery, live `llm-task` execution, five managed cron jobs, both
+launchd services, and loopback-only ports pass. `live_provider_claims` is empty,
+and the canonical synthetic round trip records zero external side effects.
+
+Backup `administrateme-20260826T142245Z.ambackup` is mode 0600,
+2,708,821,592 bytes, with SHA-256
+`4c45bcd36f8b278e9859adbdf9940ebeb39f74e7838c3317975662070e254ca8`.
+Authenticated read-only browser verification traversed Today, Triage, Comms,
+Reminders, People, Notes, Finance, Calendar, Scoreboard, and Settings at
+384 × 652. Every route had the expected path/title, one main, one page heading,
+one primary navigation with ten destinations and one current marker, a live
+region, visible observation state, no catastrophic error, and no viewport
+overflow. The browser recorded zero console issues. No write control was used,
+no source or household content was captured, and no provider effect occurred.
+
+Phase B is complete for the owner-authorized observation-only scope. Runtime
+migration, provider enrollment, credential/permission changes, observation
+disablement, checkpoint edits, and provider writes remain unauthorized.

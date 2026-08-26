@@ -3,18 +3,53 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: PHASE_B_RECOVERY_TERMINALITY_LOCAL_CANDIDATE
+gate_result: PHASE_B_COMPLETE_OBSERVATION_ONLY
 verified_local_date: 2026-08-26
-verified_github_date: pending
-branch: codex/administrateme-v2-recovery-terminality
-candidate_commit_resolution: local_aggregate_pass_pending_protected_pull_request
-pull_request_url: pending
+verified_github_date: 2026-08-26
+branch: main
+candidate_commit_resolution: active_merge_7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/349
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: aggregate_release_then_protected_merge_and_guarded_forward_repair
+next_phase: continue_observation_until_separately_authorized_change
 ---
 # Release handoff
+
+## 2026-08-26 Phase B live closure
+
+Recovery-terminality PR #349 passed both required hosted checks at exact head
+`771ea70c6b7e2088c77bc246183d49c79778d4ca` and merged normally as
+`7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7`. A fresh detached checkout matched
+that merge and `origin/main`. The governed updater ran without a source-repair
+or runtime-migration exception, attested the controller, created a new
+authenticated encrypted backup, selected the immutable merge, restarted both
+loopback services, and returned `status=upgraded` with rollback available.
+
+Production startup terminalized all four previously stranded content-free
+commands as exact `failed_assessment_not_current` refusals. The final recovery
+ledger is thirteen requested, five succeeded, eight refused, zero failed, and
+zero pending. Full Doctor is healthy: 65,691/65,691 source obligations are
+accounted with zero pending/missing/failed; all eight required pipelines and
+fifteen projections are healthy; configured provider adapters retain durable
+progress and closed circuits; the exact OpenClaw source, plugin, `llm-task`,
+cron, services, and loopback bindings pass; `live_provider_claims` is empty;
+and the canonical synthetic proof records zero external effects.
+
+The new backup `administrateme-20260826T142245Z.ambackup` is mode 0600,
+2,708,821,592 bytes, and has SHA-256
+`4c45bcd36f8b278e9859adbdf9940ebeb39f74e7838c3317975662070e254ca8`.
+Authenticated read-only browser verification traversed all ten adult routes at
+384 × 652 with exact primary navigation/current-route semantics, observation
+visible, one main and one page heading, no catastrophic error, no viewport
+overflow, and zero console issues. No write control was used and no household
+content entered the receipt.
+
+Phase B is complete for this authorized observation-only release. Observation
+remains active and write admission remains suppressed. This closure grants no
+authority to disable observation, enroll a provider, change credentials or
+permissions, migrate runtimes, edit checkpoints, or perform provider writes;
+each remains a separate future authorization boundary.
 
 ## 2026-08-26 Phase B recovery-command terminality repair
 
