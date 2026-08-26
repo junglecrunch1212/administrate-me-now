@@ -1,5 +1,21 @@
 # Migration map
 
+Phase B rollback-schema amendment (2026-08-26): the second guarded attempt of
+merge `af29e858` stopped before backup or release selection because the first
+attempt's additive `adapter_cursors.retry_not_before_ms` column is not readable
+by predecessor `d181fad`'s `SELECT *` dataclass construction. Gmail and Google
+Calendar truthfully reported the exact same constructor failure; observation,
+source accounting, event history, checkpoints, and provider state were
+unchanged. This candidate **PRESERVES/HARDENS** rollback by moving retry timing
+to the content-free companion `adapter_retry_state` table. Opening the candidate
+store atomically copies any v21 timing values and drops only the incompatible
+column, after which both the candidate and exact predecessor schemas can read
+the database. The predecessor ignores the companion table. The guarded repair
+policy recognizes only the two exact capability/instance/version/error tuples
+left by this rejected rollback; it does not admit other adapter failures or
+weaken post-switch full Doctor. No source, projection, canonical, credential,
+checkpoint, provider, Python, Node, or OpenClaw migration is introduced.
+
 Phase B replay-settlement amendment (2026-08-26): the guarded activation of
 merge `ec3c776` was automatically rolled back because noise-filtering v21 did
 not settle its full historical replay inside the unchanged one-hour release
@@ -31,12 +47,14 @@ pagination. It **SUPERSEDES** memory-only
 provider watermarks, permanently open circuits, direct writes under missing
 observation seams, ambient Node execution, indefinitely reusable healthy
 reports, full-history rescans, false-success local command responses, and
-snapshotless pagination. Existing cursor
-stores migrate additively with `retry_not_before_ms`; older event/schema facts
-remain readable and are never rewritten. Rollback can ignore the additive
-column and new client cursor but may restore the defects, so rollback is a
-release-selection operation rather than a data rewrite. No required behavior
-is deferred. Phase B deployment is a separate owner-authorized boundary.
+snapshotless pagination. Existing cursor stores migrate retry eligibility into
+a companion table while retaining their provider watermarks,
+lease/error/circuit state, and dedupe ledger. Older event/schema facts remain
+readable and are never rewritten. The main cursor table remains
+predecessor-readable, so rollback can ignore the companion state and remains a
+release-selection operation rather than a source or provider-data rewrite. No
+required behavior is deferred. Phase B deployment is a separate
+owner-authorized boundary.
 
 Control-plane reboot amendment (2026-08-25): ADR-0013 retires G-001, the Outcome Harness, proposed G-002/ADR-0012, and the earlier executor instructions. Current delivery uses one protected GitHub pull request with ordinary CI and optional advisory review. Historical process descriptions below record past events only; they are not current instructions. V2 runtime, product, privacy, observation, backup, rollback, and provider-write boundaries are unchanged.
 

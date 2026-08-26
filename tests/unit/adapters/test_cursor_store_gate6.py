@@ -139,3 +139,62 @@ def test_open_circuit_admits_one_bounded_half_open_probe(tmp_path: Path) -> None
         assert recovered.retry_not_before_ms is None
     finally:
         store.close()
+
+
+def test_generation_21_retry_column_migrates_to_rollback_compatible_table(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "cursor-v21.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE adapter_cursors (
+                adapter_id TEXT PRIMARY KEY,
+                provider_watermark TEXT,
+                lease_owner TEXT,
+                lease_until_ms INTEGER,
+                error_count INTEGER NOT NULL DEFAULT 0,
+                circuit_state TEXT NOT NULL DEFAULT 'closed',
+                retry_not_before_ms INTEGER,
+                updated_at_ms INTEGER NOT NULL
+            );
+            INSERT INTO adapter_cursors VALUES (
+                'watcher', 'page-7', NULL, NULL, 3, 'open', 4200, 4000
+            );
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = AdapterCursorStore(path)
+    try:
+        migrated = store.get("watcher")
+        assert migrated.provider_watermark == "page-7"
+        assert migrated.circuit_state == "open"
+        assert migrated.retry_not_before_ms == 4200
+        assert not store.claim("watcher", "worker-a", ttl_ms=100, now_ms=4199)
+        assert store.claim("watcher", "worker-a", ttl_ms=100, now_ms=4200)
+    finally:
+        store.close()
+
+    with sqlite3.connect(path) as inspection:
+        cursor_columns = [
+            str(row[1])
+            for row in inspection.execute("PRAGMA table_info(adapter_cursors)")
+        ]
+        retry = inspection.execute(
+            "SELECT retry_not_before_ms FROM adapter_retry_state WHERE adapter_id=?",
+            ("watcher",),
+        ).fetchone()
+    assert cursor_columns == [
+        "adapter_id",
+        "provider_watermark",
+        "lease_owner",
+        "lease_until_ms",
+        "error_count",
+        "circuit_state",
+        "updated_at_ms",
+    ]
+    assert retry == (4200,)
