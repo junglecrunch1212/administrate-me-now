@@ -366,3 +366,22 @@ This receipt is restricted to governing documentation and content-free
 operational metadata. It changes no code, configuration, dependency, lock,
 test, installed release, runtime state, credential, permission, provider
 enrollment, or observation policy.
+
+## Phase B v22 recovery-terminality closure — 2026-08-26
+
+Protected PR #349 merged as
+`7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7` and the ordinary governed updater
+selected it without a source-repair or runtime-migration exception. Startup
+appended one `failed_assessment_not_current` refusal for each of the four v22
+requests whose source had already reached a newer ordinary successful
+assessment. Recovery accounting is now 13 requested, 5 succeeded, 8 refused,
+0 failed, and 0 pending. The four immutable requests and prior assessments
+remain present; no checkpoint or source fact changed.
+
+Full Doctor is healthy with 65,691/65,691 source obligations, all eight
+pipelines and fifteen projections healthy, exact OpenClaw, observation active,
+rollback available, `live_provider_claims: []`, and zero synthetic external
+effects. The new authenticated encrypted backup and authenticated read-only
+ten-route browser pass. This closes AC-42 command terminality without granting
+domain, provider, credential, permission, runtime-migration, or observation-
+disablement authority.

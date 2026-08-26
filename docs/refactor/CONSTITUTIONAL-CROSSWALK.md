@@ -1,5 +1,18 @@
 # Constitutional crosswalk
 
+Phase B live-closure amendment (2026-08-26): protected PR #349 merged as
+`7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7` and is active under observation.
+C032/C081-C082/C086/C113/C116 are **PRESERVED/HARDENED COMPLETE LIVE**: startup
+added four exact content-free refusals, leaving recovery at 13 requested / 5
+succeeded / 8 refused / 0 failed / 0 pending without moving a checkpoint or
+replaying source facts. Full Doctor proves 65,691/65,691 source obligations,
+eight healthy pipelines, fifteen healthy projections, exact OpenClaw, loopback
+services, empty provider claims, rollback, and zero synthetic external effects.
+Authenticated read-only verification covers all ten adult routes with
+observation visible and zero console issues. No source, model, domain,
+human-decision, credential, provider-write, privacy, or runtime-migration
+authority changed. AC-21/AC-42/AC-45/AC-46 are satisfied for this release.
+
 Phase B recovery-terminality amendment (2026-08-26): C032/C113/C116 remain
 **PRESERVED/HARDENED** after the otherwise healthy v22 activation exposed four
 content-free recovery commands without terminal receipts. Every early

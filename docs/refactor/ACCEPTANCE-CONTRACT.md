@@ -1,5 +1,14 @@
 # Release acceptance contract
 
+Phase B live closure (2026-08-26): AC-21/AC-42/AC-45/AC-46 pass for active
+merge `7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7`. The governed updater used no
+repair/runtime exception, retained authenticated rollback, and left observation
+active. Startup terminalized all four stranded controls as exact refusals;
+recovery pending is zero. Full Doctor, 65,691/65,691 source settlement, eight
+pipelines, fifteen projections, exact OpenClaw, empty provider claims, backup,
+and authenticated read-only ten-route browser verification are healthy with
+zero external effects.
+
 Phase B recovery-terminality amendment (2026-08-26): AC-42/AC-46 require every
 accepted content-free recovery command to reach one exact linked assessment or
 refusal even when fixed code terminates through a non-anchor or another early
