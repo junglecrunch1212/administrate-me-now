@@ -273,25 +273,26 @@ def _cursor_decode(value: str | None) -> tuple[str | None, int, str, str] | None
     try:
         padded = value + "=" * (-len(value) % 4)
         decoded = json.loads(base64.urlsafe_b64decode(padded).decode())
-        if (
-            isinstance(decoded, list)
-            and len(decoded) == 5
-            and decoded[0] == 1
-            and isinstance(decoded[1], str)
-            and isinstance(decoded[2], int)
-            and all(isinstance(item, str) for item in decoded[3:])
-        ):
-            return decoded[1], decoded[2], decoded[3], decoded[4]
+        if isinstance(decoded, list) and len(decoded) == 5 and decoded[0] == 1:
+            revision, rank, proposed_at, proposal_id = decoded[1:]
+            if (
+                isinstance(revision, str)
+                and isinstance(rank, int)
+                and isinstance(proposed_at, str)
+                and isinstance(proposal_id, str)
+            ):
+                return revision, rank, proposed_at, proposal_id
         # Pre-revision cursors cannot prove a stable continuation after an
         # upgrade. Decode them only far enough to return the explicit stale
         # contract instead of treating a once-valid cursor as malformed.
-        if (
-            isinstance(decoded, list)
-            and len(decoded) == 3
-            and isinstance(decoded[0], int)
-            and all(isinstance(item, str) for item in decoded[1:])
-        ):
-            return None, decoded[0], decoded[1], decoded[2]
+        if isinstance(decoded, list) and len(decoded) == 3:
+            rank, proposed_at, proposal_id = decoded
+            if (
+                isinstance(rank, int)
+                and isinstance(proposed_at, str)
+                and isinstance(proposal_id, str)
+            ):
+                return None, rank, proposed_at, proposal_id
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
     raise ValueError("invalid triage cursor")
