@@ -10,7 +10,9 @@ at module import.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from adminme.events.log import (
     AppendValidationError,
     CursorNotFound,
     EventLog,
+    EventLogError,
     IdempotencyConflict,
     new_correlation_id,
 )
@@ -270,18 +273,387 @@ async def test_metadata_read_is_watermarked_and_payload_selective(
     assert [event["event_id"] for event in complete] == [first, second]
     assert complete[1]["payload"] is None
 
-    query_plan = [
-        str(row[3])
-        for row in log._conn.execute(  # noqa: SLF001 - storage-plan contract
-            "EXPLAIN QUERY PLAN "
-            "SELECT event_id, type, occurred_at, recorded_at, NULL AS payload "
-            "FROM events INDEXED BY idx_events_type_id_time "
-            "WHERE type IN (?, ?) AND event_id <= ? "
-            "ORDER BY event_id ASC LIMIT ?",
-            ("foo", "bar", second, 5000),
+    def query_plan() -> list[str]:
+        return [
+            str(row[3])
+            for row in log._conn.execute(  # noqa: SLF001 - storage-plan contract
+                "EXPLAIN QUERY PLAN "
+                "SELECT event_id, type, occurred_at, recorded_at, NULL AS payload "
+                "FROM events INDEXED BY idx_events_type_id_time "
+                "WHERE type IN (?, ?) AND event_id <= ? "
+                "ORDER BY event_id ASC LIMIT ?",
+                ("foo", "bar", second, 5000),
+            )
+        ]
+
+    plan = await log._run_locked(query_plan)  # noqa: SLF001 - storage-plan contract
+    assert any("COVERING INDEX idx_events_type_id_time" in row for row in plan)
+
+
+async def test_sqlcipher_connection_operations_stay_on_one_worker_thread(
+    log: EventLog,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: set[int] = set()
+    insert_rows = log._insert_rows  # noqa: SLF001 - thread contract
+    read_page = log._read_page  # noqa: SLF001 - thread contract
+
+    def record_thread() -> int:
+        thread_id = threading.get_ident()
+        observed.add(thread_id)
+        return thread_id
+
+    def tracked_insert(rows):
+        record_thread()
+        return insert_rows(rows)
+
+    def tracked_read(*args):
+        record_thread()
+        return read_page(*args)
+
+    monkeypatch.setattr(log, "_insert_rows", tracked_insert)
+    monkeypatch.setattr(log, "_read_page", tracked_read)
+
+    first = await log._run_locked(record_thread)  # noqa: SLF001 - thread contract
+    await log.append(_event(1))
+    await _collect(log)
+    second = await log._run_locked(record_thread)  # noqa: SLF001 - thread contract
+
+    assert first == second
+    assert observed == {first}
+    assert threading.get_ident() != first
+
+
+async def test_connection_open_migration_and_operations_share_worker_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, int] = {}
+    original_open = EventLog._open_connection  # noqa: SLF001 - thread contract
+    original_migrate = EventLog._migrate  # noqa: SLF001 - thread contract
+
+    def tracked_open(self: EventLog):
+        observed["open"] = threading.get_ident()
+        return original_open(self)
+
+    def tracked_migrate(self: EventLog) -> None:
+        observed["migrate"] = threading.get_ident()
+        original_migrate(self)
+
+    monkeypatch.setattr(EventLog, "_open_connection", tracked_open)
+    monkeypatch.setattr(EventLog, "_migrate", tracked_migrate)
+
+    log = EventLog(tmp_path / "thread-affinity.db", TEST_KEY)
+    try:
+        worker = await log._run_locked(  # noqa: SLF001 - thread contract
+            threading.get_ident
         )
-    ]
-    assert any("COVERING INDEX idx_events_type_id_time" in row for row in query_plan)
+        await log.append(_event(1))
+        assert observed == {"open": worker, "migrate": worker}
+        assert worker != threading.get_ident()
+    finally:
+        await log.close()
+
+
+def test_migration_failure_closes_connection_and_worker(tmp_path: Path) -> None:
+    observed: dict[str, int | bool] = {}
+
+    class _ConnectionProxy:
+        def __init__(self, connection) -> None:
+            self._connection = connection
+
+        def __getattr__(self, name: str):
+            return getattr(self._connection, name)
+
+        def close(self) -> None:
+            observed["close_thread"] = threading.get_ident()
+            observed["closed"] = True
+            self._connection.close()
+
+    class _MigrationFailureLog(EventLog):
+        def _open_connection(self):
+            observed["open_thread"] = threading.get_ident()
+            return _ConnectionProxy(super()._open_connection())
+
+        def _migrate(self) -> None:
+            observed["migration_thread"] = threading.get_ident()
+            raise RuntimeError("simulated migration failure")
+
+    with pytest.raises(RuntimeError, match="simulated migration failure"):
+        _MigrationFailureLog(tmp_path / "migration-failure.db", TEST_KEY)
+
+    worker = observed["open_thread"]
+    assert observed == {
+        "open_thread": worker,
+        "migration_thread": worker,
+        "close_thread": worker,
+        "closed": True,
+    }
+    assert worker not in {thread.ident for thread in threading.enumerate()}
+
+
+def test_post_connect_failure_closes_rejected_connection_on_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, int | bool] = {}
+
+    class _RejectedConnection:
+        row_factory = None
+
+        def execute(self, _statement: str):
+            observed["execute_thread"] = threading.get_ident()
+            raise RuntimeError("simulated post-connect failure")
+
+        def close(self) -> None:
+            observed["close_thread"] = threading.get_ident()
+            observed["closed"] = True
+
+    def rejected_connect(*_args, **_kwargs):
+        observed["connect_thread"] = threading.get_ident()
+        return _RejectedConnection()
+
+    monkeypatch.setattr(sqlcipher3, "connect", rejected_connect)
+    with pytest.raises(RuntimeError, match="simulated post-connect failure"):
+        EventLog(tmp_path / "post-connect-failure.db", TEST_KEY)
+
+    worker = observed["connect_thread"]
+    assert observed == {
+        "connect_thread": worker,
+        "execute_thread": worker,
+        "close_thread": worker,
+        "closed": True,
+    }
+    assert worker not in {thread.ident for thread in threading.enumerate()}
+
+
+def test_schema_autoload_failure_closes_connection_and_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, int | bool] = {}
+
+    class _ConnectionProxy:
+        def __init__(self, connection) -> None:
+            self._connection = connection
+
+        def __getattr__(self, name: str):
+            return getattr(self._connection, name)
+
+        def close(self) -> None:
+            observed["close_thread"] = threading.get_ident()
+            observed["closed"] = True
+            self._connection.close()
+
+    class _AutoloadFailureLog(EventLog):
+        def _open_connection(self):
+            observed["open_thread"] = threading.get_ident()
+            return _ConnectionProxy(super()._open_connection())
+
+    def fail_autoload() -> None:
+        raise RuntimeError("simulated schema autoload failure")
+
+    monkeypatch.setattr("adminme.events.log.ensure_autoloaded", fail_autoload)
+    with pytest.raises(RuntimeError, match="simulated schema autoload failure"):
+        _AutoloadFailureLog(tmp_path / "autoload-failure.db", TEST_KEY)
+
+    worker = observed["open_thread"]
+    assert observed == {
+        "open_thread": worker,
+        "close_thread": worker,
+        "closed": True,
+    }
+    assert worker not in {thread.ident for thread in threading.enumerate()}
+
+
+async def test_close_waits_for_queued_connection_work(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "queued-close.db", TEST_KEY)
+    started = threading.Event()
+    release = threading.Event()
+
+    def held_operation() -> None:
+        started.set()
+        if not release.wait(timeout=5):
+            raise RuntimeError("test did not release queued connection work")
+
+    operation = asyncio.create_task(
+        log._run_locked(held_operation)  # noqa: SLF001 - shutdown contract
+    )
+    assert await asyncio.to_thread(started.wait, 2)
+    closing = asyncio.create_task(log.close())
+    await asyncio.sleep(0)
+    assert not closing.done()
+
+    release.set()
+    await operation
+    await closing
+    with pytest.raises(EventLogError, match="closed"):
+        await log.count()
+
+
+async def test_cancelled_close_still_closes_once_and_stops_worker(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "cancelled-close.db", TEST_KEY)
+    raw_connection = log._conn  # noqa: SLF001 - cancellation contract
+    started = threading.Event()
+    release = threading.Event()
+    close_count = 0
+    close_thread: int | None = None
+
+    class _HeldCloseConnection:
+        def __getattr__(self, name: str):
+            return getattr(raw_connection, name)
+
+        def close(self) -> None:
+            nonlocal close_count, close_thread
+            close_count += 1
+            close_thread = threading.get_ident()
+            started.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test did not release held close")
+            raw_connection.close()
+
+    log._conn = _HeldCloseConnection()  # type: ignore[assignment]  # noqa: SLF001
+    closing = asyncio.create_task(log.close())
+    assert await asyncio.to_thread(started.wait, 2)
+    timer = threading.Timer(0.05, release.set)
+    timer.start()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    timer.join(timeout=1)
+
+    assert close_count == 1
+    assert close_thread is not None
+    assert close_thread not in {thread.ident for thread in threading.enumerate()}
+    await log.close()
+    with pytest.raises(EventLogError, match="closed"):
+        await log.count()
+
+
+async def test_cancelled_queued_close_runs_after_cancelled_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = EventLog(tmp_path / "cancelled-queued-close.db", TEST_KEY)
+    raw_connection = log._conn  # noqa: SLF001 - cancellation contract
+    operation_started = threading.Event()
+    release_operation = threading.Event()
+    close_submitted = asyncio.Event()
+    close_count = 0
+    close_thread: int | None = None
+
+    class _TrackedCloseConnection:
+        def __getattr__(self, name: str):
+            return getattr(raw_connection, name)
+
+        def close(self) -> None:
+            nonlocal close_count, close_thread
+            close_count += 1
+            close_thread = threading.get_ident()
+            raw_connection.close()
+
+    log._conn = _TrackedCloseConnection()  # type: ignore[assignment]  # noqa: SLF001
+    original_submit = log._executor.submit  # noqa: SLF001 - cancellation contract
+
+    def tracked_submit(func, *args, **kwargs):
+        submitted = original_submit(func, *args, **kwargs)
+        if getattr(func, "__self__", None) is log._conn and (
+            getattr(func, "__name__", None) == "close"
+        ):
+            close_submitted.set()
+        return submitted
+
+    monkeypatch.setattr(log._executor, "submit", tracked_submit)  # noqa: SLF001
+
+    def held_operation() -> None:
+        operation_started.set()
+        if not release_operation.wait(timeout=5):
+            raise RuntimeError("test did not release cancelled operation")
+
+    operation = asyncio.create_task(
+        log._run_locked(held_operation)  # noqa: SLF001 - cancellation contract
+    )
+    assert await asyncio.to_thread(operation_started.wait, 2)
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    closing = asyncio.create_task(log.close())
+    await asyncio.wait_for(close_submitted.wait(), timeout=2)
+    timer = threading.Timer(0.05, release_operation.set)
+    timer.start()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    timer.join(timeout=1)
+
+    assert close_count == 1
+    assert close_thread is not None
+    assert close_thread not in {thread.ident for thread in threading.enumerate()}
+    await log.close()
+
+
+async def test_cancelled_close_observes_native_close_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    log = EventLog(tmp_path / "cancelled-failed-close.db", TEST_KEY)
+    raw_connection = log._conn  # noqa: SLF001 - cancellation contract
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    class _FailingCloseConnection:
+        def __getattr__(self, name: str):
+            return getattr(raw_connection, name)
+
+        def close(self) -> None:
+            close_started.set()
+            if not release_close.wait(timeout=5):
+                raise RuntimeError("test did not release failed close")
+            raw_connection.close()
+            raise RuntimeError("simulated native close failure")
+
+    log._conn = _FailingCloseConnection()  # type: ignore[assignment]  # noqa: SLF001
+    closing = asyncio.create_task(log.close())
+    assert await asyncio.to_thread(close_started.wait, 2)
+    timer = threading.Timer(0.05, release_close.set)
+    timer.start()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    timer.join(timeout=1)
+
+    assert "native event-log close failed after caller cancellation" in caplog.text
+    assert not any(
+        thread.name.startswith("adminme-event-log") for thread in threading.enumerate()
+    )
+    await log.close()
+
+
+async def test_concurrent_close_calls_close_native_connection_once(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "concurrent-close.db", TEST_KEY)
+    raw_connection = log._conn  # noqa: SLF001 - shutdown contract
+    close_count = 0
+
+    class _TrackedCloseConnection:
+        def __getattr__(self, name: str):
+            return getattr(raw_connection, name)
+
+        def close(self) -> None:
+            nonlocal close_count
+            close_count += 1
+            raw_connection.close()
+
+    log._conn = _TrackedCloseConnection()  # type: ignore[assignment]  # noqa: SLF001
+    await asyncio.gather(log.close(), log.close())
+
+    assert close_count == 1
+    with pytest.raises(EventLogError, match="closed"):
+        await log.count()
 
 
 async def test_missing_required_fields_raises(log: EventLog) -> None:
@@ -308,10 +680,14 @@ async def test_missing_required_fields_raises(log: EventLog) -> None:
 
 async def test_append_only_trigger_refuses_delete_and_update(log: EventLog) -> None:
     await log.append(_event(1))
-    # peek inside: reuse the log's own connection to prove the trigger fires
-    conn = log._conn  # type: ignore[attr-defined]
     with pytest.raises(sqlcipher3.DatabaseError):
-        conn.execute("DELETE FROM events")
+        await log._run_locked(  # noqa: SLF001 - append-only storage contract
+            log._conn.execute,  # noqa: SLF001 - append-only storage contract
+            "DELETE FROM events",
+        )
     with pytest.raises(sqlcipher3.DatabaseError):
-        conn.execute("UPDATE events SET type = 'mutated'")
+        await log._run_locked(  # noqa: SLF001 - append-only storage contract
+            log._conn.execute,  # noqa: SLF001 - append-only storage contract
+            "UPDATE events SET type = 'mutated'",
+        )
     assert await log.count() == 1

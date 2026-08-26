@@ -25,9 +25,11 @@ schema development).
 
 Async model: ``sqlcipher3`` is a synchronous DB-API driver and there
 is no drop-in async SQLCipher for Python today (D14). We keep a single
-writer connection guarded by an ``asyncio.Lock`` and dispatch every DB call
-via ``asyncio.to_thread``. Reads and writes therefore run off the event
-loop without blocking other coroutines.
+connection guarded by an ``asyncio.Lock`` and pin its creation, migration,
+reads, writes, and close to one dedicated worker thread. SQLCipher's native
+connection must not migrate among the default executor's worker threads even
+when those calls are serialized. Reads and writes therefore remain off the
+event loop without allowing native cross-thread connection use.
 
 Signature: ``append(envelope, *, correlation_id=None, causation_id=None)``
 per D8 addition 2 — correlation_id and causation_id are explicit keyword
@@ -39,6 +41,7 @@ override whatever the envelope carries.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import importlib.resources
 import json
 import logging
@@ -188,16 +191,32 @@ class EventLog:
         if not self._read_only:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._key_pragma = _format_key(encryption_key)
-        self._conn = self._open_connection()
-        self._lock = asyncio.Lock()
-        self._id_gen = _EventIdGenerator()
-        self._closed = False
-        self._tenant_id_hint = (
-            db_path.tenant_id if isinstance(db_path, _InstanceConfig) else None
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="adminme-event-log",
         )
-        if not self._read_only:
-            self._migrate()
-        ensure_autoloaded()
+        try:
+            self._conn = self._executor.submit(self._open_connection).result()
+            self._lock = asyncio.Lock()
+            self._id_gen = _EventIdGenerator()
+            self._closed = False
+            self._tenant_id_hint = (
+                db_path.tenant_id if isinstance(db_path, _InstanceConfig) else None
+            )
+            if not self._read_only:
+                self._executor.submit(self._migrate).result()
+            ensure_autoloaded()
+        except BaseException:
+            connection = getattr(self, "_conn", None)
+            if connection is not None:
+                try:
+                    self._executor.submit(connection.close).result()
+                except Exception:
+                    _log.exception(
+                        "failed to close event log after initialization error"
+                    )
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            raise
 
     # ------------------------------------------------------------------
     # connection management
@@ -220,18 +239,27 @@ class EventLog:
         }
         if self._read_only:
             connect_options["uri"] = True
-        conn = sqlcipher3.connect(target, **connect_options)
-        conn.row_factory = sqlcipher3.Row
-        conn.execute(f'PRAGMA key = "{self._key_pragma}"')
-        if self._read_only:
-            conn.execute("PRAGMA query_only=ON")
-        else:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        # Touch the DB to surface bad-key errors eagerly.
-        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        return conn
+        conn: sqlcipher3.Connection | None = None
+        try:
+            conn = sqlcipher3.connect(target, **connect_options)
+            conn.row_factory = sqlcipher3.Row
+            conn.execute(f'PRAGMA key = "{self._key_pragma}"')
+            if self._read_only:
+                conn.execute("PRAGMA query_only=ON")
+            else:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            # Touch the DB to surface bad-key errors eagerly.
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return conn
+        except BaseException:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    _log.exception("failed to close rejected event log connection")
+            raise
 
     def _migrate(self) -> None:
         cur = self._conn.cursor()
@@ -260,15 +288,40 @@ class EventLog:
             )
 
     async def close(self) -> None:
-        # Closing a SQLCipher connection while an ``asyncio.to_thread`` DB
-        # call still owns it can crash in native code.  The same lock guards
-        # every connection operation, so close is queued behind in-flight
-        # work and repeated shutdown is harmless.
-        async with self._lock:
-            if self._closed:
-                return
-            await asyncio.to_thread(self._conn.close)
-            self._closed = True
+        # Closing a SQLCipher connection on another thread, or while an
+        # in-flight call owns it, can crash in native code. The same lock and
+        # dedicated worker guard every operation, so close is queued behind
+        # in-flight work and repeated shutdown is harmless.
+        should_shutdown = False
+        close_call: concurrent.futures.Future[Any] | None = None
+        caller_cancelled = False
+        try:
+            async with self._lock:
+                if self._closed:
+                    return
+                should_shutdown = True
+                try:
+                    # Submit synchronously before the first cancellation point.
+                    # A cancelled operation may still occupy this worker, so the
+                    # close must remain queued rather than being cancelled during
+                    # executor shutdown.
+                    close_call = self._executor.submit(self._conn.close)
+                    await asyncio.shield(asyncio.wrap_future(close_call))
+                except asyncio.CancelledError:
+                    caller_cancelled = True
+                    raise
+                finally:
+                    self._closed = True
+        finally:
+            if should_shutdown:
+                self._executor.shutdown(wait=True, cancel_futures=False)
+                if caller_cancelled and close_call is not None:
+                    try:
+                        close_call.result()
+                    except Exception:
+                        _log.exception(
+                            "native event-log close failed after caller cancellation"
+                        )
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -277,7 +330,11 @@ class EventLog:
     async def _run_locked(self, func: Any, *args: Any) -> Any:
         async with self._lock:
             self._ensure_open()
-            return await asyncio.to_thread(func, *args)
+            return await self._run_on_connection_thread(func, *args)
+
+    async def _run_on_connection_thread(self, func: Any, *args: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, func, *args)
 
     # ------------------------------------------------------------------
     # writes
@@ -316,7 +373,7 @@ class EventLog:
 
         async with self._lock:
             self._ensure_open()
-            resolved_ids = await asyncio.to_thread(
+            resolved_ids = await self._run_on_connection_thread(
                 self._insert_rows, [r for r, _ in prepared]
             )
         return resolved_ids
