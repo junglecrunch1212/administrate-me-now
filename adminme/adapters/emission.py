@@ -34,14 +34,27 @@ async def write_adapter_event(
     tenant_id = ctx.event_sink.tenant_id
     if not tenant_id:
         raise RuntimeError("adapter EventSink is not bound to a tenant")
-    member_id = str(config.get("member_id") or "")
-    owner_scope = f"private:{member_id}" if member_id else "shared:household"
-    source_account_id = str(
+    member_id = config.get("member_id")
+    normalized_member_id = member_id.strip() if isinstance(member_id, str) else ""
+    member_bound = bool(normalized_member_id)
+    if not member_bound and schema_version != 1:
+        raise RuntimeError("adapter event requires an explicit member_id")
+    source_account = (
         config.get("source_account_id")
+        or config.get("provider_account_id")
         or config.get("user_email")
-        or member_id
-        or adapter_name
+        or config.get("subject_email")
     )
+    if not isinstance(source_account, str) or not source_account.strip():
+        if schema_version != 1 and not event_type.startswith("adapter."):
+            raise RuntimeError("adapter event requires an explicit provider account")
+        source_account = normalized_member_id if member_bound else adapter_name
+    # V1 remains readable for the bounded legacy fixture/migration path. Every
+    # current provider fact is v2+ and therefore cannot use this shared scope.
+    owner_scope = (
+        f"private:{normalized_member_id}" if member_bound else "shared:household"
+    )
+    source_account_id = source_account.strip()
     correlation = correlation_id or ctx.correlation_id_factory()
     occurred_at = ctx.now_factory()
     if isinstance(occurred_at, datetime):

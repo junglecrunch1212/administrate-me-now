@@ -43,6 +43,14 @@ AdministrateMe represents five separate concepts:
    member profile holds only that member's explicit cadence, favorite,
    suppression, tags, and cue policy.
 
+A non-human **service principal** is an authorization/routing identity for a
+reviewed household service persona; it is not a household member. Its provider
+account and vendor credentials, any observed Endpoint, any qualified Party,
+the Central Host's infrastructure identity, and an OpenClaw agent/session all
+remain separate and independently revocable. In particular, the planned CoS
+Apple service identity cannot resolve as either human member and grants no
+access to either member's private Apple sources.
+
 Provider records, identifier links, facts, interactions, and member profiles
 are owner-private by default. Household-visible Parties do not expose another
 adult's private provider record, identifiers, interaction history, or member
@@ -70,6 +78,13 @@ OpenClaw retains channels, conversations, sessions, generic memory, routing,
 and agent orchestration. The one pinned Gateway uses member-bound sessions and
 exact provider-account routes. AdministrateMe does not create an agent per
 contact, inbox, or source and does not copy People truth into generic memory.
+
+For a service-addressed communication, the adapter must determine exactly one
+reviewed `member_private`, `household_shared`, or `external_contact` route from
+non-content routing evidence. Zero, multiple, absent, or contradictory matches
+remain unresolved and invisible to members. Name similarity, address-book
+sharing, provider sharing, or model output cannot choose visibility. A member-
+owned Apple source remains member-private even when a provider could share it.
 
 Reviewed bootstrap enrollment crosses this boundary through idempotent domain
 events before readiness. The mapping file remains an authentication/enrollment
@@ -99,10 +114,13 @@ identity, or provider fields.
 - **PRESERVE:** event authority, provider authority, typed domain separation,
   member isolation, human gating, governance, observation, and replay.
 - **MODERNIZE:** People as relationship memory; provider-neutral contact
-  records; scoped identity resolution; member-specific relationship profiles.
+  records; scoped identity resolution; member-specific relationship profiles;
+  explicit non-human service principals and deterministic channel routing.
 - **SUPERSEDE:** sender-as-person, implicit provider-share authorization,
-  tenant-wide exact-identifier uniqueness, model closeness/ranking, and agent
-  proliferation.
+  tenant-wide exact-identifier uniqueness, model closeness/ranking, agent
+  proliferation, and any blanket interpretation that forbids a separate CoS
+  Apple service identity while preserving the ban on central member-source
+  ingestion.
 - **DEFER:** only live enrollment of an optional contact provider and its
   separately approved write operations. The People product function, privacy
   boundary, replay, and fixture-backed adapter contracts are not deferred.

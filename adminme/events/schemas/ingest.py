@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -79,6 +79,44 @@ class MessagingReceivedV4(MessagingReceivedV3):
     in_reply_to: str | None = Field(default=None, max_length=1000)
 
 
+class MessagingReceivedV5(MessagingReceivedV4):
+    """Explicit account owner and deterministic route for service channels.
+
+    This is a provider-neutral representation only. A future adapter must
+    resolve one reviewed route before constructing the envelope; unknown
+    conversations use ``unresolved`` and remain outside member scopes.
+    """
+
+    # An additive schema version may widen a Pydantic field even though normal
+    # Python subclass substitution would forbid it.
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]  # type: ignore[assignment]
+    routing_scope: Literal[
+        "member_private", "household_shared", "external_contact", "unresolved"
+    ]
+    routing_target_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _validate_owner_and_route(self) -> "MessagingReceivedV5":
+        if (self.member_id is None) == (self.service_principal_id is None):
+            raise ValueError("message account requires exactly one owner principal")
+        target_required = self.routing_scope in {
+            "member_private",
+            "external_contact",
+        }
+        if target_required != (self.routing_target_id is not None):
+            raise ValueError("message route target contradicts routing_scope")
+        if self.member_id is not None and (
+            self.routing_scope != "member_private"
+            or self.routing_target_id != self.member_id
+        ):
+            raise ValueError("member-owned message route must remain member-private")
+        return self
+
+
 class InteractionParticipantResolvedV1(BaseModel):
     """Identity pipeline result linking an interaction role to a Party."""
 
@@ -135,6 +173,44 @@ class MessagingSentV4(MessagingSentV3):
 
     model_config = {"extra": "forbid"}
     body_html: str | None = None
+
+
+class MessagingSentV5(MessagingSentV4):
+    """Outbound service-principal fact that cannot impersonate a member."""
+
+    # An additive schema version may widen a Pydantic field even though normal
+    # Python subclass substitution would forbid it.
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]  # type: ignore[assignment]
+    send_as: Literal["member", "service_principal"]
+    routing_scope: Literal["member_private", "household_shared", "external_contact"]
+    routing_target_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _validate_sender_and_route(self) -> "MessagingSentV5":
+        if (self.member_id is None) == (self.service_principal_id is None):
+            raise ValueError("sent message requires exactly one sender principal")
+        if self.send_as == "member" and self.member_id is None:
+            raise ValueError("member send_as requires member ownership")
+        if self.send_as == "service_principal" and self.service_principal_id is None:
+            raise ValueError("service send_as requires service-principal ownership")
+        target_required = self.routing_scope in {
+            "member_private",
+            "external_contact",
+        }
+        if target_required != (self.routing_target_id is not None):
+            raise ValueError("sent-message route target contradicts routing_scope")
+        if self.member_id is not None and (
+            self.routing_scope != "member_private"
+            or self.routing_target_id != self.member_id
+        ):
+            raise ValueError(
+                "member-owned sent-message route must remain member-private"
+            )
+        return self
 
 
 class CommunicationStateChangedV1(BaseModel):
@@ -368,6 +444,7 @@ registry.register("messaging.received", 1, MessagingReceivedV1)
 registry.register("messaging.received", 2, MessagingReceivedV2)
 registry.register("messaging.received", 3, MessagingReceivedV3)
 registry.register("messaging.received", 4, MessagingReceivedV4)
+registry.register("messaging.received", 5, MessagingReceivedV5)
 registry.register(
     "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
 )
@@ -375,6 +452,7 @@ registry.register("messaging.sent", 1, MessagingSentV1)
 registry.register("messaging.sent", 2, MessagingSentV2)
 registry.register("messaging.sent", 3, MessagingSentV3)
 registry.register("messaging.sent", 4, MessagingSentV4)
+registry.register("messaging.sent", 5, MessagingSentV5)
 registry.register("communication.state_changed", 1, CommunicationStateChangedV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)

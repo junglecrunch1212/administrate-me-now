@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import grp
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
@@ -51,6 +52,16 @@ def _command_version(command: list[str]) -> str | None:
     return (completed.stdout or completed.stderr).strip().splitlines()[0]
 
 
+def _group_names() -> frozenset[str]:
+    names: set[str] = set()
+    for group_id in os.getgroups():
+        try:
+            names.add(grp.getgrgid(group_id).gr_name)
+        except KeyError:
+            continue
+    return frozenset(names)
+
+
 def run_preflight(
     target_root: Path,
     *,
@@ -60,6 +71,7 @@ def run_preflight(
     which: Callable[[str], str | None] = shutil.which,
     require_dependencies: bool = True,
     check_filevault: bool = True,
+    group_names: frozenset[str] | None = None,
 ) -> list[PreflightCheck]:
     """Perform all checks before target-root mutation and raise on failure."""
     versions = load_versions()
@@ -71,6 +83,10 @@ def run_preflight(
     running_as_non_root = (
         get_effective_user_id() != 0 if callable(get_effective_user_id) else True
     )
+    actual_groups = group_names
+    if actual_groups is None:
+        actual_groups = _group_names()
+    dedicated_standard_account = running_as_non_root and "admin" not in actual_groups
     checks = [
         PreflightCheck(
             "operating_system",
@@ -92,9 +108,13 @@ def run_preflight(
         ),
         PreflightCheck(
             "dedicated_account",
-            running_as_non_root,
-            "installer is running as a non-root user",
-            "Log in to the dedicated AdministrateMe account; do not use sudo.",
+            dedicated_standard_account,
+            (
+                "installer is running as a standard non-root user"
+                if dedicated_standard_account
+                else "installer account is root or belongs to the admin group"
+            ),
+            "Log in to the dedicated Standard AdministrateMe account; do not use an administrator account or sudo.",
         ),
     ]
     parent = target_root.expanduser().resolve().parent

@@ -45,6 +45,15 @@ macOS privacy grants. First prove the credential-free central installation in
 observation mode. Live Google authorization and Apple bridge consent are
 separate provider gates after the base system is healthy.
 
+The words “do not sign the central service account into a personal Apple
+identity” protect member-source privacy. They do not forbid a future dedicated
+**CoS Apple service identity** for CoS-addressed communications. That identity
+is currently only `planned` / `account_not_created`: do not create it, sign it
+in, install BlueBubbles, grant macOS permissions, enroll iMessage/Twilio, or
+test sending during this installation. It never substitutes for a member
+bridge and grants no access to member Calendar, Reminders, Contacts, Notes,
+Voice Memos, or other private Apple data.
+
 ## What you need before starting
 
 Have these ready on paper or in a non-shared password manager:
@@ -88,7 +97,12 @@ Do this while signed into a separate Mac administrator account.
 5. Understand the reboot behavior: these are user LaunchAgents. After a reboot,
    FileVault must be unlocked and the dedicated user must log in before the two
    services can run. Locking the screen is fine; logging out stops availability.
-6. Click **Apple menu → Log Out**. Log into the new dedicated standard account.
+6. Before leaving the administrator account, verify that it is distinct from
+   the service account and that its credentials and FileVault recovery path are
+   stored somewhere that does not depend solely on the CoS mailbox or this Mac.
+   Physically rehearse unlock/recovery before activation and record only a
+   content-free pass/fail receipt—never the recovery material.
+7. Click **Apple menu → Log Out**. Log into the new dedicated standard account.
    Stay in this account for every central-install command below.
 
 Open **Finder → Applications → Utilities → Terminal**. Keep this page open on
@@ -177,9 +191,12 @@ also install the App Store edition; the two variants conflict.
    make it the server identity.
 4. In **Tailscale → Settings → CLI integration**, select **Show me how → Install
    Now** and approve the bounded administrator prompt.
-5. In the Tailscale admin console, restrict access to the future server to the
-   intended household users. Device sharing also receives identity headers, so
-   do not share this server node casually.
+5. In the Tailscale admin console, assign the reviewed infrastructure tag
+   `tag:administrateme-central` to this node and restrict access to the intended
+   household users. The tag owner and ACL changes are a separate owner-reviewed
+   administrative action. The node must no longer be a member-login identity,
+   and it must never appear in the portal member mapping. Device sharing also
+   receives identity headers, so do not share this server node casually.
 6. Leave automatic security updates enabled for the Standalone app. An update
    must not be confused with permission to change the separately pinned
    OpenClaw release.
@@ -192,10 +209,13 @@ tailscale status
 tailscale serve status
 ```
 
-`tailscale status` must show the Mac in the expected tailnet. An empty Serve
+`tailscale status` must show the Mac online with
+`tag:administrateme-central` in the expected tailnet. An empty Serve
 configuration is normal. Do not enable Funnel. The member devices that will
-open the portal must be signed in as users; requests originating from tagged
-devices do not receive `Tailscale-User-Login`, which AdministrateMe requires.
+open the portal must be signed in as distinct users; requests originating from
+tagged devices do not receive `Tailscale-User-Login`, which AdministrateMe
+requires. That is intentional: the Central Host cannot authenticate as a
+household member.
 
 Write down each member’s exact Tailscale login. A device name such as
 `alice-iphone`, a `100.x.y.z` address, and the server’s `.ts.net` name are not
@@ -410,6 +430,9 @@ you intend to test. The activation command then:
 - enables the pinned bundled `llm-task`, adds it without removing unrelated
   tool-policy entries, and verifies runtime registration;
 - validates OpenClaw configuration;
+- reconciles one unique AdministrateMe member agent and exact channel/account/
+  actor bindings for every enabled member under
+  `per-account-channel-peer` DM scope, without removing unrelated agents;
 - runs `openclaw models status --probe`;
 - reconciles exactly five owned `administrateme-*` cron jobs in the household
   IANA timezone, leaving unrelated OpenClaw jobs untouched;
@@ -673,7 +696,8 @@ Restore rehearsal uses only the exact path printed by backup:
 ```
 
 Restore stages and authenticates the archive, checks SQLCipher, rebuilds all
-fourteen registered projections (thirteen domain truth plus Triage), preserves rollback state, and returns the old state if
+fifteen registered projections (thirteen domain truth plus Triage and the
+non-authoritative Context Fabric), preserves rollback state, and returns the old state if
 post-restore Doctor fails. Never unzip or edit a backup manually.
 
 ## Stage 12: the five-to-seven-day trust period
@@ -695,6 +719,15 @@ the seven-day review is complete, every identity/privacy finding is resolved,
 backup and Doctor pass, connector watermarks are understood, and a principal
 explicitly approves trust. There is currently no operator shortcut in this
 guide for changing trust state.
+
+The CoS Apple service identity remains planned throughout this trust period.
+Its later gates—account type/ownership, account creation/recovery, Apple
+Business Manager/domain decision if applicable, dedicated channel host,
+sign-in/OS permissions, reviewed iMessage transport, CoS-only contact scope,
+enrollment, observation-only receipt, observation-suppressed send, and explicit
+live-send enablement—each require a separate owner request. The complete gate,
+abort, and rollback register is in
+`docs/refactor/evidence/co-019-central-host-topology-readiness.md`.
 
 ## Live troubleshooting: use this exact loop
 

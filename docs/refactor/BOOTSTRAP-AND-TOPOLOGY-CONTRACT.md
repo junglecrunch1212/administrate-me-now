@@ -14,19 +14,58 @@ The first supported central deployment contains exactly:
 
 `adminme-runtime` binds loopback `127.0.0.1:3330`; Tailscale Serve is the only network edge. It serves `/api/core`, `/api/comms`, `/api/capture`, `/api/automation`, `/api/bridge`, `/api/system`, browser assets, and the narrow member portal. Legacy `:3333–:3337` product ports are compatibility aliases only if tests prove they are required; they do not create more processes. The runtime rejects/strips untrusted identity headers and accepts identity only from the local proxy boundary.
 
+The Central Host is a tagged Tailscale infrastructure node
+(`tag:administrateme-central`), never a member login or member bridge identity.
+Its node owner and service process cannot resolve as a household member. Each
+interactive member instead has one distinct reviewed trusted-ingress binding;
+missing, duplicate, case-fold-colliding, or cross-member bindings block
+readiness. The service runs under a dedicated Standard macOS account. A
+separate administrator/recovery account, a tested FileVault unlock path, and
+disabled automatic login are independent recent activation evidence; merely
+being non-root is not evidence of a dedicated service account or recovery.
+
 Node must satisfy the reviewed AdministrateMe Node 24 baseline (`>=24.15.0 <25`) and may compile plugin/frontend/profile assets during build/install. It is not a second central application server. OpenClaw listens on loopback `:18789`. Exact paths and ports are instance configuration, never string-literal instance paths in business code.
 
 ### Member bridge
 
 Each Apple-using member may have a separate least-privilege bridge daemon on a Mac signed into that member’s account. It holds only its enrollment identity and source-specific permissions; it never holds the central event-log key or another member’s credentials. The central ingest route derives owner scope from enrolled Tailscale identity and rejects a payload that claims another scope. Kid restrictions are enforced in the enrollment manifest and central policy.
 
-### Communication and OpenClaw isolation
+A package-exported credential is provisional: it may submit only the exact,
+unexpired `bridge.enrolled@v1` bootstrap proof bound to its member, enrollment
+ID, identity, private scopes, bootstrap adapter, and idempotency key. It cannot
+submit a batch or any ordinary fact. Ordinary ingest requires active status.
 
-Every central communication account is bound explicitly to one member, one
-provider account, and a `personal|work` workspace before it can ingest into
-Comms. An unbound account is disabled; account discovery or an email address
-match is never authority. Read and write capabilities are recorded per exact
-account, and provider consent is least-privilege and observation-first.
+### Communication, service identity, and OpenClaw isolation
+
+Every enabled central provider account is bound explicitly to exactly one
+reviewed owner principal: either a human member or a non-human service
+principal. It also names one exact provider account, an explicit
+`personal|work|service` workspace, reviewed permission scope, binding
+provenance, and ownership attestation before it can ingest. Duplicate or
+cross-owner provider coordinates fail closed. The currently shipped Gmail,
+Google Calendar, and Google Tasks adapters remain member-owned; service-owned
+accounts require a separately reviewed capable adapter. Account discovery,
+address matching, possession of a token, and vendor-side sharing are never
+AdministrateMe authority.
+
+A Chief-of-Staff service principal, its provider account, addressable Endpoint,
+optional Party, Tailscale infrastructure node, and OpenClaw agent/session are
+separate coordinates. The planned **CoS Apple service identity** is a
+household-owned, non-human channel identity and must never resolve as either
+human member. Its initial state is `planned` / `account_not_created`: there is
+no account reference, endpoint, enrollment, authentication, or health claim.
+Future service-channel states are `planned`, `account_not_created`,
+`account_created`, `channel_not_enrolled`, `observation`, `healthy`,
+`degraded`, `disabled`, and `revoked`. Reserving an address cannot advance the
+state. Exact provider coordinates remain encrypted instance configuration and
+public readiness exposes counts and state classes only.
+
+A future CoS-addressed fact must cross a reviewed communications adapter and
+resolve through one explicit route to `member_private`, `household_shared`, or
+`external_contact`; zero, multiple, or unknown routes remain `unresolved` and
+outside all member-visible scopes. Human-member Apple sources remain
+member-private and cannot use this service routing path. Provider and Apple
+sharing do not create a route, Party, membership, or authorization.
 
 Human-to-human provider traffic is normalized by Cat-A adapters and does not
 enter an OpenClaw model session. For member-to-CoS DMs, bootstrap binds one
@@ -36,6 +75,18 @@ share session memory. A second work agent for the same member is created only
 when its tools, model, retention, or organization policy must differ—not just
 to render a work filter. Provider account credentials and OpenClaw agent
 credentials remain separately revocable.
+
+The CoS may eventually send only as its own reviewed service identity through
+allowlist → domain governance → rate limit → final privacy/content guard →
+observation → independent OpenClaw and domain approval → terminal audit. It
+cannot impersonate or auto-send as a member. Attempted, suppressed, delivered,
+failed, and reconciled outcomes are terminally accounted. Apple/iMessage,
+BlueBubbles, Twilio, account creation, sign-in, OS permissions, enrollment, and
+live sending remain separate post-merge owner gates; this contract adds no
+provider connectivity. The current external-write request/approval/dispatcher
+contract remains member-owned, so service-channel configuration must reject
+`sending_enabled:true` until a separately reviewed generic service-owner
+command contract exists and passes observation-suppressed production proof.
 
 ## Composition lifecycle
 
@@ -68,14 +119,14 @@ Each section has `not_started|in_progress|complete|failed|rolled_back`, versione
 2. **Assistant persona:** select/fork the instance-level persona, run `npm --prefix openclaw/administrateme run workspace:compile`, install the generated `SOUL.md`, `IDENTITY.md`, `USER.md`, and `AGENTS.md` at the pinned workspace location, reload and verify. Member profiles remain per-member overlays. No authority or model policy comes from persona.
 3. **Household composition:** create tenant/household Parties, principals/children/helpers/ambient members, Memberships/Relationships, time zone and address through typed events; verify projection and two-member isolation.
 4. **Profiles:** assign one of five built-ins or validated custom profiles; disclose behavior diff; emit assignment; verify route/engine policy for adult/child/ambient roles.
-5. **Credential references:** generate a random 24+ character `ADMINME_OPENCLAW_SHARED_SECRET` for both local processes, store only its secret reference, inject its Keychain-resolved value explicitly into both the OpenClaw transport and AdministrateMe skill runtime, and configure exact `ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON` (`channel|account|actor -> member`) plus `ADMINME_OPENCLAW_MEMBER_ROLES_JSON` separately. Never require the long-lived runtime to rediscover that credential from ambient process state. Every mapped member requires an explicit interactive role and, for enabled external DMs, a distinct member agent/account binding under account-aware DM scope. Every Comms adapter requires explicit `member_id`, provider account, workspace, and capability consent. Collect other values through local secure UI/CLI, validate, write values to 1Password/OpenClaw secret storage, persist references only, and redact logs/reports. The transport secret is not member authorization; provider LLM keys go to OpenClaw only.
+5. **Credential references:** generate a random 24+ character `ADMINME_OPENCLAW_SHARED_SECRET` for both local processes, store only its secret reference, inject its Keychain-resolved value explicitly into both the OpenClaw transport and AdministrateMe skill runtime, and configure exact `ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON` (`channel|account|actor -> member`) plus `ADMINME_OPENCLAW_MEMBER_ROLES_JSON` separately. Never require the long-lived runtime to rediscover that credential from ambient process state. Every mapped member requires an explicit interactive role and, for enabled external DMs, a distinct member agent/account binding under account-aware DM scope. Every enabled provider adapter requires exactly one explicit member or service-principal owner, provider account, workspace, capability consent, ownership attestation, and provenance. Collect other values through local secure UI/CLI, validate, write values to 1Password/OpenClaw secret storage, persist references only, and redact logs/reports. The transport secret is not member authorization; provider LLM keys go to OpenClaw only. Apple, Google Workspace, Google Cloud, Cloudflare, Twilio, Tailscale, OpenClaw, and AdministrateMe credentials and recovery paths stay independently revocable; a CoS mailbox is never the sole administrative recovery root.
 6. **Plaid:** sandbox first, consent/link, read-only minimum scopes, initial sync/reconciliation, no production flip during bootstrap/observation.
 7. **Seed data:** tenant-supplied household/CRM/place/asset/account/recurrence/project data becomes typed events; skipped optional data creates an explicit follow-up, never exemplar defaults.
 8. **Central integrations:** pair selected OpenClaw channels and central Cat-A/B/C/E adapters; set `ADMINME_LIVE_GATE=1` and `OPENCLAW_SOURCE_DIR` only in the disposable lab; enable only the exact pinned bundled `llm-task`, preserve existing `tools.alsoAllow` entries while adding it, validate with OpenClaw's config writer, and require Doctor to prove it runtime-registered; run the live AdministrateMe plugin link/inspect/restart/deep-RPC gate; reconcile the compiled skill, commands, dashboard, and `automations.json`; seed selected shared lists; test enabled adapters with observation-safe actions. Do not proceed on a version/commit mismatch.
 9. **Observation briefing:** enforce active observation, explain the documented 5–7 day trust review, perform a would-have-happened test that is suppressed/audited, show review/disable prerequisites, backup status, member portal, and emergency stop.
 10. **Bridge enrollment:** create one short-lived, member-bound package at a time; verify target Apple identity, Tailscale identity, permissions, allowed Cat-B/D adapters and kid restrictions; enroll centrally; revoke bootstrap material; verify owner-scoped ingest and bridge health.
 
-Bootstrap completes only when a secret-scanned report lists versions, checks, events, installed capabilities, skipped optionals, observation start/end-not-before, backup/restore proof, and rollback status. `bootstrap.completed` is not emitted if any required section is incomplete.
+Bootstrap completes only when a secret-scanned report lists versions, checks, events, installed capabilities, skipped optionals, observation start/end-not-before, authenticated backup/restore proof, retained rollback predecessor, tagged-host and member-ingress acceptance, Standard-account/recovery proof, provider-binding evidence, OpenClaw account/agent/session isolation, and rollback status. `bootstrap.completed` is not emitted if any required section is incomplete. Service channels that are explicitly optional may remain planned or disabled without blocking the current central release, but their state is never promoted by unrelated readiness.
 
 ## Post-bootstrap Settings reconciliation
 
@@ -97,7 +148,7 @@ Observation begins before any connector/action becomes live and remains active f
 
 ## Bootstrap acceptance evidence
 
-Release requires fresh install, interrupted resume at every section boundary, repeat no-op, changed-input reconciliation, per-section rollback, corrupted-state fail-closed, secret scan, observation proof, backup and bare-machine restore, uninstall/disable without data destruction, one Apple-member bridge and kid-restriction rehearsal, and a two-instance parallel canary. The clean rehearsal is on a disposable macOS host; Windows results do not substitute.
+Release requires fresh install, interrupted resume at every section boundary, repeat no-op, changed-input reconciliation, per-section rollback, corrupted-state fail-closed, secret scan, observation proof, backup and bare-machine restore, uninstall/disable without data destruction, one Apple-member bridge and kid-restriction rehearsal, and a two-instance parallel canary. Production composition must also prove tagged infrastructure identity cannot authenticate as a member, exact A/B ingress isolation, no-enrollment bridge denial plus the narrow provisional proof, global provider ownership validation, explicit envelope-consistent service-channel routing/unresolved denial, current OpenClaw topology rather than configured assertions, Settings/readiness agreement, host/config/release-bound rollback evidence, durable terminal-effect integrity, and zero true/unknown/unsuppressed effects in the current attested observation window. The clean rehearsal is on a disposable macOS host; Windows results do not substitute.
 
 ## Gate 5 implementation status
 

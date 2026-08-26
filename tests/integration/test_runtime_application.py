@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,10 +15,12 @@ from fastapi.testclient import TestClient
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.envelope import EventEnvelope
 from adminme.events.bus import EventBus
-from adminme.events.log import EventLog
+from adminme.events.log import AppendValidationError, EventLog
 from adminme.lib.session import Session
 from adminme.lib.skill_runner import wrapper as skill_wrapper
 from adminme.lib.skill_runner.wrapper import SkillContext
+from adminme.openclaw_topology import binding_fingerprints, member_agent_id
+from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import (
     AdministrateMeRuntime,
     RuntimeSettings,
@@ -78,6 +82,458 @@ def _bridge_envelope() -> dict[str, object]:
             "enrolled_at": "2026-05-28T12:00:00Z",
         },
     ).model_dump(mode="json")
+
+
+def _strict_settings(tmp_path: Path, *, backup_ready: bool = True) -> RuntimeSettings:
+    instance_dir = tmp_path / "strict-instance"
+    instance_dir.mkdir()
+    now = datetime.now(timezone.utc).isoformat()
+    openclaw_config_path = instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    openclaw_config_path.parent.mkdir(parents=True)
+    openclaw_config_path.write_text(
+        json.dumps(
+            {
+                "agents": {"list": [{"id": member_agent_id("member-a")}]},
+                "bindings": [],
+                "session": {"dmScope": "per-account-channel-peer"},
+                "plugins": {
+                    "entries": {
+                        "administrateme": {
+                            "config": {
+                                "memberAgentIds": [member_agent_id("member-a")],
+                                "bindingFingerprints": list(
+                                    binding_fingerprints({}, frozenset({"member-a"}))
+                                ),
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    deployment_binding = {
+        "release_commit": "a" * 40,
+        "instance_fingerprint": "b" * 64,
+        "host_fingerprint": "c" * 64,
+        "configuration_fingerprint": "d" * 64,
+    }
+    return RuntimeSettings.credential_free(
+        instance_dir,
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={"member-a.ts.net": "member-a"},
+        member_roles={"member-a": "principal"},
+        openclaw_enabled=True,
+        openclaw_shared_secret="strict-test-secret-at-least-24-characters",
+        member_chat_enabled_members=frozenset({"member-a"}),
+        openclaw_runtime_config_path=openclaw_config_path,
+        host_topology={
+            "tailscale_node_online": True,
+            "central_host_tag": "tag:administrateme-central",
+            "central_identity_kind": "infrastructure_tag",
+            "central_identity_collides_with_member": False,
+            "serve_is_sole_edge": True,
+            "python_runtime_count": 1,
+            "openclaw_gateway_count": 1,
+            "service_account_standard": True,
+            "deployment_binding": deployment_binding,
+        },
+        deployment_evidence={
+            "contract": "deployment-readiness-v1",
+            "deployment_binding": deployment_binding,
+            "identity_acceptance": {
+                "member_ids": ["member-a"],
+                "distinct_identities": True,
+                "tested_at": now,
+            },
+            "recovery": {
+                "separate_admin_available": True,
+                "filevault_unlock_tested": True,
+                "automatic_login_disabled": True,
+                "tested_at": now,
+            },
+            "backup_rollback": {
+                "encrypted_backup_authenticated": backup_ready,
+                "restore_rehearsed": True,
+                "prior_release_retained": True,
+                "automatic_rollback_eligible": True,
+                "tested_at": now,
+            },
+            "provider_effect_window": {"started_at": now},
+        },
+        deployment_evidence_required=True,
+    )
+
+
+def _report_strict_openclaw(
+    client: TestClient,
+    *,
+    members: frozenset[str] = frozenset({"member-a"}),
+) -> None:
+    response = client.post(
+        "/api/openclaw/v1/health/report",
+        headers={"Authorization": "Bearer strict-test-secret-at-least-24-characters"},
+        json={
+            "state": "healthy",
+            "reason": "process fixture",
+            "openclaw_version": OPENCLAW_VERSION,
+            "openclaw_commit": OPENCLAW_COMMIT,
+            "dm_scope": "per_account_channel_peer",
+            "member_agent_ids": [member_agent_id(member) for member in sorted(members)],
+            "binding_fingerprints": list(binding_fingerprints({}, members)),
+            "unique_agents": True,
+            "unique_accounts": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
+    tmp_path: Path,
+) -> None:
+    app = create_application(_strict_settings(tmp_path))
+    with TestClient(app) as client:
+        _report_strict_openclaw(client)
+        ready = client.get("/api/system/ready")
+        assert ready.status_code == 200, ready.text
+        diagnostics = ready.json()
+        assert diagnostics["ready"] is True
+        assert diagnostics["activation_eligible"] is True
+        assert diagnostics["deployment_readiness"]["ready"] is True
+        service_channel = diagnostics["deployment_readiness"]["dimensions"][
+            "service_channel_identities"
+        ]
+        assert service_channel["state"] == "planned"
+        assert service_channel["required"] is False
+        settings = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        ).json()
+        assert settings["control"]["readiness"] == diagnostics["deployment_readiness"]
+        assert (
+            settings["system"]["runtime"]["deployment_readiness"]
+            == diagnostics["deployment_readiness"]
+        )
+        assert settings["control"]["service_channels"]["state_counts"] == {"planned": 1}
+        assert (
+            settings["control"]["service_channels"]["channels"][0]["display_name"]
+            == "CoS Apple service identity"
+        )
+        assert app.state.runtime.settings.openclaw_runtime_config_path is not None
+        app.state.runtime.settings.openclaw_runtime_config_path.write_text(
+            json.dumps(
+                {
+                    "agents": {"list": []},
+                    "bindings": [],
+                    "session": {"dmScope": "per-account-channel-peer"},
+                    "plugins": {"entries": {}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        drift = client.get("/api/system/ready")
+        assert drift.status_code == 503
+        assert "openclaw" in drift.json()["deployment_readiness"]["blocking_dimensions"]
+
+
+def test_missing_backup_blocks_activation_but_preserves_safe_reads(
+    tmp_path: Path,
+) -> None:
+    app = create_application(_strict_settings(tmp_path, backup_ready=False))
+    with TestClient(app) as client:
+        _report_strict_openclaw(client)
+        response = client.get("/api/system/ready")
+        assert response.status_code == 503
+        diagnostics = response.json()
+        assert diagnostics["ready"] is False
+        assert diagnostics["service_ready"] is True
+        assert diagnostics["safe_reads"] is True
+        assert diagnostics["write_admission"] == "blocked"
+        assert (
+            "backup_rollback"
+            in diagnostics["deployment_readiness"]["blocking_dimensions"]
+        )
+
+
+def test_two_principals_have_distinct_ingress_agents_and_sessions(
+    tmp_path: Path,
+) -> None:
+    base = _strict_settings(tmp_path)
+    members = frozenset({"member-a", "member-b"})
+    assert base.openclaw_runtime_config_path is not None
+    base.openclaw_runtime_config_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "list": [
+                        {"id": member_agent_id(member)} for member in sorted(members)
+                    ]
+                },
+                "bindings": [],
+                "session": {"dmScope": "per-account-channel-peer"},
+                "plugins": {
+                    "entries": {
+                        "administrateme": {
+                            "config": {
+                                "memberAgentIds": [
+                                    member_agent_id(member)
+                                    for member in sorted(members)
+                                ],
+                                "bindingFingerprints": list(
+                                    binding_fingerprints({}, members)
+                                ),
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = replace(
+        base,
+        member_identities={
+            "member-a.ts.net": "member-a",
+            "member-b.ts.net": "member-b",
+        },
+        member_roles={"member-a": "principal", "member-b": "principal"},
+        member_chat_enabled_members=members,
+        deployment_evidence={
+            **base.deployment_evidence,
+            "identity_acceptance": {
+                **base.deployment_evidence["identity_acceptance"],
+                "member_ids": ["member-a", "member-b"],
+            },
+        },
+    )
+    app = create_application(settings)
+    with TestClient(app) as client:
+        _report_strict_openclaw(client, members=members)
+        ready = client.get("/api/system/ready")
+        assert ready.status_code == 200, ready.text
+        for identity in ("member-a.ts.net", "member-b.ts.net"):
+            response = client.get(
+                "/api/member/v1/surfaces/settings",
+                headers={"Tailscale-User-Login": identity},
+            )
+            assert response.status_code == 200, response.text
+        unknown = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={"Tailscale-User-Login": "unknown.ts.net"},
+        )
+        assert unknown.status_code == 401
+        runtime: AdministrateMeRuntime = app.state.runtime
+        agent_a, session_a = runtime.member_chat_binding("member-a")
+        agent_b, session_b = runtime.member_chat_binding("member-b")
+        assert agent_a != agent_b
+        assert session_a != session_b
+        assert member_agent_id("member-a") in session_a
+        assert member_agent_id("member-b") in session_b
+
+
+def test_blocked_readiness_terminalizes_command_before_provider_dispatch(
+    tmp_path: Path,
+) -> None:
+    app = create_application(_strict_settings(tmp_path, backup_ready=False))
+    with TestClient(app) as client:
+        _report_strict_openclaw(client)
+        runtime: AdministrateMeRuntime = app.state.runtime
+        provider_calls = 0
+
+        async def forbidden_dispatch(**_kwargs: object) -> object:
+            nonlocal provider_calls
+            provider_calls += 1
+            raise AssertionError("provider dispatch must remain unreachable")
+
+        assert runtime.adapters is not None
+        runtime.adapters.dispatch_write = forbidden_dispatch  # type: ignore[method-assign,assignment]
+
+        async def append_and_wait() -> dict[str, object]:
+            assert runtime.events is not None
+            command_id = "strict-readiness-command"
+            request_id = await runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=runtime.settings.instance.tenant_id,
+                    type="external_sync.write_requested",
+                    schema_version=2,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="strict-process-fixture",
+                    source_account_id="provider-account-fixture",
+                    owner_scope="private:member-a",
+                    visibility_scope="private:member-a",
+                    sensitivity="normal",
+                    payload={
+                        "command_id": command_id,
+                        "member_id": "member-a",
+                        "provider": "google_tasks",
+                        "provider_account_id": "provider-account-fixture",
+                        "operation": "task.create",
+                        "target_external_id": None,
+                        "expected_provider_revision": None,
+                        "payload": {"fixture": True},
+                        "requested_at": EventEnvelope.now_utc_iso(),
+                        "domain_approval_event_id": "domain-approval-fixture",
+                        "openclaw_approval_event_id": "openclaw-approval-fixture",
+                        "request_fingerprint": "a" * 64,
+                        "privacy_guard_version": "fixture-v1",
+                        "origin_proposal_id": None,
+                    },
+                )
+            )
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                assert runtime.event_log is not None
+                async for event in runtime.event_log.read_since(
+                    types=["external_sync.write_failed"]
+                ):
+                    if (event.get("payload") or {}).get("command_id") == command_id:
+                        assert event.get("causation_id") == request_id
+                        return event
+                await asyncio.sleep(0.01)
+            raise AssertionError("blocked command did not receive a terminal result")
+
+        terminal = client.portal.call(append_and_wait)
+        assert provider_calls == 0
+        assert terminal["payload"]["error_kind"] == "permission"  # type: ignore[index]
+        assert terminal["payload"]["provider_called"] is False  # type: ignore[index]
+        assert (
+            terminal["payload"]["domain_approval_event_id"] == "domain-approval-fixture"
+        )  # type: ignore[index]
+        assert "backup_rollback" in terminal["payload"]["message"]  # type: ignore[index]
+
+
+def test_strict_identity_configuration_fails_closed_before_startup(
+    tmp_path: Path,
+) -> None:
+    base = _strict_settings(tmp_path)
+    with pytest.raises(ValueError, match="central infrastructure identity"):
+        replace(
+            base,
+            host_topology={
+                **base.host_topology,
+                "central_identity_collides_with_member": True,
+            },
+        )
+    with pytest.raises(ValueError, match="explicit member role"):
+        replace(base, member_roles={})
+    with pytest.raises(ValueError, match="ambiguous after normalization"):
+        replace(
+            base,
+            member_identities={
+                "member-a.ts.net": "member-a",
+                "MEMBER-A.TS.NET": "member-b",
+            },
+            member_roles={"member-a": "principal", "member-b": "principal"},
+        )
+    with pytest.raises(ValueError, match="exactly one trusted ingress identity"):
+        replace(
+            base,
+            member_identities={
+                "member-a.ts.net": "member-a",
+                "member-a-alias.ts.net": "member-a",
+            },
+        )
+
+
+def test_unknown_view_target_and_missing_role_never_default_to_principal(
+    tmp_path: Path,
+) -> None:
+    app = create_application(_strict_settings(tmp_path))
+    with TestClient(app) as client:
+        unknown = client.get(
+            "/api/member/v1/surfaces/today",
+            headers={
+                "Tailscale-User-Login": "member-a.ts.net",
+                "X-AdminMe-View-Member": "unknown-member",
+            },
+        )
+        assert unknown.status_code == 403
+        assert unknown.json()["detail"] == (
+            "view target is not an interactive household member"
+        )
+
+
+def test_service_channel_messages_require_explicit_scope_before_member_visibility(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "service-channel-instance"
+    instance_dir.mkdir()
+    settings = RuntimeSettings.credential_free(
+        instance_dir,
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={
+            "member-a.ts.net": "member-a",
+            "member-b.ts.net": "member-b",
+        },
+        member_roles={"member-a": "principal", "member-b": "principal"},
+    )
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+
+        async def append(scope: str, routing_scope: str, target: str | None) -> str:
+            assert runtime.events is not None
+            return await runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=1_788_000_000_000,
+                    tenant_id=settings.instance.tenant_id,
+                    type="messaging.received",
+                    schema_version=5,
+                    occurred_at="2026-08-26T12:00:00Z",
+                    source_adapter="service-channel-fixture",
+                    source_account_id="cos-apple-account:" + "3" * 32,
+                    owner_scope=scope,
+                    visibility_scope=scope,
+                    sensitivity="normal",
+                    payload={
+                        "source_channel": "service_channel",
+                        "from_identifier": "provider-account:" + "1" * 32,
+                        "to_identifier": "cos-channel-account:" + "2" * 32,
+                        "thread_id": "thread-fixture",
+                        "subject": None,
+                        "body_text": None,
+                        "body_html": None,
+                        "received_at": "2026-08-26T12:00:00Z",
+                        "attachments": [],
+                        "native_message_id": f"message-{routing_scope}",
+                        "member_id": None,
+                        "service_principal_id": "service-principal:chief-of-staff",
+                        "provider": "bluebubbles",
+                        "provider_account_id": "cos-apple-account:" + "3" * 32,
+                        "workspace": "service",
+                        "routing_scope": routing_scope,
+                        "routing_target_id": target,
+                    },
+                )
+            )
+
+        unresolved_id = client.portal.call(
+            append, "unresolved:service-channel", "unresolved", None
+        )
+        private_id = client.portal.call(
+            append, "private:member-a", "member_private", "member-a"
+        )
+        with pytest.raises(
+            AppendValidationError,
+            match="messaging v5 envelope contradicts payload route: owner_scope, visibility_scope",
+        ):
+            client.portal.call(append, "shared:household", "member_private", "member-a")
+        activity_a = client.get(
+            "/api/core/v1/activity",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        ).json()
+        activity_b = client.get(
+            "/api/core/v1/activity",
+            headers={"Tailscale-User-Login": "member-b.ts.net"},
+        ).json()
+        ids_a = {item["event_id"] for item in activity_a["items"]}
+        ids_b = {item["event_id"] for item in activity_b["items"]}
+        assert private_id in ids_a
+        assert private_id not in ids_b
+        assert unresolved_id not in ids_a | ids_b
 
 
 def test_application_boots_with_complete_truthful_inventory_and_routes(
@@ -150,8 +606,12 @@ def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
             json=_bridge_envelope(),
             headers={"Tailscale-User-Login": "member-a.ts.net"},
         )
-        assert ingest.status_code == 202, ingest.text
-        assert ingest.json()["owner_scope"] == "private:member-a"
+        assert ingest.status_code == 403
+        assert ingest.json()["detail"] == "unknown_tailscale_identity"
+        health = client.get("/api/bridge/health").json()
+        assert health["endpoint_available"] is True
+        assert health["enrollment_state"] == "none"
+        assert health["enrollment_count"] == 0
 
 
 def test_source_assurance_refresh_never_blocks_readiness(

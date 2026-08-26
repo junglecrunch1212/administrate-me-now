@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from adminme.service_identities import public_service_identity_inventory
+
 from adminme.candidate_policy import (
     SOURCE_CATALOG,
     effective_policy,
@@ -445,7 +447,7 @@ def tailscale_login_for(runtime: Any, member_id: str) -> str | None:
         for login, mapped_member in runtime.settings.member_identities.items()
         if mapped_member == member_id
     ]
-    return sorted(matches, key=str.casefold)[0] if matches else None
+    return matches[0] if len(matches) == 1 else None
 
 
 def _credential_reference_present(config: dict[str, Any]) -> bool:
@@ -464,12 +466,12 @@ def _account_label(config: dict[str, Any], fallback: str) -> str:
     return fallback
 
 
-def _account_hint(config: dict[str, Any]) -> str:
+def _account_hint(config: dict[str, Any]) -> str | None:
     for key in ("provider_account_id", "user_email", "subject_email"):
         value = config.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    return "Account identity confirmed after provider handshake"
+    return None
 
 
 def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
@@ -494,6 +496,14 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         configured_enabled = entry.get("enabled") is not False
         credentials_present = _credential_reference_present(config)
         runtime_row = inventory.get(connection_id)
+        binding = next(
+            (
+                item
+                for item in getattr(runtime.settings, "provider_bindings", ())
+                if item.adapter_id == connection_id
+            ),
+            None,
+        )
         runtime_state = "unknown"
         last_sync = None
         error = None
@@ -509,7 +519,12 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                     "severity": raw_error.get("severity") or "unknown",
                     "occurred_at": raw_error.get("occurred_at"),
                 }
-        if override_state == "paused":
+        if (
+            getattr(runtime.settings, "deployment_evidence_required", False)
+            and binding is None
+        ):
+            setup_state = "binding_blocked"
+        elif override_state == "paused":
             setup_state = "paused"
         elif not configured_enabled:
             setup_state = "disabled"
@@ -538,7 +553,18 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                 "label": _account_label(config, meta["label"]),
                 "account_hint": _account_hint(config),
                 "product": meta["product"],
-                "workspace": str(config.get("workspace") or "personal"),
+                "workspace": (
+                    str(config["workspace"])
+                    if config.get("workspace") in {"personal", "work"}
+                    else None
+                ),
+                "binding": {
+                    "state": "healthy" if binding is not None else "unverified",
+                    "ownership_attested": config.get("ownership_attested") is True,
+                    "provenance": config.get("binding_provenance"),
+                    "permission_count": len(config.get("permission_scope") or []),
+                    "content_exposed": False,
+                },
                 "deployment": meta["runtime"],
                 "setup": setup_state,
                 "runtime": runtime_state,
@@ -553,6 +579,12 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                     "human_gate_required": bool(write_permissions),
                     "openclaw_approval_required": bool(write_permissions),
                     "writes_execute": bool(write_permissions)
+                    and (
+                        binding is not None
+                        or not getattr(
+                            runtime.settings, "deployment_evidence_required", False
+                        )
+                    )
                     and not runtime._observation_active,
                 },
                 "last_sync_at": last_sync,
@@ -573,7 +605,16 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
     connections = compose_connections(runtime, view_id)
     needs_attention: list[dict[str, Any]] = []
     for connection in connections:
-        if connection["setup"] == "setup_incomplete":
+        if connection["setup"] == "binding_blocked":
+            needs_attention.append(
+                {
+                    "severity": "blocked",
+                    "title": f"Review account ownership for {connection['label']}",
+                    "detail": "Member, account, workspace, permission scope, and provenance must all be explicit.",
+                    "section": "connections",
+                }
+            )
+        elif connection["setup"] == "setup_incomplete":
             needs_attention.append(
                 {
                     "severity": "blocked",
@@ -645,7 +686,7 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "member_label": member_label(runtime, requested_member),
                 "status": record.get("state"),
                 "role": runtime.settings.member_roles.get(requested_member),
-                "identity_bound": bool(tailscale_login_for(runtime, requested_member)),
+                "identity_bound": False,
                 "requested_capabilities": list(record.get("capabilities") or []),
                 "requested_at": record.get("requested_at"),
             }
@@ -713,6 +754,10 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         },
         "needs_attention": needs_attention,
         "connections": connections,
+        "service_channels": public_service_identity_inventory(
+            runtime.settings.service_principals,
+            runtime.settings.service_channel_accounts,
+        ),
         "candidate_identification": {
             "contract": "deterministic-candidate-policy-v1",
             "sources": candidate_sources,

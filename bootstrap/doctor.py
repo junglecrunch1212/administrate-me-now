@@ -762,6 +762,29 @@ class Doctor:
                 assurance_evidence,
             )
         )
+        deployment_readiness = runtime_diagnostics.get("deployment_readiness") or {}
+        readiness_ok = deployment_readiness.get("ready") is True
+        if self.test_mode and not deployment_readiness:
+            readiness_ok = True
+            deployment_readiness = {
+                "contract": "deployment-readiness-v1",
+                "state": "not_required_in_disposable_test",
+                "ready": True,
+                "content_exposed": False,
+            }
+        checks.append(
+            DoctorCheck(
+                "deployment_topology_and_recovery_readiness",
+                readiness_ok,
+                (
+                    "topology, identity, provider, OpenClaw, bridge, backup, and effect gates are ready"
+                    if readiness_ok
+                    else "one or more deployment readiness dimensions are blocked"
+                ),
+                "Complete the owner Human Task Register; do not weaken or bypass a missing readiness predicate.",
+                deployment_readiness,
+            )
+        )
         host = "127.0.0.1"
         ports = {
             "runtime": versions["administrateme"]["runtime_port"],

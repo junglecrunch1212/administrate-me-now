@@ -175,8 +175,12 @@ async def _preload_gmail_replay_fixture(
                     "config": {
                         "service_account_key_ref": "op://fixture-vault/item/field",
                         "user_email": "fixture-member@example.invalid",
+                        "provider_account_id": "fixture-member@example.invalid",
                         "member_id": MEMBER,
                         "workspace": "personal",
+                        "permission_scope": ["gmail.readonly"],
+                        "binding_provenance": "service-account-delegation",
+                        "ownership_attested": True,
                     },
                 }
             ]
@@ -597,8 +601,12 @@ async def _preload_gmail_sent_quote_fixture(settings: RuntimeSettings) -> str:
                     "config": {
                         "service_account_key_ref": "op://fixture-vault/item/field",
                         "user_email": "fixture-member@example.invalid",
+                        "provider_account_id": "fixture-member@example.invalid",
                         "member_id": MEMBER,
                         "workspace": "personal",
+                        "permission_scope": ["gmail.readonly"],
+                        "binding_provenance": "service-account-delegation",
+                        "ownership_attested": True,
                     },
                 }
             ]

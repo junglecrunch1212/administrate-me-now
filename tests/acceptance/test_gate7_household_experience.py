@@ -16,6 +16,7 @@ from openpyxl import load_workbook
 
 from adminme import temporary_surfaces as temporary_surface_clock
 from adminme.events.envelope import EventEnvelope
+from adminme.openclaw_topology import member_agent_id
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.projections.xlsx_workbooks import FINANCE_WORKBOOK_NAME
@@ -123,8 +124,12 @@ def _settings_control_fixture(instance_dir: Path) -> RuntimeSettings:
                     "config": {
                         "member_id": PRINCIPAL,
                         "user_email": "fixture@example.invalid",
+                        "provider_account_id": "fixture@example.invalid",
                         "account_label": "Personal email",
                         "workspace": "personal",
+                        "permission_scope": ["gmail.read", "gmail.modify"],
+                        "binding_provenance": "oauth-subject",
+                        "ownership_attested": True,
                         "oauth_credentials_ref": "keychain://fixture/gmail",
                         "enable_writes": True,
                     },
@@ -390,7 +395,7 @@ def _portal_provenance(
     actor, session_key = runtime.member_chat_binding(member_id)
     return {
         "actor_id": actor,
-        "agent_id": "main",
+        "agent_id": member_agent_id(member_id),
         "session_key": session_key,
         "session_id": None,
         "channel_id": "administrateme-portal",

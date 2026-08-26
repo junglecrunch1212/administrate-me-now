@@ -109,6 +109,7 @@ def test_gmail_adapter_satisfies_protocol() -> None:
         config={
             "service_account_key_ref": "op://test/vault/item/field",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
     )
     assert isinstance(adapter, Adapter)
@@ -300,6 +301,7 @@ def _seeded_adapter(service: _FakeGmailService) -> Any:
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
     )
     adapter._service = service
@@ -327,6 +329,7 @@ async def test_service_account_auth_emits_authenticated() -> None:
         config={
             "service_account_key_ref": "op://test/vault/gmail/sa",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
         credentials_resolver=fake_resolver,
         service_factory=fake_factory,
@@ -365,6 +368,7 @@ async def test_start_rejects_non_op_ref() -> None:
         config={
             "service_account_key_ref": "ya29.A0AfH6SMB_RAW_TOKEN",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
         credentials_resolver=lambda _r: {},
         service_factory=lambda _c, _s, _u: object(),
@@ -393,6 +397,7 @@ def test_sensitivity_floor_config_can_raise_to_privileged() -> None:
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
             "sensitivity_floor": "privileged",
         },
     )
@@ -408,6 +413,7 @@ def test_sensitivity_floor_cannot_be_lowered_from_privileged() -> None:
             config={
                 "service_account_key_ref": "op://test/v/i/f",
                 "user_email": "sandbox@example.test",
+                "member_id": "member-test",
                 "sensitivity_floor": "normal",
             },
         )
@@ -421,6 +427,7 @@ def test_sensitivity_floor_rejects_unknown_value() -> None:
             config={
                 "service_account_key_ref": "op://test/v/i/f",
                 "user_email": "sandbox@example.test",
+                "member_id": "member-test",
                 "sensitivity_floor": "high",
             },
         )
@@ -441,6 +448,7 @@ async def test_first_poll_cycle_bootstraps_cursor_via_get_profile() -> None:
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
     )
     adapter._service = service
@@ -488,6 +496,7 @@ async def test_initial_backfill_pages_emits_and_is_durable(tmp_path: Path) -> No
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
             "initial_backfill_days": 365,
             "initial_backfill_max_messages": 2,
         },
@@ -541,6 +550,7 @@ async def test_invalid_internal_date_is_quarantined_without_message_fact() -> No
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
     )
     message = {**_fixture("message_alice.json"), "internalDate": "not-a-date"}
@@ -571,6 +581,7 @@ async def test_initial_backfill_provider_io_does_not_block_runtime_loop() -> Non
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
             "initial_backfill_days": 30,
             "initial_backfill_max_messages": 1,
         },
@@ -607,6 +618,7 @@ async def test_initial_backfill_hard_cap_reports_truncation() -> None:
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
             "initial_backfill_days": 30,
             "initial_backfill_max_messages": 1,
         },
@@ -630,6 +642,7 @@ async def test_initial_backfill_repeated_page_token_fails_bounded() -> None:
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
         },
     )
     adapter._service = service
@@ -661,6 +674,7 @@ def test_initial_backfill_config_rejects_unsafe_values(key: str, value: object) 
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
             key: value,
         },
     )
@@ -697,6 +711,7 @@ async def test_historical_seed_precedes_related_context_and_recent_fill(
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-test",
             "initial_backfill_days": 10,
             "initial_backfill_max_messages": 4,
             "historical_seed_queries": [private_query],

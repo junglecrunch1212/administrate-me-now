@@ -4671,6 +4671,25 @@ async def surface(
         triage_limit=triage_limit,
         triage_item=triage_item,
     )
+    if surface == "settings":
+        diagnostics = await runtime.diagnostics()
+        result["system"]["runtime"] = {
+            **diagnostics,
+            "projection_count": len(runtime.projections.projection_names()),
+        }
+        readiness = diagnostics.get("deployment_readiness") or {}
+        result["control"]["readiness"] = readiness
+        for dimension_name in readiness.get("blocking_dimensions") or []:
+            dimension = (readiness.get("dimensions") or {}).get(dimension_name) or {}
+            result["control"]["needs_attention"].append(
+                {
+                    "severity": "blocked",
+                    "title": f"Resolve {dimension_name.replace('_', ' ')} readiness",
+                    "detail": dimension.get("reason")
+                    or "Required deployment evidence is unresolved.",
+                    "section": "safety-system",
+                }
+            )
     if surface in {"today", "triage"}:
         await add_triage_source_context(runtime, session, result)
     if surface == "today":

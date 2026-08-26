@@ -8,6 +8,11 @@ const DEFAULTS: PluginConfig = {
   bridgeChannels: [],
   bridgeEventKinds: [...BRIDGE_EVENT_KINDS],
   modelSessionPrefix: "adminme:",
+  dmScope: "per_account_channel_peer",
+  memberAgentIds: [],
+  bindingFingerprints: [],
+  uniqueAgents: true,
+  uniqueAccounts: true,
 };
 
 function stringArray(value: unknown): string[] {
@@ -61,6 +66,23 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
       return kind as BridgeEventKind;
     },
   );
+  if (raw.dmScope !== undefined && raw.dmScope !== "per_account_channel_peer") {
+    throw new Error("AdministrateMe dmScope must be per_account_channel_peer");
+  }
+  const memberAgentIds = stringArray(raw.memberAgentIds);
+  const bindingFingerprints = stringArray(raw.bindingFingerprints);
+  if (memberAgentIds.some((value) => !/^adminme-[0-9a-f]{16}$/.test(value))) {
+    throw new Error("AdministrateMe memberAgentIds contain an invalid agent id");
+  }
+  if (bindingFingerprints.some((value) => !/^[0-9a-f]{64}$/.test(value))) {
+    throw new Error("AdministrateMe bindingFingerprints must be SHA-256 values");
+  }
+  if (new Set(memberAgentIds).size !== memberAgentIds.length) {
+    throw new Error("AdministrateMe memberAgentIds must be unique");
+  }
+  if (new Set(bindingFingerprints).size !== bindingFingerprints.length) {
+    throw new Error("AdministrateMe bindingFingerprints must be unique");
+  }
   return {
     baseUrl: baseUrl.replace(/\/$/, ""),
     sharedSecretEnv,
@@ -72,5 +94,10 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
       typeof raw.modelSessionPrefix === "string" && raw.modelSessionPrefix
         ? raw.modelSessionPrefix
         : DEFAULTS.modelSessionPrefix,
+    dmScope: "per_account_channel_peer",
+    memberAgentIds,
+    bindingFingerprints,
+    uniqueAgents: new Set(memberAgentIds).size === memberAgentIds.length,
+    uniqueAccounts: new Set(bindingFingerprints).size === bindingFingerprints.length,
   };
 }

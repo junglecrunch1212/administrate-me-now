@@ -93,6 +93,11 @@ export class AdministrateMeTransport {
       reason,
       openclaw_version: OPENCLAW_VERSION,
       openclaw_commit: OPENCLAW_COMMIT,
+      dm_scope: this.config.dmScope,
+      member_agent_ids: this.config.memberAgentIds,
+      binding_fingerprints: this.config.bindingFingerprints,
+      unique_agents: this.config.uniqueAgents,
+      unique_accounts: this.config.uniqueAccounts,
     });
     this.#state = state;
   }

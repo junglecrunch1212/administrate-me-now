@@ -42,7 +42,7 @@ class DictMemberIdResolver:
 
 
 class EnrollmentMemberIdResolver:
-    """Resolve only active or unexpired exported bridge enrollments."""
+    """Resolve only fully active bridge enrollments for ordinary ingest."""
 
     def __init__(
         self,
@@ -53,6 +53,8 @@ class EnrollmentMemberIdResolver:
         self._records = {
             identity.casefold(): dict(record) for identity, record in records.items()
         }
+        # Retain the keyword for backward-compatible construction. Provisional
+        # expiry is evaluated only by the narrow enrollment-proof route.
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def resolve(self, tailscale_identity: str) -> str | None:
@@ -60,23 +62,40 @@ class EnrollmentMemberIdResolver:
         if not record:
             return None
         member_id = record.get("member_id")
-        status_value = record.get("status")
         if not isinstance(member_id, str) or not member_id:
             return None
-        if status_value == "active":
-            return member_id
-        if status_value != "package-exported":
-            return None
-        expires_at = record.get("expires_at")
-        if not isinstance(expires_at, str):
-            return None
-        try:
-            expiry = datetime.fromisoformat(expires_at)
-        except ValueError:
-            return None
-        if expiry.tzinfo is None:
-            return None
-        return member_id if self._now() < expiry else None
+        return member_id if record.get("status") == "active" else None
+
+
+def unexpired_exported_enrollment(
+    records: dict[str, dict[str, Any]],
+    tailscale_identity: str,
+    *,
+    now: Callable[[], datetime] | None = None,
+) -> dict[str, Any] | None:
+    """Return one exact provisional record for the enrollment proof only."""
+
+    matches = [
+        record
+        for identity, record in records.items()
+        if identity.casefold() == tailscale_identity.casefold()
+    ]
+    if len(matches) != 1:
+        return None
+    record = matches[0]
+    if record.get("status") != "package-exported":
+        return None
+    expires_at = record.get("expires_at")
+    if not isinstance(expires_at, str):
+        return None
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return None
+    if expiry.tzinfo is None:
+        return None
+    clock = now or (lambda: datetime.now(timezone.utc))
+    return record if clock() < expiry else None
 
 
 def resolve_tailscale_identity(request: Request) -> str:
@@ -115,4 +134,5 @@ __all__ = [
     "TAILSCALE_IDENTITY_HEADER",
     "resolve_member_id",
     "resolve_tailscale_identity",
+    "unexpired_exported_enrollment",
 ]

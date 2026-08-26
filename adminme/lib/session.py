@@ -40,7 +40,7 @@ from adminme.lib.scope import ScopeViolation
 
 AuthRole = Literal["principal", "child", "ambient", "coach_session", "device"]
 ViewRole = Literal["principal", "child", "ambient", "device"]
-DmScope = Literal["per_channel_peer", "shared"]
+DmScope = Literal["per_account_channel_peer", "per_channel_peer", "shared"]
 Source = Literal[
     "node_console",
     "member_portal",

@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from adminme.events.envelope import EventEnvelope
+from adminme.events.log import EventLog
+from adminme.historical_attribution import audit_historical_attribution
+from adminme.provider_bindings import ProviderBinding
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.asyncio
+async def test_historical_attribution_is_content_free_and_binding_aware(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.db", b"h" * 32)
+    body = "neutral source content must never appear in attribution evidence"
+    try:
+        await log.append(
+            EventEnvelope(
+                event_at_ms=1,
+                tenant_id="tenant-fixture",
+                type="messaging.received",
+                schema_version=3,
+                occurred_at="2026-08-26T12:00:00Z",
+                source_adapter="gmail",
+                source_account_id="account-a@example.invalid",
+                owner_scope="private:member-a",
+                visibility_scope="private:member-a",
+                payload={
+                    "provider": "gmail",
+                    "provider_account_id": "account-a@example.invalid",
+                    "member_id": "member-a",
+                    "source_channel": "gmail",
+                    "native_message_id": "message-a",
+                    "thread_id": "thread-a",
+                    "from_identifier": "sender@example.invalid",
+                    "to_identifier": "account-a@example.invalid",
+                    "workspace": "personal",
+                    "subject": "Neutral fixture",
+                    "body_text": body,
+                    "received_at": "2026-08-26T12:00:00Z",
+                    "provider_labels": [],
+                    "attachments": [],
+                },
+            )
+        )
+        proof = await audit_historical_attribution(
+            log,
+            repository_root=REPO_ROOT,
+            provider_bindings=(
+                ProviderBinding(
+                    adapter_id="gmail-a",
+                    kind="messaging-gmail-api",
+                    provider_family="google",
+                    owner_kind="member",
+                    owner_id="member-a",
+                    member_id="member-a",
+                    service_principal_id=None,
+                    provider_account_id="account-a@example.invalid",
+                    workspace="personal",
+                    permission_scope=("gmail.read",),
+                    binding_provenance="oauth-subject",
+                ),
+                ProviderBinding(
+                    adapter_id="calendar-a",
+                    kind="calendaring-google-calendar",
+                    provider_family="google",
+                    owner_kind="member",
+                    owner_id="member-a",
+                    member_id="member-a",
+                    service_principal_id=None,
+                    provider_account_id="account-a@example.invalid",
+                    workspace="personal",
+                    permission_scope=("calendar.read",),
+                    binding_provenance="oauth-subject",
+                ),
+            ),
+            hash_key=b"audit-key" * 4,
+        )
+    finally:
+        await log.close()
+    assert proof["state"] == "healthy"
+    assert proof["source_event_count"] == proof["attributed_event_count"] == 1
+    assert proof["content_exposed"] is False
+    assert proof["raw_identifiers_exposed"] is False
+    rendered = str(proof)
+    assert body not in rendered
+    assert "account-a@example.invalid" not in rendered
+    assert "member-a" not in rendered
+    assert proof["groups"][0]["workspace"] == "personal"

@@ -3,7 +3,7 @@
   "title": "Google Tasks adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tasklist_id", "user_email", "member_id"],
+  "required": ["tasklist_id", "user_email", "provider_account_id", "member_id", "workspace", "permission_scope", "binding_provenance", "ownership_attested"],
   "oneOf": [
     { "required": ["oauth_credentials_ref"] },
     { "required": ["service_account_key_ref"] }
@@ -29,6 +29,22 @@
       "minLength": 1,
       "description": "Stable non-secret account identifier stored in reminder provenance; defaults to user_email."
     },
+    "workspace": {
+      "type": "string",
+      "enum": ["personal", "work"],
+      "description": "Exact reviewed isolation workspace for this account."
+    },
+    "permission_scope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "binding_provenance": {
+      "type": "string",
+      "enum": ["oauth-subject", "service-account-delegation"]
+    },
+    "ownership_attested": { "const": true },
     "account_label": {
       "type": "string",
       "minLength": 1,

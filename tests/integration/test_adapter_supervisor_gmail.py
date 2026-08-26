@@ -253,7 +253,13 @@ def _build_gmail_adapter(
     adapter = GmailAdapter(
         config={
             "service_account_key_ref": op_ref,
+            "member_id": "member-fixture",
+            "provider_account_id": user_email,
             "user_email": user_email,
+            "workspace": "personal",
+            "permission_scope": [GMAIL_READONLY_SCOPE],
+            "binding_provenance": "service-account-delegation",
+            "ownership_attested": True,
             "initial_backfill_days": initial_backfill_days,
             "initial_backfill_max_messages": initial_backfill_max_messages,
             "historical_seed_queries": historical_seed_queries or [],
@@ -446,7 +452,7 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
     channels = tmp_path / "channels.yaml"
     _write_channels_yaml(channels)
     cursor_store = AdapterCursorStore(tmp_path / "adapter-cursors.sqlite3")
-    cursor_id = "messaging-gmail-api:unbound:sandbox@example.test"
+    cursor_id = "messaging-gmail-api:member-fixture:sandbox@example.test"
     cursor_store.record_success(cursor_id, provider_watermark="9000")
     first_service = _FakeGmailService(
         backfill_pages=[
@@ -527,7 +533,7 @@ async def test_gmail_restart_takes_single_half_open_probe_and_recovers(
     channels = tmp_path / "channels.yaml"
     _write_channels_yaml(channels)
     store = AdapterCursorStore(tmp_path / "gmail-recovery.sqlite3")
-    cursor_id = "messaging-gmail-api:unbound:sandbox@example.test"
+    cursor_id = "messaging-gmail-api:member-fixture:sandbox@example.test"
     store.record_success(cursor_id, provider_watermark="9000")
     for now_ms in (1_000, 1_001, 1_002):
         store.record_error(

@@ -177,7 +177,20 @@
           "enum": ["commitment_candidate", "household_action", "delivery_outcome"]
         }
       },
-      "modelSessionPrefix": { "type": "string", "minLength": 1, "maxLength": 80 }
+      "modelSessionPrefix": { "type": "string", "minLength": 1, "maxLength": 80 },
+      "dmScope": { "const": "per_account_channel_peer" },
+      "memberAgentIds": {
+        "type": "array",
+        "uniqueItems": true,
+        "maxItems": 50,
+        "items": { "type": "string", "pattern": "^adminme-[0-9a-f]{16}$" }
+      },
+      "bindingFingerprints": {
+        "type": "array",
+        "uniqueItems": true,
+        "maxItems": 200,
+        "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
     }
   }
 }

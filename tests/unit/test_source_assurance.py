@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -316,3 +317,225 @@ def test_catalog_covers_all_five_adapter_categories_and_member_capture() -> None
         "action.executed",
         "triage.intent.submitted",
     } <= event_types
+
+
+async def _append_write_pair(
+    log: EventLog,
+    *,
+    suffix: str,
+    version: int,
+    provider_called: bool | None = None,
+    suppressed: bool = True,
+    mismatched_correlation: bool = False,
+) -> tuple[str, str]:
+    fingerprint = "a" * 64
+    request_payload: dict[str, object] = {
+        "command_id": f"command-{suffix}",
+        "member_id": "member-fixture",
+        "provider": "google_tasks",
+        "provider_account_id": "account-fixture",
+        "operation": "task.create",
+        "target_external_id": None,
+        "expected_provider_revision": None,
+        "payload": {"fixture": True},
+        "requested_at": "2026-08-07T12:00:00Z",
+    }
+    if version == 2:
+        request_payload.update(
+            {
+                "domain_approval_event_id": f"domain-{suffix}",
+                "openclaw_approval_event_id": f"openclaw-{suffix}",
+                "request_fingerprint": fingerprint,
+                "privacy_guard_version": "fixture-v1",
+                "origin_proposal_id": None,
+            }
+        )
+    request_id = await log.append(
+        EventEnvelope(
+            event_at_ms=1_786_100_000_000,
+            tenant_id="tenant-effect-accounting",
+            type="external_sync.write_requested",
+            schema_version=version,
+            occurred_at="2026-08-07T12:00:00Z",
+            source_adapter="fixture-request",
+            source_account_id="account-fixture",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key=f"request-{suffix}",
+            payload=request_payload,
+        )
+    )
+    result_payload: dict[str, object] = {
+        "command_id": f"command-{suffix}",
+        "member_id": "member-fixture",
+        "provider": "google_tasks",
+        "operation": "task.create",
+        "external_id": None,
+        "provider_revision": None,
+        "result": {"reason": "observation_mode_active"},
+        "completed_at": "2026-08-07T12:00:01Z",
+        "suppressed": suppressed,
+    }
+    if version == 2:
+        result_payload.update(
+            {
+                "command_event_id": request_id,
+                "domain_approval_event_id": f"domain-{suffix}",
+                "openclaw_approval_event_id": f"openclaw-{suffix}",
+                "provider_account_id": "account-fixture",
+                "request_fingerprint": (
+                    "b" * 64 if mismatched_correlation else fingerprint
+                ),
+                "provider_called": provider_called,
+                "origin_proposal_id": None,
+            }
+        )
+    result_id = await log.append(
+        EventEnvelope(
+            event_at_ms=1_786_100_000_001,
+            tenant_id="tenant-effect-accounting",
+            type="external_sync.write_completed",
+            schema_version=version,
+            occurred_at="2026-08-07T12:00:01Z",
+            source_adapter="fixture-observation-gate",
+            source_account_id="account-fixture",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            causation_id=request_id,
+            idempotency_key=f"result-{suffix}",
+            payload=result_payload,
+        )
+    )
+    return request_id, result_id
+
+
+@pytest.mark.asyncio
+async def test_provider_effect_accounting_proves_v2_observation_suppression(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "effect-accounting.db", b"e" * 32)
+    try:
+        await _append_write_pair(
+            log, suffix="suppressed", version=2, provider_called=False
+        )
+        audit = await audit_source_assurance(
+            log,
+            repository_root=REPO_ROOT,
+            capabilities={},
+            provider_effect_window_started_at="2026-08-07T11:00:00Z",
+        )
+        assert audit["provider_effects"] == {
+            "contract": "provider-effect-accounting-v1",
+            "state": "healthy",
+            "counts": {
+                "write_requests": 1,
+                "terminal_results": 1,
+                "provider_called_true": 0,
+                "provider_called_false": 1,
+                "provider_called_unknown": 0,
+                "suppressed_true": 1,
+                "suppressed_false_or_unknown": 0,
+                "missing_terminal": 0,
+                "duplicate_terminal": 0,
+                "approval_correlation_missing": 0,
+                "duplicate_request": 0,
+                "malformed_request": 0,
+                "orphan_terminal": 0,
+            },
+            "zero_effect_state": "healthy",
+            "observation_window": {
+                "state": "healthy",
+                "started_at_configured": True,
+                "counts": {
+                    "write_requests": 1,
+                    "terminal_results": 1,
+                    "provider_called_true": 0,
+                    "provider_called_false": 1,
+                    "provider_called_unknown": 0,
+                    "suppressed_true": 1,
+                    "suppressed_false_or_unknown": 0,
+                    "missing_terminal": 0,
+                    "duplicate_terminal": 0,
+                    "approval_correlation_missing": 0,
+                    "duplicate_request": 0,
+                    "malformed_request": 0,
+                    "orphan_terminal": 0,
+                },
+                "content_exposed": False,
+            },
+            "content_exposed": False,
+        }
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_authorized_live_effect_preserves_integrity_and_new_zero_effect_window(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "live-effect.db", b"p" * 32)
+    try:
+        await _append_write_pair(
+            log,
+            suffix="live",
+            version=2,
+            provider_called=True,
+            suppressed=False,
+        )
+        audit = await audit_source_assurance(
+            log,
+            repository_root=REPO_ROOT,
+            capabilities={},
+            provider_effect_window_started_at=(
+                datetime.now(timezone.utc) + timedelta(seconds=1)
+            ).isoformat(),
+        )
+        effects = audit["provider_effects"]
+        assert effects["state"] == "healthy"
+        assert effects["zero_effect_state"] == "nonzero"
+        assert effects["counts"]["provider_called_true"] == 1
+        assert effects["observation_window"]["state"] == "healthy"
+        assert effects["observation_window"]["counts"]["provider_called_true"] == 0
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_or_mismatched_effect_evidence_blocks_zero_effect_claim(
+    tmp_path: Path,
+) -> None:
+    legacy = EventLog(tmp_path / "legacy-effect.db", b"l" * 32)
+    try:
+        await _append_write_pair(legacy, suffix="legacy", version=1)
+        legacy_audit = await audit_source_assurance(
+            legacy, repository_root=REPO_ROOT, capabilities={}
+        )
+        assert legacy_audit["state"] == "degraded"
+        assert legacy_audit["provider_effects"]["state"] == "degraded"
+        assert (
+            legacy_audit["provider_effects"]["counts"]["provider_called_unknown"] == 1
+        )
+    finally:
+        await legacy.close()
+
+    mismatch = EventLog(tmp_path / "mismatch-effect.db", b"x" * 32)
+    try:
+        await _append_write_pair(
+            mismatch,
+            suffix="mismatch",
+            version=2,
+            provider_called=False,
+            mismatched_correlation=True,
+        )
+        mismatch_audit = await audit_source_assurance(
+            mismatch, repository_root=REPO_ROOT, capabilities={}
+        )
+        assert mismatch_audit["provider_effects"]["state"] == "degraded"
+        assert (
+            mismatch_audit["provider_effects"]["counts"]["approval_correlation_missing"]
+            == 1
+        )
+    finally:
+        await mismatch.close()
