@@ -27,6 +27,15 @@ from bootstrap.backup_restore import (
     _extract_and_validate_payload,
 )
 from bootstrap.contracts import DeploymentPaths
+from tests.fixtures.backup_rehearsal_processes import (
+    guardian_hung_extract_fixture as _guardian_hung_extract_fixture,
+)
+from tests.fixtures.backup_rehearsal_processes import (
+    guardian_replay_fixture as _guardian_replay_fixture,
+)
+from tests.fixtures.backup_rehearsal_processes import (
+    run_guardian_from_disposable_parent as _run_guardian_from_disposable_parent,
+)
 
 
 def _manifest(files: list[dict[str, Any]]) -> dict[str, Any]:
@@ -76,80 +85,6 @@ def _archive(
         manifest_info.size = len(encoded)
         archive.addfile(manifest_info, io.BytesIO(encoded))
     return buffer.getvalue()
-
-
-def _guardian_extract_fixture(
-    source: str,
-    staging_root: str,
-    expected_artifact_sha256: str,
-    key_pipe: Any,
-    result_pipe: Any,
-) -> None:
-    del source, expected_artifact_sha256
-    key_pipe.recv_bytes()
-    state = Path(staging_root) / "state"
-    state.mkdir(parents=True)
-    (state / "fixture.db").write_bytes(b"encrypted-fixture")
-    result_pipe.send({"status": "healthy", "event_log_sha256": "e" * 64})
-
-
-def _guardian_replay_fixture(
-    staged_state: str,
-    key_pipe: Any,
-    result_pipe: Any,
-) -> None:
-    key_pipe.recv_bytes()
-    (Path(staged_state) / "replay-complete").write_text("healthy", encoding="utf-8")
-    result_pipe.send({"status": "healthy", "event_log_sha256": "e" * 64})
-
-
-def _guardian_hung_extract_fixture(
-    source: str,
-    staging_root: str,
-    expected_artifact_sha256: str,
-    key_pipe: Any,
-    result_pipe: Any,
-) -> None:
-    del source, expected_artifact_sha256, result_pipe
-    key_pipe.recv_bytes()
-    marker = Path(staging_root) / "hung-extraction.pid"
-    marker.write_text(str(os.getpid()), encoding="ascii")
-    time.sleep(30)
-
-
-def _guardian_hung_replay_fixture(
-    staged_state: str,
-    key_pipe: Any,
-    result_pipe: Any,
-) -> None:
-    del result_pipe
-    key_pipe.recv_bytes()
-    marker = Path(staged_state) / "hung-replay.pid"
-    marker.write_text(str(os.getpid()), encoding="ascii")
-    time.sleep(30)
-
-
-def _run_guardian_from_disposable_parent(stage: str, mode: str) -> None:
-    extraction_target = (
-        _guardian_hung_extract_fixture
-        if mode == "hung-extraction"
-        else _guardian_extract_fixture
-    )
-    replay_target = (
-        _guardian_hung_replay_fixture
-        if mode == "hung-replay"
-        else _guardian_replay_fixture
-    )
-    BackupManager._run_rehearsal_guardian(
-        "fixture-source",
-        stage,
-        "a" * 64,
-        10,
-        b"k" * 64,
-        timeout_s=30,
-        extraction_target=extraction_target,
-        replay_target=replay_target,
-    )
 
 
 def _pid_exists(pid: int) -> bool:
