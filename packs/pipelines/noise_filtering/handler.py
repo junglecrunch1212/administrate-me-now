@@ -79,7 +79,8 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "7.0.0"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 21
+_REPLAY_GENERATION = 22
+_DEFERRED_THREAD_ASSESSOR_ID = "thread-anchor-deferred-v1"
 _CURRENT_MESSAGE_FALLBACK_RULE_IDS = frozenset(
     {
         "inbound_explicit_directive_or_due_obligation_v1",
@@ -281,7 +282,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "21.0.0"
+    version: str = "22.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -668,6 +669,35 @@ class NoiseFilteringPipeline:
         # Candidate fallback, model input, admission, and read-time evidence
         # all use the same authored-text v2 representation.
         source_text = current_context_message.source_text()
+        if not context_pack.current_is_thread_anchor:
+            policy_rule = (
+                f"candidate_policy_v1:{policy_source_id}:{policy.get('mode', 'review')}"
+            )
+            policy_reason = (
+                "candidate_policy_manual_only"
+                if policy.get("mode") == "manual"
+                else "candidate_policy_quiet"
+                if policy.get("mode") == "quiet"
+                else "candidate_language_disabled"
+                if not policy.get("language_enabled")
+                else None
+            )
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="no_candidate",
+                reason_codes=[
+                    "language_assessment_deferred_to_latest_thread_message",
+                    "no_eligible_candidate",
+                    "deferred_to_latest_thread_message",
+                    *([policy_reason] if policy_reason else []),
+                    policy_rule,
+                ],
+                extractor_id=_DEFERRED_THREAD_ASSESSOR_ID,
+            )
+            return
         inputs["body_text"] = current_context_message.body_text
         inputs["candidate_mode"] = policy["mode"]
         inputs["candidate_kinds"] = list(policy["candidate_kinds"])
@@ -1515,6 +1545,7 @@ class NoiseFilteringPipeline:
         occurred_at: str | None = None,
         intent_id: str | None = None,
         recovery: dict[str, str] | None = None,
+        extractor_id: str | None = None,
     ) -> str:
         """Record one terminal assessment even when zero candidates exist."""
 
@@ -1532,7 +1563,8 @@ class NoiseFilteringPipeline:
             "intent_id": intent_id or f"source:{source_event_id}",
             "source_event_id": source_event_id,
             "skill_call_event_id": None,
-            "extractor_id": (
+            "extractor_id": extractor_id
+            or (
                 f"{MESSAGE_FALLBACK_EXTRACTOR_ID}+{GROUNDED_NLP_EXTRACTOR_ID}"
                 f"+{CONTEXTUAL_NLP_EXTRACTOR_ID}"
             ),

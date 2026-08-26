@@ -3,18 +3,54 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: PHASE_A_RUNTIME_REPAIR_LOCAL_CANDIDATE
-verified_local_date: 2026-08-25
+gate_result: PHASE_B_REPLAY_SETTLEMENT_REPAIR_LOCAL_CANDIDATE
+verified_local_date: 2026-08-26
 verified_github_date: pending
-branch: codex/administrateme-v2-runtime
+branch: codex/administrateme-v2-replay-settlement
 candidate_commit_resolution: local_candidate_pending_ordinary_ci_and_pull_request
 pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: owner_review_merge_then_separately_authorized_phase_b
+next_phase: ordinary_pr_merge_then_guarded_phase_b_retry
 ---
 # Release handoff
+
+## 2026-08-26 guarded Phase B rollback and replay-settlement repair
+
+Protected merge `ec3c77615c6c4fef72dd05b48f45a6d09711cc9c` was selected by the
+attested updater after an encrypted backup. The candidate remained in
+observation mode, all three configured provider adapters recovered under their
+new durable cursor contracts, OpenClaw stayed current-process healthy, and no
+provider-called terminal effect was recorded. Noise filtering v21 advanced
+monotonically with no poison, but its historical replay still required one
+language invocation for every non-anchor message even though fixed code could
+admit candidates only from the latest message in that thread episode. The
+one-hour source-settlement gate expired with more than one thousand deliveries
+remaining, full Doctor failed closed, and the updater restored exact predecessor
+`d181fad24ef488a71ce5568cc40fb81309cb3817`. Both services restarted on
+loopback and observation remained active; the predecessor was truthfully
+degraded while it consumed the retained append-only replay results.
+
+This follow-up is a **MODERNIZE/HARDEN** replay boundary. Noise filtering v22
+uses fresh generation identities because the failed v21 attempt left valid
+immutable partial history. A historical non-anchor source now receives one
+deterministic terminal `no_candidate` assessment with extractor
+`thread-anchor-deferred-v1`; it does not invoke `llm-task`, emit a new
+classification/semantic-feature interpretation, propose work, or change an
+older source fact. The latest thread anchor still invokes the exact pinned
+skill and alone owns deterministic fallback, grounded-language admission,
+thread reconciliation, proposal supersession, and member-decision preservation.
+The release exception is rebound to the exact post-rollback state: the original
+four idempotency-race failures, zero missing/pending backlog after predecessor
+settlement, observation mode, and the monotonic 65,675-obligation floor. It may
+append only fresh, exact, content-free recovery requests; it grants no domain or
+provider authority. Focused unit and full production-composition tests prove
+that a non-anchor bypasses the language seam while the current anchor still
+records a skill call and produces the reviewed result.
+
+The content-free attempt, rollback, diagnosis, and follow-up proof are recorded
+in `docs/refactor/evidence/phase-b-replay-settlement-2026-08-26.md`.
 
 ## 2026-08-25 Phase A runtime, source, and browser repair
 

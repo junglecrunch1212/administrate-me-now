@@ -187,39 +187,20 @@ def _source() -> EventEnvelope:
     )
 
 
-def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
+def test_checked_in_policy_uses_post_rollback_floor_and_exact_failure_set() -> None:
     policy = load_repair_policy(REPO_ROOT)
 
     assert policy.contract == "source-assessment-degraded-baseline-v2"
     assert policy.required_active_commit == ("d181fad24ef488a71ce5568cc40fb81309cb3817")
-    assert policy.expected_counts.minimum_obligations == 63_610
+    assert policy.expected_counts.minimum_obligations == 65_675
     assert policy.expected_counts.pending == 0
-    assert policy.expected_counts.maximum_missing == 256
-    assert policy.expected_counts.failed == 5
-    assert len(policy.targets) == 5
+    assert policy.expected_counts.maximum_missing == 0
+    assert policy.expected_counts.failed == 4
+    assert len(policy.targets) == 4
     assert {target.expected_failure_reason for target in policy.targets} == {
         "language_seam_IdempotencyConflict",
-        "language_seam_OpenClawUnreachable",
     }
-    assert policy.paused_consumer == PausedConsumerBaseline(
-        subscriber_id="pipeline:pipeline:noise_filtering",
-        consumer_version="20.0.0",
-        checkpoint_event_id="ev_01KZP8DCKK0000",
-        poison_event_id="ev_01KZP8DCKX0000",
-        consecutive_failures=5,
-        missing_backlog=[
-            {
-                "event_type": "messaging.received",
-                "reason": "assessment_event_absent_after_checkpoint_or_grace",
-                "maximum_count": 240,
-            },
-            {
-                "event_type": "messaging.sent",
-                "reason": "assessment_event_absent_after_checkpoint_or_grace",
-                "maximum_count": 16,
-            },
-        ],
-    )
+    assert policy.paused_consumer is None
 
 
 def test_policy_requires_unique_groups_and_an_exact_combined_ceiling() -> None:
