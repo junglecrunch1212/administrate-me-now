@@ -38,6 +38,9 @@ from tests.fixtures.backup_rehearsal_processes import (
 )
 
 
+_NESTED_SPAWN_MARKER_TIMEOUT_S = 30
+
+
 def _manifest(files: list[dict[str, Any]]) -> dict[str, Any]:
     document: dict[str, Any] = {
         "format": "administrateme-backup-manifest-v1",
@@ -93,6 +96,23 @@ def _pid_exists(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+def _wait_for_process_marker(
+    controller: mp.Process,
+    marker: Path,
+    *,
+    mode: str,
+) -> None:
+    """Wait through nested spawn startup while failing early on controller death."""
+
+    deadline = time.monotonic() + _NESTED_SPAWN_MARKER_TIMEOUT_S
+    while not marker.exists():
+        if not controller.is_alive() or time.monotonic() >= deadline:
+            controller.kill()
+            controller.join()
+            raise AssertionError(f"guardian did not reach {mode}")
+        time.sleep(0.01)
 
 
 def _expose_spawn_fixture_module(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,13 +366,7 @@ def test_guardian_removes_plaintext_after_controller_death_at_each_phase(
     )
     controller.start()
     marker = stage / active_marker
-    deadline = time.monotonic() + 10
-    while not marker.exists():
-        if not controller.is_alive() or time.monotonic() >= deadline:
-            controller.kill()
-            controller.join()
-            raise AssertionError(f"guardian did not reach {mode}")
-        time.sleep(0.01)
+    _wait_for_process_marker(controller, marker, mode=mode)
 
     guardian_pid = int((stage / ".guardian.pid").read_text("ascii"))
     worker_pid = int(marker.read_text("ascii")) if marker.suffix == ".pid" else None
@@ -449,13 +463,7 @@ def test_worker_lease_survives_guardian_death(
     )
     controller.start()
     marker = stage / active_marker
-    deadline = time.monotonic() + 10
-    while not marker.exists():
-        if not controller.is_alive() or time.monotonic() >= deadline:
-            controller.kill()
-            controller.join()
-            raise AssertionError(f"guardian did not reach {mode}")
-        time.sleep(0.01)
+    _wait_for_process_marker(controller, marker, mode=mode)
 
     guardian_pid = int((stage / ".guardian.pid").read_text("ascii"))
     worker_pid = int(marker.read_text("ascii"))
