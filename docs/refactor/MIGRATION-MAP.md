@@ -8,10 +8,12 @@ provider writes, and the one-Python-runtime/one-pinned-Gateway topology. It
 Calendar/Tasks progress, automatic half-open probes, bounded retry eligibility,
 current-process OpenClaw health, explicit release eligibility, manifest-pinned
 Node selection, incremental bounded-history indexes, fixed-point restart
-quiescence, and revision-bound Triage pagination. It **SUPERSEDES** memory-only
+quiescence, truthful Comms command settlement, and revision-bound Triage
+pagination. It **SUPERSEDES** memory-only
 provider watermarks, permanently open circuits, direct writes under missing
 observation seams, ambient Node execution, indefinitely reusable healthy
-reports, full-history rescans, and snapshotless pagination. Existing cursor
+reports, full-history rescans, false-success local command responses, and
+snapshotless pagination. Existing cursor
 stores migrate additively with `retry_not_before_ms`; older event/schema facts
 remain readable and are never rewritten. Rollback can ignore the additive
 column and new client cursor but may restore the defects, so rollback is a

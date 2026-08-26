@@ -38,7 +38,10 @@ uses and verifies the manifest-selected Homebrew Node formula. Fourth, Triage
 pagination is revision-bound and stale cross-context continuation performs an
 authoritative reload; real 520-item traversal, exact focus, isolation, keyboard,
 responsive, reflow, target, contrast, and transport/console behavior pass the
-690-assertion Gate 7 fixture.
+690-assertion Gate 7 fixture. The clean aggregate additionally exposed and
+closed a Comms settlement race: the fixture now waits for semantic processing,
+and a local command reports success only when its intended projection state is
+observable; a losing concurrent revision returns a truthful conflict.
 
 This work **PRESERVES** append-only facts, deterministic replay, member scope,
 human decisions, observation mode, governance, provider-write boundaries, and

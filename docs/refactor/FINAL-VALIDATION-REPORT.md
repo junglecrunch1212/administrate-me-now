@@ -9,7 +9,10 @@ restart quiescence, and revision-safe Triage pagination/accessibility. The
 content-free 8,760-source profile accounted for all 8,760 obligations with all
 24 durable subscribers at zero lag and equal rebuild digests. Gate 7 passed
 690/690 assertions including 520 exact-once candidates across the supported
-responsive/reflow matrix. Focused, aggregate, static, package, and clean
+responsive/reflow matrix. The exact root suite passed 1,749 tests, the
+root/package aggregate passed 1,918 tests, strict acceptance passed 66 tests,
+and the bridge passed 60 tests; each Python aggregate had the one intentional
+opt-in extended-stress skip. Focused, static, package, and clean
 release results and retained hashes are recorded in
 `docs/refactor/evidence/phase-a-runtime-repair-2026-08-25.md`.
 

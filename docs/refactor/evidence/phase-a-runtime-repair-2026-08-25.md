@@ -40,6 +40,11 @@ payloads were not copied into code, tests, or this receipt.
    resolution, or insertion could silently duplicate or omit a matter. A
    member/private-scoped revision now rejects stale continuation and the client
    performs an authoritative reload.
+7. The deterministic Comms seed could return before noise-filter semantic
+   features settled. A local command could then lose its projection CAS while
+   the endpoint still returned success. The fixture now settles the semantic
+   subscriber and local commands verify their intended projected state;
+   concurrent loss returns a truthful 409.
 
 The change **PRESERVES** event/source truth, replay, privacy, human decisions,
 observation/governance, provider authority, and topology;
@@ -81,6 +86,11 @@ deferred.
   aggregate result is recorded below after the candidate is frozen.
 - Ruff and Mypy passed for the production Python tree; exact Node 24 install,
   check, contract, and test commands passed; diff hygiene passed.
+- Direct Browser-skill inspection against a separate loopback fixture confirmed
+  the semantic shell, ten destinations, one exact `Reply in this thread`
+  textarea (`id=comms-reply`), blank-reply `aria-invalid` plus `state-banner`
+  association, explicit “Nothing was sent” feedback, and zero console
+  warnings/errors.
 
 ## Bounded remaining risk
 
@@ -94,6 +104,23 @@ fencing or progress correctness.
 
 ## Final clean candidate and artifacts
 
-Pending final commit, aggregate release command, hosted CI, and retained
-artifact hashes. This section is updated before publication. Phase B may begin
-only after ordinary pull-request review/merge and a separate owner instruction.
+- Validated implementation commit: `1d2500095b30c2c233580646f15a21f175e6f963`.
+- Exact clean aggregate command: `bash scripts/acceptance/release-candidate.sh`
+  — PASS under Python 3.14.6 and Node 24.19.0.
+- Strict acceptance: 66 passed, one intentional opt-in extended-stress skip,
+  one pre-existing Starlette/httpx deprecation warning.
+- Root/package aggregate: 1,918 passed, one intentional skip, the same warning.
+- Exact configured root command (`PYTHONPATH=bridge poetry run pytest -q`):
+  1,749 passed, one intentional skip, the same warning.
+- Bridge: 60 passed. Ruff, format, Mypy (244 files), production Pyright, package
+  builds, architecture, dependency audit, clean install, tenant isolation,
+  encrypted backup/restore, OpenClaw contract/check/17 tests/build/pack/audit,
+  shell syntax, invariants, diff hygiene, and Gate 7 passed.
+- Gate 7: 690/690 assertions, 520 real fixture candidates exactly once, zero
+  unexpected browser console/page/request/HTTP failures.
+- Retained source/package hashes are in the external Phase A artifact manifest
+  generated from the final documentation commit; the manifest names its exact
+  commit and dirty state to avoid a self-referential archive hash.
+
+Hosted CI and owner review remain pending. Phase B may begin only after ordinary
+pull-request review/merge and a separate owner instruction.
