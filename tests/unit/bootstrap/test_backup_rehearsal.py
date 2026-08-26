@@ -103,11 +103,17 @@ def _wait_for_process_marker(
     marker: Path,
     *,
     mode: str,
-) -> None:
-    """Wait through nested spawn startup while failing early on controller death."""
+) -> str:
+    """Read one complete marker while failing early on controller death."""
 
     deadline = time.monotonic() + _NESTED_SPAWN_MARKER_TIMEOUT_S
-    while not marker.exists():
+    while True:
+        try:
+            marker_value = marker.read_text("ascii").strip()
+        except FileNotFoundError:
+            marker_value = ""
+        if marker_value:
+            return marker_value
         if not controller.is_alive() or time.monotonic() >= deadline:
             controller.kill()
             controller.join()
@@ -366,10 +372,10 @@ def test_guardian_removes_plaintext_after_controller_death_at_each_phase(
     )
     controller.start()
     marker = stage / active_marker
-    _wait_for_process_marker(controller, marker, mode=mode)
+    marker_value = _wait_for_process_marker(controller, marker, mode=mode)
 
     guardian_pid = int((stage / ".guardian.pid").read_text("ascii"))
-    worker_pid = int(marker.read_text("ascii")) if marker.suffix == ".pid" else None
+    worker_pid = int(marker_value) if marker.suffix == ".pid" else None
     if mode == "between-phases":
         assert not (stage / "payload" / "state" / "replay-complete").exists()
     with pytest.raises(BackupError, match="orphan rehearsal child"):
@@ -463,10 +469,10 @@ def test_worker_lease_survives_guardian_death(
     )
     controller.start()
     marker = stage / active_marker
-    _wait_for_process_marker(controller, marker, mode=mode)
+    marker_value = _wait_for_process_marker(controller, marker, mode=mode)
 
     guardian_pid = int((stage / ".guardian.pid").read_text("ascii"))
-    worker_pid = int(marker.read_text("ascii"))
+    worker_pid = int(marker_value)
     os.kill(guardian_pid, signal.SIGKILL)
     deadline = time.monotonic() + 5
     while _pid_exists(guardian_pid) and time.monotonic() < deadline:

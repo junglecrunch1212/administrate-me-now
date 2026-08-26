@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.backup_restore import BackupManager
+from bootstrap.contracts import atomic_write
 
 
 def guardian_extract_fixture(
@@ -54,7 +55,7 @@ def guardian_hung_extract_fixture(
     del source, expected_artifact_sha256, result_pipe
     key_pipe.recv_bytes()
     marker = Path(staging_root) / "hung-extraction.pid"
-    marker.write_text(str(os.getpid()), encoding="ascii")
+    atomic_write(marker, str(os.getpid()).encode("ascii"))
     time.sleep(30)
 
 
@@ -66,7 +67,7 @@ def guardian_hung_replay_fixture(
     del result_pipe
     key_pipe.recv_bytes()
     marker = Path(staged_state) / "hung-replay.pid"
-    marker.write_text(str(os.getpid()), encoding="ascii")
+    atomic_write(marker, str(os.getpid()).encode("ascii"))
     time.sleep(30)
 
 
