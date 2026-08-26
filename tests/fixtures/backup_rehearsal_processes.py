@@ -2,8 +2,8 @@
 
 Spawned disposable controllers create a guardian, which creates another phase
 worker.  Keeping every target in an importable module gives each spawn level a
-stable module identity on both macOS and Linux instead of repickling helpers
-from pytest's transient ``__mp_main__`` module.
+stable source module on supported macOS and Linux runs without relying on a
+pytest-collected module remaining importable across nested fresh interpreters.
 """
 
 from __future__ import annotations
