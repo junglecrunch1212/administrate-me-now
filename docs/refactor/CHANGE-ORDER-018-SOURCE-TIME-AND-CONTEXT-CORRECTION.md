@@ -1,15 +1,18 @@
 # Change Order 018 — Source-time and conservative context correction
 
 Status: PR #338 merged as `5b6c140`, but guarded activation rejected v21 and
-automatically restored `d181fad`. PR #339's forward repair is now on `main`,
-and PR #340 added the Outcome Harness, but neither has been activated on the
-family Mac. A 2026-08-15 content-free read-only diagnosis proved that restored
+automatically restored `d181fad`. PR #339's forward repair, PR #340's
+member-navigation/browser-test improvements, and PR #341's final CO-018
+amendment are on current `main` at merge
+`88bd571881bc0636ff90b12cb906626018978563`; they have not been activated on
+the family Mac. A 2026-08-15 content-free read-only diagnosis proved that restored
 v20 is durably poisoned at exact source `ev_01KZP8DCKX0000`, behind checkpoint
 `ev_01KZP8DCKK0000`, after five repeatable `IdempotencyConflict` deliveries.
 The paused backlog now contains both received and sent messages, which the
-single-type checked release exception on `main` cannot represent. A bounded
-forward-only policy amendment is in progress; deployment remains incomplete
-and requires fresh independent review and exact-head authority.
+single-type checked release exception could not represent. The bounded
+forward-only policy amendment is merged but deployment remains incomplete and
+follows the ordinary protected-PR and separately requested guarded-deployment
+workflow in ADR-0013.
 
 Governing sources: event-source authority; D19, D26, and D28; ADR-0008 and
 ADR-0010; C002, C025, C034, C097, C106–C110, C114; AC-08, AC-09, AC-18,

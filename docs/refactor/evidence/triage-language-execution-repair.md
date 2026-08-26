@@ -43,5 +43,5 @@ The candidate performs no provider write, confirmation, canonical
 materialization, or external dispatch. Observation mode remains mandatory.
 Historical source facts, failed-call audit facts, and pending Triage proposals
 remain immutable. Live replay and final aggregate counts occur only after
-independent review, merge, backup, guarded deployment, and a successful Doctor
+protected CI, merge, backup, separately requested guarded deployment, and a successful Doctor
 execution probe.

@@ -1,7 +1,9 @@
 # CO-016 Triage queue-continuity evidence
 
-Status: local candidate evidence complete; independent review and hosted gates
-pending; not merged or deployed.
+Status: historical completed release evidence. PR #334 candidate
+`40f1c27a1259b35c263cf980fbbb9cf3e4f5d239` merged as
+`2d739ad2e89a49bf330a854317326482907b956d` and is an ancestor of active
+observation release `d181fad24ef488a71ce5568cc40fb81309cb3817`.
 
 ## Reproduction
 
@@ -115,6 +117,6 @@ resolved to macOS system Python. Binding `python3` to the clean Poetry Python
 3.14 environment produced the passing result above. No test was waived and no
 installed runtime was touched.
 
-Hosted checks, an independent exact-head review, and release evidence will be
-added only when obtained. G-001 continues to prohibit merge or deployment
-without a fresh exact-head authorization.
+Under the then-current process, hosted checks and exact-head review completed
+before merge. That historical transaction is evidence, not current authority;
+ADR-0013 now governs delivery and deployment.

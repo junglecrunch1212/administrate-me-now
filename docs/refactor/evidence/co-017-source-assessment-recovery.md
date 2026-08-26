@@ -1,5 +1,9 @@
 # CO-017 source-assessment recovery evidence
 
+Historical receipt notice: the exact-head, G-001, and separate-review sequence
+below records the procedure completed for PR #336. ADR-0013 supersedes those
+delivery instructions and does not create another reviewer task.
+
 Status: released and authenticated-live-verified in observation mode. PR #336
 merge `d181fad24ef488a71ce5568cc40fb81309cb3817` is the active release; all four
 declared sources have newer successful v4 assessments while the older failures

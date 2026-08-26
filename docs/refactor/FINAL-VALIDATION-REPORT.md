@@ -1,5 +1,10 @@
 # Gate 8 final validation report
 
+Historical receipt notice: prior independent-review and merge instructions in
+this report describe the procedure active for their named releases. ADR-0013
+supersedes those delivery instructions; no current separate reviewer task is
+created by this report.
+
 ## 2026-08-08 CO-008 upgrade-controller amendment and deployment
 
 PR #299 passed both hosted gates and merged as `d5dd805`. During guarded
@@ -142,7 +147,7 @@ backup/restore, plugin contract/build/package, shellcheck, shell syntax, and
 diff hygiene pass under Python 3.14 and Node 24. The first aggregate run reached
 the final production npm audit and encountered an external registry timeout;
 the same audit then returned zero vulnerabilities, and the exact final
-aggregate rerun passed. GitHub checks, independent review, and the live
+aggregate rerun passed. GitHub checks, the then-current review, and the live
 deployment/replay evidence described in CO-008 remain release boundaries and
 must replace this candidate wording after activation.
 
@@ -487,7 +492,7 @@ deferred optional providers.
 
 ## Release decision
 
-No P0 or P1 defect remains in the credential-free release boundary. The PR is
-reviewable and reversible, and must not be merged by automation. Required human
-action is independent review, merge if accepted, and only then the bounded
-post-merge activation checklist.
+No P0 or P1 defect remained in that credential-free release boundary. Under
+current ADR-0013, required GitHub CI and protected merge govern delivery;
+deployment is separately owner-requested and uses the bounded post-merge
+activation checklist.

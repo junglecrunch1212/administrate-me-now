@@ -1,4 +1,0 @@
-interface:
-  display_name: "AdministrateMe Outcome"
-  short_description: "Turn owner outcomes into acceptance"
-  default_prompt: "Use $adminme-outcome to turn my product outcome into a bounded, testable AdministrateMe journey."

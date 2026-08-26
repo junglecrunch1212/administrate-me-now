@@ -2,13 +2,15 @@
 
 Date: 2026-08-15
 
-Status: PR #339's forward repair and PR #340's Outcome Harness are present on
-current `origin/main` merge `cd08b50`; the active family release remains
-`d181fad`. A new local-only PRESERVE/HARDEN amendment repairs the checked
-release exception so it can describe the content-free mixed received/sent
-backlog actually present behind the restored v20 poison. No merge, deployment,
-live recovery, observation change, provider/configuration write, runtime
-migration, or installed-release edit has occurred.
+Status: PR #341 merged the final amendment as
+`88bd571881bc0636ff90b12cb906626018978563`; the active family release remains
+`d181fad`. No deployment, live recovery, observation change, provider or
+configuration write, runtime migration, or installed-release edit followed.
+
+Historical chronology notice: the exact-head and separate-review sequence
+below records work performed under retired ADR-0009. It does not require or
+authorize a current reviewer task. ADR-0013 governs any future delivery or
+separately requested guarded deployment.
 
 ## 2026-08-15 read-only diagnosis and local candidate
 
@@ -311,9 +313,9 @@ the descendant read could still be followed by a system supersession.
 projection performs deterministic compare-and-apply, and controlled unit plus
 production-composition interleavings prove a newer member revision remains
 pending. The complete aggregate was again rerun from the beginning and passed
-with the final counts above. These advisories are not the separate user-visible
-independent review required by ADR-0009. No Phase B action is authorized by this
-evidence.
+with the final counts above. Under then-current ADR-0009, these advisories did
+not count as its separate user-visible review. No Phase B action was authorized
+by this evidence.
 
 The separate user-visible review of exact head `12c4a16` then rejected the
 candidate for two findings: replay superseded a still-valid same-source v20
@@ -325,8 +327,8 @@ composition regression proof, and corrects the schema reference. The amended
 worktree then passed the 185-test changed-path slice, the complete aggregate
 from the beginning, the separate 1,699-test configured root discovery, and the
 invariant scan; the counts above now describe that fresh run. The replacement
-commit still requires hosted checks and a fresh independent exact-head review.
-No Phase B action is authorized.
+commit still required hosted checks and a fresh independent exact-head review
+under the procedure active at that historical point. No Phase B action was authorized.
 
 The next separate user-visible review of exact head `c915c1c` rejected the
 candidate because the first repair exempted only prior proposals without an
@@ -341,14 +343,15 @@ through actual Gmail mapping, the production v21 runner, projection, and member
 Triage API. The amended worktree then passed the 186-test changed-path slice,
 the complete aggregate release-candidate suite from the beginning, the
 separate 1,700-test configured root discovery, and the invariant scan; the
-counts above describe this fresh run. The rejected receipt grants no Phase B
-or release authority, and the amended head still requires hosted checks and a
-fresh independent review. Final audit added projection-level closure for the
+counts above described this fresh run. The rejected receipt granted no Phase B
+or release authority, and the amended head still required hosted checks and a
+fresh independent review under the procedure active at that historical point.
+Final audit added projection-level closure for the
 companion member-race case described above. The race-hardened worktree then
 passed the 186-test changed-path slice, complete aggregate release-candidate
 suite from the beginning, separate 1,700-test configured root discovery, and
-the invariant scan. The counts above remain current; hosted checks and fresh
-independent review are still required for the final head.
+the invariant scan. The counts above remained current; hosted checks and fresh
+independent review were still required for that historical head.
 
 The following independent review of exact head `93bc404` rejected the candidate
 because the replacement guard covered only active predecessor states. A member
@@ -362,6 +365,6 @@ failed exactly for both terminal decisions before the repair. All three now
 preserve the member revision and suppress the replacement. The amended worktree
 then passed the 188-test changed-path slice, complete aggregate release-
 candidate suite from the beginning, separate 1,702-test configured root
-discovery, and invariant scan; the counts above describe this fresh run. The
-rejected receipt grants no Phase B or release authority, and the amended head
-still requires hosted checks and fresh independent review.
+discovery, and invariant scan; the counts above described this fresh run. The
+rejected receipt granted no Phase B or release authority, and the amended head
+still required hosted checks and fresh independent review under the then-current procedure.

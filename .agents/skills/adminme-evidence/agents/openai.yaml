@@ -1,4 +1,0 @@
-interface:
-  display_name: "AdministrateMe Evidence"
-  short_description: "Turn receipts into an owner handoff"
-  default_prompt: "Use $adminme-evidence to validate the run receipts and prepare a concise owner-ready handoff."
