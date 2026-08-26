@@ -7,8 +7,8 @@ gate_result: PHASE_B_ROLLBACK_SCHEMA_COMPAT_LOCAL_CANDIDATE
 verified_local_date: 2026-08-26
 verified_github_date: pending
 branch: codex/administrateme-v2-rollback-schema-compat
-candidate_commit_resolution: local_candidate_pending_ordinary_ci_and_pull_request
-pull_request_url: pending
+candidate_commit_resolution: pull_request_348_pending_required_github_checks
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/348
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
