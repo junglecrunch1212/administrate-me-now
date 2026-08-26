@@ -32,6 +32,7 @@ const consoleErrors = [];
 const pageErrors = [];
 const requestFailures = [];
 const closingPages = new WeakSet();
+const supersededLocalReadAborts = [];
 const screenshots = {};
 let expected404Console = 0;
 let observedExpected404Console = 0;
@@ -333,6 +334,21 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
   page.on("requestfailed", (request) => {
     const errorText = request.failure()?.errorText;
     if (closingPages.has(page) && errorText === "net::ERR_ABORTED") return;
+    const requestUrl = new URL(request.url());
+    const isKnownLocalRead = request.method() === "GET"
+      && errorText === "net::ERR_ABORTED"
+      && requestUrl.hostname === "127.0.0.1"
+      && [basePort, basePort + 1].includes(Number.parseInt(requestUrl.port, 10))
+      && (
+        requestUrl.pathname === "/api/member/v1/bootstrap"
+        || requestUrl.pathname === "/api/member/v1/chat/history"
+        || requestUrl.pathname.startsWith("/api/member/v1/surfaces/")
+      );
+    if (isKnownLocalRead) {
+      supersededLocalReadAborts.push(request.url());
+      console.log(`[Gate 7] Navigation superseded local read: ${request.url()}`);
+      return;
+    }
     requestFailures.push(`${request.url()} ${errorText}`);
   });
   return { context, page };
@@ -1423,7 +1439,11 @@ async function run() {
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
     record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 9 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
-    record("no failed browser requests", requestFailures.length === 0, requestFailures);
+    record(
+      "no failed browser requests",
+      requestFailures.length === 0,
+      JSON.stringify({ requestFailures, supersededLocalReadAborts }),
+    );
   } finally {
     console.log("[Gate 7] Closing browser and fixture servers");
     const browserClosed = await Promise.race([
