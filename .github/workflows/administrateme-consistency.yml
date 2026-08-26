@@ -1,12 +1,6 @@
 name: AdministrateMe consistency
 
 on:
-  workflow_call:
-    inputs:
-      g002_orchestrated:
-        required: false
-        type: boolean
-        default: false
   pull_request:
     branches: [main]
 
@@ -14,17 +8,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: administrateme-consistency-${{ github.ref }}-${{ inputs.g002_orchestrated && 'g002' || 'direct' }}
+  group: administrateme-consistency-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # Keep this job name stable because protected main requires it.
   deterministic-consistency:
-    name: ${{ inputs.g002_orchestrated && 'g002-deterministic-consistency' || 'deterministic-consistency' }}
-    if: >-
-      github.event_name != 'pull_request' ||
-      inputs.g002_orchestrated ||
-      vars.ADMINME_CODEX_REVIEW_ENABLED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -33,7 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 

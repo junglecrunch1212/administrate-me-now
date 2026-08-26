@@ -1,12 +1,6 @@
 name: macOS bootstrap contract
 
 on:
-  workflow_call:
-    inputs:
-      g002_orchestrated:
-        required: false
-        type: boolean
-        default: false
   pull_request:
     paths:
       - "bootstrap/**"
@@ -33,11 +27,6 @@ permissions:
 
 jobs:
   credential-free-rehearsal:
-    name: ${{ inputs.g002_orchestrated && 'g002-credential-free-rehearsal' || 'credential-free-rehearsal' }}
-    if: >-
-      github.event_name != 'pull_request' ||
-      inputs.g002_orchestrated ||
-      vars.ADMINME_CODEX_REVIEW_ENABLED != 'true'
     runs-on: macos-15
     timeout-minutes: 90
     env:
