@@ -66,6 +66,14 @@ from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
+# ``sqlcipher3`` re-exports these native DB-API symbols at runtime, but its
+# source-derived type surface does not declare every re-export.  Resolve only
+# the exact constants/types needed by the authorizer and native-handle guard;
+# omitting defaults preserves a fail-closed import if the native API changes.
+_SQLITE_OK: int = getattr(sqlcipher3, "SQLITE_OK")
+_SQLITE_DENY: int = getattr(sqlcipher3, "SQLITE_DENY")
+_SQLCIPHER_CURSOR_TYPE: type[Any] = getattr(sqlcipher3, "Cursor")
+
 # Default projection classes the runner registers when no caller has supplied an
 # explicit set. Pack-provided projections register separately via the pack runner.
 # [D18] enumerated the original 13 first-party projections. [D26] added the
@@ -1106,15 +1114,11 @@ class ProjectionRunner:
         del arg2, database, source
         if action == getattr(sqlcipher3, "SQLITE_PRAGMA", -1):
             return (
-                sqlcipher3.SQLITE_OK
+                _SQLITE_OK
                 if (arg1 or "").casefold() in _READ_ONLY_PRAGMAS
-                else sqlcipher3.SQLITE_DENY
+                else _SQLITE_DENY
             )
-        return (
-            sqlcipher3.SQLITE_DENY
-            if action in _READ_ONLY_DENIED_ACTIONS
-            else sqlcipher3.SQLITE_OK
-        )
+        return _SQLITE_DENY if action in _READ_ONLY_DENIED_ACTIONS else _SQLITE_OK
 
     def _connection_control_sync(
         self,
@@ -1163,7 +1167,7 @@ class ProjectionRunner:
     ) -> None:
         """Reject values that could carry native DB ownership off-worker."""
 
-        if isinstance(value, (sqlcipher3.Connection, sqlcipher3.Cursor)):
+        if isinstance(value, (sqlcipher3.Connection, _SQLCIPHER_CURSOR_TYPE)):
             raise RuntimeError("projection query returned a native SQLCipher handle")
         if value is None or isinstance(
             value,
