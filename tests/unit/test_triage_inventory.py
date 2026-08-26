@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 import sqlcipher3
 
 from adminme.lib.session import build_internal_session
@@ -69,7 +70,7 @@ def _projection() -> tuple[TriageProjection, sqlcipher3.Connection]:
 
 def test_every_candidate_is_reachable_once_across_stable_pages() -> None:
     projection, conn = _projection()
-    for index in range(125):
+    for index in range(520):
         projection.apply(_event(index), conn)
     session = build_internal_session(MEMBER, "principal", TENANT)
     cursor = None
@@ -93,8 +94,109 @@ def test_every_candidate_is_reachable_once_across_stable_pages() -> None:
         cursor = page["next_cursor"]
         if cursor is None:
             break
-    assert len(seen_matters) == len(set(seen_matters)) == 125
-    assert len(seen_candidates) == len(set(seen_candidates)) == 125
+    assert len(seen_matters) == len(set(seen_matters)) == 520
+    assert len(seen_candidates) == len(set(seen_candidates)) == 520
+
+
+def test_cursor_refuses_root_promotion_after_concurrent_resolution() -> None:
+    projection, conn = _projection()
+    for event in (
+        _event(0, thread_key="matter-a"),
+        _event(10, thread_key="matter-a"),
+        _event(5, thread_key="matter-b"),
+        _event(20, thread_key="matter-c"),
+    ):
+        projection.apply(event, conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+
+    first_page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates", limit=2
+    )
+    assert first_page["next_cursor"] is not None
+
+    dismissed = _event(30)
+    dismissed.update(event_id="event-9000", type="triage.item.dismissed")
+    dismissed["payload"] = {
+        "proposal_id": "proposal-0000",
+        "dismissed_at": "2030-02-01T00:00:00Z",
+        "dismissed_by_member_id": MEMBER,
+        "reason": "not_actionable",
+    }
+    projection.apply(dismissed, conn)
+
+    with pytest.raises(ValueError, match="stale triage cursor"):
+        triage_page_for_member(
+            conn,
+            session,
+            member_id=MEMBER,
+            lens="all_candidates",
+            cursor=first_page["next_cursor"],
+            limit=2,
+        )
+
+    refreshed = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates", limit=2
+    )
+    matter_a = next(
+        matter
+        for matter in refreshed["matters"]
+        if any(
+            candidate["proposal_id"] == "proposal-0010"
+            for candidate in matter["candidates"]
+        )
+    )
+    assert [item["proposal_id"] for item in matter_a["candidates"]] == [
+        "proposal-0010"
+    ]
+
+
+def test_cursor_refuses_concurrent_scoped_insert_but_ignores_other_member() -> None:
+    projection, conn = _projection()
+    for index in (10, 20, 30):
+        projection.apply(_event(index), conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+    first_page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates", limit=2
+    )
+    assert first_page["next_cursor"] is not None
+
+    other_member_event = _event(5)
+    other_member_event["event_id"] = "event-other-member"
+    other_member_event["owner_scope"] = "private:other-member"
+    other_member_event["visibility_scope"] = "private:other-member"
+    other_member_event["payload"].update(
+        proposal_id="proposal-other-member",
+        owner_member_id="other-member",
+        route={"member_id": "other-member"},
+    )
+    projection.apply(other_member_event, conn)
+    unaffected = triage_page_for_member(
+        conn,
+        session,
+        member_id=MEMBER,
+        lens="all_candidates",
+        cursor=first_page["next_cursor"],
+        limit=2,
+    )
+    assert [
+        candidate["proposal_id"]
+        for matter in unaffected["matters"]
+        for candidate in matter["candidates"]
+    ] == ["proposal-0030"]
+
+    scoped_insert = _event(5)
+    scoped_insert["event_id"] = "event-scoped-insert"
+    scoped_insert["payload"]["proposal_id"] = "proposal-scoped-insert"
+    projection.apply(scoped_insert, conn)
+    with pytest.raises(ValueError, match="stale triage cursor"):
+        triage_page_for_member(
+            conn,
+            session,
+            member_id=MEMBER,
+            lens="all_candidates",
+            cursor=first_page["next_cursor"],
+            limit=2,
+        )
 
 
 def test_cross_surface_candidate_lookup_reads_only_visible_source_rows() -> None:

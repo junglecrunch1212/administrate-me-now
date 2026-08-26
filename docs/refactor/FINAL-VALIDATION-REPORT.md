@@ -1,5 +1,22 @@
 # Gate 8 final validation report
 
+## 2026-08-25 Phase A runtime-repair local candidate
+
+The Phase A candidate repairs durable adapter progress/circuit recovery,
+current-process OpenClaw health and explicit release eligibility,
+manifest-selected Node execution, full-history source-processing cost and
+restart quiescence, and revision-safe Triage pagination/accessibility. The
+content-free 8,760-source profile accounted for all 8,760 obligations with all
+24 durable subscribers at zero lag and equal rebuild digests. Gate 7 passed
+690/690 assertions including 520 exact-once candidates across the supported
+responsive/reflow matrix. Focused, aggregate, static, package, and clean
+release results and retained hashes are recorded in
+`docs/refactor/evidence/phase-a-runtime-repair-2026-08-25.md`.
+
+This is repository evidence only. No deployment, family-Mac mutation, live
+recovery, provider write, credential change, or runtime migration occurred.
+Phase B remains separately owner-authorized.
+
 Historical receipt notice: prior independent-review and merge instructions in
 this report describe the procedure active for their named releases. ADR-0013
 supersedes those delivery instructions; no current separate reviewer task is

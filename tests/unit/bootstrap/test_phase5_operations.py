@@ -156,6 +156,11 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert 'ADMINME_REPOSITORY_ROOT="$candidate"' in updater
     assert 'ADMINME_UPGRADE_CONTROLLER_COMMIT="$candidate_commit"' in updater
     assert "candidate upgrade-controller provenance attestation failed" in updater
+    assert (
+        'resolve_formula_node "$active_node_formula" "$active_node_preferred"'
+        in updater
+    )
+    assert 'active_node="$(command -v node || true)"' not in updater
     assert "run_cli upgrade" not in updater
     assert (
         '"$active_python" "$candidate/bootstrap/keychain_runtime_migration.py"'
@@ -187,6 +192,62 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
     )
     assert 'cd "$ACTIVE_RELEASE_ROOT"' in common
+
+
+def test_formula_node_resolution_ignores_ambient_node_and_checks_exact_version(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    formula = tmp_path / "node@24"
+    formula_bin = formula / "bin"
+    fake_bin.mkdir()
+    formula_bin.mkdir(parents=True)
+    ambient_node = fake_bin / "node"
+    ambient_node.write_text("#!/bin/bash\nprintf 'v22.23.2\\n'\n", encoding="utf-8")
+    ambient_node.chmod(0o755)
+    formula_node = formula_bin / "node"
+    formula_node.write_text("#!/bin/bash\nprintf 'v24.19.0\\n'\n", encoding="utf-8")
+    formula_node.chmod(0o755)
+    brew = fake_bin / "brew"
+    brew.write_text(
+        f"#!/bin/bash\n[[ \"$1\" == --prefix && \"$2\" == node@24 ]] || exit 2\nprintf '%s\\n' '{formula}'\n",
+        encoding="utf-8",
+    )
+    brew.chmod(0o755)
+    environment = dict(os.environ)
+    environment["PATH"] = f"{fake_bin}:/opt/homebrew/bin:/usr/bin:/bin"
+    common = REPO_ROOT / "bootstrap" / "common.sh"
+
+    selected = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'source "$1"; resolve_formula_node node@24 24.19.0',
+            "bash",
+            str(common),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert selected.stdout.strip() == str(formula_node)
+
+    mismatch = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'source "$1"; resolve_formula_node node@24 24.20.0',
+            "bash",
+            str(common),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert mismatch.returncode != 0
+    assert "does not match reviewed manifest" in mismatch.stderr
 
 
 def test_required_llm_tool_status_proves_config_and_runtime_registration(

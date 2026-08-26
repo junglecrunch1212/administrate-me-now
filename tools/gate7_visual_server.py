@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -580,6 +581,55 @@ def build_app():
         )
         await runtime.wait_for_projection("triage", superseded_id)
         return {"seeded": 9, "last_event_id": superseded_id}
+
+    @app.post("/__gate7/seed-triage-pagination")
+    async def seed_triage_pagination():
+        """Seed a real cursor inventory beyond 500 in the disposable fixture."""
+
+        runtime = app.state.runtime
+        # Keep the bulk inventory older than the named interaction fixtures so it
+        # proves deep pagination without displacing those fixtures from Today.
+        now = fixture_now() - timedelta(days=365)
+        proposal_ids = [f"gate7-page-{index:04d}" for index in range(520)]
+        envelopes = [
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000) + index,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=1,
+                occurred_at=(now + timedelta(seconds=index)).isoformat(),
+                source_adapter="gate7-pagination-fixture",
+                source_account_id="credential-free",
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                idempotency_key=f"gate7:pagination:{proposal_id}",
+                actor_identity=PRINCIPAL,
+                payload={
+                    "proposal_id": proposal_id,
+                    "target_kind": "task",
+                    "owner_member_id": PRINCIPAL,
+                    "title": f"Pagination candidate {index:04d}",
+                    "candidate": {},
+                    "route": {"member_id": PRINCIPAL},
+                    "source_event_id": f"gate7-page-source-{index:04d}",
+                    "confidence": None,
+                    "reasons": ["credential-free pagination fixture"],
+                },
+            )
+            for index, proposal_id in enumerate(proposal_ids)
+        ]
+        event_ids = await runtime.events.write_batch(envelopes)
+        await runtime.wait_for_projection("triage", event_ids[-1])
+        fixture_sha256 = hashlib.sha256(
+            json.dumps(proposal_ids, separators=(",", ":")).encode()
+        ).hexdigest()
+        return {
+            "seeded": len(envelopes),
+            "last_event_id": event_ids[-1],
+            "fixture_sha256": fixture_sha256,
+            "python": sys.version.split()[0],
+        }
 
     @app.post("/__gate7/fail-next-triage-materialization")
     async def fail_next_triage_materialization():

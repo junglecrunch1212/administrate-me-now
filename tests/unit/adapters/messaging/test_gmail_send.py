@@ -74,6 +74,21 @@ GmailAdapter: Any = _adapter_mod.GmailAdapter
 
 
 _FROZEN_NOW = datetime(2026, 5, 17, 12, 0, 0, tzinfo=timezone.utc)
+_OBSERVATION_DEFAULT = object()
+
+
+@pytest.fixture(autouse=True)
+def _inactive_observation_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def call_through(
+        _session: Any,
+        _action: str,
+        _payload: dict[str, Any],
+        action_fn: Any,
+        **_kwargs: Any,
+    ) -> OutboundResult:
+        return OutboundResult(suppressed=False, result=await action_fn())
+
+    monkeypatch.setattr(_adapter_mod, "outbound", call_through)
 
 
 class _FakeEventLog:
@@ -189,9 +204,9 @@ class _FakeHttpError(Exception):
 def _make_adapter(
     *,
     service: _FakeSendService | None = None,
-    observation_session: Any = None,
-    observation_manager: Any = None,
-    observation_event_log: Any = None,
+    observation_session: Any = _OBSERVATION_DEFAULT,
+    observation_manager: Any = _OBSERVATION_DEFAULT,
+    observation_event_log: Any = _OBSERVATION_DEFAULT,
     user_email: str = "sandbox@example.test",
 ) -> Any:
     """Construct a GmailAdapter pre-seeded with a fake service +
@@ -203,9 +218,21 @@ def _make_adapter(
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": user_email,
         },
-        observation_session=observation_session,
-        observation_manager=observation_manager,
-        observation_event_log=observation_event_log,
+        observation_session=(
+            object()
+            if observation_session is _OBSERVATION_DEFAULT
+            else observation_session
+        ),
+        observation_manager=(
+            object()
+            if observation_manager is _OBSERVATION_DEFAULT
+            else observation_manager
+        ),
+        observation_event_log=(
+            object()
+            if observation_event_log is _OBSERVATION_DEFAULT
+            else observation_event_log
+        ),
     )
     adapter._service = service
     return adapter
@@ -439,20 +466,22 @@ async def test_send_observation_suppressed_path(
 
 
 # ---------------------------------------------------------------------------
-# 3) send() — Phase A: seams unset → direct Gmail API call
+# 3) send() — seams missing → fail closed
 # ---------------------------------------------------------------------------
 
 
-async def test_send_direct_call_when_seams_not_populated() -> None:
-    """Phase A (today): the supervisor's adapter loader does NOT yet
-    populate the observation-seam slots, so :meth:`send` calls Gmail v1
-    directly. The 11r-c Phase-A-conditional pattern. The
-    ``messaging.sent@v4`` event is still emitted with
-    ``delivery_status="sent"``."""
+async def test_send_fails_closed_when_seams_not_populated() -> None:
+    """A missing observation seam is a configuration failure, never
+    permission to bypass the final outbound guard."""
     service = _FakeSendService(
         response={"id": "gmail-direct-1", "threadId": "thr-direct"}
     )
-    adapter = _make_adapter(service=service)
+    adapter = _make_adapter(
+        service=service,
+        observation_session=None,
+        observation_manager=None,
+        observation_event_log=None,
+    )
     event_log = _FakeEventLog()
     _seed_ctx(adapter, event_log)
     message = OutboundMessage(
@@ -462,17 +491,11 @@ async def test_send_direct_call_when_seams_not_populated() -> None:
         metadata={"subject": "Direct"},
     )
 
-    result = await adapter.send(message)
+    with pytest.raises(RuntimeError, match="observation"):
+        await adapter.send(message)
 
-    assert len(service.send_calls) == 1
-    sent = [c for c in event_log.calls if c["type"] == "messaging.sent"]
-    assert len(sent) == 1
-    payload = sent[0]["payload"]
-    assert payload["delivery_status"] == "sent"
-    assert payload["thread_id"] == "thr-direct"
-    assert result.delivered is True
-    assert result.external_id == "gmail-direct-1"
-    assert result.suppressed is False
+    assert service.send_calls == []
+    assert not [c for c in event_log.calls if c["type"] == "messaging.sent"]
 
 
 # ---------------------------------------------------------------------------

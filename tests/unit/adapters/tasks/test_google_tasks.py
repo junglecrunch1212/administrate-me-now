@@ -86,6 +86,21 @@ GoogleTasksAdapter: Any = _adapter_mod.GoogleTasksAdapter
 
 
 _FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
+_OBSERVATION_DEFAULT = object()
+
+
+@pytest.fixture(autouse=True)
+def _inactive_observation_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def call_through(
+        _session: Any,
+        _action: str,
+        _payload: dict[str, Any],
+        action_fn: Any,
+        **_kwargs: Any,
+    ) -> OutboundResult:
+        return OutboundResult(suppressed=False, result=await action_fn())
+
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", call_through)
 
 
 class _FakeEventLog:
@@ -152,7 +167,7 @@ class _FakeTasksService:
     def __init__(
         self,
         *,
-        list_pages: list[dict[str, Any]] | None = None,
+        list_pages: list[dict[str, Any] | BaseException] | None = None,
         insert_response: dict[str, Any] | None = None,
         raises: BaseException | None = None,
     ) -> None:
@@ -187,7 +202,10 @@ class _FakeListRequest:
         if self._service._raises is not None:
             raise self._service._raises
         if self._service._list_pages:
-            return dict(self._service._list_pages.pop(0))
+            page = self._service._list_pages.pop(0)
+            if isinstance(page, BaseException):
+                raise page
+            return dict(page)
         return {"items": []}
 
 
@@ -204,9 +222,9 @@ class _FakeInsertRequest:
 def _make_adapter(
     *,
     service: _FakeTasksService | None = None,
-    observation_session: Any = None,
-    observation_manager: Any = None,
-    observation_event_log: Any = None,
+    observation_session: Any = _OBSERVATION_DEFAULT,
+    observation_manager: Any = _OBSERVATION_DEFAULT,
+    observation_event_log: Any = _OBSERVATION_DEFAULT,
     tasklist_id: str = "tasklist-primary",
     member_id: str = "member-001",
     list_name: str | None = None,
@@ -224,9 +242,21 @@ def _make_adapter(
         config["list_name"] = list_name
     adapter = GoogleTasksAdapter(
         config=config,
-        observation_session=observation_session,
-        observation_manager=observation_manager,
-        observation_event_log=observation_event_log,
+        observation_session=(
+            object()
+            if observation_session is _OBSERVATION_DEFAULT
+            else observation_session
+        ),
+        observation_manager=(
+            object()
+            if observation_manager is _OBSERVATION_DEFAULT
+            else observation_manager
+        ),
+        observation_event_log=(
+            object()
+            if observation_event_log is _OBSERVATION_DEFAULT
+            else observation_event_log
+        ),
     )
     if service is not None:
         adapter._service = service
@@ -380,8 +410,8 @@ async def test_apply_write_routes_through_observation_outbound(
     observation-mode seam slots are populated. The adapter imports the
     function under the alias ``observation_outbound`` in its own module
     namespace; monkeypatching THAT name records the wrap without needing
-    real session / manager / event-log instances. The Phase A path
-    leaves the seams unset and bypasses the wrap (see the next test)."""
+    real session / manager / event-log instances. Missing seams are covered
+    separately as a fail-closed configuration error."""
     service = _FakeTasksService(insert_response={"id": "gtask-wrapped-001"})
     session_sentinel = object()
     manager_sentinel = object()
@@ -498,15 +528,16 @@ async def test_apply_write_observation_suppressed_returns_unapplied(
     assert service.insert_calls == []
 
 
-async def test_apply_write_direct_call_when_seams_unset_returns_applied() -> None:
-    """Phase A (today): the supervisor's adapter loader does NOT yet
-    populate the observation-seam slots, so :meth:`_apply_write_impl`
-    falls through the wrap branch and direct-calls
-    ``service.tasks().insert(...)``. The 11r-c / 11a / 11b-iii Phase-A-
-    conditional pattern. ``WriteResult(applied=True, ...)`` returns with
-    the Google task id."""
+async def test_apply_write_fails_closed_when_seams_unset() -> None:
+    """Missing observation dependencies must not bypass the final
+    outbound side-effect guard."""
     service = _FakeTasksService(insert_response={"id": "gtask-direct-001"})
-    adapter = _make_adapter(service=service)  # seams default to None
+    adapter = _make_adapter(
+        service=service,
+        observation_session=None,
+        observation_manager=None,
+        observation_event_log=None,
+    )
 
     op = WriteOperation(
         kind="create_task",
@@ -517,16 +548,10 @@ async def test_apply_write_direct_call_when_seams_unset_returns_applied() -> Non
             "notes": "no observation seams",
         },
     )
-    result = await adapter.apply_write(op)
+    with pytest.raises(RuntimeError, match="observation"):
+        await adapter.apply_write(op)
 
-    assert len(service.insert_calls) == 1
-    insert_call = service.insert_calls[0]
-    assert insert_call["tasklist"] == "tasklist-primary"
-    assert insert_call["body"]["title"] == "Direct call task"
-    assert insert_call["body"]["notes"] == "no observation seams"
-    assert result.applied is True
-    assert result.external_id == "gtask-direct-001"
-    assert result.suppressed is False
+    assert service.insert_calls == []
 
 
 # ===========================================================================
@@ -762,11 +787,124 @@ async def test_provider_revision_dedupe_survives_adapter_restart(
     )
     assert await restarted._poll_once(ctx=restarted_ctx) == 0
     assert restarted.status().extra["restart_dedupe"] == "durable"
+    assert cursor_store.get("google-tasks-primary").provider_watermark is not None
     assert (
         len([call for call in event_log.calls if call["type"] == "list_item.added"])
         == 1
     )
     cursor_store.close()
+
+
+async def test_tasks_partial_page_does_not_advance_completion_watermark(
+    tmp_path: Path,
+) -> None:
+    service = _FakeTasksService(
+        list_pages=[
+            {"items": [], "nextPageToken": "page-2"},
+            ConnectionResetError("fixture page failed"),
+        ]
+    )
+    adapter = _make_adapter(service=service)
+    adapter.instance_name = "google-tasks-primary"
+    store = AdapterCursorStore(tmp_path / "partial-tasks.sqlite3")
+    ctx = AdapterContext(
+        event_sink=_FakeEventLog(),  # type: ignore[arg-type]
+        config={},
+        correlation_id_factory=lambda: "partial-cycle",
+        now_factory=lambda: _FROZEN_NOW,
+        cursor_store=store,
+    )
+    try:
+        with pytest.raises(ConnectionResetError, match="page failed"):
+            await adapter._poll_once(ctx=ctx)
+        assert store.get("google-tasks-primary").provider_watermark is None
+    finally:
+        store.close()
+
+
+async def test_tasks_duplicate_runtime_cannot_poll_same_account(
+    tmp_path: Path,
+) -> None:
+    service = _FakeTasksService(list_pages=[{"items": []}])
+    adapter = _make_adapter(service=service)
+    adapter.instance_name = "google-tasks-primary"
+    store = AdapterCursorStore(tmp_path / "tasks-owner.sqlite3")
+    assert store.claim("google-tasks-primary", "other-runtime", ttl_ms=60_000)
+    ctx = AdapterContext(
+        event_sink=_FakeEventLog(),  # type: ignore[arg-type]
+        config={},
+        correlation_id_factory=lambda: "owner-cycle",
+        now_factory=lambda: _FROZEN_NOW,
+        cursor_store=store,
+    )
+    try:
+        assert await adapter._poll_once(ctx=ctx) == 0
+        assert service.list_calls == []
+        assert adapter.status().extra["cursor_lease"] == "held_by_another_runtime"
+    finally:
+        store.close()
+
+
+async def test_tasks_provider_failures_open_durable_circuit(tmp_path: Path) -> None:
+    adapter = _make_adapter()
+    adapter.instance_name = "google-tasks-primary"
+    adapter._poll_interval_s = 0
+    store = AdapterCursorStore(tmp_path / "tasks-circuit.sqlite3")
+    ctx = AdapterContext(
+        event_sink=_FakeEventLog(),  # type: ignore[arg-type]
+        config={},
+        correlation_id_factory=lambda: "circuit-cycle",
+        now_factory=lambda: _FROZEN_NOW,
+        cursor_store=store,
+    )
+    try:
+        for _attempt in range(3):
+            adapter._service = _FakeTasksService(
+                list_pages=[ConnectionResetError("fixture provider failure")]
+            )
+            with pytest.raises(ConnectionResetError):
+                await adapter._poll_once(ctx=ctx)
+        assert store.get("google-tasks-primary").circuit_state == "open"
+        blocked = _FakeTasksService(list_pages=[{"items": []}])
+        adapter._service = blocked
+        assert await adapter._poll_once(ctx=ctx) == 0
+        assert blocked.list_calls == []
+        assert adapter.status().extra["cursor_lease"] == "circuit_open"
+    finally:
+        store.close()
+
+
+async def test_tasks_poll_loop_honors_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _make_adapter()
+    adapter._max_poll_cycles = 2
+    adapter._poll_interval_s = 0
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def poll_once(*, ctx: AdapterContext) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise _FakeHttpError(
+                _FakeHttpResponse(status=429, headers={"Retry-After": "45"})
+            )
+        return 0
+
+    async def record_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    adapter._poll_once = poll_once
+    monkeypatch.setattr(_adapter_mod.asyncio, "sleep", record_sleep)
+
+    await adapter._poll_loop(ctx=ctx)
+
+    assert attempts == 2
+    assert sleeps[0] == 45
+    assert adapter.status().state == "running"
 
 
 async def test_poll_loop_recovers_current_health_after_transient_failure() -> None:

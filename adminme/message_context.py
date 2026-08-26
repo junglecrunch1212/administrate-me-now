@@ -15,13 +15,15 @@ member/account/workspace boundary or invent another source.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import json
 import re
 import unicodedata
+import weakref
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -73,6 +75,37 @@ _STOPWORDS = {
     "with",
     "your",
 }
+
+_CONTEXT_INPUT_TYPES = (
+    *MESSAGE_EVENT_TYPES,
+    "context.relationship.rejected",
+    "context.relationship.confirmed",
+    "context.source_text.corrected",
+    "context.source_text.reinstated",
+)
+
+
+@dataclass
+class _ContextInputHistory:
+    """One append-only, owner-scoped context view for a live event log."""
+
+    cursor: str | None = None
+    messages_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
+    messages_by_thread: dict[tuple[str, ...], set[str]] = field(default_factory=dict)
+    messages_by_rfc_id: dict[tuple[str, ...], set[str]] = field(default_factory=dict)
+    messages_by_reference: dict[tuple[str, ...], set[str]] = field(
+        default_factory=dict
+    )
+    messages_by_attachment: dict[tuple[str, ...], set[str]] = field(
+        default_factory=dict
+    )
+    corrections: list[dict[str, Any]] = field(default_factory=list)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+_CONTEXT_INPUT_HISTORY: weakref.WeakKeyDictionary[
+    Any, dict[str, _ContextInputHistory]
+] = weakref.WeakKeyDictionary()
 
 
 @dataclass(frozen=True)
@@ -471,6 +504,137 @@ def _eligible_event(candidate: Mapping[str, Any], current: Mapping[str, Any]) ->
     ) and _coordinate(candidate, payload) == _coordinate(current, current_payload)
 
 
+def _context_coordinate_key(event: Mapping[str, Any]) -> tuple[str, ...] | None:
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return None
+    account, workspace = _coordinate(event, payload)
+    return (
+        str(event.get("tenant_id") or ""),
+        str(event.get("owner_scope") or ""),
+        str(event.get("visibility_scope") or ""),
+        str(event.get("sensitivity") or "normal"),
+        _provider(event, payload),
+        account,
+        workspace,
+    )
+
+
+def _index_context_event(
+    history: _ContextInputHistory, event: dict[str, Any]
+) -> None:
+    if event.get("type") not in MESSAGE_EVENT_TYPES:
+        history.corrections.append(event)
+        return
+    event_id = str(event.get("event_id") or "")
+    coordinate = _context_coordinate_key(event)
+    payload = event.get("payload")
+    if not event_id or coordinate is None or not isinstance(payload, Mapping):
+        return
+    history.messages_by_id[event_id] = event
+    thread_id = str(payload.get("thread_id") or "").strip()
+    if thread_id:
+        history.messages_by_thread.setdefault((*coordinate, thread_id), set()).add(
+            event_id
+        )
+    rfc_message_id = str(payload.get("rfc_message_id") or "").strip()
+    if rfc_message_id:
+        history.messages_by_rfc_id.setdefault(
+            (*coordinate, rfc_message_id), set()
+        ).add(event_id)
+    for reference in (
+        list(payload.get("references") or []) + [payload.get("in_reply_to")]
+    ):
+        if isinstance(reference, str) and reference.strip():
+            history.messages_by_reference.setdefault(
+                (*coordinate, reference.strip()), set()
+            ).add(event_id)
+    for attachment_id in _attachment_identities(payload):
+        history.messages_by_attachment.setdefault(
+            (*coordinate, attachment_id), set()
+        ).add(event_id)
+
+
+def _indexed_context_inputs(
+    history: _ContextInputHistory, current: Mapping[str, Any]
+) -> tuple[dict[str, Any], ...]:
+    """Return only sources that can satisfy the existing relationship rules."""
+
+    coordinate = _context_coordinate_key(current)
+    payload = current.get("payload")
+    if coordinate is None or not isinstance(payload, Mapping):
+        return tuple(history.corrections)
+    current_id = str(current.get("event_id") or "")
+    native_thread = str(payload.get("thread_id") or "").strip()
+    primary_ids = (
+        set(history.messages_by_thread.get((*coordinate, native_thread), ()))
+        if native_thread
+        else set()
+    )
+    if current_id:
+        primary_ids.add(current_id)
+    primary_events: list[Mapping[str, Any]] = [
+        history.messages_by_id[event_id]
+        for event_id in primary_ids
+        if event_id in history.messages_by_id
+    ]
+    if current_id not in history.messages_by_id:
+        primary_events.append(current)
+
+    candidate_ids = set(primary_ids)
+    for primary in primary_events:
+        primary_payload = primary.get("payload")
+        if not isinstance(primary_payload, Mapping):
+            continue
+        primary_rfc_id = str(primary_payload.get("rfc_message_id") or "").strip()
+        if primary_rfc_id:
+            candidate_ids.update(
+                history.messages_by_reference.get(
+                    (*coordinate, primary_rfc_id), ()
+                )
+            )
+        for reference in (
+            list(primary_payload.get("references") or [])
+            + [primary_payload.get("in_reply_to")]
+        ):
+            if isinstance(reference, str) and reference.strip():
+                candidate_ids.update(
+                    history.messages_by_rfc_id.get(
+                        (*coordinate, reference.strip()), ()
+                    )
+                )
+        for attachment_id in _attachment_identities(primary_payload):
+            candidate_ids.update(
+                history.messages_by_attachment.get(
+                    (*coordinate, attachment_id), ()
+                )
+            )
+
+    # Explicit confirmations are strong edges even when the provider has no
+    # RFC or stable-attachment continuity. Include both ends here; the existing
+    # latest-correction and privacy checks below remain authoritative.
+    for correction in history.corrections:
+        if correction.get("type") != "context.relationship.confirmed":
+            continue
+        correction_payload = correction.get("payload")
+        if not isinstance(correction_payload, Mapping):
+            continue
+        first = str(correction_payload.get("source_event_id") or "")
+        second = str(correction_payload.get("related_source_event_id") or "")
+        if first in primary_ids and second:
+            candidate_ids.add(second)
+        if second in primary_ids and first:
+            candidate_ids.add(first)
+
+    indexed = [
+        history.messages_by_id[event_id]
+        for event_id in candidate_ids
+        if event_id in history.messages_by_id
+    ]
+    indexed.sort(key=lambda value: str(value.get("event_id") or ""))
+    return (*indexed, *history.corrections)
+
+
 def _related_edge_reasons(
     payload: Mapping[str, Any],
     *,
@@ -535,20 +699,38 @@ def _related_edge_reasons(
 
 
 async def _read_context_inputs(
-    event_log: Any, owner_scope: str
+    event_log: Any, owner_scope: str, current: Mapping[str, Any]
 ) -> AsyncIterator[dict[str, Any]]:
     if not hasattr(event_log, "read_since"):
         return
-    async for event in event_log.read_since(
-        owner_scope=owner_scope,
-        types=[
-            *MESSAGE_EVENT_TYPES,
-            "context.relationship.rejected",
-            "context.relationship.confirmed",
-            "context.source_text.corrected",
-            "context.source_text.reinstated",
-        ],
-    ):
+    try:
+        owner_histories = _CONTEXT_INPUT_HISTORY.setdefault(event_log, {})
+    except TypeError:
+        # Some isolated test doubles are deliberately unhashable. They retain
+        # the safe historical behavior instead of becoming globally retained.
+        async for event in event_log.read_since(
+            owner_scope=owner_scope,
+            types=list(_CONTEXT_INPUT_TYPES),
+        ):
+            yield event
+        return
+
+    history = owner_histories.setdefault(owner_scope, _ContextInputHistory())
+    async with history.lock:
+        suffix = [
+            event
+            async for event in event_log.read_since(
+                cursor=history.cursor,
+                owner_scope=owner_scope,
+                types=list(_CONTEXT_INPUT_TYPES),
+            )
+        ]
+        if suffix:
+            for event in suffix:
+                _index_context_event(history, event)
+            history.cursor = str(suffix[-1]["event_id"])
+        snapshot = _indexed_context_inputs(history, current)
+    for event in snapshot:
         yield event
 
 
@@ -692,7 +874,7 @@ async def build_message_context_pack(
     all_events: list[dict[str, Any]] = [dict(current)]
     corrections: list[dict[str, Any]] = []
     async for candidate in _read_context_inputs(
-        event_log, str(current.get("owner_scope") or "")
+        event_log, str(current.get("owner_scope") or ""), current
     ):
         if candidate.get("type") not in MESSAGE_EVENT_TYPES:
             if _correction_applies(candidate, current):

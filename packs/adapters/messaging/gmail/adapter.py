@@ -4,10 +4,9 @@ Inherits :class:`adminme.lib.adapters.CommunicationAdapter` (Cat-A) per
 ``docs/08-architecture-amendment-adapter-rebase.md`` §3.3 (Cohort C
 retrofit) and §3.4 (Cohort D step 1 / prompt 11a). Real Gmail outbound
 (``users.messages.send`` + MIME builder) ships in prompt 11a c2; the
-:meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint
-directly when the observation seam slots are unpopulated (Phase A),
-and routes through :func:`adminme.lib.observation.outbound` when the
-slots are populated by the supervisor (Phase B). D28 now emits the additive
+:meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint only
+through :func:`adminme.lib.observation.outbound`; incomplete observation
+wiring fails closed. D28 now emits the additive
 ``messaging.sent@v4`` schema with exact member/account/workspace coordinates,
 RFC continuity, and an optional HTML alternative; v1-v3 remain registered for
 historical producers.
@@ -236,14 +235,8 @@ class GmailAdapter(CommunicationAdapter):
         # ``messaging.sent@v2`` / ``adapter.error@v1`` events through the
         # supervisor-bound event log. Mirrors the apple-eventkit pattern.
         self._ctx: AdapterContext | None = None
-        # Observation-mode wiring slots for :meth:`send`. Phase A leaves
-        # these unset (constructor default None); the Phase B prompt
-        # extending the supervisor's adapter-loading path will populate
-        # them via constructor injection so Gmail outbound routes through
-        # :func:`adminme.lib.observation.outbound` per [§6.20]. When
-        # unset, :meth:`send` calls Gmail v1 ``users.messages.send``
-        # directly (memo 08 §3.4 Phase-A-conditional pattern, mirroring
-        # 11r-c's :meth:`_apply_write_impl`).
+        # Observation-mode wiring slots for :meth:`send`. External writes
+        # fail closed unless the complete seam is injected.
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
         self._observation_event_log: Any = observation_event_log
@@ -332,6 +325,7 @@ class GmailAdapter(CommunicationAdapter):
         while not self._stop_requested:
             if self._max_poll_cycles is not None and cycles >= self._max_poll_cycles:
                 return
+            sleep_s = float(self.POLL_INTERVAL_S)
             try:
                 await self._run_poll_cycle(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
@@ -344,15 +338,30 @@ class GmailAdapter(CommunicationAdapter):
                     retry_after_s=retry_after_s,
                 )
                 if ctx.cursor_store is not None and self._cursor_id is not None:
-                    cursor = ctx.cursor_store.record_error(self._cursor_id)
+                    next_error_count = (
+                        ctx.cursor_store.get(self._cursor_id).error_count + 1
+                    )
+                    sleep_s = self._bounded_retry_delay(
+                        retry_after_s=retry_after_s,
+                        error_count=next_error_count,
+                    )
+                    cursor = ctx.cursor_store.record_error(
+                        self._cursor_id,
+                        recovery_after_ms=int(sleep_s * 1000),
+                        lease_owner=self._lease_owner,
+                    )
+                    if cursor is False:
+                        cursor = ctx.cursor_store.get(self._cursor_id)
+                        self._status.extra["cursor_lease"] = "lost_before_error_commit"
                     self._status.extra["durable_cursor"] = cursor.public()
+                    ctx.cursor_store.release(self._cursor_id, self._lease_owner)
                 if severity == "fatal" or error_kind == "api_changed":
                     self._status.state = "crashed"
                     return
                 self._status.state = "backoff"
             cycles += 1
             try:
-                await asyncio.sleep(self.POLL_INTERVAL_S)
+                await asyncio.sleep(sleep_s)
             except asyncio.CancelledError:
                 return
 
@@ -370,6 +379,7 @@ class GmailAdapter(CommunicationAdapter):
             raise RuntimeError("Gmail service not initialized; call start() first")
         store = ctx.cursor_store
         cursor_id = self._cursor_id or self.name
+        before_claim = store.get(cursor_id) if store is not None else None
         claimed = store is None or store.claim(
             cursor_id,
             self._lease_owner,
@@ -377,8 +387,25 @@ class GmailAdapter(CommunicationAdapter):
         )
         if not claimed:
             self._status.state = "backoff"
-            self._status.extra["cursor_lease"] = "held_by_another_runtime"
+            cursor = store.get(cursor_id) if store is not None else None
+            self._status.extra["cursor_lease"] = (
+                "circuit_open"
+                if cursor is not None and cursor.circuit_state == "open"
+                else "held_by_another_runtime"
+            )
+            if cursor is not None:
+                self._status.extra["durable_cursor"] = cursor.public()
             return 0
+        half_open_probe = (
+            store is not None
+            and store.get(cursor_id).circuit_state == "half_open"
+            and before_claim is not None
+            and before_claim.circuit_state == "open"
+        )
+        self._status.extra["cursor_lease"] = (
+            "half_open_probe" if half_open_probe else "owned"
+        )
+        failed = False
         try:
             if store is not None:
                 self._cursor = store.get(cursor_id).provider_watermark
@@ -387,7 +414,14 @@ class GmailAdapter(CommunicationAdapter):
                 self._cursor = self._bootstrap_cursor()
                 bootstrapped = True
                 if store is not None:
-                    store.record_success(cursor_id, provider_watermark=self._cursor)
+                    if not store.record_success(
+                        cursor_id,
+                        lease_owner=self._lease_owner,
+                        provider_watermark=self._cursor,
+                    ):
+                        self._status.state = "backoff"
+                        self._status.extra["cursor_lease"] = "lost_before_commit"
+                        return 0
                     self._status.extra["durable_cursor"] = store.get(cursor_id).public()
 
             backfill_emitted, backfill_quarantined = await self._run_initial_backfill(
@@ -407,6 +441,8 @@ class GmailAdapter(CommunicationAdapter):
                 # the bounded get. Keep the adapter available after accounting for
                 # that race instead of degrading the whole source.
                 self._status.state = "running"
+                if half_open_probe:
+                    self._status.extra["cursor_recovery"] = "half_open_succeeded"
                 await self._maybe_emit_cursor_advance(
                     ctx=ctx, cursor_value=str(self._cursor)
                 )
@@ -427,7 +463,14 @@ class GmailAdapter(CommunicationAdapter):
             if new_history_id and new_history_id != self._cursor:
                 self._cursor = new_history_id
             if store is not None:
-                store.record_success(cursor_id, provider_watermark=self._cursor)
+                if not store.record_success(
+                    cursor_id,
+                    lease_owner=self._lease_owner,
+                    provider_watermark=self._cursor,
+                ):
+                    self._status.state = "backoff"
+                    self._status.extra["cursor_lease"] = "lost_before_commit"
+                    return 0
                 self._status.extra["durable_cursor"] = store.get(cursor_id).public()
             self._status.extra["last_poll"] = {
                 "emitted": emitted,
@@ -435,10 +478,15 @@ class GmailAdapter(CommunicationAdapter):
                 "provider_watermark": self._cursor,
             }
             self._status.state = "running"
+            if half_open_probe:
+                self._status.extra["cursor_recovery"] = "half_open_succeeded"
             await self._maybe_emit_cursor_advance(ctx=ctx, cursor_value=self._cursor)
             return emitted
+        except BaseException:
+            failed = True
+            raise
         finally:
-            if store is not None:
+            if store is not None and not failed:
                 store.release(cursor_id, self._lease_owner)
 
     def _initial_backfill_settings(self) -> GmailInitialBackfillPolicy:
@@ -555,24 +603,58 @@ class GmailAdapter(CommunicationAdapter):
             }
             return 0, 0
 
-        # ``googleapiclient`` is synchronous.  Initial acquisition can span many
-        # bounded list/get calls, so running it on the central asyncio loop would
-        # stall the HTTP health surface and every other adapter during startup.
-        # Keep the deterministic acquisition algorithm intact, but execute its
-        # blocking provider I/O in a worker thread.
-        message_ids, prefetched, acquisition = await asyncio.to_thread(
-            self._fetch_initial_backfill_ids, policy
+        backfill_claimed = store is None or store.claim(
+            backfill_id,
+            self._lease_owner,
+            ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000),
         )
-        emitted, quarantined = await self._ingest_message_ids(
-            ctx=ctx,
-            store=store,
-            cursor_id=cursor_id,
-            message_ids=message_ids,
-            provider_watermark=self._cursor,
-            prefetched_messages=prefetched,
-        )
-        if store is not None:
-            store.record_success(backfill_id, provider_watermark="complete")
+        if not backfill_claimed:
+            self._status.state = "backoff"
+            self._status.extra["initial_backfill"] = {
+                "contract": "gmail-initial-backfill-v2",
+                "state": "held_by_another_runtime",
+            }
+            return 0, 0
+
+        try:
+            # ``googleapiclient`` is synchronous. Initial acquisition remains
+            # off the central asyncio loop.
+            message_ids, prefetched, acquisition = await asyncio.to_thread(
+                self._fetch_initial_backfill_ids, policy
+            )
+            if store is not None and not store.claim(
+                cursor_id,
+                self._lease_owner,
+                ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000),
+            ):
+                self._status.state = "backoff"
+                self._status.extra["cursor_lease"] = "lost_during_backfill"
+                return 0, 0
+            if store is not None and not store.claim(
+                backfill_id,
+                self._lease_owner,
+                ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000),
+            ):
+                self._status.state = "backoff"
+                return 0, 0
+            emitted, quarantined = await self._ingest_message_ids(
+                ctx=ctx,
+                store=store,
+                cursor_id=cursor_id,
+                message_ids=message_ids,
+                provider_watermark=self._cursor,
+                prefetched_messages=prefetched,
+            )
+            if store is not None and not store.record_success(
+                backfill_id,
+                lease_owner=self._lease_owner,
+                provider_watermark="complete",
+            ):
+                self._status.state = "backoff"
+                return emitted, quarantined
+        finally:
+            if store is not None:
+                store.release(backfill_id, self._lease_owner)
         self._initial_backfill_complete = True
         self._status.extra["initial_backfill"] = {
             "contract": "gmail-initial-backfill-v2",
@@ -862,6 +944,14 @@ class GmailAdapter(CommunicationAdapter):
         quarantined = 0
         prefetched = prefetched_messages or {}
         for msg_id in message_ids:
+            if store is not None and not store.claim(
+                cursor_id,
+                self._lease_owner,
+                ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000),
+            ):
+                self._status.state = "backoff"
+                self._status.extra["cursor_lease"] = "lost_during_ingest"
+                return emitted, quarantined
             try:
                 full_msg = prefetched.get(msg_id) or self._fetch_message(msg_id)
             except Exception as exc:
@@ -880,12 +970,17 @@ class GmailAdapter(CommunicationAdapter):
                     provider_watermark=provider_watermark,
                 )
                 if store is not None:
-                    store.record_success(
+                    if not store.record_success(
                         cursor_id,
+                        lease_owner=self._lease_owner,
+                        mark_healthy=False,
                         external_id=msg_id,
                         fingerprint=fingerprint,
                         event_id=quarantine_event_id,
-                    )
+                    ):
+                        self._status.state = "backoff"
+                        self._status.extra["cursor_lease"] = "lost_before_commit"
+                        return emitted, quarantined
                 continue
             fingerprint = self._message_fingerprint(full_msg)
             if store is not None and store.dedupe_event(cursor_id, msg_id, fingerprint):
@@ -895,12 +990,17 @@ class GmailAdapter(CommunicationAdapter):
                     ctx=ctx, message=full_msg, fingerprint=fingerprint
                 )
                 if store is not None:
-                    store.record_success(
+                    if not store.record_success(
                         cursor_id,
+                        lease_owner=self._lease_owner,
+                        mark_healthy=False,
                         external_id=msg_id,
                         fingerprint=fingerprint,
                         event_id=event_id,
-                    )
+                    ):
+                        self._status.state = "backoff"
+                        self._status.extra["cursor_lease"] = "lost_before_commit"
+                        return emitted, quarantined
                 emitted += 1
                 self._events_since_advance += 1
             except (EventValidationError, _GmailSourceTimestampError) as exc:
@@ -913,12 +1013,17 @@ class GmailAdapter(CommunicationAdapter):
                     provider_watermark=provider_watermark,
                 )
                 if store is not None:
-                    store.record_success(
+                    if not store.record_success(
                         cursor_id,
+                        lease_owner=self._lease_owner,
+                        mark_healthy=False,
                         external_id=msg_id,
                         fingerprint=fingerprint,
                         event_id=quarantine_event_id,
-                    )
+                    ):
+                        self._status.state = "backoff"
+                        self._status.extra["cursor_lease"] = "lost_before_commit"
+                        return emitted, quarantined
         return emitted, quarantined
 
     async def stop(self) -> None:
@@ -938,12 +1043,8 @@ class GmailAdapter(CommunicationAdapter):
 
         Builds an RFC 2822 MIME envelope from ``message`` via
         :meth:`_build_mime_message`, base64url-encodes it, and POSTs to
-        the Gmail v1 ``users.messages.send`` endpoint. Routes through
-        :func:`adminme.lib.observation.outbound` when the
-        observation-seam slots are populated (Phase B); otherwise calls
-        the Gmail service directly (Phase A — memo 08 §3.4
-        Phase-A-conditional, mirroring 11r-c's
-        :meth:`_apply_write_impl`). On success, emits one
+        the Gmail v1 ``users.messages.send`` endpoint through the required
+        observation seam. On success, emits one
         ``messaging.sent@v4`` event with field-mapping from Gmail
         semantics plus the exact Comms account coordinates; on
         observation-suppress, the same event is emitted with
@@ -991,39 +1092,33 @@ class GmailAdapter(CommunicationAdapter):
         session = self._observation_session
         manager = self._observation_manager
         event_log = self._observation_event_log
+        if session is None or manager is None or event_log is None:
+            raise RuntimeError("Gmail observation seam is required for external writes")
 
         response: dict[str, Any] = {}
         suppressed = False
         try:
-            if session is not None and manager is not None and event_log is not None:
-                # [§6.20] Phase B: route through the observation seam so
-                # ``observation.suppressed`` / ``external.sent`` are
-                # emitted around the actual Gmail API call. The 11-β
-                # validator's ``observation_mode_wrapping`` AST-walk
-                # finds this call site.
-                outbound_result = await outbound(
-                    session,
-                    "messaging.send",
-                    {
-                        "channel": message.channel,
-                        "recipient": message.recipient,
-                        "body": message.body,
-                    },
-                    _gmail_api_send,
-                    manager=manager,
-                    event_sink=event_log,
-                    target_channel=message.channel,
-                    target_identifier=message.recipient,
-                )
-                if outbound_result.suppressed:
-                    suppressed = True
-                else:
-                    response = outbound_result.result or {}
+            # [§6.20] Route through the observation seam so
+            # ``observation.suppressed`` / ``external.sent`` are emitted
+            # around the actual Gmail API call.
+            outbound_result = await outbound(
+                session,
+                "messaging.send",
+                {
+                    "channel": message.channel,
+                    "recipient": message.recipient,
+                    "body": message.body,
+                },
+                _gmail_api_send,
+                manager=manager,
+                event_sink=event_log,
+                target_channel=message.channel,
+                target_identifier=message.recipient,
+            )
+            if outbound_result.suppressed:
+                suppressed = True
             else:
-                # Phase A: seams unset; direct Gmail API call. The
-                # supervisor's adapter-loading path keeps the simple
-                # ``Adapter`` Protocol surface unchanged per memo 08 §5.
-                response = await _gmail_api_send()
+                response = outbound_result.result or {}
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             severity, error_kind, retry_after_s = self._classify_gmail_error(exc)
             if ctx is not None:
@@ -1147,28 +1242,26 @@ class GmailAdapter(CommunicationAdapter):
                 .execute()
             )
 
-        suppressed = False
         if (
-            self._observation_session is not None
-            and self._observation_manager is not None
-            and self._observation_event_log is not None
+            self._observation_session is None
+            or self._observation_manager is None
+            or self._observation_event_log is None
         ):
-            result = await outbound(
-                self._observation_session,
-                "messaging.manage",
-                {
-                    "operation": operation,
-                    "native_message_id": native_message_id,
-                },
-                _gmail_api_modify,
-                manager=self._observation_manager,
-                event_sink=self._observation_event_log,
-                target_channel="gmail",
-                target_identifier=str(self._config.get("user_email") or "gmail"),
-            )
-            suppressed = result.suppressed
-        else:
-            await _gmail_api_modify()
+            raise RuntimeError("Gmail observation seam is required for external writes")
+        result = await outbound(
+            self._observation_session,
+            "messaging.manage",
+            {
+                "operation": operation,
+                "native_message_id": native_message_id,
+            },
+            _gmail_api_modify,
+            manager=self._observation_manager,
+            event_sink=self._observation_event_log,
+            target_channel="gmail",
+            target_identifier=str(self._config.get("user_email") or "gmail"),
+        )
+        suppressed = result.suppressed
         return {
             "applied": not suppressed,
             "suppressed": suppressed,
@@ -1620,6 +1713,14 @@ class GmailAdapter(CommunicationAdapter):
     # ------------------------------------------------------------------
     # Error classification
     # ------------------------------------------------------------------
+    def _bounded_retry_delay(
+        self, *, retry_after_s: int | None, error_count: int
+    ) -> float:
+        base = max(1.0, float(self.POLL_INTERVAL_S))
+        exponential = base * (2 ** min(max(error_count - 1, 0), 3))
+        requested = float(retry_after_s or 0)
+        return min(max(base, exponential, requested), max(base, 900.0))
+
     @staticmethod
     def _classify_gmail_error(
         exc: BaseException,

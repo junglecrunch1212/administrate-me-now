@@ -27,6 +27,33 @@ class _Log:
             yield event
 
 
+class _CursorRecordingLog:
+    """Append-only fixture that records how context history is traversed."""
+
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self.events = events
+        self.cursors: list[str | None] = []
+        self.yield_counts: list[int] = []
+
+    async def read_since(
+        self,
+        cursor: str | None = None,
+        **_kwargs: Any,
+    ):  # type: ignore[no-untyped-def]
+        self.cursors.append(cursor)
+        start = 0
+        if cursor is not None:
+            start = next(
+                index + 1
+                for index, event in enumerate(self.events)
+                if event["event_id"] == cursor
+            )
+        values = self.events[start:]
+        self.yield_counts.append(len(values))
+        for event in values:
+            yield event
+
+
 def test_interpretation_v2_schema_rejects_weak_related_source_without_edge() -> None:
     with pytest.raises(ValidationError):
         TriageContextSourceV2(
@@ -85,6 +112,39 @@ def _message(
             "attachments": attachments or [],
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_context_history_reads_only_the_append_only_suffix_after_warmup() -> None:
+    messages = [
+        _message(
+            f"source-scan-{index:03d}",
+            f"Fixture update {index}.",
+            thread_id=f"thread-scan-{index}",
+            occurred_at=f"2034-02-{(index % 27) + 1:02d}T10:00:00Z",
+        )
+        for index in range(200)
+    ]
+    log = _CursorRecordingLog(messages)
+
+    first = await build_message_context_pack(messages[-1], log)
+    appended = _message(
+        "source-scan-200",
+        "A new fixture update.",
+        thread_id="thread-scan-200",
+        occurred_at="2034-03-01T10:00:00Z",
+    )
+    messages.append(appended)
+    second = await build_message_context_pack(appended, log)
+
+    assert [message.source_event_id for message in first.messages] == [
+        "source-scan-199"
+    ]
+    assert [message.source_event_id for message in second.messages] == [
+        "source-scan-200"
+    ]
+    assert log.cursors == [None, "source-scan-199"]
+    assert log.yield_counts == [200, 1]
 
 
 @pytest.mark.asyncio
@@ -214,6 +274,72 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
         _Log([]),
     )
     assert other_member_pack.fingerprint != same_content_pack.fingerprint
+
+
+@pytest.mark.asyncio
+async def test_indexed_history_keeps_edges_from_every_native_thread_source() -> None:
+    first = _message(
+        "source-index-first",
+        "The first source carries the exact RFC identity.",
+        rfc_message_id="<source-index-first@example.invalid>",
+        occurred_at="2034-02-01T10:00:00Z",
+    )
+    anchor = _message(
+        "source-index-anchor",
+        "A later update in the same provider thread.",
+        occurred_at="2034-02-01T11:00:00Z",
+    )
+    related = _message(
+        "source-index-related",
+        "A provider-linked update from another thread.",
+        thread_id="thread-index-related",
+        references=["<source-index-first@example.invalid>"],
+        occurred_at="2034-02-01T10:30:00Z",
+    )
+
+    pack = await build_message_context_pack(anchor, _Log([first, related, anchor]))
+
+    assert [message.source_event_id for message in pack.messages] == [
+        "source-index-first",
+        "source-index-anchor",
+        "source-index-related",
+    ]
+    assert pack.messages[-1].relationship_source_event_ids == (
+        "source-index-first",
+    )
+
+
+@pytest.mark.asyncio
+async def test_related_cross_thread_source_does_not_expand_authority_transitively() -> (
+    None
+):
+    anchor = _message(
+        "source-index-root",
+        "The native-thread root.",
+        rfc_message_id="<source-index-root@example.invalid>",
+    )
+    related = _message(
+        "source-index-one-hop",
+        "The directly related source.",
+        thread_id="thread-index-one-hop",
+        rfc_message_id="<source-index-one-hop@example.invalid>",
+        references=["<source-index-root@example.invalid>"],
+    )
+    transitive = _message(
+        "source-index-two-hop",
+        "A source linked only through the related cross-thread source.",
+        thread_id="thread-index-two-hop",
+        references=["<source-index-one-hop@example.invalid>"],
+    )
+
+    pack = await build_message_context_pack(
+        anchor, _Log([anchor, related, transitive])
+    )
+
+    assert [message.source_event_id for message in pack.messages] == [
+        "source-index-root",
+        "source-index-one-hop",
+    ]
 
 
 @pytest.mark.asyncio

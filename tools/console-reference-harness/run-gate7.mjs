@@ -29,8 +29,12 @@ const identities = {
 };
 const results = [];
 const consoleErrors = [];
+const consoleWarnings = [];
 const pageErrors = [];
 const requestFailures = [];
+const unexpectedResponses = [];
+const expectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
+const observedExpectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
 const closingPages = new WeakSet();
 const supersededLocalReadAborts = [];
 const screenshots = {};
@@ -38,6 +42,8 @@ let expected404Console = 0;
 let observedExpected404Console = 0;
 let expected409Console = 0;
 let observedExpected409Console = 0;
+let expected422Console = 0;
+let observedExpected422Console = 0;
 let expected503Console = 0;
 let observedExpected503Console = 0;
 let contextSequence = 0;
@@ -55,10 +61,58 @@ const deterministicRasterArgs = [
   "--hide-scrollbars",
 ];
 
+async function commandOutput(command, args) {
+  return await new Promise((resolveCommand, rejectCommand) => {
+    const child = spawn(command, args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.once("error", rejectCommand);
+    child.once("close", (code) => {
+      if (code === 0) resolveCommand(stdout.trim());
+      else rejectCommand(new Error(`${command} exited ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
+async function sourceBinding() {
+  const [gitCommit, gitStatus, indexHtml, memberCss, memberJs] = await Promise.all([
+    commandOutput("git", ["rev-parse", "HEAD"]),
+    commandOutput("git", ["status", "--porcelain=v1", "--untracked-files=normal"]),
+    readFile(join(repoRoot, "adminme", "products", "member", "assets", "index.html")),
+    readFile(join(repoRoot, "adminme", "products", "member", "assets", "member.css")),
+    readFile(join(repoRoot, "adminme", "products", "member", "assets", "member.js")),
+  ]);
+  const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+  return {
+    git_commit: gitCommit,
+    dirty: gitStatus.length > 0,
+    git_status_sha256: sha256(gitStatus),
+    asset_version: sha256(Buffer.concat([memberCss, memberJs])).slice(0, 12),
+    assets: {
+      index_html_sha256: sha256(indexHtml),
+      member_css_sha256: sha256(memberCss),
+      member_js_sha256: sha256(memberJs),
+    },
+  };
+}
+
+function expectHandledFailure(status) {
+  if (status === 404) expected404Console += 1;
+  else if (status === 409) expected409Console += 1;
+  else if (status === 422) expected422Console += 1;
+  else if (status === 503) expected503Console += 1;
+  expectedHttpResponses.set(status, (expectedHttpResponses.get(status) || 0) + 1);
+}
+
 function record(name, pass, detail) {
   results.push({ name, status: pass ? "PASS" : "FAIL", detail });
   console.log(`[Gate 7] ${pass ? "PASS" : "FAIL"}: ${name}`);
-  if (!pass) throw new Error(`${name}: ${detail}`);
+  if (!pass) {
+    const renderedDetail = typeof detail === "string" ? detail : JSON.stringify(detail);
+    throw new Error(`${name}: ${renderedDetail}`);
+  }
 }
 
 async function launchEdge() {
@@ -111,7 +165,7 @@ async function startServer(port, modelConfigured) {
       cwd: repoRoot,
       env: {
         ...process.env,
-        PYTHONPATH: ".;bridge",
+        PYTHONPATH: process.platform === "win32" ? ".;bridge" : ".:bridge",
         ADMINME_GATE7_VISUAL_INSTANCE: instance,
         ADMINME_GATE7_VISUAL_PORT: String(port),
         ADMINME_GATE7_VISUAL_MODEL: modelConfigured ? "1" : "0",
@@ -255,6 +309,14 @@ async function seed(baseUrl) {
   );
   record("isolated final Ready fixture seeded", triageFinalReady.response.ok && triageFinalReady.value.seeded === 1, triageFinalReady.value);
   await settle(baseUrl);
+  const triagePagination = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-triage-pagination",
+    identities.principal,
+    "POST",
+  );
+  record("real 520-candidate Triage pagination fixture seeded", triagePagination.response.ok && triagePagination.value.seeded === 520 && /^[0-9a-f]{64}$/.test(triagePagination.value.fixture_sha256), triagePagination.value);
+  await settle(baseUrl);
   const calendar = await jsonRequest(
     baseUrl,
     "/__gate7/seed-calendar",
@@ -279,6 +341,11 @@ async function seed(baseUrl) {
   );
   record("Finance fixture seeded", finance.response.ok && finance.value.seeded === 10, finance.value);
   await settle(baseUrl);
+  return {
+    triage_pagination_candidates: triagePagination.value.seeded,
+    triage_pagination_sha256: triagePagination.value.fixture_sha256,
+    python: triagePagination.value.python,
+  };
 }
 
 async function newContext(browser, identity, viewport, reducedMotion = "no-preference") {
@@ -312,6 +379,10 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
   }, { instant: fixedNow, contextId: contextSequence });
   const page = await context.newPage();
   page.on("console", (message) => {
+    if (message.type() === "warning") {
+      consoleWarnings.push(message.text());
+      return;
+    }
     if (message.type() !== "error") return;
     if (expected404Console > 0 && message.text().includes("404")) {
       expected404Console -= 1;
@@ -323,12 +394,29 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
       observedExpected409Console += 1;
       return;
     }
+    if (expected422Console > 0 && message.text().includes("422")) {
+      expected422Console -= 1;
+      observedExpected422Console += 1;
+      return;
+    }
     if (expected503Console > 0 && message.text().includes("503")) {
       expected503Console -= 1;
       observedExpected503Console += 1;
       return;
     }
     consoleErrors.push(message.text());
+  });
+  page.on("response", (response) => {
+    const status = response.status();
+    if (status < 400) return;
+    const remaining = expectedHttpResponses.get(status) || 0;
+    if (remaining > 0) {
+      expectedHttpResponses.set(status, remaining - 1);
+      observedExpectedHttpResponses.set(status, (observedExpectedHttpResponses.get(status) || 0) + 1);
+      return;
+    }
+    const url = new URL(response.url());
+    unexpectedResponses.push({ status, method: response.request().method(), path: `${url.pathname}${url.search}` });
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("requestfailed", (request) => {
@@ -466,14 +554,51 @@ async function visit(page, baseUrl, path, expectedTitle) {
 
 async function auditAccessibility(page, label) {
   const audit = await page.evaluate(() => {
-    const controls = [...document.querySelectorAll("button, a, textarea")];
+    const rendered = (node) => {
+      const closedDetails = node.closest("details:not([open])");
+      const belongsToClosedSummary = closedDetails
+        && (node === closedDetails.querySelector(":scope > summary") || Boolean(node.closest("summary")));
+      return (!closedDetails || belongsToClosedSummary) && node.getClientRects().length > 0;
+    };
+    const controls = [...new Set(document.querySelectorAll("button, a[href], input:not([type='hidden']), select, textarea, summary, [tabindex]:not([tabindex='-1'])"))]
+      .filter(rendered);
     const unnamedControls = controls.filter((node) => {
-      const labelValue = node.getAttribute("aria-label") || node.textContent?.trim();
-      if (node instanceof HTMLTextAreaElement) {
-        return !node.labels?.length && !labelValue;
-      }
+      const labelledBy = (node.getAttribute("aria-labelledby") || "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent?.trim() || "")
+        .join(" ")
+        .trim();
+      const nativeLabels = "labels" in node
+        ? [...(node.labels || [])].map((label) => label.textContent?.trim() || "").join(" ").trim()
+        : "";
+      const labelValue = node.getAttribute("aria-label") || labelledBy || nativeLabels || node.textContent?.trim() || node.getAttribute("title");
       return !labelValue;
     });
+    const invalidAriaValues = controls.filter((node) => (
+      node.hasAttribute("aria-pressed") && !["true", "false", "mixed"].includes(node.getAttribute("aria-pressed"))
+    ) || (
+      node.hasAttribute("aria-expanded") && !["true", "false"].includes(node.getAttribute("aria-expanded"))
+    ));
+    const clickTargets = controls.filter((node) => {
+      if (node instanceof HTMLAnchorElement && getComputedStyle(node).display === "inline") return false;
+      return node.matches("button, input, select, textarea, summary, a[href]");
+    });
+    const smallTargets = clickTargets.filter((node) => {
+      const target = node.matches("input[type='checkbox'], input[type='radio']") && node.labels?.[0]
+        ? node.labels[0]
+        : node;
+      const rect = target.getBoundingClientRect();
+      return rect.width < 24 || rect.height < 24;
+    }).map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        tag: node.tagName.toLowerCase(),
+        type: node.getAttribute("type"),
+        text: node.textContent?.trim().slice(0, 80),
+        rect: { width: rect.width, height: rect.height },
+      };
+    }).slice(0, 10);
     const unnamed = unnamedControls.length;
     const unnamedExamples = unnamedControls.slice(0, 5).map((node) => node.outerHTML.slice(0, 240));
     const overflow = document.documentElement.scrollWidth > document.documentElement.clientWidth + 1;
@@ -488,8 +613,34 @@ async function auditAccessibility(page, label) {
       const style = getComputedStyle(node);
       return toMs(style.animationDuration) > 0.1 || toMs(style.transitionDuration) > 0.1;
     });
-    const luminance = (hex) => {
-      const channels = hex.match(/[0-9a-f]{2}/gi).map((value) => Number.parseInt(value, 16) / 255);
+    const parseColor = (value) => {
+      const match = value.match(/rgba?\(([^)]+)\)/);
+      if (!match) return null;
+      const parts = match[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+      return [parts[0], parts[1], parts[2], parts.length > 3 ? parts[3] : 1];
+    };
+    const composite = (foreground, background) => {
+      const alpha = foreground[3] + background[3] * (1 - foreground[3]);
+      if (alpha === 0) return [0, 0, 0, 0];
+      return [
+        (foreground[0] * foreground[3] + background[0] * background[3] * (1 - foreground[3])) / alpha,
+        (foreground[1] * foreground[3] + background[1] * background[3] * (1 - foreground[3])) / alpha,
+        (foreground[2] * foreground[3] + background[2] * background[3] * (1 - foreground[3])) / alpha,
+        alpha,
+      ];
+    };
+    const effectiveBackground = (node) => {
+      const chain = [];
+      for (let current = node; current instanceof Element; current = current.parentElement) chain.unshift(current);
+      let result = [255, 255, 255, 1];
+      for (const current of chain) {
+        const color = parseColor(getComputedStyle(current).backgroundColor);
+        if (color && color[3] > 0) result = composite(color, result);
+      }
+      return result;
+    };
+    const luminance = (color) => {
+      const channels = color.slice(0, 3).map((value) => value / 255);
       const linear = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
       return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
     };
@@ -497,23 +648,90 @@ async function auditAccessibility(page, label) {
       const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
       return (values[0] + 0.05) / (values[1] + 0.05);
     };
-    const contrastPairs = [
-      contrast("222421", "f8f2e8"),
-      contrast("686861", "fffdf8"),
-      contrast("45386d", "ded8f2"),
-      contrast("625e58", "e8e5df"),
-      contrast("46545f", "e6eaed"),
-    ];
+    const textNodes = [...document.querySelectorAll("p, small, span, strong, a, button, label, h1, h2, h3, dt, dd, summary")]
+      .filter((node) => rendered(node) && !node.closest(":disabled, [aria-disabled='true']"))
+      .filter((node) => node.textContent?.trim() && ![...node.children].some((child) => child.textContent?.trim()));
+    const contrastFailures = [];
+    let minContrast = Number.POSITIVE_INFINITY;
+    for (const node of textNodes) {
+      const style = getComputedStyle(node);
+      const foreground = parseColor(style.color);
+      if (!foreground) continue;
+      const background = effectiveBackground(node);
+      const ratio = contrast(composite(foreground, background), background);
+      minContrast = Math.min(minContrast, ratio);
+      const fontSize = Number.parseFloat(style.fontSize);
+      const weight = Number.parseInt(style.fontWeight, 10) || 400;
+      const large = fontSize >= 24 || (fontSize >= 18.66 && weight >= 700);
+      if (ratio + 0.01 < (large ? 3 : 4.5)) {
+        contrastFailures.push({ tag: node.tagName.toLowerCase(), text: node.textContent.trim().slice(0, 100), ratio, fontSize, weight });
+      }
+    }
     const landmarks = document.documentElement.lang === "en"
       && Boolean(document.querySelector("main#main"))
       && Boolean(document.querySelector("nav[aria-label='Primary']"))
       && Boolean(document.querySelector("#surface[aria-live='polite']"));
-    return { unnamed, unnamedExamples, overflow, headings, motion, landmarks, minContrast: Math.min(...contrastPairs) };
+    const liveRegions = [...document.querySelectorAll("[aria-live], [role='status'], [role='alert']")];
+    const liveRegionContract = Boolean(document.querySelector("#surface[aria-live='polite']"))
+      && Boolean(document.querySelector("#state-banner[role='status']"))
+      && Boolean(document.querySelector("#chat-state[role='status']"));
+    const invalidErrorAssociations = controls.filter((node) => node.getAttribute("aria-invalid") === "true" && !node.getAttribute("aria-describedby") && !node.getAttribute("aria-errormessage"));
+    return {
+      unnamed,
+      unnamedExamples,
+      invalidAriaValues: invalidAriaValues.length,
+      smallTargets,
+      overflow,
+      headings,
+      motion,
+      landmarks,
+      liveRegions: liveRegions.length,
+      liveRegionContract,
+      invalidErrorAssociations: invalidErrorAssociations.length,
+      minContrast,
+      contrastFailures: contrastFailures.slice(0, 10),
+    };
   });
+  const focusOrder = await page.evaluate(() => {
+    const selector = "a[href], button, input:not([type='hidden']), select, textarea, summary, [contenteditable='true'], [tabindex]:not([tabindex='-1'])";
+    const candidates = [...new Set(document.querySelectorAll(selector))].filter((node) => {
+      const style = getComputedStyle(node);
+      const closedDetails = node.closest("details:not([open])");
+      const belongsToClosedSummary = closedDetails
+        && (node === closedDetails.querySelector(":scope > summary") || Boolean(node.closest("summary")));
+      if (closedDetails && !belongsToClosedSummary) return false;
+      if (node.disabled || style.visibility === "hidden" || style.display === "none" || node.getClientRects().length === 0 || node.tabIndex < 0) return false;
+      if (node.matches("input[type='radio']") && node.name) {
+        const group = [...document.querySelectorAll(`input[type='radio'][name='${CSS.escape(node.name)}']`)].filter((radio) => !radio.disabled && radio.getClientRects().length > 0);
+        return node === (group.find((radio) => radio.checked) || group[0]);
+      }
+      return true;
+    });
+    const ordered = candidates.map((node, domIndex) => ({ node, domIndex })).sort((left, right) => {
+      const leftPositive = left.node.tabIndex > 0;
+      const rightPositive = right.node.tabIndex > 0;
+      if (leftPositive !== rightPositive) return leftPositive ? -1 : 1;
+      if (leftPositive && left.node.tabIndex !== right.node.tabIndex) return left.node.tabIndex - right.node.tabIndex;
+      return left.domIndex - right.domIndex;
+    });
+    ordered.forEach(({ node }, index) => { node.dataset.gate7FocusOrder = String(index); });
+    return ordered.map(({ node }) => ({ tag: node.tagName.toLowerCase(), text: (node.getAttribute("aria-label") || node.textContent || node.getAttribute("name") || "").trim().slice(0, 80) }));
+  });
+  const observedFocusOrder = [];
+  const traversalStates = [];
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   });
-  await page.keyboard.press("Tab");
+  for (let attempt = 0; attempt < Math.min(208, focusOrder.length + 48) && observedFocusOrder.length < focusOrder.length; attempt += 1) {
+    await page.keyboard.press("Tab");
+    const index = await page.evaluate(() => Number(document.activeElement?.dataset?.gate7FocusOrder ?? -1));
+    traversalStates.push(index);
+    if (index >= 0 && observedFocusOrder.at(-1) !== index) observedFocusOrder.push(index);
+  }
+  const firstObserved = observedFocusOrder[0] ?? 0;
+  const focusOrderPass = focusOrder.length <= 160
+    && observedFocusOrder.length === focusOrder.length
+    && observedFocusOrder.every((value, index) => value === (firstObserved + index) % focusOrder.length);
   const keyboard = await page.evaluate(() => {
     const active = document.activeElement;
     if (!(active instanceof HTMLElement)) return { tag: "none", visible: false, outline: 0 };
@@ -524,26 +742,91 @@ async function auditAccessibility(page, label) {
       outline: Number.parseFloat(style.outlineWidth),
     };
   });
-  record(`${label} named controls`, audit.unnamed === 0, audit);
+  await page.evaluate(() => {
+    for (const node of document.querySelectorAll("[data-gate7-focus-order]")) delete node.dataset.gate7FocusOrder;
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  record(`${label} named controls and valid ARIA values`, audit.unnamed === 0 && audit.invalidAriaValues === 0, audit);
   record(`${label} no horizontal overflow`, audit.overflow === false, audit);
   record(`${label} single page heading`, audit.headings === 1, audit);
   record(`${label} screen-reader landmarks`, audit.landmarks, audit);
-  record(`${label} contrast tokens`, audit.minContrast >= 4.5, audit.minContrast);
+  record(`${label} computed text contrast`, audit.contrastFailures.length === 0, JSON.stringify({ minContrast: audit.minContrast, failures: audit.contrastFailures }));
+  record(`${label} 24px pointer targets`, audit.smallTargets.length === 0, audit.smallTargets);
+  record(`${label} live regions and error associations`, audit.liveRegionContract && audit.liveRegions >= 3 && audit.invalidErrorAssociations === 0, audit);
+  record(`${label} bounded full visible tab order`, focusOrderPass, JSON.stringify({ expected: focusOrder.length, observed: observedFocusOrder, traversalStates }));
   record(`${label} keyboard focus indicator`, keyboard.visible && keyboard.outline >= 3, keyboard);
-  return { ...audit, keyboard };
+  return { ...audit, keyboard, focusOrder: { expected: focusOrder.length, observed: observedFocusOrder.length, pass: focusOrderPass } };
+}
+
+async function auditZoom200Equivalent(page, label) {
+  const original = page.viewportSize();
+  if (!original) throw new Error(`${label}: viewport is unavailable`);
+  const session = await page.context().newCDPSession(page);
+  const cssWidth = Math.max(320, Math.floor(original.width / 2));
+  const cssHeight = Math.max(320, Math.floor(original.height / 2));
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: cssWidth,
+    height: cssHeight,
+    deviceScaleFactor: 2,
+    mobile: false,
+    screenWidth: original.width,
+    screenHeight: original.height,
+  });
+  await page.waitForFunction((width) => window.innerWidth === width, cssWidth);
+  const metrics = await page.evaluate(() => ({
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+    documentWidth: document.documentElement.scrollWidth,
+  }));
+  record(`${label} 200% Chromium zoom-equivalent reflow`, metrics.innerWidth === cssWidth && metrics.devicePixelRatio === 2 && metrics.documentWidth <= metrics.innerWidth + 1, { method: "CDP Emulation.setDeviceMetricsOverride", physicalViewport: original, cssViewport: { width: cssWidth, height: cssHeight }, ...metrics });
+  await session.send("Emulation.clearDeviceMetricsOverride");
+  await page.setViewportSize(original);
 }
 
 async function run() {
   console.log(`[Gate 7] Starting with a ${maxRuntimeMs} ms hard runtime bound`);
+  const source = await sourceBinding();
   await mkdir(evidenceDir, { recursive: true });
   const server = await startServer(basePort, true);
   let degraded;
   const browser = await launchEdge();
   browserDescription = `${browserDescription}; engine ${browser.version()}`;
   console.log(`[Gate 7] Browser ready: ${browserDescription}`);
+  let fixture = {};
   try {
-    await seed(server.baseUrl);
+    fixture = await seed(server.baseUrl);
     console.log("[Gate 7] Canonical fixtures seeded; beginning browser assertions");
+
+    const paginationBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    await visit(paginationBrowser.page, server.baseUrl, "/member/triage?view=all_candidates", "Triage");
+    const servedAssetVersions = await paginationBrowser.page.locator("link[href*='/member-assets/member.css'], script[src*='/member-assets/member.js']").evaluateAll((nodes) => nodes.map((node) => new URL(node.href || node.src).searchParams.get("v")));
+    record("served member assets match the source-bound version", servedAssetVersions.length === 2 && servedAssetVersions.every((version) => version === source.asset_version), JSON.stringify({ servedAssetVersions, sourceVersion: source.asset_version }));
+    const initialPaginationMatters = await paginationBrowser.page.locator(".triage-master-button").count();
+    let forceStaleCursor = true;
+    const staleCursorRoute = async (route) => {
+      if (forceStaleCursor && new URL(route.request().url()).searchParams.has("triage_cursor")) {
+        forceStaleCursor = false;
+        expectHandledFailure(422);
+        await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: "stale triage cursor" }) });
+        return;
+      }
+      await route.continue();
+    };
+    await paginationBrowser.page.route("**/api/member/v1/surfaces/triage?*", staleCursorRoute);
+    await paginationBrowser.page.getByRole("button", { name: "Load next matters" }).click();
+    await paginationBrowser.page.getByText("the queue was refreshed before pagination continued", { exact: false }).waitFor();
+    record("stale Triage continuation performs an authoritative client reload", !forceStaleCursor && await paginationBrowser.page.locator(".triage-master-button").count() === initialPaginationMatters, await paginationBrowser.page.locator("#state-banner").textContent());
+    await paginationBrowser.page.unroute("**/api/member/v1/surfaces/triage?*", staleCursorRoute);
+    while (await paginationBrowser.page.getByRole("button", { name: "Load next matters" }).count()) {
+      const prior = await paginationBrowser.page.locator(".triage-master-button").count();
+      await paginationBrowser.page.getByRole("button", { name: "Load next matters" }).click();
+      await paginationBrowser.page.waitForFunction((previous) => document.querySelectorAll(".triage-master-button").length > previous || !document.querySelector("[data-triage-more]"), prior);
+    }
+    const paginationLabels = await paginationBrowser.page.locator(".triage-master-button strong").allTextContents();
+    const bulkLabels = paginationLabels.filter((label) => label.startsWith("Pagination candidate "));
+    record("real browser pagination reaches all 520 synthetic candidates exactly once", bulkLabels.length === 520 && new Set(bulkLabels).size === 520 && await paginationBrowser.page.getByRole("button", { name: "Load next matters" }).count() === 0, JSON.stringify({ loadedMatters: paginationLabels.length, bulkCandidates: bulkLabels.length }));
+    await closePageContext(paginationBrowser);
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
@@ -745,7 +1028,7 @@ async function run() {
             return;
           }
           rejectNoRenderSave = false;
-          expected409Console += 1;
+          expectHandledFailure(409);
           await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this enrichment before recording it." }) });
         };
         await principal.page.route("**/api/member/v1/surfaces/triage?*", noRenderLoadRoute);
@@ -822,7 +1105,7 @@ async function run() {
         const savedDecisionFailureRoute = async (route) => {
           if (!rejectedSavedDecision) {
             rejectedSavedDecision = true;
-            expected409Console += 1;
+            expectHandledFailure(409);
             await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this decision after saving its details." }) });
             return;
           }
@@ -897,6 +1180,23 @@ async function run() {
         record("Comms renders one member-bound account and thread", await principal.page.locator(".account-filters .account-filter").count() === 2 && await principal.page.locator(".comms-thread").count() === 1, await principal.page.locator("#surface").textContent());
         record("Comms explains focus without a model", (await principal.page.locator(".focus-reason").textContent()).includes("Why it is here"), await principal.page.locator(".focus-reason").textContent());
         record("Comms reply requires independent approval", (await principal.page.locator(".comms-compose").textContent()).includes("pending provider action") && await principal.page.getByRole("button", { name: "Save reply for approval" }).count() === 1, await principal.page.locator(".comms-compose").textContent());
+        const replyByLabel = principal.page.getByLabel("Reply in this thread", { exact: true });
+        record("Comms reply has one explicit accessible label", await replyByLabel.count() === 1 && await replyByLabel.getAttribute("id") === "comms-reply", await principal.page.locator(".comms-compose").innerHTML());
+        await replyByLabel.fill(" ");
+        await principal.page.getByRole("button", { name: "Save reply for approval" }).click();
+        record(
+          "Comms blank reply is announced and associated without a provider request",
+          await replyByLabel.getAttribute("aria-invalid") === "true"
+            && await replyByLabel.getAttribute("aria-describedby") === "state-banner"
+            && await principal.page.locator("#state-banner[role='status']").isVisible()
+            && (await principal.page.locator("#state-banner").textContent()).includes("Nothing was sent"),
+          JSON.stringify({
+            invalid: await replyByLabel.getAttribute("aria-invalid"),
+            describedBy: await replyByLabel.getAttribute("aria-describedby"),
+            banner: await principal.page.locator("#state-banner").textContent(),
+          }),
+        );
+        await replyByLabel.fill("");
         await screenshot(principal.page, "surface-comms-focus-desktop.png");
         await principal.page.getByRole("button", { name: /^Quieted/ }).click();
         record("Comms quiet lens is interactive", (await principal.page.locator(".comms-list").textContent()).includes("Nothing in this lens"), await principal.page.locator(".comms-list").textContent());
@@ -1004,11 +1304,16 @@ async function run() {
       }
     }
     record("ten principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 10, await principal.page.locator("#primary-nav .nav-link").count());
+    await principal.page.locator("#add-for-review").focus();
+    await principal.page.locator("#add-for-review").click();
+    await principal.page.getByRole("dialog", { name: "Add for review" }).waitFor();
+    await principal.page.getByRole("button", { name: "Close action" }).click();
+    record("action dialog returns focus to its opener", await principal.page.locator("#add-for-review").evaluate((node) => node === document.activeElement), await principal.page.evaluate(() => document.activeElement?.id));
     await auditAccessibility(principal.page, "desktop");
     await visit(principal.page, server.baseUrl, "/member/triage?view=ready", "Triage");
     await principal.page.locator(".triage-master-button").filter({ hasText: "Attach the insurance note to its existing task" }).click();
     const dispositionDecisionRoute = async (route) => {
-      expected409Console += 1;
+      expectHandledFailure(409);
       await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture changed this candidate's disposition before recording the decision." }) });
     };
     const dispositionSurfaceRoute = async (route) => {
@@ -1039,7 +1344,7 @@ async function run() {
       guardedRequestIds.push(JSON.parse(route.request().postData() || "{}").request_id);
       await route.continue();
     };
-    expected409Console += 1;
+    expectHandledFailure(409);
     await principal.page.route("**/api/member/v1/triage/gate7-visual-guarded-task/approve", guardedDecisionRoute);
     await principal.page.getByRole("button", { name: "Confirm and route" }).click();
     await principal.page.getByText("Confirmed and added to Reminders", { exact: false }).waitFor();
@@ -1053,7 +1358,7 @@ async function run() {
     const ambiguousDecisionRoute = async (route) => {
       const response = await route.fetch();
       ambiguousCommitStatus = response.status();
-      expected503Console += 1;
+      expectHandledFailure(503);
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted the response after commit." }) });
     };
     await principal.page.route("**/api/member/v1/triage/gate7-visual-ambiguous-task/approve", ambiguousDecisionRoute);
@@ -1076,7 +1381,7 @@ async function run() {
         { ...browserBody, request_id: "gate7-other-member-request" },
       );
       mismatchedOtherStatus = other.response.status;
-      expected503Console += 1;
+      expectHandledFailure(503);
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted a different member request." }) });
     };
     await principal.page.route("**/api/member/v1/triage/gate7-visual-mismatched-receipt-task/approve", mismatchedReceiptRoute);
@@ -1088,7 +1393,7 @@ async function run() {
     await principal.page.locator(".triage-master-button").filter({ hasText: "Review the system-transition dismissal" }).click();
     await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("not_actionable");
     const systemDismissDecisionRoute = async (route) => {
-      expected503Console += 1;
+      expectHandledFailure(503);
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted dismissal while extraction changed state." }) });
     };
     const systemDismissSurfaceRoute = async (route) => {
@@ -1140,6 +1445,28 @@ async function run() {
     }
     await closePageContext(principalPhone);
 
+    const memberViewportMatrix = [
+      { width: 1280, height: 900, reducedMotion: "no-preference" },
+      { width: 1024, height: 900, reducedMotion: "no-preference" },
+      { width: 820, height: 1180, reducedMotion: "reduce" },
+    ];
+    for (const viewport of memberViewportMatrix) {
+      const matrix = await newContext(
+        browser,
+        identities.principal,
+        { width: viewport.width, height: viewport.height },
+        viewport.reducedMotion,
+      );
+      for (const [surface, label] of Object.entries(surfaceLabels)) {
+        await visit(matrix.page, server.baseUrl, `/member/${surface}`, label);
+        await auditAccessibility(matrix.page, `${viewport.width}px ${surface}`);
+        if (viewport.width === 1280) {
+          await auditZoom200Equivalent(matrix.page, `1280px ${surface}`);
+        }
+      }
+      await closePageContext(matrix);
+    }
+
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await adult.page.goto(`${server.baseUrl}/member/today`, { waitUntil: "networkidle" });
     await adult.page.getByRole("heading", { name: "Today", level: 1 }).waitFor();
@@ -1166,7 +1493,7 @@ async function run() {
     await todayIntentStarted;
     await adult.page.keyboard.press("Escape");
     const todayDialogStayedOpen = await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open);
-    expected503Console += 1;
+    expectHandledFailure(503);
     releaseTodayIntent();
     await adult.page.waitForFunction(() => !document.querySelector("#action-dialog")?.open, null, { timeout: 5_000 }).catch(() => {});
     const todayIntentBanner = await adult.page.locator("#state-banner").textContent();
@@ -1177,7 +1504,7 @@ async function run() {
     const unknownOutcomeRequestIds = [];
     const unknownOutcomeRoute = async (route) => {
       unknownOutcomeRequestIds.push(JSON.parse(route.request().postData() || "{}").client_request_id);
-      expected503Console += 1;
+      expectHandledFailure(503);
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture cannot determine whether capture occurred." }) });
     };
     await adult.page.route("**/api/member/v1/triage/intents", unknownOutcomeRoute);
@@ -1198,7 +1525,7 @@ async function run() {
     const todayRecoveryRoute = async (route) => {
       todayRecoveryRequestIds.push(JSON.parse(route.request().postData() || "{}").client_request_id);
       const response = await route.fetch();
-      if (response.status() === 409) expected409Console += 1;
+      if (response.status() === 409) expectHandledFailure(409);
       await route.fulfill({ response });
     };
     await adult.page.route("**/api/member/v1/triage/intents", todayRecoveryRoute);
@@ -1221,7 +1548,7 @@ async function run() {
     let definiteIntentRequests = 0;
     const definiteIntentRoute = async (route) => {
       definiteIntentRequests += 1;
-      expected409Console += 1;
+      expectHandledFailure(409);
       await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this Add-for-review request before durable capture." }) });
     };
     await adult.page.route("**/api/member/v1/triage/intents", definiteIntentRoute);
@@ -1256,7 +1583,7 @@ async function run() {
         await failedIntentRelease;
       }
       const response = await route.fetch();
-      if (response.status() === 409) expected409Console += 1;
+      if (response.status() === 409) expectHandledFailure(409);
       await route.fulfill({ response });
     };
     await adult.page.route("**/api/member/v1/triage/intents", failedIntentRoute);
@@ -1336,6 +1663,8 @@ async function run() {
     await adult.page.locator("#chat-state").filter({ hasText: "Ready" }).waitFor();
     await chatResponse.finished();
     record("adult OpenClaw stream rendered", await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
+    await adult.page.locator("#chat-close").click();
+    record("chat drawer returns focus to its opener", await adult.page.locator("#chat-open").evaluate((node) => node === document.activeElement && node.getAttribute("aria-expanded") === "false"), await adult.page.evaluate(() => document.activeElement?.id));
     await screenshot(adult.page, "adult-chat-streamed-tablet.png");
     const browserPersistence = await adult.page.evaluate(async () => ({
       localStorageKeys: Object.keys(localStorage),
@@ -1377,7 +1706,7 @@ async function run() {
     await screenshot(promotedContext.page, "quest-promoted-carousel.png");
     await closePageContext(promotedContext);
     await jsonRequest(server.baseUrl, `/api/member/v1/temporary-surfaces/${questId}/archive`, identities.adult, "POST");
-    expected404Console += 1;
+    expectHandledFailure(404);
     await adult.page.goto(`${server.baseUrl}/member/quests/${questId}`, { waitUntil: "networkidle" });
     await adult.page.locator(".state-card").waitFor();
     record("archived quest has no navigation entry", await adult.page.locator(`a[href='/member/quests/${questId}']`).count() === 0, await adult.page.locator("#primary-nav").textContent());
@@ -1400,7 +1729,7 @@ async function run() {
       advancedClock.response.ok && advancedClock.value.expired.includes(expiringQuestId),
       JSON.stringify(advancedClock.value),
     );
-    expected404Console += 1;
+    expectHandledFailure(404);
     await adult.page.goto(`${server.baseUrl}/member/quests/${expiringQuestId}`, { waitUntil: "networkidle" });
     await adult.page.locator(".state-card").waitFor();
     record("expired quest has no navigation entry", await adult.page.locator(`a[href='/member/quests/${expiringQuestId}']`).count() === 0, await adult.page.locator("#primary-nav").textContent());
@@ -1436,8 +1765,19 @@ async function run() {
     await closePageContext(degradedAdult);
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
+    record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 9 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
+    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 9 && observedExpected422Console === 1 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected422Console, observedExpected503Console }));
+    record(
+      "no unexpected browser HTTP error responses",
+      unexpectedResponses.length === 0
+        && [...expectedHttpResponses.values()].every((count) => count === 0)
+        && observedExpectedHttpResponses.get(404) === 2
+        && observedExpectedHttpResponses.get(409) === 9
+        && observedExpectedHttpResponses.get(422) === 1
+        && observedExpectedHttpResponses.get(503) === 8,
+      JSON.stringify({ unexpectedResponses, remaining: Object.fromEntries(expectedHttpResponses), observed: Object.fromEntries(observedExpectedHttpResponses) }),
+    );
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record(
       "no failed browser requests",
@@ -1462,13 +1802,24 @@ async function run() {
     generated_at: new Date().toISOString(),
     status: results.every((item) => item.status === "PASS") ? "PASS" : "FAIL",
     browser: browserDescription,
-    viewports: ["1440x1000", "1280x900", "1024x768", "820x1180", "390x844"],
+    source,
+    fixture,
+    runtime: { node: process.version, python: fixture.python, playwright_core: "1.62.0" },
+    accessibility_methods: {
+      zoom_200: "Chromium CDP Emulation.setDeviceMetricsOverride with half-size CSS viewport and deviceScaleFactor 2",
+      tab_traversal_cap: 160,
+      pointer_target_min_css_px: 24,
+      contrast: "computed foreground composited over rendered ancestor backgrounds",
+    },
+    viewports: ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
     states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
     results,
     screenshots,
     console_errors: consoleErrors,
+    console_warnings: consoleWarnings,
     page_errors: pageErrors,
     request_failures: requestFailures,
+    unexpected_responses: unexpectedResponses,
   };
   await writeFile(join(evidenceDir, "visual-results.json"), `${JSON.stringify(report, null, 2)}\n`);
   const lines = [

@@ -39,6 +39,7 @@ import pytest
 from adminme.adapters.base import AdapterContext
 from adminme.events.schemas.ingest import MessagingSentV4
 from adminme.lib.adapters import OutboundMessage
+from adminme.lib.observation import OutboundResult
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,6 +62,20 @@ GmailAdapter: Any = _adapter_mod.GmailAdapter
 
 
 _FROZEN_NOW = datetime(2026, 5, 17, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _inactive_observation_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def call_through(
+        _session: Any,
+        _action: str,
+        _payload: dict[str, Any],
+        action_fn: Any,
+        **_kwargs: Any,
+    ) -> OutboundResult:
+        return OutboundResult(suppressed=False, result=await action_fn())
+
+    monkeypatch.setattr(_adapter_mod, "outbound", call_through)
 
 
 class _FakeEventLog:
@@ -133,6 +148,9 @@ def _make_adapter(*, service: _FakeSendService | None = None) -> Any:
             "member_id": "member-fixture",
             "workspace": "personal",
         },
+        observation_session=object(),
+        observation_manager=object(),
+        observation_event_log=object(),
     )
     if service is not None:
         adapter._service = service
@@ -250,8 +268,8 @@ def test_mime_message_round_trips_through_base64_decode() -> None:
 
 @pytest.mark.asyncio
 async def test_messaging_sent_v4_emit_validates_against_additive_schema() -> None:
-    """End-to-end pack-internal: after a successful Phase A send (seams
-    unset), the emitted ``messaging.sent`` payload validates byte-for-
+    """End-to-end pack-internal: after a successful explicitly inactive
+    observation-wrapped send, the emitted ``messaging.sent`` payload validates byte-for-
     byte against :class:`MessagingSentV4` (which has ``extra='forbid'``
     on its model_config). Any drift in field names or extras introduced
     by the pack would fail validation here — the pack-side guard

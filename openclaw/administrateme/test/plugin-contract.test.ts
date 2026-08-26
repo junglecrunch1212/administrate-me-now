@@ -188,9 +188,13 @@ describe("native OpenClaw contract fixture", () => {
       expect.stringContaining("AdministrateMe plugin ready"),
     );
 
-    await service?.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(healthFetch).toHaveBeenCalledTimes(3);
-    expect(requestBody(healthFetch, 2)).toMatchObject({ state: "unavailable" });
+    expect(requestBody(healthFetch, 2)).toMatchObject({ state: "healthy" });
+
+    await service?.stop();
+    expect(healthFetch).toHaveBeenCalledTimes(4);
+    expect(requestBody(healthFetch, 3)).toMatchObject({ state: "unavailable" });
   });
 
   it("cancels pending health reconciliation when the plugin stops", async () => {

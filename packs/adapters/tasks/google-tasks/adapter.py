@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Literal
 
@@ -41,6 +42,11 @@ _DEFAULT_PAGE_SIZE: int = 100
 
 # Google has no priority.  ``0`` means genuinely unspecified.
 _GOOGLE_TASKS_DEFAULT_PRIORITY: Literal[0, 1, 5, 9] = 0
+
+
+class _TasksLeaseLost(RuntimeError):
+    """The poll may no longer commit provider progress."""
+
 
 GOOGLE_TASKS_WRITE_CAPABILITIES = [
     "create_list",
@@ -77,9 +83,9 @@ def _default_service_factory(
     from googleapiclient.discovery import build
 
     if {"client_id", "client_secret", "refresh_token"} <= credentials_json.keys():
-        from google.oauth2.credentials import Credentials
+        from google.oauth2.credentials import Credentials as UserCredentials
 
-        creds = Credentials(
+        creds: Any = UserCredentials(
             token=None,
             refresh_token=str(credentials_json["refresh_token"]),
             token_uri=str(
@@ -91,9 +97,13 @@ def _default_service_factory(
             scopes=scopes,
         )
     else:
-        from google.oauth2.service_account import Credentials
+        from google.oauth2.service_account import (
+            Credentials as ServiceAccountCredentials,
+        )
 
-        creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
+        creds = ServiceAccountCredentials.from_service_account_info(
+            credentials_json, scopes=scopes
+        )
         if subject_email:
             creds = creds.with_subject(subject_email)
     return build("tasks", "v1", credentials=creds, cache_discovery=False)
@@ -176,9 +186,10 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         self._ctx: AdapterContext | None = None
         self._stop_requested: bool = False
         self._max_poll_cycles: int | None = max_poll_cycles
+        self._lease_owner = f"google-tasks-{uuid.uuid4()}"
         self._seen_inbound: dict[tuple[str, str], dict[str, Any]] = {}
         self._seen_lists: dict[str, dict[str, Any]] = {}
-        # [§6.20, PM-27] observation seam slots; Phase A leaves unset.
+        # [§6.20, PM-27] required fail-closed observation seam slots.
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
         self._observation_event_log: Any = observation_event_log
@@ -243,6 +254,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         while not self._stop_requested:
             if self._max_poll_cycles is not None and cycles >= self._max_poll_cycles:
                 return
+            sleep_s = float(self._poll_interval_s)
             try:
                 await self._poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
@@ -258,14 +270,20 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                     self._status.state = "crashed"
                     return
                 self._status.state = "backoff"
+                sleep_s = self._bounded_retry_delay(retry_after_s=retry_after_s)
             else:
                 # A transient provider failure is durable audit history, not a
                 # permanent current-health state.  A later successful poll
                 # proves the configured instance is running again.
-                self._status.state = "running"
+                lease_state = self._status.extra.get("cursor_lease")
+                self._status.state = (
+                    "backoff"
+                    if lease_state in {"circuit_open", "held_by_another_runtime"}
+                    else "running"
+                )
             cycles += 1
             try:
-                await asyncio.sleep(self._poll_interval_s)
+                await asyncio.sleep(sleep_s)
             except asyncio.CancelledError:
                 return
 
@@ -275,7 +293,63 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             raise RuntimeError(
                 "Google Tasks service not initialized; call start() first"
             )
+        store = ctx.cursor_store
+        cursor_id = self._cursor_id()
+        if store is not None and not store.claim(
+            cursor_id,
+            self._lease_owner,
+            ttl_ms=max(30_000, self._poll_interval_s * 2000),
+        ):
+            cursor = store.get(cursor_id)
+            self._status.state = "backoff"
+            self._status.extra["cursor_lease"] = (
+                "circuit_open"
+                if cursor.circuit_state == "open"
+                else "held_by_another_runtime"
+            )
+            self._set_durable_status(ctx)
+            return 0
+        try:
+            emitted, completion_watermark = await self._poll_once_owned(ctx=ctx)
+            if store is not None:
+                if not store.record_success(
+                    cursor_id,
+                    lease_owner=self._lease_owner,
+                    provider_watermark=completion_watermark,
+                ):
+                    raise _TasksLeaseLost(
+                        "Google Tasks lease lost before completion commit"
+                    )
+                self._set_durable_status(ctx)
+            self._status.extra["cursor_lease"] = "owned"
+            return emitted
+        except BaseException as exc:
+            if store is not None:
+                _severity, _kind, retry_after_s = self._classify_tasks_error(exc)
+                error_cursor = store.record_error(
+                    cursor_id,
+                    lease_owner=self._lease_owner,
+                    recovery_after_ms=int(
+                        self._bounded_retry_delay(retry_after_s=retry_after_s) * 1000
+                    ),
+                )
+                if error_cursor is False:
+                    self._status.extra["cursor_lease"] = "lost_before_error_commit"
+                    self._set_durable_status(ctx)
+                else:
+                    durable = error_cursor.public()
+                    durable["provider_watermark"] = (
+                        "present" if durable.get("provider_watermark") else None
+                    )
+                    self._status.extra["durable_cursor"] = durable
+            raise
+        finally:
+            if store is not None:
+                store.release(cursor_id, self._lease_owner)
+
+    async def _poll_once_owned(self, *, ctx: AdapterContext) -> tuple[int, str]:
         emitted = 0
+        completion_revisions: list[str] = []
         tasklists = self._fetch_tasklists()
         observed_list_ids = {
             str(tasklist.get("id")) for tasklist in tasklists if tasklist.get("id")
@@ -302,6 +376,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 state="present",
             )
             list_external_id = f"list:{tasklist_id}"
+            completion_revisions.append(f"list:{tasklist_id}:{list_fingerprint}")
             durable_list = self._durable_latest(ctx, list_external_id)
             if previous_list is None and durable_list is not None:
                 if durable_list[0] == list_fingerprint:
@@ -338,6 +413,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                     ),
                 )
                 durable_external_id = f"item:{tasklist_id}:{task_id}"
+                completion_revisions.append(
+                    f"item:{tasklist_id}:{task_id}:{task_fingerprint}"
+                )
                 durable = self._durable_latest(ctx, durable_external_id)
                 if previous is None and durable is not None:
                     if durable[0] == task_fingerprint:
@@ -388,7 +466,10 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 )
                 self._seen_inbound[key] = dict(task)
                 emitted += 1
-        return emitted
+        digest = hashlib.sha256(
+            "\n".join(sorted(completion_revisions)).encode("utf-8")
+        ).hexdigest()
+        return emitted, f"complete:{digest}"
 
     def _cursor_id(self) -> str:
         return str(
@@ -423,12 +504,24 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
     ) -> None:
         if ctx.cursor_store is None:
             return
-        ctx.cursor_store.record_success(
+        if not ctx.cursor_store.record_success(
             self._cursor_id(),
+            lease_owner=self._lease_owner,
+            mark_healthy=False,
             external_id=external_id,
             fingerprint=fingerprint,
             event_id=event_id,
+        ):
+            raise _TasksLeaseLost("Google Tasks lease lost before dedupe commit")
+
+    def _set_durable_status(self, ctx: AdapterContext) -> None:
+        if ctx.cursor_store is None:
+            return
+        durable = ctx.cursor_store.get(self._cursor_id()).public()
+        durable["provider_watermark"] = (
+            "present" if durable.get("provider_watermark") else None
         )
+        self._status.extra["durable_cursor"] = durable
 
     def _fetch_tasklists(self) -> list[dict[str, Any]]:
         """Return every task list when enabled, otherwise the configured list."""
@@ -788,31 +881,30 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         session = self._observation_session
         manager = self._observation_manager
         event_log = self._observation_event_log
+        if session is None or manager is None or event_log is None:
+            raise RuntimeError(
+                "Google Tasks observation seam is required for external writes"
+            )
 
         response: dict[str, Any] = {}
         try:
-            if session is not None and manager is not None and event_log is not None:
-                outbound_result = await observation_outbound(
-                    session,
-                    f"tasks.{operation.kind}",
-                    {
-                        "tasklist_id": tasklist_id,
-                        "target_external_id": target_id or None,
-                        "fields": sorted(task_body or list_body),
-                    },
-                    _do_write,
-                    manager=manager,
-                    event_sink=event_log,
-                    target_channel="tasks-google-tasks",
-                    target_identifier=tasklist_id,
-                )
-                if outbound_result.suppressed:
-                    # F-3 (HARD): suppressed → unapplied; caller does NOT
-                    # emit externally-visible side effects.
-                    return WriteResult(applied=False, external_id=None, suppressed=True)
-                response = outbound_result.result or {}
-            else:
-                response = await _do_write()
+            outbound_result = await observation_outbound(
+                session,
+                f"tasks.{operation.kind}",
+                {
+                    "tasklist_id": tasklist_id,
+                    "target_external_id": target_id or None,
+                    "fields": sorted(task_body or list_body),
+                },
+                _do_write,
+                manager=manager,
+                event_sink=event_log,
+                target_channel="tasks-google-tasks",
+                target_identifier=tasklist_id,
+            )
+            if outbound_result.suppressed:
+                return WriteResult(applied=False, external_id=None, suppressed=True)
+            response = outbound_result.result or {}
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             ctx = self._ctx
             severity, error_kind, retry_after_s = self._classify_tasks_error(exc)
@@ -936,6 +1028,11 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return ("transient", "network", retry_after)
         return ("transient", "unknown", retry_after)
+
+    def _bounded_retry_delay(self, *, retry_after_s: int | None) -> float:
+        base = max(1.0, float(self._poll_interval_s))
+        requested = float(retry_after_s or 0)
+        return min(max(base, requested), max(base, 900.0))
 
 
 __all__ = [

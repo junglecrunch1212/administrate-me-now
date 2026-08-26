@@ -59,7 +59,7 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
     with TestClient(app) as client:
         runtime = app.state.runtime
         envelopes = []
-        for index in range(137):
+        for index in range(521):
             envelopes.append(
                 EventEnvelope(
                     event_at_ms=1_900_000_000_000 + index,
@@ -91,6 +91,7 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         client.portal.call(runtime.wait_for_projection, "context_fabric", event_ids[-1])
         seen: set[str] = set()
         cursor = None
+        first_cursor = None
         first_inventory = None
         while True:
             params = "triage_lens=all_candidates&triage_limit=17"
@@ -102,14 +103,16 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
             assert response.status_code == 200, response.text
             page = response.json()
             first_inventory = first_inventory or page["triage"]["inventory"]
+            first_cursor = first_cursor or page["triage"]["next_cursor"]
             for item in page["items"]:
                 assert item["proposal_id"] not in seen
                 seen.add(item["proposal_id"])
             cursor = page["triage"]["next_cursor"]
             if cursor is None:
                 break
-        assert len(seen) == 137
-        assert first_inventory["total_candidates"] == 137
+        assert len(seen) == 521
+        assert first_inventory["total_candidates"] == 521
+        assert first_cursor is not None
         other = client.get(
             "/api/member/v1/surfaces/triage?triage_lens=all_candidates",
             headers=AUTH_B,
@@ -120,17 +123,17 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         exact_question = next(
             item
             for item in today["brief"]["questions"]
-            if item["candidate_id"] == "co014-proposal-0124"
+            if item["candidate_id"] == "co014-proposal-0508"
         )
         assert exact_question["decision_context"]["contract"] == (
             "member-decision-context-v1"
         )
         assert exact_question["decision_context"]["decision_maker"] == "member"
         assert exact_question["decision_context"]["what_happened"] == (
-            "Tenant-neutral candidate 0124"
+            "Tenant-neutral candidate 0508"
         )
         assert exact_question["surface_link"]["href"].startswith(
-            "/member/triage?item=co014-proposal-0124&matter="
+            "/member/triage?item=co014-proposal-0508&matter="
         )
         carousel_questions = [
             item
@@ -153,22 +156,22 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         focused_pending = client.get(
             "/api/member/v1/surfaces/triage"
             "?triage_lens=all_candidates&triage_limit=10"
-            "&triage_item=co014-proposal-0124",
+            "&triage_item=co014-proposal-0508",
             headers=AUTH_A,
         ).json()
         assert focused_pending["focus"] == {
-            "requested_candidate_id": "co014-proposal-0124",
+            "requested_candidate_id": "co014-proposal-0508",
             "state": "pending",
             "candidate_state": "pending_review",
             "matter_id": exact_question["matter_id"],
         }
         assert any(
-            item["proposal_id"] == "co014-proposal-0124"
+            item["proposal_id"] == "co014-proposal-0508"
             for matter in focused_pending["triage"]["matters"]
             for item in matter["candidates"]
         )
         cross_scope_focus = client.get(
-            "/api/member/v1/surfaces/triage?triage_item=co014-proposal-0124",
+            "/api/member/v1/surfaces/triage?triage_item=co014-proposal-0508",
             headers=AUTH_B,
         ).json()
         assert cross_scope_focus["focus"]["state"] == "not_found"
@@ -189,6 +192,18 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
             )
             assert dismissed.status_code == 200, dismissed.text
             assert dismissed.json()["feedback_event_id"]
+        stale_page = client.get(
+            "/api/member/v1/surfaces/triage"
+            f"?triage_lens=all_candidates&triage_cursor={first_cursor}",
+            headers=AUTH_A,
+        )
+        assert stale_page.status_code == 422
+        assert stale_page.json() == {"detail": "stale triage cursor"}
+        refreshed_inventory = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates",
+            headers=AUTH_A,
+        ).json()["triage"]["inventory"]
+        assert refreshed_inventory["total_candidates"] == 518
         suggestions = client.get(
             "/api/member/v1/surfaces/triage?triage_lens=all_candidates",
             headers=AUTH_A,
@@ -264,10 +279,10 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         focused_item = next(
             item
             for item in focused_pending["items"]
-            if item["proposal_id"] == "co014-proposal-0124"
+            if item["proposal_id"] == "co014-proposal-0508"
         )
         resolved = client.post(
-            "/api/member/v1/triage/co014-proposal-0124/dismiss",
+            "/api/member/v1/triage/co014-proposal-0508/dismiss",
             headers=AUTH_A,
             json={
                 "request_id": "co015-resolved-deep-link",
@@ -278,13 +293,13 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         )
         assert resolved.status_code == 200, resolved.text
         focused_resolved = client.get(
-            "/api/member/v1/surfaces/triage?triage_item=co014-proposal-0124",
+            "/api/member/v1/surfaces/triage?triage_item=co014-proposal-0508",
             headers=AUTH_A,
         ).json()
         assert focused_resolved["focus"]["state"] == "resolved"
         assert focused_resolved["focus"]["candidate_state"] == "dismissed"
         assert any(
-            item["proposal_id"] == "co014-proposal-0124"
+            item["proposal_id"] == "co014-proposal-0508"
             for item in focused_resolved["recent_items"]
         )
         pending_intent_id = "co014-pending-interpretation"

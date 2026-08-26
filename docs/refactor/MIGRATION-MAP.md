@@ -1,5 +1,23 @@
 # Migration map
 
+Phase A runtime-repair amendment (2026-08-25): this candidate **PRESERVES**
+immutable source facts, encrypted append-only history, deterministic replay,
+member/tenant privacy, human decision authority, observation mode, guarded
+provider writes, and the one-Python-runtime/one-pinned-Gateway topology. It
+**MODERNIZES/HARDENS** additive adapter cursor state, lease fencing, durable
+Calendar/Tasks progress, automatic half-open probes, bounded retry eligibility,
+current-process OpenClaw health, explicit release eligibility, manifest-pinned
+Node selection, incremental bounded-history indexes, fixed-point restart
+quiescence, and revision-bound Triage pagination. It **SUPERSEDES** memory-only
+provider watermarks, permanently open circuits, direct writes under missing
+observation seams, ambient Node execution, indefinitely reusable healthy
+reports, full-history rescans, and snapshotless pagination. Existing cursor
+stores migrate additively with `retry_not_before_ms`; older event/schema facts
+remain readable and are never rewritten. Rollback can ignore the additive
+column and new client cursor but may restore the defects, so rollback is a
+release-selection operation rather than a data rewrite. No required behavior
+is deferred. Phase B deployment is a separate owner-authorized boundary.
+
 Control-plane reboot amendment (2026-08-25): ADR-0013 retires G-001, the Outcome Harness, proposed G-002/ADR-0012, and the earlier executor instructions. Current delivery uses one protected GitHub pull request with ordinary CI and optional advisory review. Historical process descriptions below record past events only; they are not current instructions. V2 runtime, product, privacy, observation, backup, rollback, and provider-write boundaries are unchanged.
 
 CO-018 mixed-backlog amendment (2026-08-15, historical): `origin/main` was
