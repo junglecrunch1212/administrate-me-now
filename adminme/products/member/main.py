@@ -5757,13 +5757,28 @@ async def _communication_command_locked(
             )
         )
         await runtime.wait_for_projection("interactions", event_id)
+        projected = get_interaction(
+            interactions_conn, session, interaction_id=interaction_id
+        )
+        applied = projected is not None and (
+            (
+                body.operation == "snooze"
+                and projected.get("snoozed_until") == body.snoozed_until
+            )
+            or (body.operation == "unsnooze" and projected.get("snoozed_until") is None)
+            or (body.operation == "quiet" and bool(projected.get("quieted")) is True)
+            or (body.operation == "unquiet" and bool(projected.get("quieted")) is False)
+        )
+        if not applied:
+            # A later interaction revision can win between the pre-append CAS
+            # check and projection delivery. The event remains immutable, but
+            # the API must not describe a non-applied state change as success.
+            raise HTTPException(409, "communication changed; refresh before acting")
         return {
             "accepted": True,
             "local": True,
             "event_id": event_id,
-            "interaction": get_interaction(
-                interactions_conn, session, interaction_id=interaction_id
-            ),
+            "interaction": projected,
         }
 
     provider = str(interaction.get("provider") or "")

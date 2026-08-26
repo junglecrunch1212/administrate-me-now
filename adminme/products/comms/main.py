@@ -120,6 +120,11 @@ async def canonical_message(
     await runtime.wait_for_subscriber(
         "pipeline:pipeline:commitment_extraction", source_id
     )
+    # The fixture response is a production-composition settlement boundary.
+    # Noise filtering can append interaction semantic features after the source
+    # projection and commitment extraction complete; returning earlier lets a
+    # member command race that later interaction revision.
+    await runtime.wait_for_subscriber("pipeline:pipeline:noise_filtering", source_id)
     proposal = await runtime.event_log.get_by_idempotency(
         session.tenant_id, f"commitment:proposal:{source_id}"
     )

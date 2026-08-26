@@ -1522,6 +1522,7 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
             },
         )
         assert snoozed.status_code == 200, snoozed.text
+        assert snoozed.json()["interaction"]["snoozed_until"] == wake
         updated = client.get(
             "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
         ).json()["cockpit"]
