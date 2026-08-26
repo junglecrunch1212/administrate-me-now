@@ -1,5 +1,17 @@
 # Constitutional crosswalk
 
+Phase B recovery-terminality amendment (2026-08-26): C032/C113/C116 remain
+**PRESERVED/HARDENED** after the otherwise healthy v22 activation exposed four
+content-free recovery commands without terminal receipts. Every early
+noise-filtering terminal now retains exact request/predecessor linkage.
+Production startup reconciles only request controls through a fixed encrypted-
+log watermark, caps pending delivery at 64, uses the ordinary scoped pipeline
+callback, leaves subscriber checkpoints and source facts untouched, and fails
+closed unless each selected command gains its exact idempotent linked
+assessment or refusal. This adds no source, model, domain, human-decision,
+provider-write, privacy, or replay authority. AC-42/AC-46 are the executable
+boundary.
+
 Phase B rollback-schema amendment (2026-08-26): C032/C080-C082/C086/C113/C116
 remain **PRESERVED/HARDENED** after the guarded retry of `af29e858` rejected the
 exact Gmail/Calendar degradation left by v21's predecessor-incompatible cursor

@@ -34,9 +34,11 @@ from adminme.pipelines import (
     load_pipeline_pack,
 )
 from adminme.pipelines.runner import PipelineRunner
+from adminme.source_assessment_recovery import recovery_refusal_idempotency_key
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ECHO_LOGGER_ROOT = REPO_ROOT / "tests" / "fixtures" / "pipelines" / "echo_logger"
+NOISE_FILTERING_ROOT = REPO_ROOT / "packs" / "pipelines" / "noise_filtering"
 TEST_KEY = b"p" * 32
 
 
@@ -68,6 +70,65 @@ def _messaging_received_payload() -> dict[str, Any]:
         "to_identifier": "bob@example.com",
         "received_at": EventEnvelope.now_utc_iso(),
     }
+
+
+def _recovery_request(
+    *, tenant_id: str, request_id: str, source_event_id: str, event_at_ms: int
+) -> EventEnvelope:
+    return EventEnvelope(
+        event_at_ms=event_at_ms,
+        tenant_id=tenant_id,
+        type="source.assessment.recovery_requested",
+        schema_version=1,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="source_assessment_recovery",
+        source_account_id="operator",
+        owner_scope="private:member-recovery",
+        visibility_scope="private:member-recovery",
+        sensitivity="normal",
+        idempotency_key=f"runner-recovery:{request_id}:{source_event_id}",
+        payload={
+            "request_id": request_id,
+            "batch_fingerprint": "a" * 64,
+            "source_event_id": source_event_id,
+            "failed_assessment_event_id": f"failed:{source_event_id}",
+            "expected_failure_reason": "language_seam_OpenClawUnreachable",
+            "owner_member_id": "member-recovery",
+            "requested_by_actor": "member-recovery",
+            "authority": "member_principal",
+            "policy": "source-assessment-recovery-v1",
+            "attempt_limit": 3,
+            "max_concurrency": 2,
+        },
+    )
+
+
+def _recovery_refusal(
+    *,
+    tenant_id: str,
+    request_event_id: str,
+    source_event_id: str,
+    event_at_ms: int,
+) -> EventEnvelope:
+    return EventEnvelope(
+        event_at_ms=event_at_ms,
+        tenant_id=tenant_id,
+        type="source.assessment.recovery_refused",
+        schema_version=1,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="noise_filtering",
+        source_account_id="pipeline",
+        owner_scope="private:member-recovery",
+        visibility_scope="private:member-recovery",
+        sensitivity="normal",
+        idempotency_key=recovery_refusal_idempotency_key(request_event_id),
+        payload={
+            "request_event_id": request_event_id,
+            "source_event_id": source_event_id,
+            "reason": "source_not_found",
+            "policy": "source-assessment-recovery-v1",
+        },
+    )
 
 
 async def _wait_for_checkpoint(
@@ -245,6 +306,88 @@ async def test_runner_passes_reviewed_delivery_concurrency_to_bus(
 
     status = await rig["bus"].subscriber_status(f"pipeline:{pack.pack_id}")
     assert status["delivery_concurrency"] == 3
+
+
+async def test_startup_reconciliation_is_bounded_terminal_and_checkpoint_free(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    invalidate_cache()
+    runner.register(load_pipeline_pack(NOISE_FILTERING_ROOT))
+    await runner.start(start_bus=False)
+
+    try:
+        first_id = await log.append(
+            _recovery_request(
+                tenant_id=config.tenant_id,
+                request_id="runner-request-1",
+                source_event_id="missing-source-1",
+                event_at_ms=1_786_500_000_000,
+            )
+        )
+        second_id = await log.append(
+            _recovery_request(
+                tenant_id=config.tenant_id,
+                request_id="runner-request-2",
+                source_event_id="missing-source-2",
+                event_at_ms=1_786_500_000_001,
+            )
+        )
+        terminal_id = await log.append(
+            _recovery_request(
+                tenant_id=config.tenant_id,
+                request_id="runner-request-3",
+                source_event_id="missing-source-3",
+                event_at_ms=1_786_500_000_002,
+            )
+        )
+        await log.append(
+            _recovery_refusal(
+                tenant_id=config.tenant_id,
+                request_event_id=terminal_id,
+                source_event_id="missing-source-3",
+                event_at_ms=1_786_500_000_003,
+            ),
+            causation_id=terminal_id,
+        )
+
+        with pytest.raises(RuntimeError, match="ceiling exceeded"):
+            await runner.reconcile_pending_source_assessment_recoveries(max_pending=1)
+        refusals_before = [
+            event
+            async for event in log.read_since(
+                types=["source.assessment.recovery_refused"]
+            )
+        ]
+        assert [event["payload"]["request_event_id"] for event in refusals_before] == [
+            terminal_id
+        ]
+
+        assert await runner.reconcile_pending_source_assessment_recoveries() == 2
+        assert await runner.reconcile_pending_source_assessment_recoveries() == 0
+        refusals_after = [
+            event
+            async for event in log.read_since(
+                types=["source.assessment.recovery_refused"]
+            )
+        ]
+        assert {event["payload"]["request_event_id"] for event in refusals_after} == {
+            first_id,
+            second_id,
+            terminal_id,
+        }
+        status = await bus.subscriber_status("pipeline:pipeline:noise_filtering")
+        assert status["checkpoint_event_id"] is None
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()
+        invalidate_cache()
 
 
 # ---------------------------------------------------------------------------

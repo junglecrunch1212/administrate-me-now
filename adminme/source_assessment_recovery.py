@@ -115,6 +115,20 @@ def assessment_reason(event: dict[str, Any]) -> str:
     return str(reasons[0])
 
 
+def recovery_assessment_idempotency_key(
+    request_event_id: str, source_event_id: str
+) -> str:
+    """Return the one terminal-assessment identity for a recovery command."""
+
+    return f"triage:message-features:recovery:{request_event_id}:{source_event_id}"
+
+
+def recovery_refusal_idempotency_key(request_event_id: str) -> str:
+    """Return the one terminal-refusal identity for a recovery command."""
+
+    return f"source-assessment-recovery-refused:{request_event_id}"
+
+
 async def latest_source_assessment(
     event_log: EventLog, source_event_id: str
 ) -> dict[str, Any] | None:
@@ -282,7 +296,9 @@ __all__ = [
     "assessment_reason",
     "build_recovery_request_envelopes",
     "latest_source_assessment",
+    "recovery_assessment_idempotency_key",
     "recovery_batch_fingerprint",
+    "recovery_refusal_idempotency_key",
     "target_from_request_event",
     "validate_recovery_target",
 ]

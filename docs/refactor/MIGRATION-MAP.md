@@ -1,5 +1,19 @@
 # Migration map
 
+Phase B recovery-terminality amendment (2026-08-26): active merge
+`cfde6b631edd034633e8dc63a0204d06de363ac3` completed v22 settlement with
+65,685/65,685 source obligations accounted, zero source pending/missing/failed,
+healthy durable consumers and adapters, observation active, and no provider-
+called effect. A separate command-ledger audit nevertheless found four of the
+new recovery requests without a linked assessment or refusal because v22's
+non-anchor early assessment omitted recovery context. This repair
+**PRESERVES/HARDENS** append-only control terminality: all early assessments
+carry the exact recovery link, and startup processes only non-terminal request
+controls through a fixed watermark and a 64-command ceiling. It changes no
+checkpoint, rewrites no fact, performs no full source replay, and introduces no
+event/schema, projection, canonical, credential, provider, Python, Node, or
+OpenClaw migration.
+
 Phase B rollback-schema amendment (2026-08-26): the second guarded attempt of
 merge `af29e858` stopped before backup or release selection because the first
 attempt's additive `adapter_cursors.retry_not_before_ms` column is not readable

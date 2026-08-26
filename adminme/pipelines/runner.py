@@ -42,11 +42,19 @@ from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import run_skill
 from adminme.pipelines.base import PipelineContext
 from adminme.pipelines.pack_loader import LoadedPipelinePack, load_pipeline_pack
+from adminme.source_assessment_recovery import (
+    recovery_assessment_idempotency_key,
+    recovery_refusal_idempotency_key,
+)
 
 if TYPE_CHECKING:
     import sqlcipher3
 
 _log = logging.getLogger(__name__)
+
+_SOURCE_RECOVERY_EVENT = "source.assessment.recovery_requested"
+_SOURCE_RECOVERY_PACK_ID = "pipeline:noise_filtering"
+_SOURCE_RECOVERY_MAX_PENDING = 64
 
 
 class PipelineRunner:
@@ -205,6 +213,68 @@ class PipelineRunner:
         if not self._started:
             return
         self._started = False
+
+    async def reconcile_pending_source_assessment_recoveries(
+        self, *, max_pending: int = _SOURCE_RECOVERY_MAX_PENDING
+    ) -> int:
+        """Terminalize bounded recovery controls before normal bus delivery.
+
+        Recovery requests are content-free commands, but their ordinary bus
+        checkpoint may already be past them after a crash or a handler defect.
+        Read only those controls through one fixed encrypted-log watermark,
+        select commands without either exact terminal idempotency identity,
+        and deliver them through the production callback/context. The bus
+        checkpoint is never changed and source facts are never replayed.
+        """
+
+        if not self._started:
+            raise RuntimeError("pipeline runner must be started before reconciliation")
+        if max_pending <= 0:
+            raise ValueError("max_pending must be positive")
+        pack = self._packs.get(_SOURCE_RECOVERY_PACK_ID)
+        if pack is None:
+            return 0
+        triggered_events = pack.triggers.get("events") if pack.triggers else None
+        if not triggered_events or _SOURCE_RECOVERY_EVENT not in triggered_events:
+            raise RuntimeError("noise-filtering recovery trigger is not registered")
+
+        watermark = await self._log.latest_event_id()
+        pending: list[dict[str, Any]] = []
+        async for metadata in self._log.read_metadata_since(
+            through=watermark or "",
+            types=[_SOURCE_RECOVERY_EVENT],
+        ):
+            request = await self._log.get(str(metadata["event_id"]))
+            if request is None:
+                raise RuntimeError("recovery request disappeared from append-only log")
+            if await self._recovery_terminal(request):
+                continue
+            pending.append(request)
+            if len(pending) > max_pending:
+                raise RuntimeError("pending source-recovery ceiling exceeded")
+
+        callback = self._make_callback(pack)
+        for request in pending:
+            await callback(request)
+            if not await self._recovery_terminal(request):
+                raise RuntimeError("source-recovery command remained non-terminal")
+        return len(pending)
+
+    async def _recovery_terminal(self, request: dict[str, Any]) -> bool:
+        request_event_id = str(request.get("event_id") or "")
+        payload = request.get("payload") or {}
+        source_event_id = str(payload.get("source_event_id") or "")
+        tenant_id = str(request.get("tenant_id") or "")
+        assessment, refusal = await asyncio.gather(
+            self._log.get_by_idempotency(
+                tenant_id,
+                recovery_assessment_idempotency_key(request_event_id, source_event_id),
+            ),
+            self._log.get_by_idempotency(
+                tenant_id, recovery_refusal_idempotency_key(request_event_id)
+            ),
+        )
+        return assessment is not None or refusal is not None
 
     # ------------------------------------------------------------------
     # status

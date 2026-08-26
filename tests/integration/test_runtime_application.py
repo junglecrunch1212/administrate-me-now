@@ -23,6 +23,11 @@ from adminme.runtime.application import (
     create_application,
 )
 from adminme.source_assessment_recovery import latest_source_assessment
+from adminme.source_assessment_recovery import (
+    SourceAssessmentRecoveryBatch,
+    SourceAssessmentRecoveryTarget,
+    build_recovery_request_envelopes,
+)
 from bootstrap.contracts import PROJECTION_NAMES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -602,6 +607,166 @@ def test_runtime_recovery_endpoint_is_scoped_append_only_and_human_gated(
             "external_sync.write_requested",
             "external_sync.write_completed",
         }.intersection(all_events)
+
+
+async def test_runtime_startup_terminalizes_checkpointed_recovery_command(
+    tmp_path: Path,
+) -> None:
+    """Production startup repairs a command ledger without moving checkpoints."""
+
+    settings = _settings(tmp_path)
+    log = EventLog(settings.instance, TEST_KEY)
+    try:
+        source_id = await log.append(
+            EventEnvelope(
+                event_at_ms=1_786_420_000_000,
+                tenant_id=settings.instance.tenant_id,
+                type="messaging.received",
+                schema_version=3,
+                occurred_at="2026-08-11T18:00:00Z",
+                source_adapter="gmail",
+                source_account_id="fixture-account",
+                owner_scope="private:member-a",
+                visibility_scope="private:member-a",
+                sensitivity="normal",
+                idempotency_key="startup-recovery-source",
+                payload={
+                    "provider": "gmail",
+                    "provider_account_id": "fixture-account",
+                    "member_id": "member-a",
+                    "source_channel": "gmail",
+                    "native_message_id": "startup-recovery-source",
+                    "thread_id": "startup-recovery-thread",
+                    "from_identifier": "sender@example.invalid",
+                    "to_identifier": "member@example.invalid",
+                    "workspace": "personal",
+                    "subject": "Fixture startup recovery",
+                    "body_text": "A private fixture update without an action.",
+                    "received_at": "2026-08-11T18:00:00Z",
+                    "provider_labels": ["INBOX"],
+                    "attachments": [],
+                },
+            )
+        )
+        failed_id = await log.append(
+            EventEnvelope(
+                event_at_ms=1_786_420_000_001,
+                tenant_id=settings.instance.tenant_id,
+                type="triage.intent.features_extracted",
+                schema_version=3,
+                occurred_at="2026-08-11T18:00:01Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope="private:member-a",
+                visibility_scope="private:member-a",
+                sensitivity="normal",
+                idempotency_key=f"startup-recovery-failed:{source_id}",
+                payload={
+                    "intent_id": f"source:{source_id}",
+                    "source_event_id": source_id,
+                    "skill_call_event_id": None,
+                    "extractor_id": "fixture-source-assessor",
+                    "language": None,
+                    "candidates": [],
+                    "extraction_state": "unavailable",
+                    "extracted_at": "2026-08-11T18:00:01Z",
+                    "assessment_outcome": "failed",
+                    "reason_codes": [
+                        "language_seam_OpenClawUnreachable",
+                        "no_eligible_candidate",
+                    ],
+                },
+            ),
+            causation_id=source_id,
+        )
+        [request_envelope] = await build_recovery_request_envelopes(
+            log,
+            SourceAssessmentRecoveryBatch(
+                request_id="startup-recovery-request-1",
+                targets=[
+                    SourceAssessmentRecoveryTarget(
+                        source_event_id=source_id,
+                        failed_assessment_event_id=failed_id,
+                        expected_failure_reason="language_seam_OpenClawUnreachable",
+                    )
+                ],
+            ),
+            tenant_id=settings.instance.tenant_id,
+            requested_by_actor="member-a",
+            authority="member_principal",
+            required_owner_scope="private:member-a",
+        )
+        request_id = await log.append(request_envelope)
+        request = await log.get(request_id)
+        assert request is not None
+        current_id = await log.append(
+            EventEnvelope(
+                event_at_ms=int(request["event_at_ms"]) + 1,
+                tenant_id=settings.instance.tenant_id,
+                type="triage.intent.features_extracted",
+                schema_version=3,
+                occurred_at=EventEnvelope.now_utc_iso(),
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope="private:member-a",
+                visibility_scope="private:member-a",
+                sensitivity="normal",
+                idempotency_key=f"startup-recovery-current:{source_id}",
+                payload={
+                    "intent_id": f"source:{source_id}",
+                    "source_event_id": source_id,
+                    "skill_call_event_id": None,
+                    "extractor_id": "fixture-source-assessor",
+                    "language": None,
+                    "candidates": [],
+                    "extraction_state": "complete",
+                    "extracted_at": EventEnvelope.now_utc_iso(),
+                    "assessment_outcome": "no_candidate",
+                    "reason_codes": ["language_assessment_completed"],
+                },
+            ),
+            causation_id=source_id,
+        )
+        checkpoint_bus = EventBus(log, settings.instance.bus_checkpoint_path)
+
+        async def noop(_event: dict[str, object]) -> None:
+            return None
+
+        checkpoint_bus.subscribe(
+            "pipeline:pipeline:noise_filtering",
+            [
+                "messaging.received",
+                "messaging.sent",
+                "telephony.sms_received",
+                "source.assessment.recovery_requested",
+            ],
+            noop,
+            consumer_version="22.0.0",
+        )
+        await checkpoint_bus.set_checkpoint(
+            "pipeline:pipeline:noise_filtering", current_id
+        )
+        await checkpoint_bus.stop()
+    finally:
+        await log.close()
+
+    runtime = AdministrateMeRuntime(settings)
+    await runtime.start()
+    try:
+        assert runtime.event_log is not None
+        refusals = [
+            event
+            async for event in runtime.event_log.read_since(
+                types=["source.assessment.recovery_refused"]
+            )
+            if event["payload"]["request_event_id"] == request_id
+        ]
+        assert len(refusals) == 1
+        assert refusals[0]["payload"]["reason"] == "failed_assessment_not_current"
+        assert runtime._source_assurance_cache is not None
+        assert runtime._source_assurance_cache["recovery"]["counts"]["pending"] == 0
+    finally:
+        await runtime.stop()
 
 
 async def _event_types(log: EventLog) -> list[str]:
