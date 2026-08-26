@@ -198,6 +198,12 @@ creates one request-linked v4 assessment without a skill call; runner
 reconciliation is bounded, idempotent, and checkpoint-free; and the production
 runtime composition converts a checkpointed stale command into exactly one
 `failed_assessment_not_current` refusal with zero recovery commands pending.
-Targeted Ruff, format, and mypy checks pass. Aggregate release, protected hosted
-checks/merge, governed upgrade, final live ledger/Doctor/browser/effect proof,
-and a documentation-only closure receipt remain pending.
+Targeted Ruff, format, and mypy checks pass. The clean aggregate release gate
+also passed: 66 strict acceptance tests and one documented skip, 1,924
+root/package tests and one documented skip, 60 bridge tests, Ruff/format/mypy/
+Pyright, performance and fixed-point source stress, builds, architecture,
+clean-install, tenant-isolation, backup/restore, exact OpenClaw contract/build
+and 17 plugin tests, and all 690 credential-free Gate 7 assertions under Node
+24 and Chrome 151. Protected hosted checks/merge, governed upgrade, final live
+ledger/Doctor/browser/effect proof, and a documentation-only closure receipt
+remain pending.

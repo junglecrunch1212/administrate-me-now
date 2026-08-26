@@ -7,7 +7,7 @@ gate_result: PHASE_B_RECOVERY_TERMINALITY_LOCAL_CANDIDATE
 verified_local_date: 2026-08-26
 verified_github_date: pending
 branch: codex/administrateme-v2-recovery-terminality
-candidate_commit_resolution: local_candidate_pending_protected_pull_request
+candidate_commit_resolution: local_aggregate_pass_pending_protected_pull_request
 pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
@@ -48,10 +48,15 @@ delivers at most 64 through the ordinary production callback. It neither moves
 a checkpoint nor replays source facts, and startup fails closed unless every
 selected command becomes an exact linked assessment or refusal. The direct
 non-anchor regression, bounded runner proof, and production composition startup
-proof pass with 21 tests; targeted Ruff, format, and mypy checks also pass. A
-protected merge, governed forward upgrade, zero-pending live ledger, final
-Doctor/browser/effect proof, and documentation-only closure receipt remain
-required.
+proof pass with 21 tests; targeted Ruff, format, and mypy checks also pass. The
+clean aggregate release gate passed with 66 strict acceptance tests and one
+documented skip, 1,924 root/package tests and one documented skip, 60 bridge
+tests, Ruff/format/mypy/Pyright, performance and fixed-point source stress,
+package/architecture/clean-install/tenant-isolation/backup-restore checks, exact
+OpenClaw contract/build and 17 plugin tests, and all 690 credential-free Gate 7
+assertions under Node 24 and Chrome 151. A protected merge, governed forward
+upgrade, zero-pending live ledger, final Doctor/browser/effect proof, and
+documentation-only closure receipt remain required.
 
 ## 2026-08-26 guarded Phase B rollback and replay-settlement repair
 
