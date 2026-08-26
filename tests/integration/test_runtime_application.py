@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
+import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -235,6 +239,88 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
         drift = client.get("/api/system/ready")
         assert drift.status_code == 503
         assert "openclaw" in drift.json()["deployment_readiness"]["blocking_dimensions"]
+
+
+def test_concurrent_http_projection_reads_serialize_on_native_owner_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_application(
+        replace(_settings(tmp_path), member_roles={"member-a": "principal"})
+    )
+    native_threads: set[int] = set()
+    callback_started = threading.Event()
+    release_callback = threading.Event()
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        assert runtime.projections is not None
+        assert runtime.events is not None
+        projection = runtime.projections._projections["tasks"]  # noqa: SLF001
+        original_apply = projection.apply
+        original_execute = runtime.projections._execute_statement  # noqa: SLF001
+
+        def _held_apply(envelope: dict[str, Any], connection: Any) -> None:
+            native_threads.add(threading.get_ident())
+            if envelope["type"] == "task.created":
+                callback_started.set()
+                if not release_callback.wait(timeout=5):
+                    raise RuntimeError("test did not release projection callback")
+            original_apply(envelope, connection)
+
+        def _tracked_execute(*args: Any, **kwargs: Any) -> Any:
+            native_threads.add(threading.get_ident())
+            return original_execute(*args, **kwargs)
+
+        monkeypatch.setattr(projection, "apply", _held_apply)
+        monkeypatch.setattr(runtime.projections, "_execute_statement", _tracked_execute)
+        client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_780_000_000_000,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="task.created",
+                schema_version=1,
+                occurred_at="2026-05-28T12:00:00Z",
+                source_adapter="concurrent-http-read-test",
+                source_account_id="fixture",
+                owner_scope="private:member-a",
+                visibility_scope="private:member-a",
+                sensitivity="normal",
+                payload={
+                    "task_id": "task-concurrent-http",
+                    "title": "Concurrent HTTP projection proof",
+                    "owner_member_id": "member-a",
+                },
+            ),
+        )
+        assert callback_started.wait(timeout=2)
+
+        def _read_reminders() -> Any:
+            return client.get(
+                "/api/member/v1/surfaces/reminders",
+                headers={"Tailscale-User-Login": "member-a.ts.net"},
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            pending = [executor.submit(_read_reminders) for _ in range(8)]
+            time.sleep(0.05)
+            release_callback.set()
+            responses = [future.result(timeout=10) for future in pending]
+
+        assert all(response.status_code == 200 for response in responses), [
+            (response.status_code, response.text) for response in responses
+        ]
+        assert all(
+            "task-concurrent-http" in json.dumps(response.json(), sort_keys=True)
+            for response in responses
+        )
+        assert len(native_threads) == 1
+        assert threading.get_ident() not in native_threads
+
+    assert not any(
+        thread.name.startswith(("adminme-projections", "adminme-projection-snapshot"))
+        for thread in threading.enumerate()
+    )
 
 
 def test_missing_backup_blocks_activation_but_preserves_safe_reads(
@@ -1367,6 +1453,86 @@ async def test_repeated_shutdown_is_safe_and_log_reopens(tmp_path: Path) -> None
     finally:
         await reopened.close()
         await reopened.close()
+
+
+async def test_cancelled_runtime_stop_settles_real_bus_callback_and_native_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    runtime = AdministrateMeRuntime(settings)
+    await runtime.start()
+    assert runtime.projections is not None
+    assert runtime.events is not None
+    assert runtime.bus is not None
+    projection = runtime.projections._projections["tasks"]  # noqa: SLF001
+    original_apply = projection.apply
+    callback_started = threading.Event()
+    release_callback = threading.Event()
+
+    def _held_apply(envelope: dict[str, Any], connection: Any) -> None:
+        if envelope["type"] == "task.created":
+            callback_started.set()
+            if not release_callback.wait(timeout=5):
+                raise RuntimeError("test did not release projection callback")
+        original_apply(envelope, connection)
+
+    monkeypatch.setattr(projection, "apply", _held_apply)
+    await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=1_780_000_000_000,
+            tenant_id=settings.instance.tenant_id,
+            type="task.created",
+            schema_version=1,
+            occurred_at="2026-05-28T12:00:00Z",
+            source_adapter="runtime-shutdown-test",
+            source_account_id="fixture",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            sensitivity="normal",
+            payload={
+                "task_id": "task-runtime-cancelled-stop",
+                "title": "Shutdown settles callback",
+                "owner_member_id": "member-a",
+            },
+        )
+    )
+    assert await asyncio.to_thread(callback_started.wait, 2)
+
+    stopping = asyncio.create_task(runtime.stop())
+    deadline = time.monotonic() + 2
+    while not runtime.bus._stopping.is_set():  # noqa: SLF001
+        if time.monotonic() >= deadline:
+            release_callback.set()
+            raise AssertionError("runtime did not enter EventBus shutdown")
+        await asyncio.sleep(0.01)
+    stopping.cancel()
+    await asyncio.sleep(0)
+    assert not stopping.done()
+    release_callback.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    assert runtime.bus._closed is True  # noqa: SLF001
+    assert runtime.bus._tasks == {}  # noqa: SLF001
+    with pytest.raises(sqlite3.ProgrammingError):
+        runtime.bus._ckpt_conn.execute("SELECT 1")  # noqa: SLF001
+    assert runtime.projections._closed is True  # noqa: SLF001
+    assert runtime.projections._conns == {}  # noqa: SLF001
+    assert runtime.event_log is not None and runtime.event_log._closed is True  # noqa: SLF001
+    assert not [
+        task
+        for task in asyncio.all_tasks()
+        if task is not asyncio.current_task()
+        and not task.done()
+        and task.get_name().startswith("eventbus:")
+    ]
+    assert not any(
+        thread.name.startswith("adminme-projections")
+        for thread in threading.enumerate()
+    )
+    await runtime.stop()
 
 
 async def test_startup_failure_unwinds_all_open_resources(

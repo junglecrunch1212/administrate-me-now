@@ -37,7 +37,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
@@ -184,6 +184,10 @@ class XlsxWorkbooksProjection(Projection):
         event_log: EventLog,
         event_sink: EventSink,
         query_context_factory: Callable[[], XlsxQueryContext] | None = None,
+        query_context_runner: Callable[
+            [Callable[[XlsxQueryContext, str], None], dict[str, str]], Awaitable[str]
+        ]
+        | None = None,
         debounce_s: float = 5.0,
     ) -> None:
         self._config = config
@@ -191,11 +195,19 @@ class XlsxWorkbooksProjection(Projection):
             raise ValueError("query_context or query_context_factory is required")
         self._ctx = query_context
         self._query_context_factory = query_context_factory
+        self._query_context_runner = query_context_runner
         self._log = event_log
         self._events = event_sink
         self._debounce_s = debounce_s
         self._pending_tasks: dict[str, asyncio.Task[None]] = {}
         self._regen_lock = asyncio.Lock()
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._replaying = False
+        self._replay_dirty_workbooks: set[str] = set()
+        self._pending_trigger_events: dict[str, dict[str, str]] = {
+            OPS_WORKBOOK_NAME: {},
+            FINANCE_WORKBOOK_NAME: {},
+        }
         self._config.xlsx_workbooks_dir.mkdir(parents=True, exist_ok=True)
 
     def _query_context(self) -> XlsxQueryContext:
@@ -214,6 +226,11 @@ class XlsxWorkbooksProjection(Projection):
             await asyncio.gather(*tasks, return_exceptions=True)
         self._pending_tasks.clear()
 
+    def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the runtime loop before worker-side projection callbacks begin."""
+
+        self._event_loop = loop
+
     # ------------------------------------------------------------------
     # Projection contract
     # ------------------------------------------------------------------
@@ -230,7 +247,28 @@ class XlsxWorkbooksProjection(Projection):
         workbook = _TYPE_TO_WORKBOOK.get(event_type)
         if workbook is None:
             return
+        event_id = envelope.get("event_id")
+        if isinstance(event_id, str) and event_id:
+            current = self._pending_trigger_events[workbook].get(str(event_type))
+            if current is None or event_id > current:
+                self._pending_trigger_events[workbook][str(event_type)] = event_id
+        if self._replaying:
+            self._replay_dirty_workbooks.add(workbook)
+            return
         self._schedule_regeneration(workbook)
+
+    def before_replay(self, conn: Any) -> None:
+        del conn
+        self._replaying = True
+        self._replay_dirty_workbooks.clear()
+
+    def after_replay(self, conn: Any, *, succeeded: bool) -> None:
+        del conn
+        dirty = tuple(sorted(self._replay_dirty_workbooks)) if succeeded else ()
+        self._replay_dirty_workbooks.clear()
+        self._replaying = False
+        for workbook in dirty:
+            self._schedule_regeneration(workbook)
 
     # ------------------------------------------------------------------
     # Debounce + regeneration
@@ -238,9 +276,24 @@ class XlsxWorkbooksProjection(Projection):
     def _schedule_regeneration(self, workbook: str) -> None:
         """Cancel any pending regenerate for this workbook and schedule a
         fresh one that fires after ``debounce_s`` seconds of silence."""
+        loop = self._event_loop
         try:
-            loop = asyncio.get_running_loop()
+            running = asyncio.get_running_loop()
         except RuntimeError:
+            running = None
+        if loop is None:
+            if running is None:
+                raise RuntimeError("xlsx regeneration has no bound event loop")
+            loop = running
+            self._event_loop = loop
+        if running is not loop:
+            loop.call_soon_threadsafe(self._schedule_regeneration_on_loop, workbook)
+            return
+        self._schedule_regeneration_on_loop(workbook)
+
+    def _schedule_regeneration_on_loop(self, workbook: str) -> None:
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
             return
 
         existing = self._pending_tasks.get(workbook)
@@ -259,7 +312,7 @@ class XlsxWorkbooksProjection(Projection):
 
         self._pending_tasks[workbook] = loop.create_task(_wait_then_run())
 
-    async def regenerate_now(self, workbook: str) -> None:
+    async def regenerate_now(self, workbook: str, *, emit_event: bool = True) -> None:
         """Bypass the debounce: regenerate ``workbook`` immediately and
         emit ``xlsx.regenerated``. Used by tests and by ``adminme
         projection rebuild xlsx_workbooks``."""
@@ -267,9 +320,15 @@ class XlsxWorkbooksProjection(Projection):
             raise ValueError(f"unknown workbook: {workbook!r}")
 
         async with self._regen_lock:
-            await self._regenerate(workbook)
+            await self._regenerate(workbook, emit_event=emit_event)
 
-    async def _regenerate(self, workbook: str) -> None:
+    async def regenerate_all(self, *, emit_event: bool = True) -> None:
+        """Regenerate both canonical workbooks from one projection snapshot each."""
+
+        for workbook in (OPS_WORKBOOK_NAME, FINANCE_WORKBOOK_NAME):
+            await self.regenerate_now(workbook, emit_event=emit_event)
+
+    async def _regenerate(self, workbook: str, *, emit_event: bool) -> None:
         from adminme.projections.xlsx_workbooks.builders import (
             build_finance_workbook,
             build_ops_workbook,
@@ -279,26 +338,28 @@ class XlsxWorkbooksProjection(Projection):
         )
 
         start_ms = int(time.time() * 1000)
-        query_context = self._query_context()
         path = self._config.xlsx_workbooks_dir / workbook
         lock_path = path.with_suffix(path.suffix + ".lock")
-        last_event_id = await self._log.latest_event_id() or ""
+        trigger_events = dict(self._pending_trigger_events[workbook])
 
-        def _under_lock() -> None:
+        def _under_lock(
+            query_context: XlsxQueryContext,
+            represented_event_id: str,
+        ) -> None:
             with acquire_workbook_lock(lock_path, timeout_s=10.0):
                 if workbook == OPS_WORKBOOK_NAME:
                     build_ops_workbook(
                         path,
                         query_context,
                         tenant_id=self._config.tenant_id,
-                        last_event_id=last_event_id,
+                        last_event_id=represented_event_id,
                     )
                 else:
                     build_finance_workbook(
                         path,
                         query_context,
                         tenant_id=self._config.tenant_id,
-                        last_event_id=last_event_id,
+                        last_event_id=represented_event_id,
                     )
                 # Sidecar must be written INSIDE the same lock as the xlsx
                 # write so reverse (07c-β) cannot observe a workbook whose
@@ -307,34 +368,48 @@ class XlsxWorkbooksProjection(Projection):
                 # sidecar is byte-aligned with the workbook on disk.
                 self._write_sidecar_for(workbook, path)
 
-        await asyncio.to_thread(_under_lock)
+        if self._query_context_runner is not None:
+            last_event_id = await self._query_context_runner(
+                _under_lock,
+                trigger_events,
+            )
+        else:
+            query_context = self._query_context()
+            last_event_id = await self._log.latest_event_id() or ""
+            await asyncio.to_thread(_under_lock, query_context, last_event_id)
+
+        pending = self._pending_trigger_events[workbook]
+        for event_type, event_id in trigger_events.items():
+            if pending.get(event_type) == event_id:
+                pending.pop(event_type, None)
 
         sheets = _BIDIRECTIONAL_SHEETS[workbook] + _READONLY_SHEETS[workbook]
         duration_ms = int(time.time() * 1000) - start_ms
 
-        # Emit xlsx.regenerated as a SYSTEM event per [§2.2] resolution.
-        # This is the ONLY emit in this projection.
-        await self._events.write(
-            EventEnvelope(
-                event_at_ms=int(time.time() * 1000),
-                tenant_id=self._config.tenant_id,
-                type="xlsx.regenerated",
-                schema_version=1,
-                occurred_at=EventEnvelope.now_utc_iso(),
-                source_adapter="xlsx_workbooks",
-                source_account_id="projection",
-                owner_scope="shared:household",
-                visibility_scope="shared:household",
-                sensitivity="normal",
-                payload={
-                    "workbook_name": workbook,
-                    "generated_at": EventEnvelope.now_utc_iso(),
-                    "last_event_id_consumed": last_event_id,
-                    "sheets_regenerated": sheets,
-                    "duration_ms": duration_ms,
-                },
+        if emit_event:
+            # Emit xlsx.regenerated as a SYSTEM event per [§2.2] resolution.
+            # This is the ONLY emit in this projection.
+            await self._events.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=self._config.tenant_id,
+                    type="xlsx.regenerated",
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="xlsx_workbooks",
+                    source_account_id="projection",
+                    owner_scope="shared:household",
+                    visibility_scope="shared:household",
+                    sensitivity="normal",
+                    payload={
+                        "workbook_name": workbook,
+                        "generated_at": EventEnvelope.now_utc_iso(),
+                        "last_event_id_consumed": last_event_id,
+                        "sheets_regenerated": sheets,
+                        "duration_ms": duration_ms,
+                    },
+                )
             )
-        )
 
     # ------------------------------------------------------------------
     # Sidecar

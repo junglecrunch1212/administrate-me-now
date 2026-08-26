@@ -19,16 +19,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
+import sqlcipher3
+from openpyxl import load_workbook
 
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.calendars import CalendarsProjection
@@ -38,14 +43,665 @@ from adminme.projections.money import MoneyProjection
 from adminme.projections.parties import PartiesProjection
 from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProjection
 from adminme.projections.recurrences import RecurrencesProjection
-from adminme.projections.runner import ProjectionRunner
+from adminme.projections.runner import ProjectionRunner, register_default_projections
 from adminme.projections.tasks import TasksProjection
 from adminme.projections.triage import TriageProjection
 from adminme.projections.vector_search import VectorSearchProjection
+from adminme.projections.xlsx_workbooks import OPS_WORKBOOK_NAME
 
 _log = logging.getLogger(__name__)
 
 TEST_KEY = b"z" * 32
+
+
+@pytest.mark.asyncio
+async def test_projection_native_lifecycle_stays_on_one_owner_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No open/apply/replay/query/status/close native call changes threads."""
+
+    instance_dir = tmp_path / "projection-thread-affinity"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(TasksProjection())
+
+    observed: dict[str, list[int]] = {}
+    for method_name in (
+        "_open_projection_db",
+        "_apply_one_for",
+        "_execute_statement",
+        "_collect_row_counts_for",
+        "_apply_replay_batch",
+        "_close_all_connections",
+    ):
+        original = getattr(runner, method_name)
+
+        def _record(
+            *args: Any,
+            _name: str = method_name,
+            _original: Any = original,
+            **kwargs: Any,
+        ):
+            observed.setdefault(_name, []).append(threading.get_ident())
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(runner, method_name, _record)
+
+    loop_thread = threading.get_ident()
+    await runner.start()
+    event_id = await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "task-affinity",
+                "title": "Thread-affinity proof",
+                "owner_member_id": "member-a",
+            },
+            owner_scope="private:member-a",
+        )
+    )
+    await bus.notify(event_id)
+    await _wait_idle(bus, "projection:tasks")
+
+    facade = runner.connection("tasks")
+    assert not isinstance(facade, sqlcipher3.Connection)
+    assert (
+        facade.execute(
+            "SELECT title FROM tasks WHERE task_id='task-affinity'"
+        ).fetchone()[0]
+        == "Thread-affinity proof"
+    )
+    assert (await runner.status())["tasks"]["row_counts"]["tasks"] == 1
+    await runner.rebuild("tasks")
+    assert (
+        facade.execute(
+            "SELECT title FROM tasks WHERE task_id='task-affinity'"
+        ).fetchone()[0]
+        == "Thread-affinity proof"
+    )
+    await runner.stop()
+    await log.close()
+
+    owner_threads = {thread_id for values in observed.values() for thread_id in values}
+    assert len(owner_threads) == 1
+    assert loop_thread not in owner_threads
+    assert all(observed[name] for name in observed)
+    assert not any(
+        thread.name.startswith("adminme-projections")
+        for thread in threading.enumerate()
+    )
+
+
+@pytest.mark.asyncio
+async def test_projection_open_failure_closes_on_owner_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "projection-open-failure"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    observed: dict[str, int] = {}
+    original_connect = sqlcipher3.connect
+
+    class _TrackedConnection:
+        def __init__(self, connection: Any) -> None:
+            self._connection = connection
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._connection, name)
+
+        def close(self) -> None:
+            observed["close"] = threading.get_ident()
+            self._connection.close()
+
+    def _tracked_connect(*args: Any, **kwargs: Any) -> _TrackedConnection:
+        observed["connect"] = threading.get_ident()
+        return _TrackedConnection(original_connect(*args, **kwargs))
+
+    class _RejectedTasksProjection(TasksProjection):
+        def on_connection_opened(self, conn: Any) -> None:
+            del conn
+            observed["hook"] = threading.get_ident()
+            raise RuntimeError("simulated projection open failure")
+
+    monkeypatch.setattr(sqlcipher3, "connect", _tracked_connect)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(_RejectedTasksProjection())
+
+    with pytest.raises(RuntimeError, match="simulated projection open failure"):
+        await runner.start()
+
+    worker = observed["connect"]
+    assert observed == {"connect": worker, "hook": worker, "close": worker}
+    assert worker != threading.get_ident()
+    assert worker not in {thread.ident for thread in threading.enumerate()}
+    await runner.stop()
+    await log.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_staged_rebuild_preserves_published_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "projection-cancelled-rebuild"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    projection = TasksProjection()
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(projection)
+    await runner.start()
+    try:
+        event_id = await log.append(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "task-cancelled-rebuild",
+                    "title": "Published state survives",
+                    "owner_member_id": "member-a",
+                },
+                tenant_id=config.tenant_id,
+                owner_scope="private:member-a",
+            )
+        )
+        await bus.notify(event_id)
+        await _wait_idle(bus, "projection:tasks")
+        original_apply = projection.apply
+        replay_started = threading.Event()
+        release_replay = threading.Event()
+
+        def _held_apply(envelope: dict[str, Any], conn: Any) -> None:
+            replay_started.set()
+            if not release_replay.wait(timeout=5):
+                raise RuntimeError("test did not release staged replay")
+            original_apply(envelope, conn)
+
+        monkeypatch.setattr(projection, "apply", _held_apply)
+        rebuilding = asyncio.create_task(runner.rebuild("tasks"))
+        assert await asyncio.to_thread(replay_started.wait, 2)
+        timer = threading.Timer(0.05, release_replay.set)
+        timer.start()
+        rebuilding.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await rebuilding
+        timer.join(timeout=1)
+
+        row = (
+            runner.connection("tasks")
+            .execute("SELECT title FROM tasks WHERE task_id='task-cancelled-rebuild'")
+            .fetchone()
+        )
+        assert row is not None and row[0] == "Published state survives"
+        assert not list(config.projections_dir.glob("tasks.db.rebuild-*"))
+    finally:
+        await runner.stop()
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_active_rebuild_and_removes_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "projection-stop-during-rebuild"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    projection = TasksProjection()
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(projection)
+    await runner.start()
+    event_id = await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "task-stop-rebuild",
+                "title": "Lifecycle-gated rebuild",
+                "owner_member_id": "member-a",
+            },
+            owner_scope="private:member-a",
+        )
+    )
+    await bus.notify(event_id)
+    await _wait_idle(bus, "projection:tasks")
+    original_apply = projection.apply
+    replay_started = threading.Event()
+    release_replay = threading.Event()
+
+    def _held_apply(envelope: dict[str, Any], conn: Any) -> None:
+        replay_started.set()
+        if not release_replay.wait(timeout=5):
+            raise RuntimeError("test did not release staged replay")
+        original_apply(envelope, conn)
+
+    monkeypatch.setattr(projection, "apply", _held_apply)
+    rebuilding = asyncio.create_task(runner.rebuild("tasks"))
+    assert await asyncio.to_thread(replay_started.wait, 2)
+    stopping = asyncio.create_task(runner.stop())
+    await asyncio.sleep(0.05)
+    assert not stopping.done()
+    release_replay.set()
+    await rebuilding
+    await stopping
+    await log.close()
+
+    assert not list(config.projections_dir.glob("tasks.db.rebuild-*"))
+    assert not any(
+        thread.name.startswith("adminme-projections")
+        for thread in threading.enumerate()
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stop_settles_bus_and_projection_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "projection-cancelled-stop"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(TasksProjection())
+    await runner.start()
+    bus_stop_started = asyncio.Event()
+    release_bus_stop = asyncio.Event()
+    original_bus_stop = bus.stop
+
+    async def _held_bus_stop() -> None:
+        bus_stop_started.set()
+        await release_bus_stop.wait()
+        await original_bus_stop()
+
+    monkeypatch.setattr(bus, "stop", _held_bus_stop)
+    stopping = asyncio.create_task(runner.stop())
+    await asyncio.wait_for(bus_stop_started.wait(), timeout=2)
+    stopping.cancel()
+    await asyncio.sleep(0)
+    assert not stopping.done()
+    release_bus_stop.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    assert bus._closed is True  # noqa: SLF001 - shutdown terminality contract
+    assert bus._tasks == {}  # noqa: SLF001 - no abandoned subscriber task
+    assert runner._closed is True  # noqa: SLF001 - exact terminal lifecycle
+    await runner.stop()
+    await log.close()
+    assert not any(
+        thread.name.startswith("adminme-projections")
+        for thread in threading.enumerate()
+    )
+
+
+@pytest.mark.asyncio
+async def test_public_projection_reads_are_query_only_and_cannot_escape_handle(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "projection-read-boundary"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(TasksProjection())
+    await runner.start()
+    try:
+        facade = runner.connection("tasks")
+        with pytest.raises(sqlcipher3.DatabaseError, match="not authorized"):
+            facade.execute("CREATE TABLE escaped(value TEXT)")
+        with pytest.raises(sqlcipher3.DatabaseError, match="not authorized"):
+            facade.execute("INSERT INTO tasks(task_id, tenant_id) VALUES ('x', 't')")
+        with pytest.raises(RuntimeError, match="unsupported live object"):
+            await runner.read("tasks", lambda connection: connection)
+
+        assert await runner.read("tasks", lambda connection: connection.close()) is None
+        assert facade.execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    finally:
+        await runner.stop()
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_detached_snapshot_render_does_not_monopolize_projection_worker(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "projection-detached-snapshot"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(TasksProjection())
+    await runner.start()
+    render_started = threading.Event()
+    release_render = threading.Event()
+
+    def _held_render(connections: dict[str, sqlcipher3.Connection]) -> None:
+        assert (
+            connections["tasks"].execute("SELECT count(*) FROM tasks").fetchone()[0]
+            == 0
+        )
+        render_started.set()
+        if not release_render.wait(timeout=5):
+            raise RuntimeError("test did not release detached renderer")
+
+    rendering = asyncio.create_task(runner.read_snapshot(["tasks"], _held_render))
+    assert await asyncio.to_thread(render_started.wait, 2)
+    try:
+        started = time.monotonic()
+        assert (
+            runner.connection("tasks")
+            .execute("SELECT count(*) FROM tasks")
+            .fetchone()[0]
+            == 0
+        )
+        assert time.monotonic() - started < 0.25
+
+        event_id = await log.append(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "task-during-render",
+                    "title": "Projection worker remains live",
+                    "owner_member_id": "member-a",
+                },
+                owner_scope="private:member-a",
+            )
+        )
+        await bus.notify(event_id)
+        await _wait_idle(bus, "projection:tasks")
+    finally:
+        release_render.set()
+        await rendering
+        await runner.stop()
+        await log.close()
+
+    assert not list(config.projections_dir.glob(".projection-snapshot-*"))
+
+
+@pytest.mark.asyncio
+async def test_snapshot_waits_for_rebuild_and_copies_published_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "projection-snapshot-during-rebuild"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    projection = TasksProjection()
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(projection)
+    await runner.start()
+    try:
+        event_id = await log.append(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "task-snapshot-rebuild",
+                    "title": "Rebuilt state wins",
+                    "owner_member_id": "member-a",
+                },
+                owner_scope="private:member-a",
+            )
+        )
+        await bus.notify(event_id)
+        await _wait_idle(bus, "projection:tasks")
+        runner._unsafe_maintenance_connection("tasks").execute(  # noqa: SLF001
+            "DELETE FROM tasks WHERE task_id='task-snapshot-rebuild'"
+        )
+
+        original_apply = projection.apply
+        replay_started = threading.Event()
+        release_replay = threading.Event()
+
+        def _held_apply(envelope: dict[str, Any], conn: Any) -> None:
+            replay_started.set()
+            if not release_replay.wait(timeout=5):
+                raise RuntimeError("test did not release staged replay")
+            original_apply(envelope, conn)
+
+        monkeypatch.setattr(projection, "apply", _held_apply)
+        rebuilding = asyncio.create_task(runner.rebuild("tasks"))
+        assert await asyncio.to_thread(replay_started.wait, 2)
+        snapshot = asyncio.create_task(
+            runner.read_snapshot(
+                ["tasks"],
+                lambda connections: (
+                    connections["tasks"]
+                    .execute(
+                        "SELECT count(*) FROM tasks "
+                        "WHERE task_id='task-snapshot-rebuild'"
+                    )
+                    .fetchone()[0]
+                ),
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not snapshot.done()
+
+        release_replay.set()
+        await rebuilding
+        assert await snapshot == 1
+    finally:
+        await runner.stop()
+        await log.close()
+
+    assert not list(config.projections_dir.glob(".projection-snapshot-*"))
+
+
+@pytest.mark.asyncio
+async def test_ops_workbook_snapshot_waits_for_published_rebuild(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "xlsx-snapshot-during-rebuild"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    xlsx = register_default_projections(runner, config, log, events)
+    xlsx._debounce_s = 60  # noqa: SLF001 - keep this proof on the explicit call
+    await runner.start()
+    try:
+        event_id = await events.write(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "task-xlsx-rebuild",
+                    "title": "Workbook represents rebuilt state",
+                    "owner_member_id": "member-a",
+                },
+                tenant_id=config.tenant_id,
+                owner_scope="private:member-a",
+            )
+        )
+        await _wait_idle(bus, "projection:tasks")
+        await _wait_idle(bus, "projection:xlsx_workbooks")
+        runner._unsafe_maintenance_connection("tasks").execute(  # noqa: SLF001
+            "DELETE FROM tasks WHERE task_id='task-xlsx-rebuild'"
+        )
+        projection = runner._projections["tasks"]  # noqa: SLF001
+        original_apply = projection.apply
+        replay_started = threading.Event()
+        release_replay = threading.Event()
+
+        def _held_apply(envelope: dict[str, Any], conn: Any) -> None:
+            replay_started.set()
+            if not release_replay.wait(timeout=5):
+                raise RuntimeError("test did not release staged replay")
+            original_apply(envelope, conn)
+
+        monkeypatch.setattr(projection, "apply", _held_apply)
+        rebuilding = asyncio.create_task(runner.rebuild("tasks"))
+        assert await asyncio.to_thread(replay_started.wait, 2)
+        regenerating = asyncio.create_task(
+            xlsx.regenerate_now(OPS_WORKBOOK_NAME, emit_event=False)
+        )
+        await asyncio.sleep(0.05)
+        assert not regenerating.done()
+
+        release_replay.set()
+        await rebuilding
+        await regenerating
+        assert (
+            runner.connection("tasks")
+            .execute("SELECT count(*) FROM tasks WHERE task_id='task-xlsx-rebuild'")
+            .fetchone()[0]
+            == 1
+        )
+        sidecar = json.loads(
+            (
+                config.xlsx_workbooks_dir.parent
+                / ".xlsx-state"
+                / OPS_WORKBOOK_NAME
+                / "Tasks.json"
+            ).read_text("utf-8")
+        )
+        assert any(row.get("task_id") == "task-xlsx-rebuild" for row in sidecar["rows"])
+        workbook = load_workbook(
+            config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME,
+            data_only=True,
+            read_only=True,
+        )
+        try:
+            assert any(
+                "task-xlsx-rebuild" in row
+                for row in workbook["Tasks"].iter_rows(values_only=True)
+            )
+        finally:
+            workbook.close()
+        assert event_id
+    finally:
+        await runner.stop()
+        await log.close()
+
+    assert not list(config.projections_dir.glob(".projection-snapshot-*"))
+
+
+@pytest.mark.asyncio
+async def test_worker_side_xlsx_apply_schedules_real_regeneration(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "worker-xlsx-regeneration"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    xlsx = register_default_projections(runner, config, log, events)
+    xlsx._debounce_s = 0.01  # noqa: SLF001 - production scheduling contract
+    await runner.start()
+    try:
+        await events.write(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "task-worker-xlsx",
+                    "title": "Worker scheduled workbook",
+                    "owner_member_id": "member-a",
+                },
+                owner_scope="private:member-a",
+            )
+        )
+        await _wait_idle(bus, "projection:tasks")
+        await _wait_idle(bus, "projection:xlsx_workbooks")
+        deadline = time.monotonic() + 5
+        while OPS_WORKBOOK_NAME not in xlsx._pending_tasks:  # noqa: SLF001
+            if time.monotonic() >= deadline:
+                raise AssertionError("worker-side xlsx apply did not schedule")
+            await asyncio.sleep(0.01)
+        await xlsx._pending_tasks[OPS_WORKBOOK_NAME]  # noqa: SLF001
+
+        assert (config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME).is_file()
+        assert (
+            config.xlsx_workbooks_dir.parent
+            / ".xlsx-state"
+            / OPS_WORKBOOK_NAME
+            / "Tasks.json"
+        ).is_file()
+        generated = [
+            event async for event in log.read_since(types=["xlsx.regenerated"])
+        ]
+        assert len(generated) == 1
+        assert generated[0]["payload"]["workbook_name"] == OPS_WORKBOOK_NAME
+    finally:
+        await runner.stop()
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_xlsx_waits_for_source_checkpoint_before_claiming_watermark(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "xlsx-source-watermark"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    xlsx = register_default_projections(runner, config, log, events)
+    xlsx._debounce_s = 60.0  # noqa: SLF001 - isolate explicit regeneration
+    await runner.start()
+    try:
+        # Let each start-triggered empty drain return to its notification wait.
+        await asyncio.sleep(0.1)
+        event_id = await log.append(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "task-watermark",
+                    "title": "Represented source checkpoint",
+                    "owner_member_id": "member-a",
+                },
+                tenant_id=config.tenant_id,
+                owner_scope="private:member-a",
+            )
+        )
+        regeneration = asyncio.create_task(xlsx.regenerate_now(OPS_WORKBOOK_NAME))
+        await asyncio.sleep(0.05)
+        assert not regeneration.done()
+        assert not (config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME).exists()
+
+        await bus.notify(event_id)
+        await _wait_idle(bus, "projection:tasks")
+        await regeneration
+
+        sidecar = json.loads(
+            (
+                config.xlsx_workbooks_dir.parent
+                / ".xlsx-state"
+                / OPS_WORKBOOK_NAME
+                / "Tasks.json"
+            ).read_text("utf-8")
+        )
+        assert any(
+            row.get("title") == "Represented source checkpoint"
+            for row in sidecar["rows"]
+        )
+        generated = [
+            event async for event in log.read_since(types=["xlsx.regenerated"])
+        ]
+        assert generated[-1]["payload"]["last_event_id_consumed"] == event_id
+    finally:
+        await runner.stop()
+        await log.close()
 
 
 def _envelope(
@@ -345,7 +1001,7 @@ async def test_version_change_replays_triage_before_live_delivery(
         local_confirmation_id,
         local_receipt_id,
     )
-    runner_v7.connection("triage").execute(
+    runner_v7._unsafe_maintenance_connection("triage").execute(  # noqa: SLF001
         "UPDATE triage_items SET confirmation_event_id=NULL, "
         "confirmation_request_id=NULL"
     )
@@ -365,11 +1021,17 @@ async def test_version_change_replays_triage_before_live_delivery(
     monkeypatch.setattr(failed_runner, "_replay_through", interrupted_replay)
     with pytest.raises(RuntimeError, match="interrupted version replay"):
         await failed_runner.start()
-    interrupted_version = (
-        failed_runner.connection("triage")
-        .execute("SELECT value FROM _projection_meta WHERE key='version'")
-        .fetchone()[0]
+    interrupted_conn = sqlcipher3.connect(
+        str(config.projection_db_path("triage")),
+        isolation_level=None,
     )
+    try:
+        interrupted_conn.execute(f"PRAGMA key = \"x'{TEST_KEY.hex()}'\"")
+        interrupted_version = interrupted_conn.execute(
+            "SELECT value FROM _projection_meta WHERE key='version'"
+        ).fetchone()[0]
+    finally:
+        interrupted_conn.close()
     assert interrupted_version == "7"
     await failed_runner.stop()
     await failed_log.close()

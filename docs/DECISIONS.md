@@ -126,13 +126,33 @@ The SQLCipher binding is **`sqlcipher3==0.6.2`**, not `pysqlcipher3`. Import nam
 
 Every current implementation must use the exact locked `sqlcipher3` distribution in `pyproject.toml` and `import sqlcipher3` in Python. Historical prompt text remains provenance, not an instruction to reintroduce an unavailable platform artifact.
 
-### D14 — Event log async model
+### D14 — SQLCipher async and native-thread ownership model
 
-**Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** seam left open by architecture-summary.md §3 ("In-process event bus. Asyncio queues with durable per-subscriber offsets") and BUILD.md §L2 not specifying the sync-vs-async shape of the SQLCipher connection.
+**Decided:** 2026-04-23. **Updated:** 2026-08-26. **Status:** CURRENT; FORMER DEFAULT-EXECUTOR PRESCRIPTION SUPERSEDED. **Resolves:** seam left open by architecture-summary.md §3 ("In-process event bus. Asyncio queues with durable per-subscriber offsets") and BUILD.md §L2 not specifying the sync-vs-async shape or native-thread ownership of SQLCipher connections.
 
-The EventLog exposes an async API (`async def append`, `async def read_since`, etc.) implemented over a **synchronous SQLCipher connection dispatched through `asyncio.to_thread`** and guarded by an `asyncio.Lock` for writes. Rationale: there is no drop-in async SQLCipher driver for Python in 2026; `aiosqlite` does not support SQLCipher, and `sqlcipher3` is DB-API sync-only. Wrapping sync calls in `to_thread` keeps the event loop responsive without pulling in a second C extension or process model.
+The public EventLog and ProjectionRunner APIs remain async over the synchronous
+`sqlcipher3` DB-API driver. A persistent native connection, however, is created,
+migrated, queried, written, checkpointed, and closed only on its owning
+single-worker executor. `asyncio.to_thread` is not an ownership boundary: its
+default executor may run successive calls on different threads. That earlier
+pattern was observed to crash a production-scale encrypted replay inside the
+native SQLCipher cursor.
 
-Later prompts (projections, pipelines, product APIs) use the same pattern: async public API, sync DB driver, `to_thread` boundary. Any prompt proposing `aiosqlite + sqlcipher` or a persistent background thread pool should be rejected — neither is necessary and both add complexity without benefit.
+EventLog owns one dedicated worker for its connection. ProjectionRunner owns
+one serialized dedicated worker for all of its persistent projection
+connections. Compatibility query facades buffer rows and cursor metadata; they
+never return a native connection or cursor. Slow workbook rendering uses
+private encrypted, query-only projection snapshots on a separate bounded
+worker after the persistent owner has checkpointed and copied them, so neither
+the raw persistent handles nor the rendering workload escape onto the runtime
+event loop. Connection creation and every failure/close path use the same owner
+worker, and shutdown settles already submitted native work before terminating
+the executor.
+
+This **SUPERSEDES** only the former `asyncio.to_thread` and "reject persistent
+workers" prescription. It **PRESERVES** the async API, SQLCipher binding,
+append-only event contract, deterministic projections, and absence of a second
+database dependency or process-level data service.
 
 ### D15 — Instance-path resolution discipline (formalization)
 

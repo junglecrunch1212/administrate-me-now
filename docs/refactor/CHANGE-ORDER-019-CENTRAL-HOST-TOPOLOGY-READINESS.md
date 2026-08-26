@@ -1,6 +1,6 @@
 # Change Order 019 — Central Host topology and service-channel readiness
 
-Status: **PHASE A IMPLEMENTED; PR REVIEW AND PHASE B OWNER ACTIONS PENDING**
+Status: **PHASE A RECOVERY IMPLEMENTATION COMPLETE; PHASE B BLOCKED ON CANDIDATE-ATTESTATION, UPDATER-CONSUMED FRESH REHEARSAL, AND CRASH-RECOVERABLE REPLACEMENT; OWNER ACTIONS NOT AUTHORIZED**
 
 Date: 2026-08-26
 
@@ -222,3 +222,32 @@ AC-47 owns production-composition proof. Detailed content-free Phase 0/Phase A
 evidence, the Human Task Register, and the post-merge Phase B activation,
 verification, abort, and rollback packet are in
 `evidence/co-019-central-host-topology-readiness.md`.
+
+Phase-A implementation of the future Phase-B recovery gate **MODERNIZES** the pre-switch backup proof without
+changing source-of-truth or activation authority. Persistent EventLog and
+projection SQLCipher handles now remain on one native owner worker from open
+through close; rebuild publishes a staged projection only after replay through
+a captured event watermark. The non-replacing rehearsal uses one
+activity-lock-owning guardian to supervise distinct extraction and replay
+workers, reap them, and destroy the private plaintext payload before reporting
+success. The controller then reaps the guardian, removes validated control
+residue, and writes only content-free evidence. This **PRESERVES** the encrypted
+backup and deterministic replay contracts. It constructs no provider
+component, uses a rejecting event sink, and reports external effects as
+`not_evaluated`, preserving provider-effect gating without presenting offline
+replay as a live effect audit.
+It narrowly **SUPERSEDES** D14's former default-executor prescription.
+
+The rehearsal does not evaluate live services, topology, provider or OpenClaw
+readiness, full Doctor, projection divergence against backed-up derived state,
+release immutability, rollback compatibility, or automatic rollback
+eligibility. HTR-05 is therefore two-stage: the preliminary exact-candidate
+rehearsal precedes HTR-08; the updater must create and rehearse its own exact
+fresh backup and prove predecessor compatibility after backup quiescence and
+before any active candidate or OpenClaw selector, plugin-registration, or
+release-pointer mutation, with full Doctor still post-switch. The current
+attestation writer is active-predecessor-bound and cannot issue the required
+candidate-pending HTR-08 evidence, and destructive replacement is not yet
+crash-recoverable. Until those paths are implemented and consume this ordering,
+HTR-08, HTR-09, and deployment readiness remain executably blocked; owner
+authorization alone cannot make the activation packet runnable.

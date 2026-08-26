@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import os
 import sqlite3
 import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from adminme.events.bus import EventBus
 from adminme.runtime.application import RuntimeSettings, create_application
-from bootstrap.backup_restore import BackupManager
+from bootstrap import backup_restore as backup_restore_module
+from bootstrap.backup_restore import BackupError, BackupManager
 from bootstrap.bridge_enrollment import (
     BridgeEnrollmentManager,
     MemberBridgeInstaller,
@@ -76,6 +83,9 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     (plugin_skills / "generated-skill").symlink_to(REPO_ROOT / "packs" / "skills")
     transient = paths.instance_dir / "events" / "events.db-shm"
     transient.write_bytes(b"transient sqlite state")
+    content_canary = paths.instance_dir / "data" / "rehearsal-content-canary.bin"
+    content_canary.parent.mkdir(parents=True, exist_ok=True)
+    content_canary.write_bytes(b"neutral-content-must-not-enter-rehearsal-receipt")
     original_read_bytes = Path.read_bytes
 
     def remove_transient_on_read(path: Path):
@@ -87,6 +97,175 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
     backup = manager.create()
     assert backup["encrypted"] is True
+    predecessor_commit = "1" * 40
+    predecessor_release = paths.app_dir / "releases" / predecessor_commit
+    predecessor_release.mkdir(parents=True)
+    (predecessor_release / ".administrateme-source-commit").write_text(
+        predecessor_commit,
+        encoding="utf-8",
+    )
+    predecessor_pointer = paths.app_dir / "current-release.json"
+    predecessor_pointer.write_text(
+        json.dumps(
+            {
+                "commit": predecessor_commit,
+                "path": str(predecessor_release),
+            }
+        ),
+        encoding="utf-8",
+    )
+    predecessor_pointer.chmod(0o600)
+    candidate = tmp_path / "clean-rehearsal-candidate"
+    candidate.mkdir()
+    (candidate / "candidate.txt").write_text("reviewed candidate\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(candidate)], check=True)
+    subprocess.run(["git", "-C", str(candidate), "add", "candidate.txt"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate),
+            "-c",
+            "user.name=Rehearsal Fixture",
+            "-c",
+            "user.email=rehearsal-fixture.invalid",
+            "commit",
+            "-qm",
+            "candidate",
+        ],
+        check=True,
+    )
+    live_sentinel = paths.instance_dir / "rehearsal-live-sentinel"
+    live_sentinel.write_text("unchanged", encoding="utf-8")
+
+    def _service_manager_must_not_be_constructed(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("rehearsal constructed ServiceManager")
+
+    monkeypatch.setattr(
+        "bootstrap.backup_restore.ServiceManager",
+        _service_manager_must_not_be_constructed,
+    )
+    rehearsal = BackupManager(paths, root=REPO_ROOT, test_mode=True).rehearse(
+        Path(backup["path"]),
+        candidate=candidate,
+    )
+    assert rehearsal["status"] == "healthy"
+    assert rehearsal["artifact"]["authenticated"] is True
+    assert rehearsal["replay"]["projections_rebuilt"] == 15
+    assert rehearsal["workbooks"]["rebuilt_count"] == 2
+    assert rehearsal["workbooks"]["bidirectional_sidecar_count"] == 8
+    assert rehearsal["workbooks"]["readonly_sidecar_count"] == 9
+    assert rehearsal["offline_replay_checks"]["live_checks"] == "not_evaluated"
+    assert rehearsal["offline_replay_checks"]["activation_eligible"] is False
+    assert rehearsal["offline_replay_checks"]["event_sink_mode"] == "rejecting"
+    assert rehearsal["offline_replay_checks"]["external_effects"] == "not_evaluated"
+    assert rehearsal["isolation"]["active_state_replaced"] is False
+    assert rehearsal["isolation"]["service_manager_constructed"] is False
+    assert rehearsal["isolation"]["staging_destroyed"] is True
+    assert rehearsal["isolation"]["plaintext_stage_destroyed"] is True
+    assert rehearsal["source_events_appended"] == 0
+    assert rehearsal["content_emitted_in_receipt"] is False
+    assert rehearsal["candidate"]["controller_coordinate_matches"] is False
+    assert rehearsal["candidate"]["execution_immutability"] == "not_evaluated"
+    assert live_sentinel.read_text("utf-8") == "unchanged"
+
+    cli_rehearsal = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "rehearse-restore",
+            str(backup["path"]),
+            str(candidate),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    cli_receipt = json.loads(cli_rehearsal.stdout)
+    assert cli_receipt["status"] == "healthy"
+    assert cli_receipt["isolation"]["staging_destroyed"] is True
+    assert cli_receipt["offline_replay_checks"]["activation_eligible"] is False
+    receipts = list(paths.backup_dir.glob("backup-rehearsal-*.json"))
+    assert len(receipts) == 2
+    assert all(receipt.stat().st_mode & 0o077 == 0 for receipt in receipts)
+    assert all(
+        b"neutral-content-must-not-enter-rehearsal-receipt" not in receipt.read_bytes()
+        for receipt in receipts
+    )
+
+    tampered_path = paths.backup_dir / "tampered.ambackup"
+    tampered_envelope = json.loads(Path(backup["path"]).read_text("utf-8"))
+    tampered_ciphertext = bytearray(
+        base64.b64decode(tampered_envelope["ciphertext"], validate=True)
+    )
+    tampered_ciphertext[-1] ^= 0x01
+    tampered_envelope["ciphertext"] = base64.b64encode(tampered_ciphertext).decode()
+    tampered_path.write_text(
+        json.dumps(tampered_envelope, sort_keys=True),
+        encoding="utf-8",
+    )
+    tampered_path.chmod(0o600)
+    with pytest.raises(BackupError, match="backup_rehearsal_validation_failed"):
+        BackupManager(paths, root=REPO_ROOT, test_mode=True).rehearse(
+            tampered_path,
+            candidate=candidate,
+        )
+    instance_fingerprint = hashlib.sha256(str(paths.root).encode()).hexdigest()
+    rehearsal_parent = Path(tempfile.gettempdir()) / (
+        f"administrateme-backup-rehearsal-{instance_fingerprint[:16]}"
+    )
+    assert not list(rehearsal_parent.glob("run-*"))
+    assert list(paths.backup_dir.glob("backup-rehearsal-*.json")) == receipts
+
+    original_fsync_private_directory = (
+        backup_restore_module._fsync_private_directory  # noqa: SLF001
+    )
+
+    def _fail_rehearsal_parent_fsync(path: Path, *, label: str) -> None:
+        if path == rehearsal_parent:
+            raise OSError("simulated rehearsal parent fsync failure")
+        original_fsync_private_directory(path, label=label)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            backup_restore_module,
+            "_fsync_private_directory",
+            _fail_rehearsal_parent_fsync,
+        )
+        with pytest.raises(OSError, match="rehearsal parent fsync failure"):
+            BackupManager(paths, root=REPO_ROOT, test_mode=True).rehearse(
+                Path(backup["path"]),
+                candidate=candidate,
+            )
+    assert not list(rehearsal_parent.glob("run-*"))
+    assert list(paths.backup_dir.glob("backup-rehearsal-*.json")) == receipts
+
+    monkeypatch.setattr(
+        "bootstrap.backup_restore.ServiceManager",
+        ServiceManager,
+    )
+    bus_closed_before_live_replace = False
+    original_bus_stop = EventBus.stop
+    original_replace = os.replace
+
+    async def _tracked_bus_stop(bus: EventBus) -> None:
+        nonlocal bus_closed_before_live_replace
+        await original_bus_stop(bus)
+        bus_closed_before_live_replace = bus._closed  # noqa: SLF001
+
+    def _assert_bus_closed_before_live_replace(source, destination) -> None:
+        if Path(source) == paths.instance_dir:
+            assert bus_closed_before_live_replace
+        original_replace(source, destination)
+
+    monkeypatch.setattr(EventBus, "stop", _tracked_bus_stop)
+    monkeypatch.setattr(os, "replace", _assert_bus_closed_before_live_replace)
     restored = manager.restore(Path(backup["path"]))
     assert restored["projections_rebuilt"] == 15
     assert restored["workbooks_rebuilt"] is True

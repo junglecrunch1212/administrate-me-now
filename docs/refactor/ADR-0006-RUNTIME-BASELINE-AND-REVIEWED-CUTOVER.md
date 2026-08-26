@@ -46,7 +46,10 @@ named by `current-release.json`. A change to the Python or Node compatibility
 range, preferred version, or Homebrew formula fails before
 service replacement unless `--approve-runtime-migration` is supplied. That
 flag is valid only after the candidate passes the full release suite on 3.14/
-24, a clean isolated bootstrap, encrypted backup/restore and projection replay,
+24, a clean isolated bootstrap, encrypted backup/restore and an exact-candidate
+non-replacing rehearsal whose guardian-supervised distinct workers prove
+affinity-safe fixed-watermark projection replay and workbook/sidecar
+regeneration,
 the pinned OpenClaw build/registration tests, browser simulation, and a staged
 rollback rehearsal. The actual family instance then still requires a separate
 operator decision.

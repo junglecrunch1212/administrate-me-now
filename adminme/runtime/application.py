@@ -6,9 +6,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from functools import partial
@@ -82,8 +83,7 @@ from adminme.products.core.main import router as core_router
 from adminme.products.member.main import router as member_router
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw.main import router as openclaw_router
-from adminme.projections.base import Projection
-from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
+from adminme.projections.runner import ProjectionRunner, register_default_projections
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.settings_control import SettingsControlStore
@@ -95,6 +95,8 @@ from adminme.source_assessment_recovery import (
     recovery_batch_fingerprint,
 )
 from adminme.temporary_surfaces import TemporarySurfaceStore
+
+_log = logging.getLogger(__name__)
 
 CapabilityState = Literal[
     "healthy", "observation_only", "degraded", "blocked", "disabled"
@@ -615,6 +617,7 @@ class AdministrateMeRuntime:
         self.standing_orders: dict[str, dict[str, Any]] = {}
         self.started = False
         self.stopping = False
+        self._stop_task: asyncio.Task[None] | None = None
         self.startup_error: str | None = None
         self._observation_active = True
         self.openclaw_state = "degraded" if settings.openclaw_enabled else "unavailable"
@@ -692,20 +695,12 @@ class AdministrateMeRuntime:
                 self.settings.instance,
                 encryption_key=self.settings.encryption_key,
             )
-            for projection_class in DEFAULT_PROJECTION_CLASSES:
-                projection: Projection
-                if projection_class is XlsxWorkbooksProjection:
-                    projection = XlsxWorkbooksProjection(
-                        self.settings.instance,
-                        None,
-                        event_log=self.event_log,
-                        event_sink=self.events,
-                        query_context_factory=self._xlsx_query_context,
-                    )
-                    self.xlsx_projection = projection
-                else:
-                    projection = projection_class()
-                self.projections.register(projection)
+            self.xlsx_projection = register_default_projections(
+                self.projections,
+                self.settings.instance,
+                self.event_log,
+                self.events,
+            )
 
             skill_runtime = (
                 build_fixture_runtime(
@@ -836,39 +831,94 @@ class AdministrateMeRuntime:
             raise
 
     async def stop(self) -> None:
-        if self.stopping:
+        cleanup_task = self._stop_task
+        if cleanup_task is not None and cleanup_task.done():
             return
-        self.stopping = True
+        if cleanup_task is None:
+            self.stopping = True
+            cleanup_task = asyncio.create_task(
+                self._stop_components(),
+                name="administrateme-runtime-stop",
+            )
+            self._stop_task = cleanup_task
+        cancellation: asyncio.CancelledError | None = None
+        cleanup_failure: BaseException | None = None
         try:
-            if self._source_assurance_refresh_task is not None:
-                self._source_assurance_refresh_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await self._source_assurance_refresh_task
-                self._source_assurance_refresh_task = None
-            if self.xlsx_reverse is not None:
-                await self.xlsx_reverse.stop()
-                self.xlsx_reverse = None
-            if self.adapters is not None:
-                await self.adapters.stop()
-            if self.adapter_cursor_store is not None:
-                self.adapter_cursor_store.close()
-                self.adapter_cursor_store = None
-            if self.openclaw_approval_store is not None:
-                self.openclaw_approval_store.close()
-                self.openclaw_approval_store = None
-            if self.events is not None:
-                self.events.stop_accepting()
-            if self.pipelines is not None:
-                await self.pipelines.stop()
-            if self.bus is not None:
-                await self.bus.stop()
-            if self.projections is not None:
-                await self.projections.stop(stop_bus=False)
-            if self.event_log is not None:
-                await self.event_log.close()
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                except BaseException:
+                    break
+            try:
+                cleanup_task.result()
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+            except BaseException as exc:
+                cleanup_failure = exc
         finally:
             set_default_event_sink(None)
             self.started = False
+        if cancellation is not None:
+            raise cancellation
+        if cleanup_failure is not None:
+            raise cleanup_failure
+
+    async def _stop_components(self) -> None:
+        """Settle every owned resource even when one shutdown step fails."""
+
+        first_failure: BaseException | None = None
+
+        async def _await_step(label: str, awaitable: Any) -> None:
+            nonlocal first_failure
+            try:
+                await awaitable
+            except BaseException as exc:
+                first_failure = first_failure or exc
+                _log.exception("runtime shutdown step failed: %s", label)
+
+        def _sync_step(label: str, callback: Any) -> None:
+            nonlocal first_failure
+            try:
+                callback()
+            except BaseException as exc:
+                first_failure = first_failure or exc
+                _log.exception("runtime shutdown step failed: %s", label)
+
+        if self._source_assurance_refresh_task is not None:
+            self._source_assurance_refresh_task.cancel()
+            try:
+                await self._source_assurance_refresh_task
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                first_failure = first_failure or exc
+                _log.exception("runtime shutdown step failed: source assurance refresh")
+            self._source_assurance_refresh_task = None
+        if self.xlsx_reverse is not None:
+            await _await_step("xlsx reverse", self.xlsx_reverse.stop())
+            self.xlsx_reverse = None
+        if self.adapters is not None:
+            await _await_step("adapter supervisor", self.adapters.stop())
+        if self.adapter_cursor_store is not None:
+            _sync_step("adapter cursor store", self.adapter_cursor_store.close)
+            self.adapter_cursor_store = None
+        if self.openclaw_approval_store is not None:
+            _sync_step("OpenClaw approval store", self.openclaw_approval_store.close)
+            self.openclaw_approval_store = None
+        if self.events is not None:
+            _sync_step("event admission", self.events.stop_accepting)
+        if self.pipelines is not None:
+            await _await_step("pipelines", self.pipelines.stop())
+        if self.projections is not None:
+            await _await_step("projections and bus", self.projections.stop())
+        elif self.bus is not None:
+            await _await_step("event bus", self.bus.stop())
+        if self.event_log is not None:
+            await _await_step("event log", self.event_log.close())
+        if first_failure is not None:
+            raise first_failure
 
     def _require_events(self) -> EventWriter:
         if self.events is None:

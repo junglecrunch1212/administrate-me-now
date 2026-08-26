@@ -103,7 +103,8 @@ async def test_multiple_events_coalesce(projection_rig: dict[str, Any]) -> None:
     projection = projection_rig["projection"]
     call_count = 0
 
-    async def fake_regen(workbook: str) -> None:
+    async def fake_regen(workbook: str, *, emit_event: bool = True) -> None:
+        assert emit_event is True
         nonlocal call_count
         call_count += 1
 
@@ -122,7 +123,8 @@ async def test_debounce_cancels_on_new_event(projection_rig: dict[str, Any]) -> 
     projection = projection_rig["projection"]
     fired_at: list[float] = []
 
-    async def fake_regen(workbook: str) -> None:
+    async def fake_regen(workbook: str, *, emit_event: bool = True) -> None:
+        assert emit_event is True
         fired_at.append(time.monotonic())
 
     projection._regenerate = fake_regen  # type: ignore[method-assign]
@@ -149,7 +151,8 @@ async def test_regenerate_now_bypasses_debounce(
     projection = projection_rig["projection"]
     calls: list[tuple[str, str]] = []
 
-    async def fake_regen(workbook: str) -> None:
+    async def fake_regen(workbook: str, *, emit_event: bool = True) -> None:
+        assert emit_event is True
         calls.append(("regen", workbook))
 
     projection._regenerate = fake_regen  # type: ignore[method-assign]
