@@ -56,8 +56,11 @@ class AdapterCursorStore:
                 error_count INTEGER NOT NULL DEFAULT 0,
                 circuit_state TEXT NOT NULL DEFAULT 'closed'
                     CHECK (circuit_state IN ('closed','open','half_open')),
-                retry_not_before_ms INTEGER,
                 updated_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS adapter_retry_state (
+                adapter_id TEXT PRIMARY KEY,
+                retry_not_before_ms INTEGER
             );
             CREATE TABLE IF NOT EXISTS adapter_dedupe (
                 adapter_id TEXT NOT NULL,
@@ -75,10 +78,29 @@ class AdapterCursorStore:
             str(row[1])
             for row in self._conn.execute("PRAGMA table_info(adapter_cursors)")
         }
-        if "retry_not_before_ms" not in columns:
-            self._conn.execute(
-                "ALTER TABLE adapter_cursors ADD COLUMN retry_not_before_ms INTEGER"
-            )
+        if "retry_not_before_ms" in columns:
+            # Generation 21 added retry timing to the predecessor-owned cursor
+            # table.  Its ``SELECT *`` reader cannot tolerate that extra column
+            # after rollback.  Move only the content-free timing value into a
+            # companion table and restore the predecessor-readable schema in one
+            # transaction before any adapter can use the store.
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    "INSERT INTO adapter_retry_state "
+                    "(adapter_id, retry_not_before_ms) "
+                    "SELECT adapter_id, retry_not_before_ms FROM adapter_cursors "
+                    "WHERE retry_not_before_ms IS NOT NULL "
+                    "ON CONFLICT(adapter_id) DO UPDATE SET "
+                    "retry_not_before_ms=excluded.retry_not_before_ms"
+                )
+                self._conn.execute(
+                    "ALTER TABLE adapter_cursors DROP COLUMN retry_not_before_ms"
+                )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     @staticmethod
     def _now_ms() -> int:
@@ -100,7 +122,13 @@ class AdapterCursorStore:
         with self._lock:
             self._ensure(adapter_id, now_ms)
             row = self._conn.execute(
-                "SELECT * FROM adapter_cursors WHERE adapter_id=?", (adapter_id,)
+                "SELECT c.adapter_id, c.provider_watermark, c.lease_owner, "
+                "c.lease_until_ms, c.error_count, c.circuit_state, "
+                "r.retry_not_before_ms, c.updated_at_ms "
+                "FROM adapter_cursors AS c "
+                "LEFT JOIN adapter_retry_state AS r USING (adapter_id) "
+                "WHERE c.adapter_id=?",
+                (adapter_id,),
             ).fetchone()
         assert row is not None
         return AdapterCursor(**dict(row))
@@ -121,9 +149,11 @@ class AdapterCursorStore:
             try:
                 self._ensure(adapter_id, now)
                 row = self._conn.execute(
-                    "SELECT lease_owner, lease_until_ms, circuit_state, "
-                    "retry_not_before_ms "
-                    "FROM adapter_cursors WHERE adapter_id=?",
+                    "SELECT c.lease_owner, c.lease_until_ms, c.circuit_state, "
+                    "r.retry_not_before_ms "
+                    "FROM adapter_cursors AS c "
+                    "LEFT JOIN adapter_retry_state AS r USING (adapter_id) "
+                    "WHERE c.adapter_id=?",
                     (adapter_id,),
                 ).fetchone()
                 assert row is not None
@@ -240,10 +270,13 @@ class AdapterCursorStore:
                     self._conn.execute(
                         "UPDATE adapter_cursors SET "
                         "provider_watermark=COALESCE(?, provider_watermark), "
-                        "error_count=0, circuit_state='closed', "
-                        "retry_not_before_ms=NULL, updated_at_ms=? "
+                        "error_count=0, circuit_state='closed', updated_at_ms=? "
                         "WHERE adapter_id=?",
                         (provider_watermark, now, adapter_id),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM adapter_retry_state WHERE adapter_id=?",
+                        (adapter_id,),
                     )
                 else:
                     self._conn.execute(
@@ -343,20 +376,31 @@ class AdapterCursorStore:
                 )
                 self._conn.execute(
                     "UPDATE adapter_cursors SET error_count=?, circuit_state=?, "
-                    "retry_not_before_ms=?, "
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until_ms=CASE WHEN ? THEN NULL ELSE lease_until_ms END, "
                     "updated_at_ms=? WHERE adapter_id=?",
                     (
                         error_count,
                         "open" if should_open else str(row["circuit_state"]),
-                        now + recovery_after_ms if should_open else None,
                         should_open,
                         should_open,
                         now,
                         adapter_id,
                     ),
                 )
+                if should_open:
+                    self._conn.execute(
+                        "INSERT INTO adapter_retry_state "
+                        "(adapter_id, retry_not_before_ms) VALUES (?, ?) "
+                        "ON CONFLICT(adapter_id) DO UPDATE SET "
+                        "retry_not_before_ms=excluded.retry_not_before_ms",
+                        (adapter_id, now + recovery_after_ms),
+                    )
+                else:
+                    self._conn.execute(
+                        "DELETE FROM adapter_retry_state WHERE adapter_id=?",
+                        (adapter_id,),
+                    )
                 self._conn.execute("COMMIT")
             except BaseException:
                 self._conn.execute("ROLLBACK")
@@ -372,12 +416,27 @@ class AdapterCursorStore:
 
         now = self._now_ms()
         with self._lock:
-            self._ensure(adapter_id, now)
-            self._conn.execute(
-                "UPDATE adapter_cursors SET retry_not_before_ms=?, updated_at_ms=? "
-                "WHERE adapter_id=? AND circuit_state='open'",
-                (now, now, adapter_id),
-            )
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._ensure(adapter_id, now)
+                self._conn.execute(
+                    "UPDATE adapter_cursors SET updated_at_ms=? "
+                    "WHERE adapter_id=? AND circuit_state='open'",
+                    (now, adapter_id),
+                )
+                self._conn.execute(
+                    "INSERT INTO adapter_retry_state "
+                    "(adapter_id, retry_not_before_ms) "
+                    "SELECT adapter_id, ? FROM adapter_cursors "
+                    "WHERE adapter_id=? AND circuit_state='open' "
+                    "ON CONFLICT(adapter_id) DO UPDATE SET "
+                    "retry_not_before_ms=excluded.retry_not_before_ms",
+                    (now, adapter_id),
+                )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
         return self.get(adapter_id)
 
 

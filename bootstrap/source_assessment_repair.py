@@ -99,6 +99,49 @@ class PausedConsumerBaseline(BaseModel):
         return self
 
 
+class RollbackSchemaDegradation(BaseModel):
+    """One exact predecessor health failure caused by the retired v21 schema."""
+
+    model_config = {"extra": "forbid"}
+
+    capability_id: Literal[
+        "adapter:messaging-gmail-api",
+        "adapter:calendaring-google-calendar",
+    ]
+    instance_id: Literal["gmail-primary", "google-calendar-primary"]
+    adapter_version: Literal["1.1.1", "2.0.0"]
+    error_message: Literal[
+        "TypeError: AdapterCursor.__init__() got an unexpected keyword argument "
+        "'retry_not_before_ms'",
+        "AdapterCursor.__init__() got an unexpected keyword argument "
+        "'retry_not_before_ms'",
+    ]
+
+    @model_validator(mode="after")
+    def require_exact_capability_instance_pair(self) -> "RollbackSchemaDegradation":
+        expected = {
+            "adapter:messaging-gmail-api": (
+                "gmail-primary",
+                "1.1.1",
+                "TypeError: AdapterCursor.__init__() got an unexpected keyword "
+                "argument 'retry_not_before_ms'",
+            ),
+            "adapter:calendaring-google-calendar": (
+                "google-calendar-primary",
+                "2.0.0",
+                "AdapterCursor.__init__() got an unexpected keyword argument "
+                "'retry_not_before_ms'",
+            ),
+        }
+        if expected[self.capability_id] != (
+            self.instance_id,
+            self.adapter_version,
+            self.error_message,
+        ):
+            raise ValueError("rollback schema degradation tuple is not exact")
+        return self
+
+
 class SourceAssessmentRepairPolicy(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -108,10 +151,18 @@ class SourceAssessmentRepairPolicy(BaseModel):
     expected_counts: BaselineCounts
     targets: list[BaselineTarget] = Field(min_length=1, max_length=20)
     paused_consumer: PausedConsumerBaseline | None = None
+    rollback_schema_degradations: list[RollbackSchemaDegradation] = Field(
+        default_factory=list, max_length=2
+    )
     expires_after_activation: Literal[True]
 
     @model_validator(mode="after")
     def require_exact_missing_ceiling(self) -> "SourceAssessmentRepairPolicy":
+        capability_ids = [
+            item.capability_id for item in self.rollback_schema_degradations
+        ]
+        if len(capability_ids) != len(set(capability_ids)):
+            raise ValueError("rollback schema degradations repeat a capability id")
         if self.paused_consumer is None:
             if self.expected_counts.maximum_missing != 0:
                 raise ValueError(
@@ -411,6 +462,55 @@ def _validate_paused_consumer(
     return True
 
 
+def _validate_rollback_schema_degradations(
+    policy: SourceAssessmentRepairPolicy,
+    capabilities: dict[str, Any],
+) -> frozenset[str]:
+    """Permit only the exact content-free failure left by the v21 rollback.
+
+    A healthy capability remains valid.  A declared capability is exempted
+    only while its sole configured instance reports the exact predecessor
+    constructor error; blocked, differently degraded, or additional instances
+    still fail the guarded baseline.
+    """
+
+    permitted: set[str] = set()
+    for expected in policy.rollback_schema_degradations:
+        capability = capabilities.get(expected.capability_id)
+        if not isinstance(capability, dict) or capability.get("state") != "degraded":
+            continue
+        details = capability.get("details") or {}
+        instances = details.get("instances") or []
+        instance = instances[0] if len(instances) == 1 else {}
+        error = instance.get("last_error") or {}
+        actual = {
+            "reason": capability.get("reason"),
+            "provider_health": details.get("provider_health"),
+            "instance_id": instance.get("instance_id"),
+            "version": instance.get("version"),
+            "state": instance.get("state"),
+            "severity": error.get("severity"),
+            "error_kind": error.get("error_kind"),
+            "error_message": error.get("error_message"),
+        }
+        required = {
+            "reason": "one or more configured adapter instances are not running",
+            "provider_health": "degraded",
+            "instance_id": expected.instance_id,
+            "version": expected.adapter_version,
+            "state": "backoff",
+            "severity": "transient",
+            "error_kind": "unknown",
+            "error_message": expected.error_message,
+        }
+        if actual != required:
+            raise SourceAssessmentRepairError(
+                "declared rollback schema degradation differs from the exact baseline"
+            )
+        permitted.add(expected.capability_id)
+    return frozenset(permitted)
+
+
 def validate_declared_baseline(
     policy: SourceAssessmentRepairPolicy,
     *,
@@ -462,6 +562,10 @@ def validate_declared_baseline(
     capabilities = diagnostics.get("capabilities") or {}
     if not isinstance(capabilities, dict):
         raise SourceAssessmentRepairError("runtime capabilities are unavailable")
+    permitted_rollback_degradations = _validate_rollback_schema_degradations(
+        policy,
+        capabilities,
+    )
     paused_subscriber_id = (
         policy.paused_consumer.subscriber_id
         if policy.paused_consumer is not None
@@ -471,6 +575,7 @@ def validate_declared_baseline(
         capability_id
         for capability_id, capability in capabilities.items()
         if capability_id not in _SOURCE_DERIVED_CAPABILITIES
+        and capability_id not in permitted_rollback_degradations
         and not (paused_consumer_expected and capability_id == paused_subscriber_id)
         and isinstance(capability, dict)
         and capability.get("state") in {"degraded", "blocked"}

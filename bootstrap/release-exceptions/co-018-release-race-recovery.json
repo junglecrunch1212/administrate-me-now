@@ -27,5 +27,19 @@
     }
   ],
   "paused_consumer": null,
+  "rollback_schema_degradations": [
+    {
+      "capability_id": "adapter:messaging-gmail-api",
+      "instance_id": "gmail-primary",
+      "adapter_version": "1.1.1",
+      "error_message": "TypeError: AdapterCursor.__init__() got an unexpected keyword argument 'retry_not_before_ms'"
+    },
+    {
+      "capability_id": "adapter:calendaring-google-calendar",
+      "instance_id": "google-calendar-primary",
+      "adapter_version": "2.0.0",
+      "error_message": "AdapterCursor.__init__() got an unexpected keyword argument 'retry_not_before_ms'"
+    }
+  ],
   "expires_after_activation": true
 }

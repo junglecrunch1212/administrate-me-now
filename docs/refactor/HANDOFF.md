@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: PHASE_B_REPLAY_SETTLEMENT_REPAIR_LOCAL_CANDIDATE
+gate_result: PHASE_B_ROLLBACK_SCHEMA_COMPAT_LOCAL_CANDIDATE
 verified_local_date: 2026-08-26
 verified_github_date: pending
-branch: codex/administrateme-v2-replay-settlement
-candidate_commit_resolution: local_candidate_pending_ordinary_ci_and_pull_request
-pull_request_url: pending
+branch: codex/administrateme-v2-rollback-schema-compat
+candidate_commit_resolution: pull_request_348_pending_required_github_checks
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/348
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -17,6 +17,31 @@ next_phase: ordinary_pr_merge_then_guarded_phase_b_retry
 # Release handoff
 
 ## 2026-08-26 guarded Phase B rollback and replay-settlement repair
+
+The replay-settlement repair merged through protected PR #347 as
+`af29e858e302f82f73bb7f5ab272927ddbf7433a` after both required hosted checks
+passed. Before a second backup or release selection, its guarded updater found
+two unexpected predecessor adapter degradations and stopped safely. The first
+candidate had added `retry_not_before_ms` directly to `adapter_cursors`; exact
+predecessor `d181fad` constructs its cursor from `SELECT *`, so the retained
+additive column made Gmail and Google Calendar report the same content-free
+constructor error after rollback. Observation stayed active, noise filtering
+v20 and all projections remained healthy at zero lag, and source assurance was
+current and settled at the exact declared 65,675-obligation/four-failure
+baseline. No selector, credential, checkpoint, provider object, or provider
+write changed during the rejected retry.
+
+This follow-up **PRESERVES/HARDENS** rollback compatibility. Retry eligibility
+moves to a companion `adapter_retry_state` table. When the v21 column is
+present, candidate startup transactionally copies its content-free timing
+values and drops only that column, restoring the predecessor-readable cursor
+schema while preserving current fenced-circuit semantics. A subsequent code
+rollback can ignore the companion table. The checked-in release exception may
+admit only the two exact degraded capability/instance/version/error tuples
+observed above; a healthy instance remains valid, while another message,
+instance, capability, blocked state, or unrelated degradation still fails
+closed. Focused migration and baseline tests are required before another
+protected merge and guarded retry.
 
 Protected merge `ec3c77615c6c4fef72dd05b48f45a6d09711cc9c` was selected by the
 attested updater after an encrypted backup. The candidate remained in

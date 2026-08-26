@@ -17,6 +17,7 @@ from bootstrap.source_assessment_repair import (
     BaselineCounts,
     BaselineTarget,
     PausedConsumerBaseline,
+    RollbackSchemaDegradation,
     SourceAssessmentRepairError,
     SourceAssessmentRepairPolicy,
     hydrate_online_repair_diagnostics,
@@ -485,6 +486,66 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
             policy,
             active_commit=ACTIVE_COMMIT,
             doctor=_doctor(),
+            diagnostics=changed,
+        )
+
+
+def test_declared_baseline_accepts_only_exact_rollback_schema_degradation() -> None:
+    source_id = "ev_fixture_source"
+    policy = _policy(source_id).model_copy(
+        update={
+            "rollback_schema_degradations": [
+                RollbackSchemaDegradation(
+                    capability_id="adapter:messaging-gmail-api",
+                    instance_id="gmail-primary",
+                    adapter_version="1.1.1",
+                    error_message=(
+                        "TypeError: AdapterCursor.__init__() got an unexpected "
+                        "keyword argument 'retry_not_before_ms'"
+                    ),
+                )
+            ]
+        }
+    )
+    diagnostics = _diagnostics(source_id)
+    diagnostics["capabilities"]["adapter:messaging-gmail-api"] = {
+        "state": "degraded",
+        "reason": "one or more configured adapter instances are not running",
+        "details": {
+            "provider_health": "degraded",
+            "instances": [
+                {
+                    "instance_id": "gmail-primary",
+                    "version": "1.1.1",
+                    "state": "backoff",
+                    "last_error": {
+                        "severity": "transient",
+                        "error_kind": "unknown",
+                        "error_message": (
+                            "TypeError: AdapterCursor.__init__() got an unexpected "
+                            "keyword argument 'retry_not_before_ms'"
+                        ),
+                    },
+                }
+            ],
+        },
+    }
+    validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=_doctor(source_derived_launch_status=True),
+        diagnostics=diagnostics,
+    )
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed["capabilities"]["adapter:messaging-gmail-api"]["details"]["instances"][0][
+        "last_error"
+    ]["error_message"] = "different transient failure"
+    with pytest.raises(SourceAssessmentRepairError, match="exact baseline"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(source_derived_launch_status=True),
             diagnostics=changed,
         )
 
