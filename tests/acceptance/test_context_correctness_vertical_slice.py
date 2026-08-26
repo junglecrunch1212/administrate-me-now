@@ -1139,7 +1139,7 @@ def test_stale_system_supersession_cannot_override_member_action(
                 visibility_scope=f"private:{MEMBER}",
                 sensitivity="normal",
                 idempotency_key=(
-                    "triage:message-candidate:v21:fixture-race:"
+                    "triage:message-candidate:v22:fixture-race:"
                     "fixture-supersession-race:commitment"
                 ),
                 payload={
@@ -1201,7 +1201,7 @@ def test_stale_system_supersession_cannot_override_member_action(
 def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
     tmp_path: Path,
 ) -> None:
-    """Actual Gmail mapping reaches the v21 full-replay production runner."""
+    """Actual Gmail mapping reaches the v22 full-replay production runner."""
 
     instance = tmp_path / "replay-instance"
     instance.mkdir()
@@ -1298,6 +1298,31 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         assert len(legacy_proposals) == 1
         assert legacy_proposals[0]["payload"]["proposal_id"] == legacy_proposal_id
 
+        replay_assessments = client.portal.call(
+            _events, runtime, "triage.intent.features_extracted"
+        )
+        deferred_first = next(
+            event
+            for event in replay_assessments
+            if event.get("causation_id") == first_id
+            and event.get("idempotency_key")
+            == f"triage:message-features:v22:{first_id}"
+        )
+        assert deferred_first["payload"]["assessment_outcome"] == "no_candidate"
+        assert deferred_first["payload"]["extractor_id"] == (
+            "thread-anchor-deferred-v1"
+        )
+        assert deferred_first["payload"]["reason_codes"][:3] == [
+            "language_assessment_deferred_to_latest_thread_message",
+            "no_eligible_candidate",
+            "deferred_to_latest_thread_message",
+        ]
+        language_calls = client.portal.call(_events, runtime, "skill.call.recorded")
+        assert not any(
+            event.get("causation_id") == first_id for event in language_calls
+        )
+        assert any(event.get("causation_id") == current_id for event in language_calls)
+
         stable_fallback_supersessions = [
             event
             for event in client.portal.call(_events, runtime, "triage.item.superseded")
@@ -1344,7 +1369,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             stable_fallback_assessments, key=lambda event: event["event_id"]
         )
         assert current_stable_assessment["idempotency_key"] == (
-            f"triage:message-features:v21:{stable_fallback_source_id}"
+            f"triage:message-features:v22:{stable_fallback_source_id}"
         )
         client.portal.call(
             runtime.wait_for_projection,
@@ -1387,7 +1412,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         assert valid["review_state"]["human_gate_required"] is True
 
         pipeline_status = client.portal.call(runtime.pipelines.status)
-        assert pipeline_status["pipeline:noise_filtering"]["version"] == "21.0.0"
+        assert pipeline_status["pipeline:noise_filtering"]["version"] == "22.0.0"
         assert (
             pipeline_status["pipeline:noise_filtering"]["subscriber_status"][
                 "lag_count"

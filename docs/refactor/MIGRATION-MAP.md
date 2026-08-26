@@ -1,5 +1,23 @@
 # Migration map
 
+Phase B replay-settlement amendment (2026-08-26): the guarded activation of
+merge `ec3c776` was automatically rolled back because noise-filtering v21 did
+not settle its full historical replay inside the unchanged one-hour release
+window. The attempt **PRESERVED** observation mode, append-only source and
+derived history, human decisions, provider-write denial, and exact predecessor
+selection. Noise filtering advances from v21 to v22 so partial v21 events remain
+immutable and cannot occupy the new generation's identities. V22
+**MODERNIZES/HARDENS** replay by deterministically terminating non-anchor
+sources as `no_candidate`/`thread-anchor-deferred-v1` without a language call;
+the latest thread anchor retains the pinned `llm-task` invocation and all
+candidate/reconciliation semantics. Existing classifications and semantic
+features are retained rather than rewritten for a historical non-anchor. The
+release repair exception now accepts only the exact four remaining
+idempotency-race failures after predecessor backlog settlement, with zero
+missing/pending sources and a 65,675-obligation floor. No source, projection,
+canonical object, member decision, provider object, credential, runtime, or
+OpenClaw pin is migrated.
+
 Phase A runtime-repair amendment (2026-08-25): this candidate **PRESERVES**
 immutable source facts, encrypted append-only history, deterministic replay,
 member/tenant privacy, human decision authority, observation mode, guarded

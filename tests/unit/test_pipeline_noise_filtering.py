@@ -1111,7 +1111,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v21:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v22:")
 
 
 @pytest.mark.asyncio
@@ -1222,7 +1222,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v21:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v22:")
         for proposal in proposals
     )
 
@@ -1587,8 +1587,71 @@ async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> 
 
 
 @pytest.mark.asyncio
+async def test_full_replay_defers_non_anchor_without_language_invocation() -> None:
+    prior = _messaging_received_event(body_text="An earlier fixture update.")
+    prior.update(
+        {
+            "event_id": "thread-source-prior",
+            "occurred_at": "2034-02-01T10:00:00Z",
+            "recorded_at": "2034-02-01T10:00:01Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    prior["payload"].update(
+        {
+            "thread_id": "thread-replay-fixture",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "received_at": "2034-02-01T10:00:00Z",
+        }
+    )
+    current = _messaging_received_event(body_text="Please review the fixture now.")
+    current.update(
+        {
+            "event_id": "thread-source-current",
+            "occurred_at": "2034-02-01T11:00:00Z",
+            "recorded_at": "2034-02-01T11:00:01Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    current["payload"].update(
+        {
+            "thread_id": "thread-replay-fixture",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "received_at": "2034-02-01T11:00:00Z",
+        }
+    )
+    log = _ContextEventLog(source_events=[prior, current])
+
+    async def language_must_not_run(*_args: Any, **_kwargs: Any) -> SkillResult:
+        raise AssertionError("a non-anchor replay must not invoke the language seam")
+
+    await NoiseFilteringPipeline().handle(prior, _make_ctx(log, language_must_not_run))
+
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.idempotency_key
+        == "triage:message-features:v22:thread-source-prior"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+    assert assessment.payload["reason_codes"] == [
+        "language_assessment_deferred_to_latest_thread_message",
+        "no_eligible_candidate",
+        "deferred_to_latest_thread_message",
+        "candidate_policy_v1:adapter:gmail:review",
+    ]
+    assert {call.envelope.type for call in log.calls} == {
+        "triage.intent.features_extracted"
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("contextualized", [False, True])
-async def test_v21_replay_keeps_or_replaces_still_eligible_same_source_fallback(
+async def test_v22_replay_keeps_or_replaces_still_eligible_same_source_fallback(
     contextualized: bool,
 ) -> None:
     source = _messaging_received_event(
@@ -1724,7 +1787,7 @@ async def test_v21_replay_keeps_or_replaces_still_eligible_same_source_fallback(
         call.envelope
         for call in log.calls
         if call.envelope.idempotency_key
-        == "triage:message-features:v21:trigger-eid-001"
+        == "triage:message-features:v22:trigger-eid-001"
     )
     assert current_assessment.payload["assessment_outcome"] == "eligible_candidates"
 

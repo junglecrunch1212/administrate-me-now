@@ -465,7 +465,7 @@ def _event_authored_message_text(
     if _legacy_gmail_sent_without_quote_provenance(event, payload):
         # Historical Gmail SENT observations retained only the plain MIME
         # alternative. It is impossible to prove whether that text was newly
-        # authored or copied from an HTML quote container, so v21 replay must
+        # authored or copied from an HTML quote container, so reviewed replay must
         # retain the fact while excluding its body from authored evidence.
         return AuthoredMessageText(
             "",
