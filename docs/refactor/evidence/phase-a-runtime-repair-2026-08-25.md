@@ -45,6 +45,11 @@ payloads were not copied into code, tests, or this receipt.
    the endpoint still returned success. The fixture now settles the semantic
    subscriber and local commands verify their intended projected state;
    concurrent loss returns a truthful 409.
+8. The Finance round-trip process proof waited for an intermediate budget fact
+   before asserting validation state owned by the later terminal
+   `finance.workbook_published` receipt. The proof now waits that receipt's
+   money-projection watermark, preserving the production daemon's asynchronous
+   composition while removing the false race from release evidence.
 
 The change **PRESERVES** event/source truth, replay, privacy, human decisions,
 observation/governance, provider authority, and topology;
