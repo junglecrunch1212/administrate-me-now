@@ -1,12 +1,14 @@
 # AdministrateMe engineering instructions
 
-This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; prompt-era prose is not executable proof. The v2 constitutional reconciliation lives in `docs/refactor/` and governs new work. Historical detail remains in `WHAT-IS-ADMINISTRATEME.md`, `ADMINISTRATEME_BUILD.md`, `ADMINISTRATEME_CONSOLE_PATTERNS.md`, `ADMINISTRATEME_CONSOLE_REFERENCE.html`, `ADMINISTRATEME_DIAGRAMS.md`, `ADMINISTRATEME_FIELD_MANUAL.md`, `ADMINISTRATEME_REFERENCE_EXAMPLES.md`, `prompts/PROMPT_SEQUENCE.md`, `docs/00-mental-model.md`, `docs/openclaw-cheatsheet.md`, and `docs/architecture-summary.md`.
+This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; executable behavior and tests decide whether a change works. The v2 reconciliation in `docs/refactor/` governs product architecture. Historical delivery procedures are not current authority.
 
 ## Working rules
 
-- v2 integration work belongs on `codex/administrateme-v2-runtime`, based on `main`. Never rewrite published history or weaken tests.
-- Release authority is deny-by-default: do not merge a pull request, push directly to `main`, or begin Phase B unless the exact G-001 procedure or an effective, enrolled, deterministic G-002 decision below is active and satisfied.
-- Preserve unrelated changes. Never place household names, emails, phone numbers, addresses, credentials, or tokens in platform code, bootstrap code, built-ins, or tests.
+- Start each change from current protected `main`, use one `codex/` branch and one pull request, and preserve unrelated changes. Never rewrite published history, force-push, or push directly to `main`.
+- The implementation task may use bounded subagents for implementation, testing, research, or advisory review. A separate user-created review task, exact-head review artifact, staged label, or prescribed authorization phrase is not required.
+- GitHub is the delivery control plane: fix failures on the same branch, require the protected PR checks to pass, resolve actionable review comments, and merge through the pull request. Normal commits invalidate only the checks GitHub reruns; they do not start a new review ceremony.
+- A repository owner may authorize merge in ordinary language. A merge request does not authorize deployment or another operational change.
+- Never place household names, emails, phone numbers, addresses, credentials, or tokens in platform code, bootstrap code, built-ins, or tests.
 - Keep the dependency direction: adapters -> encrypted append-only event log/durable bus -> deterministic projections -> pipelines -> family surfaces. Sources emit events; projections are never a source of truth.
 - OpenClaw owns channels, conversations, generic memory, sessions, model routing, cron/background execution, agent orchestration, generic tool approval, device nodes, and runtime administration. AdministrateMe owns typed household truth, domain authorization, scope/privacy, projections, workbooks, provenance, correction, observation, and outcome feedback.
 - All LLM work goes through the pinned OpenClaw `llm-task` seam. Never add a provider SDK or a second model router.
@@ -14,63 +16,13 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 - External writes require the documented allowlist -> governance -> rate-limit ordering, independent OpenClaw and domain approval, a final content/privacy guard, and observation-mode handling. Audit every terminal result.
 - Preserve all six product functions, all thirteen projection capabilities, all five adapter categories, all six pack kinds, the five built-in profiles, and four built-in personas. A missing implementation must be reported, not silently omitted.
 - A central v2 deployment is one long-lived AdministrateMe Python runtime behind Tailscale Serve plus one exactly pinned OpenClaw Gateway. Member bridge daemons remain separate, per-member edge processes. Node may build browser assets but is not another central application runtime.
-- Phase A runs only in Codex/cloud or a disposable lab. Never experiment on the family Mac. Phase B starts only after review and merge.
+- Phase A runs only in Codex/cloud or a disposable lab. Never experiment on the family Mac. Phase B begins only after merge and a clear, separate owner request to deploy.
 
-## G-001 controlled release authority
+## Deployment safety
 
-G-001 is a narrow exception to the default no-merge rule, not blanket merge or
-deployment authority. The governance change that introduces G-001 cannot
-authorize its own merge; a repository owner must merge that governance-only PR
-manually. G-001 applies only after the merged policy is present on `main`.
-A controlled-release task must start after that merge so it loads the effective
-instructions; a task started under the former absolute rule cannot promote
-itself by observing that the file changed.
+A deployment operates on the immutable merge commit from protected `main`. Use the existing guarded updater; keep observation mode active; verify an encrypted backup before switching; and roll back automatically on a new degradation or failed prerequisite. After activation, require bounded settlement, full Doctor, privacy and tenant-isolation checks, authenticated read-only browser acceptance for changed behavior, backup/rollback evidence, and zero unintended provider effects.
 
-- A release authorization must be an explicit current-task user instruction in
-  the form **“Authorize guarded release of PR #<number> at head
-  <40-character-commit>.”** It authorizes one named PR, one immutable head, and
-  one release transaction. A change order, branch name, earlier blanket
-  instruction, inferred intent, or approval of a different SHA is insufficient.
-- Before merge, an independent human or a separate user-visible Codex review
-  task that did not implement the candidate must review the exact head. An
-  implementation subagent is not independent review. A human records an
-  approving GitHub review. A separate Codex task records a content-free PR
-  comment naming its task/thread, exact SHA, review scope, commands, findings,
-  and conclusion. Any material head change invalidates the review.
-- The authorized head must contain current `origin/main`, the PR must be clean
-  and mergeable, every required local and hosted gate must pass on that head,
-  and every actionable review thread must be resolved. If `main` advances,
-  merge current `main` into the candidate without rebasing, force-pushing, or
-  rewriting history; resolve only the actual conflicts, then repeat independent
-  review and every required gate.
-- Merge only through the named GitHub PR using a merge commit bound to the
-  authorized head. Never push directly to `main`, merge a different SHA, bypass
-  branch protection, weaken a check, or combine another PR into the authority.
-- Phase B may begin only after the resulting merge commit exists on
-  `origin/main`. Deploy an immutable checkout of that merged SHA through the
-  reviewed guarded updater only. Never edit an installed release, active venv,
-  LaunchAgent, encrypted state, or provider configuration to make activation
-  pass.
-- Record the live baseline, retain observation mode, create and verify the
-  encrypted pre-switch backup, and require automatic rollback on any new
-  degradation or failed prerequisite. Runtime/dependency migrations, provider
-  enrollment, write enablement, Keychain/permission changes, and unrelated
-  repairs require separate named approval and are never opportunistic parts of
-  a guarded release.
-- After activation, require bounded settlement, full Doctor, privacy/isolation
-  checks, authenticated read-only browser acceptance for the changed behavior,
-  backup/rollback evidence, and zero unintended provider effects. A failed or
-  ambiguous check makes the deployment incomplete even if liveness is green.
-- The same authorization permits one follow-up PR containing only release
-  evidence in governing documentation. Its exact head must receive independent
-  docs review and hosted checks before merge; it may not change code,
-  configuration, dependencies, locks, tests, runtime state, or the release
-  result it records.
-- Stop without improvising when the PR/SHA/base, independent review, test
-  result, backup, observation state, updater provenance, health, settlement,
-  privacy, rollback, or live acceptance differs from the authorized plan.
-  Preserve diagnostics and the last healthy release; do not broaden authority
-  to finish the task.
+Runtime or dependency migration, provider enrollment, write enablement, Keychain or permission changes, and unrelated live repairs always require their own explicit owner request. Never edit an installed release, active virtual environment, LaunchAgent, encrypted state, or provider configuration to make activation pass. Hosted CI and subagents must not access the live family instance or credentials.
 
 ## G-002 autonomous observation release train
 
@@ -168,18 +120,9 @@ as required. A task created before that merge continues under G-001.
 - `adminme/products/`: product router namespaces served by the one Python runtime.
 - `adminme/lib/`: session/scope, governance, observation, pack registry, OpenClaw skill seam.
 - `bridge/`: per-member bridge package and tests.
-- Browser behavior remains governed by `docs/refactor/UX-BEHAVIOR-CONTRACT.md`;
-  the false Node application scaffold was removed at Gate 6.
+- Browser behavior remains governed by `docs/refactor/UX-BEHAVIOR-CONTRACT.md`; the false Node application scaffold was removed at Gate 6.
 - `bootstrap/`: baseline prose/config scaffolding. Its target is `docs/refactor/BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md`.
 - `tests/acceptance/`: golden process gates. Run with `--runxfail` for release gating.
-
-## Outcome Harness
-
-- Start current local change work from `docs/refactor/CURRENT-STATE.md` and the repository skills `adminme-outcome`, `adminme-change`, `adminme-review`, `adminme-frontend-qa`, and `adminme-evidence` under `.agents/skills/`.
-- Use `python -m scripts.harness.cli` for bound run artifacts, reviewed check selection, consistency validation, browser proof, and owner evidence. A changed binding invalidates earlier receipts and review.
-- A retirement or removal proof must bind every path whose continued presence is a prerequisite. Task bindings include tracked mode changes and untracked file mode, file type, and symlink target; a same-content executable or link change is not equivalent evidence.
-- Every OpenClaw breadth receipt and browser receipt must attest the exact supported Python 3.14, Node >=24.15,<25, and npm >=11.6,<12 executables in its hashed log. A green command under the live Node 22 rollback runtime is not candidate evidence.
-- `docs/refactor/CURRENT-STATE.md` reports whether legacy Claude executor surfaces are still present pending a parity gate or have been retired. They are never current Codex authority. `docs/refactor/LEGACY-EXECUTOR-HISTORY.md` preserves their provenance; an absent path must not be restored by inference.
 
 ## Supported checks
 
@@ -197,8 +140,8 @@ npm --prefix openclaw/administrateme run check
 npm --prefix openclaw/administrateme test
 ```
 
-Before a release, also run the full unscoped lint suite, all pack/package validators, identity and instance-path scans, replay/isolation/backup tests, and the clean macOS lab rehearsal in `docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and failures verbatim.
+Before a deployment, also run the full unscoped lint suite, all pack/package validators, identity and instance-path scans, replay/isolation/backup tests, and the clean macOS lab rehearsal in `docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and failures verbatim.
 
 ## Definition of done
 
-A claim is complete only when a process-level test demonstrates it through the production composition root. Unit tests for isolated layers are necessary but insufficient. Update `docs/refactor/HANDOFF.md`, the crosswalk, migration map, and acceptance evidence when behavior or scope changes. Classify semantic changes as PRESERVE, MODERNIZE, SUPERSEDE, or DEFER and cite the governing source. DEFER is never valid for a required product function, projection capability, privacy/governance invariant, workbook round trip, or bootstrap safety.
+A claim is complete only when a process-level test demonstrates it through the production composition root. Unit tests for isolated layers are necessary but insufficient. Update governing documentation when behavior or scope changes, but do not create evidence-only follow-up work. Classify semantic changes as PRESERVE, MODERNIZE, SUPERSEDE, or DEFER and cite the governing source. DEFER is never valid for a required product function, projection capability, privacy/governance invariant, workbook round trip, or bootstrap safety.

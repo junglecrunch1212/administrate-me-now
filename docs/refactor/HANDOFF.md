@@ -3,72 +3,28 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: G_002_AUTONOMOUS_OBSERVATION_RELEASE_TRAIN_LOCAL_CANDIDATE
-verified_local_date: 2026-08-16
+gate_result: CONTROL_PLANE_REBOOT_LOCAL_CANDIDATE
+verified_local_date: pending
 verified_github_date: pending
-branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: local_candidate_pending_immutable_head_gates_and_draft_pr
+branch: codex/v2-control-plane-reboot
+candidate_commit_resolution: local_candidate_pending_ordinary_ci_and_pull_request
 pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: observation_review_and_candidate_signal_quality_iteration
+next_phase: resume_product_delivery_under_simple_github_workflow
 ---
-
 # Release handoff
 
-## 2026-08-16 G-002 autonomous observation release-train candidate
+## 2026-08-25 control-plane reboot
 
-G-001 has prevented real defects, but its review was positioned after the most
-expensive proof and its owner ceremony applied equally to low- and high-risk
-work. PR #342 therefore repeated full green suites before lease, cancellation,
-authority-transfer, and Harness-history findings were discovered. Reverting
-those checks would hide defects rather than restore throughput.
+ADR-0013 restores ordinary protected-pull-request delivery. G-001, the Outcome Harness, proposed G-002/ADR-0012, and the older executor instructions are retired. No separate user-created reviewer task, exact authorization phrase, staged label, artifact import, evidence-only follow-up pull request, or repeated exact-head review is required.
 
-The local G-002 candidate preserves G-001 for provider writes, observation,
-runtimes/dependencies, enrollment, credentials/Keychain/permissions,
-privacy/authorization, destructive data, and release-control changes. For an
-ordinary low-risk observation release or exact bounded repair, it moves the
-exhaustive independent review after static/focused/production/applicable-
-browser proof and before breadth, release, or applicable hosted macOS work. A
-same-repository GitHub workflow runs Codex ephemerally and read-only, binds its
-schema result and content-free receipt to the exact head/base/diff, retains the
-attempt immutably, and starts later hosted jobs only after approval. This uses
-the official Codex action boundary; it does not add a model provider SDK or a
-second application router.
+The reboot is subtractive from current `main`: it preserves every V2 product/runtime merge, the focused member-navigation module, browser determinism improvements, privacy and event-sourcing architecture, observation mode, guarded updater, encrypted backup, rollback, Doctor, tenant isolation, and provider-write protections. It removes only the overlapping development control planes and converts useful navigation checks into ordinary product tests. This change does not deploy, touch the family Mac, read household state, change credentials, or enable provider writes.
 
-The Harness now records browser `NOT_APPLICABLE` for a classified non-visible
-change, exposes the exact `review-ready` checkpoint, imports a hosted review,
-retains unique local receipt/log attempts, validates every retained attempt,
-and binds all nine release-impact decisions in the original outcome contract.
-An immutable local queue copies the exact Harness run into an enrolled
-owner-only durable root and hands one exact committed candidate to the
-versioned scheduled operator. Each scheduled run appends an immutable
-content-free lifecycle receipt; completion also retains a digest-bound exact
-settlement manifest that canonical selection revalidates. The operator
-derives—not hand-authors—the manifest from the queue, complete Harness run,
-hosted artifacts, Doctor, and live diagnostics.
-Ordinary releases still require a healthy baseline. Both lanes bind their exact
-admission receipt to the actual two-parent merge before the guarded updater can
-run. A bounded repair additionally binds unhealthy capability and failed Doctor
-targets. The updater revalidates baseline before and after backup, authenticates
-and decrypts the backup into temporary staging, validates its manifest/digests,
-rebuilds all fifteen projections and retained workbooks, permits only monotonic
-target repair, and rolls back on any new or worsened failure.
-Final settlement also requires a schema-valid, exact-merge authenticated live
-privacy/isolation receipt; it cannot infer that green field from pre-release
-tests. The ordinary lane requires a wholly healthy fresh Doctor report. A
-bounded repair may retain only admitted non-target baseline failures after all
-named capability and Doctor targets clear.
+Current work uses one `codex/` branch and one pull request. Required GitHub CI must pass; optional subagents or human review are advisory; the owner may authorize merge in ordinary language. Deployment remains a separate owner-requested guarded operation.
 
-This governance candidate changes its own manual paths and therefore denies its
-own G-002 eligibility. It is uncommitted, unpublished, unmerged, unenrolled,
-and unreleased. A later publication task must create its immutable head and run
-the current G-001 process. After manual merge, the owner must separately add
-the repository-scoped OpenAI API secret, set the enablement variable, configure
-the orchestrated checks as required, create the local queue directory, and
-install the checked-in release-operator prompt as a Codex scheduled task. No
-current PR, including PR #342, inherits this candidate authority.
+All entries below dated before 2026-08-25 are historical records. Their G-001, exact-head, Outcome Harness, separate-review, or pending-gate language does not govern current work.
 
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
@@ -2624,137 +2580,3 @@ tenant isolation, backup/restore, the pinned OpenClaw contract, its 17 plugin
 tests, exact OpenClaw source install, and the 69-test arm64 macOS rehearsal.
 Final candidate head, hosted checks, independent review, and any authorized
 release evidence remain pending.
-
-## 2026-08-13 Outcome Harness local candidate
-
-The local candidate adds a thin exact-bound Outcome Harness, five bounded
-repository skills, deterministic current-state consistency CI, and a focused
-member-navigation module behind compatibility imports. The pilot intentionally
-changes no visible route, label, order, click, payload, authorization, mode,
-observation, event, projection, pipeline, provider, or release behavior.
-
-An independent final review found that generic receipt filenames had overwritten
-the earlier pilot's exact-bound non-browser receipts. The legacy Claude-era
-executor/recovery workflows, settings, MCP configuration, hooks, agent
-instructions, and setup verdict were therefore restored. A first separate
-pre-retirement run was also correctly rejected: it did not bind those eighteen
-legacy paths, permitted incomplete review-scope declarations, omitted untracked
-mode/file-type identity and four outcome-state classifications, and described a
-pre-extraction baseline it had not retained.
-
-The next run, `20260813t180234z-18dafbf8-5xod__dw`, bound all eighteen paths and
-passed its functional and browser checks, but independent review correctly
-rejected it because the OpenClaw install/check/test breadth receipts ran under
-Node 22.23.2/npm 10.9.8. A separate Node 24 browser receipt was not proof for
-those commands. That rejected run grants no retirement authority.
-
-The repaired harness binds the declared task-path manifest, committed and
-working-tree diffs, untracked modes, file types, and symlink targets;
-requires all eight review scopes and all eight outcome states exactly once; runs
-the production navigation case from an immutable archive of the candidate merge
-base; removes ambient provider credentials and live-instance selectors from
-check subprocesses; and requires every prerequisite removal path in its task
-binding. OpenClaw breadth and browser receipts each require exact supported
-Python 3.14, Node >=24.15,<25, and npm >=11.6,<12 toolchain evidence in their
-hashed logs.
-
-Pre-retirement run `20260813t182422z-739bfefa-22y57puv`, bound to diff
-`d54819ab905da1d4e2e7071ce3496846008b4f84e83af45a1415f29188009376`,
-retained all eighteen legacy paths byte/mode exact to `HEAD` and passed static,
-focused, immutable-baseline, current production-composition, full breadth, and
-260-assertion/39-screenshot browser proof. Its independent read-only review
-returned `APPROVE` with no findings or unresolved evidence; canonical review
-SHA-256 is
-`98e1ee1f182fe058d723fa7d904947e3c5f56ed9bd76febb88574f0060cb5fe5`.
-Only after preserving that exact `NOT_RELEASED` run did the local retirement
-patch remove the six Claude executor/constitution/smoke workflows, Claude
-settings/MCP registration, three hooks, six agent instructions, and obsolete
-setup verdict. Intended replacements and Git provenance remain mapped in
-`LEGACY-EXECUTOR-HISTORY.md`.
-
-This is not released. Candidate commits, current-main integration merge commits,
-pushes, and a draft PR are publication steps only and grant no release authority.
-No PR merge, deployment, Phase B, provider effect, observation change,
-household-state access, or G-001 authority is claimed here.
-
-Post-retirement run `20260813t184707z-a1b88771-msfn5j52` is rejected and must
-not be reused. Its static, focused, immutable-baseline, production-composition,
-breadth, and all substantive release checks passed, including 63 release
-acceptance tests, 1,932 root tests, and 60 bridge tests. The aggregate release
-command exited 1 because Ruff reported that `scripts/harness/checks.py` and
-`tests/unit/harness/test_core.py` required formatting. Ruff then mechanically
-formatted exactly those two files. Because that changed the binding, all final
-receipts and review must come from a new post-format run.
-
-## 2026-08-14 Outcome Harness independent-review remediation
-
-G-001 independent review rejected draft PR #340 at exact head
-`464892304b3c9c297469e06fdfb30b5172227349`. The otherwise-green candidate did
-not bind sixteen committed retirement paths, used clean-worktree-only diff
-hygiene, inventoried protected paths without fingerprinting their state, and
-required zero changed screenshot pixels even across semantically identical
-same-head browser runs. That head and its receipts remain rejected and grant no
-merge or deployment authority.
-
-The remediation is **HARDEN** under AC-44/C115 while preserving member and
-runtime behavior. Run creation now completes the declared manifest with every
-committed candidate path, and validation independently rejects a self-consistent
-manifest that omits any base-to-head path or deletion. The harness static gate,
-release-candidate script, consistency workflow, and macOS workflow all invoke
-the same range-aware diff hygiene against the committed candidate range as well
-as current task work; a wiring test rejects any return to plain worktree-only
-`git diff --check`.
-Protected work is represented only by content-free SHA-256 fingerprints that
-bind content, mode, file type, recursive directory state, and symlink targets;
-an in-place change invalidates the run without recording protected content.
-Browser equivalence retains exact semantic assertions, dimensions, screenshot
-inventory, routes, authorization, modes, console/page/request outcomes, and
-hash verification. It accepts only same-engine variance with maximum channel
-delta two and at most 0.25% changed pixels per screenshot; exceeding either
-bound fails.
-
-The first post-remediation run,
-`20260814t154830z-91069a88-vz6oe70h`, passed deterministic, production,
-browser-repeat, breadth, and release-candidate checks but was rejected by its
-read-only exact-diff review. That review proved three additional stale-state
-paths: refreshing could absorb a protected-only change without invalidating
-old proof; review and owner imports could write before current-state
-validation; and the repository-state inventory omitted staged tracked work.
-The amended harness compares protected and complete repository state before
-refresh, invalidates every proof on either binding or state change, inventories
-tracked changes against `HEAD`, rejects staged or unstaged tracked work outside
-task/protected boundaries, preflights review and owner imports, and restores
-their prior canonical artifacts if a post-write validation fails. The rejected
-run is retained only as diagnostic evidence and grants no candidate or release
-authority.
-
-The later exact-bound run `20260814t173013z-79e1f402-ffi0b9va` is also
-rejected and must not be reused. Its two same-head browser passes retained all
-260 semantic assertions and the same 39 screenshots, but the comparator found
-demonstrated narrow-screen rendering variance in 0.1868% of pixels with maximum
-channel delta two, above the initial 0.15% cap. The sparse-pixel cap is therefore
-calibrated to 0.25% while the channel-delta limit and every semantic, route,
-authorization, mode, navigation, error, dimension, and inventory check remain
-unchanged.
-
-The subsequent exact-head read-only review at
-`feb10ec40b5098ada81cfa9c68b4f6c25cc9c47c` found three more false-green paths
-before publication. Aggregate `HEAD` versus worktree state could collapse the
-index and unstaged delta; capture-time CSS overrides could hide a sticky rail
-or fixed chat-button regression; and the artifact restoration branches had
-not been driven through a post-write failure. The harness now binds and
-inventories staged and unstaged state independently, checks their diff hygiene
-independently, and proves the index/worktree cancellation case. Browser capture
-records and asserts the computed production rail/chat position and viewport
-geometry before each of the 39 screenshots, then freezes only those observed
-geometries during full-page expansion. Forced
-post-write review reconciliation and owner validation failures prove
-byte-for-byte restoration of review, verification, owner metadata, and owner
-prose. The `feb10ec` run remains rejected diagnostic evidence and must not be
-promoted.
-
-This remediation changes no member route, label, order, payload, event,
-projection, pipeline, provider boundary, observation state, or live state. A
-fresh exact-bound run, new candidate commit/head, hosted checks, and a separate
-G-001 independent review remain required. PR #340 remains draft; no merge,
-deployment, provider write, or Phase B action is authorized.

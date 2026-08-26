@@ -1,3 +1,11 @@
+# Historical build log
+
+> **Frozen provenance only.** This file records the retired prompt/executor-era
+> build chronology. Referenced prompt and workflow paths may now exist only in
+> Git history. Nothing below is a current instruction, gate, task queue, or
+> source of delivery authority; `AGENTS.md`, the V2 reconciliation in
+> `docs/refactor/`, and ADR-0013 govern current work.
+
 build_changelog.md not started until after Prompt 05
 Prompt 05 Completed and Merged
 Prompt 06 due for review and potential refactor

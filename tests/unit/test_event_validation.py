@@ -116,7 +116,7 @@ async def test_valid_calendar_event_added(log: EventLog) -> None:
             "summary": "dentist",
             "start": "2026-04-24T09:00:00Z",
             "end": "2026-04-24T10:00:00Z",
-            "location": "123 main st",
+            "location": "123 Example Street",
             "attendees": [],
             "body": None,
         },

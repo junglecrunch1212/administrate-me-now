@@ -1,4 +1,0 @@
-interface:
-  display_name: "AdministrateMe Change"
-  short_description: "Build changes with preservation proof"
-  default_prompt: "Use $adminme-change to implement this AdministrateMe change through the preservation and verification ladder."

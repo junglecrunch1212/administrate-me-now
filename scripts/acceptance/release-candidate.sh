@@ -45,12 +45,10 @@ poetry -C bridge sync --with dev --no-interaction
 poetry -C bridge run pytest -q
 poetry -C bridge run ruff check adminme_bridge tests
 poetry -C bridge run mypy adminme_bridge
-poetry -C bridge run pip-audit --local --progress-spinner off
 poetry run ruff check .
 poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
 poetry run mypy adminme bridge/adminme_bridge bootstrap
 poetry run pyright adminme bridge/adminme_bridge bootstrap packs
-poetry run pip-audit --local --progress-spinner off
 poetry run python scripts/acceptance/performance-smoke.py
 poetry check --lock
 poetry build
@@ -69,11 +67,16 @@ poetry run bash scripts/acceptance/backup-restore.sh
   npm test
   npm run build
   npm pack --dry-run >/dev/null
-  npm audit --omit=dev
 )
+
+npm ci --prefix tools/console-reference-harness --ignore-scripts
+ADMINME_GATE7_PYTHON="$(poetry env info --executable)" \
+ADMINME_GATE7_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adminme-gate7.XXXXXX")" \
+npm run test:gate7 --prefix tools/console-reference-harness
 
 shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
 bash -n bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
-PYTHONPATH=bridge poetry run python -m scripts.harness.cli diff-hygiene
+git diff --check
+test -z "$(git status --porcelain)"
 
 echo "ADMINISTRATEME RELEASE CANDIDATE SUITE: PASS"

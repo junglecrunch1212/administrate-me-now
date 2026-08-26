@@ -5,7 +5,7 @@ Status: released and authenticated-live-verified in observation mode at merge
 
 Governing sources: event-sourced source authority; D19 and D26; C002, C034,
 C097, C106, C107, C109, and C113; AC-12, AC-18, AC-21, AC-24, AC-34,
-AC-35, and AC-42; G-001 controlled release authority.
+AC-35, and AC-42; ADR-0013 delivery and guarded-deployment boundary.
 
 ## Incident
 
