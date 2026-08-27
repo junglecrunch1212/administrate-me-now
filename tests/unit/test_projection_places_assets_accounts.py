@@ -297,7 +297,9 @@ async def test_account_added_with_raw_credential_fails_check(
             login_vault_ref="password123",
         ),
     }
-    conn = runner.connection("places_assets_accounts")
+    conn = runner._unsafe_maintenance_connection(  # noqa: SLF001
+        "places_assets_accounts"
+    )
     with pytest.raises(sqlcipher3.IntegrityError):
         handlers.apply_event(bad_envelope, conn)
 

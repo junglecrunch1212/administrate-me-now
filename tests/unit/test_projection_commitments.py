@@ -441,7 +441,10 @@ async def test_old_proposal_replay_cannot_reset_completed_state(
     assert proposal is not None
     from adminme.projections.commitments.handlers import apply_event
 
-    apply_event(proposal, runner.connection("commitments"))
+    apply_event(
+        proposal,
+        runner._unsafe_maintenance_connection("commitments"),  # noqa: SLF001
+    )
     row = get_commitment(runner.connection("commitments"), _S(), commitment_id="c1")
     assert row is not None
     assert row["status"] == "done"

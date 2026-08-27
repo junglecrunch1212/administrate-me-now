@@ -172,6 +172,18 @@ async def test_read_since_cursor_exclusive(log: EventLog) -> None:
     assert [e["event_id"] for e in rest] == ids[1:]
 
 
+async def test_read_since_stops_at_fixed_watermark(log: EventLog) -> None:
+    first = await log.append(_event(1))
+    through = await log.latest_event_id()
+    second = await log.append(_event(2))
+
+    bounded = await _collect(log, through=through)
+    complete = await _collect(log)
+
+    assert [event["event_id"] for event in bounded] == [first]
+    assert [event["event_id"] for event in complete] == [first, second]
+
+
 async def test_read_since_filters_by_type(log: EventLog) -> None:
     await log.append(_event(1, type="foo"))
     await log.append(_event(2, type="bar"))

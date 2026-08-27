@@ -535,6 +535,7 @@ class EventLog:
         self,
         cursor: str | None = None,
         *,
+        through: str | None = None,
         limit: int = 1000,
         owner_scope: str | None = None,
         types: list[str] | None = None,
@@ -552,6 +553,7 @@ class EventLog:
             rows = await self._run_locked(
                 self._read_page,
                 last,
+                through,
                 batch_size,
                 owner_scope,
                 tuple(types) if types else None,
@@ -680,6 +682,7 @@ class EventLog:
     def _read_page(
         self,
         after_id: str | None,
+        through: str | None,
         limit: int,
         owner_scope: str | None,
         types: tuple[str, ...] | None,
@@ -689,6 +692,9 @@ class EventLog:
         if after_id is not None:
             where.append("event_id > ?")
             params.append(after_id)
+        if through is not None:
+            where.append("event_id <= ?")
+            params.append(through)
         if owner_scope is not None:
             where.append("owner_scope = ?")
             params.append(owner_scope)

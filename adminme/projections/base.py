@@ -47,6 +47,16 @@ class Projection(ABC):
         Default: no-op."""
         return None
 
+    def before_replay(self, conn: Any) -> None:
+        """Optional hook called on the connection owner before a replay."""
+
+        return None
+
+    def after_replay(self, conn: Any, *, succeeded: bool) -> None:
+        """Optional hook called on the connection owner after replay settles."""
+
+        return None
+
     def on_connection_opened(self, conn: Any) -> None:
         """Optional hook called once per connection, after PRAGMA key is set
         and before schema.sql is executed. Default: no-op. Override for

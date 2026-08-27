@@ -122,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
         "stop",
         "status",
         "backup",
+        "rehearse-restore",
         "restore",
         "upgrade",
         "rollback",
@@ -137,6 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
         child = subparsers.add_parser(name)
         if name == "backup":
             child.add_argument("--output", type=Path)
+        elif name == "rehearse-restore":
+            child.add_argument("backup", type=Path)
+            child.add_argument("candidate", type=Path)
+            child.add_argument("--receipt", type=Path)
         elif name == "restore":
             child.add_argument("backup", type=Path)
         elif name == "upgrade":
@@ -279,6 +284,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "backup":
             _print(
                 BackupManager(paths, root=root, test_mode=test_mode).create(args.output)
+            )
+            return 0
+        if args.command == "rehearse-restore":
+            _print(
+                BackupManager(paths, root=root, test_mode=test_mode).rehearse(
+                    args.backup,
+                    candidate=args.candidate,
+                    receipt=args.receipt,
+                )
             )
             return 0
         if args.command in {

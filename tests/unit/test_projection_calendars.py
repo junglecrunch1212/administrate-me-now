@@ -173,7 +173,7 @@ async def test_v3_migration_rekeys_existing_routed_calendar_rows(
     event_id = await log.append(_v2_envelope("calendar-a", summary="Before upgrade"))
     await bus.notify(event_id)
     await _wait_for_checkpoint(bus, "projection:calendars", event_id)
-    conn = runner.connection("calendars")
+    conn = runner._unsafe_maintenance_connection("calendars")  # noqa: SLF001
     current = conn.execute(
         "SELECT calendar_event_id FROM calendar_events WHERE tenant_id=?",
         ("tenant-a",),
@@ -565,7 +565,7 @@ async def test_busy_slots_merges_events_and_availability(
 
     # Inject an availability_block directly — prompt 06 does not yet have
     # an event type for availability ingestion (prompt 11 adds one).
-    conn = runner.connection("calendars")
+    conn = runner._unsafe_maintenance_connection("calendars")  # noqa: SLF001
     conn.execute(
         "INSERT INTO availability_blocks "
         "(availability_id, tenant_id, party_id, start_at, end_at, "

@@ -206,6 +206,50 @@ configuration metadata and secret references, OpenClaw workspace metadata,
 member/bridge mappings, pack manifests, and workbook/sidecar state. It never
 includes the Keychain values themselves.
 
+Before a candidate switch, run the non-replacing rehearsal from that exact
+clean candidate's Python 3.14 environment. The candidate path must be the same
+checkout that supplies `bootstrap.backup_restore`; do not run this command from
+the active release and point it at unrelated code:
+
+```bash
+cd /absolute/path/to/clean-reviewed-candidate
+ADMINME_REPOSITORY_ROOT="$PWD" poetry run python -m bootstrap.cli \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe" \
+  rehearse-restore \
+  "$HOME/Library/Application Support/AdministrateMe/backups/administrateme-YYYYMMDDTHHMMSSZ.ambackup" \
+  "$PWD"
+```
+
+The rehearsal reads the two required keys from the instance's existing
+Keychain boundary without printing them. One guardian and each active worker
+retain shared cleanup-visible activity leases. One worker authenticates and
+strictly extracts the exact manifest inventory, and a distinct worker opens
+only the staged encrypted event log, rebuilds all 15 projections at a fixed
+watermark, and regenerates both workbooks and all 17 sidecars. The guardian
+reaps each worker, upgrades to the exclusive cleanup lease, and removes the
+plaintext payload before reporting success. The controller reaps the guardian,
+removes the validated control stage, and only then writes one new mode-0600,
+content-free receipt under `backups/`. On controller disconnect or a supervised
+timeout, the guardian reaps the active worker and removes payload; guardian
+death leaves the worker lease in force, and a later run requires an exclusive
+lease and removes payload before validated inactive control residue. The
+rehearsal never constructs the service manager, replaces active state, changes
+the release pointer or rollback tree, connects a provider, or appends an event.
+
+The receipt's offline check is deliberately not full Doctor. It records live
+checks and activation eligibility as `not_evaluated`/false, and it records
+rollback compatibility and automatic rollback eligibility as `not_evaluated`.
+It also reports projection divergence as `not_evaluated`; the logical digests
+are content-free replay evidence, not a comparison with the backed-up derived
+databases. The guarded updater must later create and rehearse its exact fresh
+backup and bind predecessor compatibility after backup quiescence and before
+any active candidate or OpenClaw selector, plugin registration, or
+release-pointer mutation; full live Doctor is post-switch. Do not mark all of
+HTR-05 or deployment readiness complete from the preliminary receipt alone.
+Until the candidate-pending attestation, updater-consumed fresh rehearsal, and
+crash-recoverable replacement paths are implemented, activation remains
+blocked.
+
 Restore only a file inside the configured backup directory:
 
 ```bash
@@ -237,8 +281,11 @@ remains `planned` / `account_not_created` unless the owner separately
 authorizes each account, recovery, host, permission, transport, enrollment,
 observation, and sending gate. It never grants member Apple-source access.
 
-Never run a floating OpenClaw upgrade. Prepare and review a candidate checkout,
-then run:
+Never run a floating OpenClaw upgrade. The commands in this section are
+reference-only until the candidate-pending attestation, updater-consumed exact
+fresh rehearsal, and crash-recoverable replacement paths are implemented and
+merged. Owner authorization alone does not make them executable. After those
+prerequisites exist, prepare and review a candidate checkout, then run:
 
 ```bash
 ./bootstrap/update.sh /absolute/path/to/reviewed-candidate
