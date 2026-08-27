@@ -6,13 +6,15 @@ REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 acceptance_python_source="$(command -v python)"
 TEST_PARENT="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 TEST_ROOT="$(mktemp -d "$TEST_PARENT/adminme-clean-install.XXXXXX")"
+acceptance_runtime="$(mktemp -d "$TEST_PARENT/adminme-acceptance-runtime.XXXXXX")"
 cleanup() {
   [[ "$TEST_ROOT" == "$TEST_PARENT"/adminme-clean-install.* ]] && rm -rf "$TEST_ROOT"
+  [[ "$acceptance_runtime" == "$TEST_PARENT"/adminme-acceptance-runtime.* ]] \
+    && rm -rf "$acceptance_runtime"
 }
 trap cleanup EXIT
 
-acceptance_runtime="$TEST_ROOT/.acceptance-runtime"
-mkdir -m 0700 "$acceptance_runtime" "$acceptance_runtime/bin"
+mkdir -m 0700 "$acceptance_runtime/bin"
 ADMINME_ACCEPTANCE_PYTHON="$acceptance_runtime/bin/python"
 printf '#!/bin/sh\nexec %q "$@"\n' "$acceptance_python_source" \
   >"$ADMINME_ACCEPTANCE_PYTHON"
