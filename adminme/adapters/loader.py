@@ -18,7 +18,10 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from adminme.adapters.base import Adapter
-from adminme.provider_bindings import validate_provider_bindings
+from adminme.provider_bindings import (
+    MEMBER_BRIDGE_ONLY_ADAPTER_KINDS,
+    validate_provider_bindings,
+)
 
 
 def load_builtin_adapters(
@@ -28,6 +31,7 @@ def load_builtin_adapters(
     member_roles: dict[str, str] | None = None,
     household_mapping: dict[str, Any] | None = None,
     service_principal_ids: set[str] | None = None,
+    service_principal_provider_authorizations: dict[str, frozenset[str]] | None = None,
     validate_bindings: bool = False,
 ) -> list[Adapter]:
     if validate_bindings:
@@ -36,6 +40,9 @@ def load_builtin_adapters(
             member_roles=member_roles or {},
             household_mapping=household_mapping or {},
             service_principal_ids=service_principal_ids or set(),
+            service_principal_provider_authorizations=(
+                service_principal_provider_authorizations or {}
+            ),
         )
     catalog = _catalog(repository_root / "packs" / "adapters")
     adapters: list[Adapter] = []
@@ -45,10 +52,31 @@ def load_builtin_adapters(
         if entry.get("enabled") is False:
             continue
         kind = str(entry.get("kind") or "")
+        normalized_kind = kind.removeprefix("adapter:")
+        if normalized_kind in MEMBER_BRIDGE_ONLY_ADAPTER_KINDS:
+            raise ValueError(
+                f"configured adapter pack is member-bridge-only and cannot run "
+                f"in the central supervisor: {kind!r}"
+            )
         resolved = catalog.get(kind)
         if resolved is None:
             raise ValueError(f"configured adapter pack not found: {kind!r}")
         pack_dir, manifest = resolved
+        targets = manifest.get("deployment_targets")
+        capabilities = manifest.get("capabilities")
+        bridge_only = targets == ["bridge"] or (
+            isinstance(capabilities, list)
+            and bool(capabilities)
+            and all(
+                isinstance(capability, dict) and capability.get("runtime") == "bridge"
+                for capability in capabilities
+            )
+        )
+        if bridge_only:
+            raise ValueError(
+                f"configured adapter pack is bridge-only and cannot run in the "
+                f"central supervisor: {kind!r}"
+            )
         adapter_config = dict(entry.get("config") or {})
         schema_path = pack_dir / "config.schema.json"
         if schema_path.exists():

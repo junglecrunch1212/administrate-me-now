@@ -1,6 +1,14 @@
-member_id: member-id
-provider_account_id: apple-contacts
+member_id: REPLACE_WITH_MEMBER_ID
+provider_account_id: provider-account:00000000000000000000000000000000
+deployment_target: bridge
+workspace: personal
+permission_scope:
+  - contacts.read
+  - contacts.write
+binding_provenance: member-bridge-enrollment
+ownership_attested: true
 account_label: Apple Contacts
 container_external_id: all-containers
-bridge_socket: /path/to/member-bridge.sock
+allowed_container_ids:
+  - all-containers
 poll_interval_s: 300

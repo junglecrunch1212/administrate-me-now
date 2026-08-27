@@ -1,13 +1,14 @@
-"""Apple Calendar adapter pack — fresh Cohort D Cat-B central pack (prompt 11b-ii-β-α).
+"""Apple Calendar Cat-B adapter for an authorized member bridge.
 
 Inherits :class:`adminme.lib.adapters.ExternalStateMirrorAdapter` per memo
 05 §1.2 / §2.3 / §2.5 / §3.2 / [D19] / [PM-34] / [UT-27]. Inbound EKEventStore
 poll maps onto EXISTING ``calendar.event_added@v1`` (no new schema per [D7]);
 outbound ``create_event`` saves an ``EKEvent`` wrapped through
 :func:`adminme.lib.observation.outbound` per [§6.20]. Asymmetric
-``write_capabilities=["create_event"]`` per [UT-27]. Central deployment
-ONLY (F-7) — dual-deployment is 11b-ii-β-β scope per
-`docs/11-split-memo-11b-ii-beta.md` §2.
+``write_capabilities=["create_event"]`` per [UT-27].  The historical central
+human-member path is superseded: this class now requires the wrapper-injected
+member-bridge context.  A future service-owned central implementation needs a
+distinct reviewed adapter and schema.
 """
 
 # [§8.2, D6] no LLM SDK imports under packs/adapters/.
@@ -73,9 +74,12 @@ _DEFAULT_POLL_WINDOW_DAYS: int = 30
 # OS-level access ref. EventKit grants Calendar access at the OS level
 # (``requestFullAccessToEvents``); no 1Password secret involved. Same
 # pattern as Apple Reminders.
-_OS_TOKEN_STORAGE_REF: str = "op://local-system/calendar/permission"
+_OS_TOKEN_STORAGE_REF: str = "keychain://device-permissions/calendar"
 
-_APPLE_CALENDAR_SCOPES: list[str] = ["calendar:read", "calendar:write"]
+_APPLE_CALENDAR_SCOPES: list[str] = [
+    "eventkit.calendar.read",
+    "eventkit.calendar.write",
+]
 
 
 EKEventStoreFactory = Callable[[], Any]
@@ -185,13 +189,12 @@ def _participant_v2(value: Any) -> dict[str, Any]:
 
 
 class AppleCalendarAdapter(ExternalStateMirrorAdapter):
-    """Apple Calendar Cat-B central pack. Polls ``EKEventStore`` every
+    """Apple Calendar Cat-B member-bridge pack. Polls ``EKEventStore`` every
     ``poll_interval_s`` over a forward-looking ``poll_window_days`` window
     and emits one ``calendar.event_added@v1`` per non-deduped ``EKEvent``
     per [D7] + canonical "MAP DON'T REGISTER". Outbound
     :meth:`_apply_write_impl` routes ``saveEvent_span_error_`` through
-    :func:`observation_outbound` per [§6.20]. Central-only (F-7); β-β
-    adds dual-deployment."""
+    :func:`observation_outbound` per [§6.20]."""
 
     name: ClassVar[str] = "calendaring-apple-calendar"
     family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
@@ -205,7 +208,7 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
     capabilities: ClassVar[list[Any]] = [
         {
             "kind": "Cat-B",
-            "runtime": "central",
+            "runtime": "bridge",
             "event_families": [
                 "calendar.event_added",
                 "calendar.event_updated",
@@ -271,14 +274,8 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
         self._observation_event_log: Any = observation_event_log
-        # [D18, D22, memo 04 §2.2] Dual-deployment instance state.
-        # Defaults preserve the central path byte-for-byte (F-2); the
-        # bridge branch flips these in :meth:`start`. ``_sharing_model_value``
-        # surfaces the row discriminator (memo 05 §2.5 / §5.4) as an
-        # instance attribute since ``calendar.event_added@v1`` is
-        # ``extra="forbid"`` and β-β registers no new schemas.
-        self._deployment_target: Literal["central", "bridge"] = "central"
-        self._sharing_model_value: str = "shared_central"
+        self._deployment_target: Literal["bridge"] = "bridge"
+        self._sharing_model_value: str = "per_member_isolated"
         self._bridge_sink: Any = None
         # F-5: retain bridge emit Tasks so they can't be GC'd mid-flight
         # when scheduled from the sync ``_append`` call site.
@@ -302,45 +299,27 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
     async def start(self, *, ctx: AdapterContext) -> None:
         """Authorize EventKit, emit ``adapter.authenticated``, run poll loop.
 
-        β-β dual-deployment: ``ctx.config["deployment_target"]`` selects
-        ``"central"`` (default — byte-for-byte β-α per F-2) or ``"bridge"``
-        (per-member iCloud, emit via the wrapper-injected sink per memo
-        04 §2.2 / [§6.19]).
+        The current human-member EventKit adapter is bridge-only. A future
+        service-owned central implementation requires a distinct reviewed
+        adapter and schema; it cannot reuse this member credential boundary.
         """
-        # [D18, D22, docs/11-split-memo-11b-ii-beta.md §2] Default
-        # ``"central"`` keeps existing instances backwards-compatible (F-2).
-        deployment_target = ctx.config.get("deployment_target", "central")
-        if deployment_target not in ("central", "bridge"):
+        # [D18, D22, CO-019] Member Apple credentials are bridge-only.
+        deployment_target = ctx.config.get("deployment_target")
+        if deployment_target != "bridge":
             raise ValueError(
-                "config.deployment_target must be 'central' or 'bridge'; "
-                f"got {deployment_target!r}"
+                "Apple Calendar's human-member adapter requires "
+                "config.deployment_target='bridge'"
             )
-        self._deployment_target = deployment_target
-        # [A-2, memo 05 §2.5 / §5.4] row discriminator surfaced as an
-        # instance attribute (schema is ``extra="forbid"``).
-        self._sharing_model_value = (
-            "per_member_isolated" if deployment_target == "bridge" else "shared_central"
+        bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
+            "member_id"
         )
-
-        if deployment_target == "bridge":
-            # [A-3, memo 04 §2.2] Wrapper synthesizes ctx.config with the
-            # per-member Apple ID identity + injected sink.
-            bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
-                "member_id"
-            )
-            if not isinstance(bridge_member_id, str) or not bridge_member_id:
-                raise ValueError(
-                    "bridge deployment requires ctx.config['_bridge_member_id'] "
-                    "or ctx.config['member_id'] as a non-empty string"
-                )
-            self._config["member_id"] = bridge_member_id
-            sink = ctx.config.get("_bridge_sink")
-            if sink is None:
-                raise ValueError(
-                    "bridge deployment requires ctx.config['_bridge_sink'] "
-                    "(an adminme_bridge.adapters.sinks.BridgeEventSink)"
-                )
-            self._bridge_sink = sink
+        if not isinstance(bridge_member_id, str) or not bridge_member_id:
+            raise ValueError("bridge deployment requires config._bridge_member_id")
+        self._config["member_id"] = bridge_member_id
+        sink = ctx.config.get("_bridge_sink")
+        if sink is None:
+            raise ValueError("bridge deployment requires config._bridge_sink")
+        self._bridge_sink = sink
 
         calendar_identifier = self._config.get("calendar_identifier")
         member_id = self._config.get("member_id")
@@ -814,12 +793,22 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         await self._append(
             ctx=ctx,
             event_type="adapter.authenticated",
+            schema_version=2,
             payload={
                 "adapter_name": self.name,
                 "adapter_family": self.family,
                 "token_storage_ref": _OS_TOKEN_STORAGE_REF,
                 "authenticated_at": _to_iso(ctx.now_factory()),
                 "scopes": list(self.SCOPES),
+                "bridge_enrollment_id": str(
+                    self._config.get("_bridge_enrollment_id") or ""
+                ),
+                "configuration_sha256": str(
+                    self._config.get("_bridge_configuration_sha256") or ""
+                ),
+                "provider_account_id": str(
+                    self._config.get("provider_account_id") or ""
+                ),
             },
         )
 
@@ -896,9 +885,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         so it can't be GC'd mid-flight. Memo 04 §2.2: provisional
         ``private:<member_id>`` scopes are re-stamped by the central
         :3330 router from Tailscale identity post-receipt."""
-        sink = self._bridge_sink
+        sink = self._bridge_sink or ctx.config.get("_bridge_sink")
         if sink is None:
-            return
+            raise RuntimeError("Apple Calendar bridge sink is not configured")
         member_id = str(self._config.get("member_id") or "")
         now = ctx.now_factory()
         provisional_owner_scope = (
@@ -912,7 +901,7 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             occurred_at=_to_iso(now),
             recorded_at="",
             source_adapter=self.name,
-            source_account_id=member_id or self.name,
+            source_account_id=str(self._config.get("provider_account_id") or ""),
             owner_scope=provisional_owner_scope,
             visibility_scope=provisional_owner_scope,
             sensitivity=self.sensitivity_floor,
@@ -920,11 +909,13 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             causation_id=causation_id,
             payload=payload,
         )
-        await self._dispatch_bridge_emit(envelope)
+        await self._dispatch_bridge_emit(envelope, sink=sink)
 
-    async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
+    async def _dispatch_bridge_emit(
+        self, envelope: EventEnvelope, *, sink: Any | None = None
+    ) -> None:
         """Require a durable central-ingest acknowledgement before returning."""
-        sink = self._bridge_sink
+        sink = sink or self._bridge_sink
         if sink is None:
             raise RuntimeError("Apple Calendar bridge sink is not configured")
         result = await sink.emit(envelope)

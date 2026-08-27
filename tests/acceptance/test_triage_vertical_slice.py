@@ -18,6 +18,8 @@ from adminme.runtime.application import RuntimeSettings, create_application
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MEMBER = "member_triage_principal"
 CHILD = "member_triage_child"
+APPLE_CALENDAR_ACCOUNT = f"provider-account:{'a' * 32}"
+APPLE_CALENDAR_PACK = "calendaring-apple-calendar-bridge"
 SECRET = "triage-loopback-secret-at-least-32-bytes"
 AUTH = {
     "Tailscale-User-Login": "triage-principal.ts.net",
@@ -37,7 +39,39 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
             "triage-child.ts.net": CHILD,
         },
         bridge_enrollments={
-            "bridge-triage.ts.net": {"member_id": MEMBER, "status": "active"}
+            "bridge-triage.ts.net": {
+                "member_id": MEMBER,
+                "enrollment_id": "enrollment-triage-calendar",
+                "status": "active",
+                "configured_packs": [APPLE_CALENDAR_PACK],
+                "enabled_packs": [APPLE_CALENDAR_PACK],
+                "authorized_packs": [APPLE_CALENDAR_PACK],
+                "adapters_active": [APPLE_CALENDAR_PACK],
+                "pack_config": {
+                    APPLE_CALENDAR_PACK: {
+                        "member_id": MEMBER,
+                        "provider_account_id": APPLE_CALENDAR_ACCOUNT,
+                        "deployment_target": "bridge",
+                        "workspace": "personal",
+                        "permission_scope": [
+                            "eventkit.calendar.read",
+                            "eventkit.calendar.write",
+                        ],
+                        "calendar_identifier": "calendar-primary",
+                        "allowed_container_ids": ["calendar-primary"],
+                        "shared_container_ids": [],
+                        "binding_provenance": "member-bridge-enrollment",
+                        "ownership_attested": True,
+                    }
+                },
+                "pack_capability_states": {APPLE_CALENDAR_PACK: "attested"},
+                "provider_capability_state": "attested",
+                "capability_attestations": {
+                    APPLE_CALENDAR_PACK: {
+                        "event_id": "event-triage-calendar-authenticated"
+                    }
+                },
+            }
         },
         member_roles={MEMBER: "principal", CHILD: "child"},
         openclaw_enabled=True,
@@ -1255,8 +1289,8 @@ def test_proposal_requires_member_triage_before_official_task(
                 type="calendar.source_observed",
                 schema_version=1,
                 occurred_at="2026-08-06T10:00:00Z",
-                source_adapter="triage-calendar-fixture",
-                source_account_id=MEMBER,
+                source_adapter="calendaring-apple-calendar",
+                source_account_id=APPLE_CALENDAR_ACCOUNT,
                 owner_scope=f"private:{MEMBER}",
                 visibility_scope=f"private:{MEMBER}",
                 sensitivity="normal",
@@ -1264,7 +1298,7 @@ def test_proposal_requires_member_triage_before_official_task(
                 payload={
                     "member_id": MEMBER,
                     "provider": "apple_calendar",
-                    "provider_account_id": MEMBER,
+                    "provider_account_id": APPLE_CALENDAR_ACCOUNT,
                     "calendar_external_id": "calendar-primary",
                     "calendar_name": "Fixture personal calendar",
                     "access_role": "owner",
@@ -1289,7 +1323,7 @@ def test_proposal_requires_member_triage_before_official_task(
                     {
                         "source_member_id": MEMBER,
                         "provider": "apple_calendar",
-                        "provider_account_id": MEMBER,
+                        "provider_account_id": APPLE_CALENDAR_ACCOUNT,
                         "calendar_external_id": "calendar-primary",
                         "purpose": "personal",
                         "effect": "hard_block",
@@ -1335,7 +1369,7 @@ def test_proposal_requires_member_triage_before_official_task(
             "route": {
                 "member_id": MEMBER,
                 "provider": "apple_calendar",
-                "provider_account_id": MEMBER,
+                "provider_account_id": APPLE_CALENDAR_ACCOUNT,
                 "container_external_id": "calendar-primary",
             },
         }

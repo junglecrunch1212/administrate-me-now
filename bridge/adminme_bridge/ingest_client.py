@@ -47,11 +47,13 @@ class IngestClient:
         *,
         central_endpoint_url: str,
         tailscale_identity_header: str,
+        enrollment_id: str,
         client: httpx.AsyncClient | None = None,
         sleep: Any = asyncio.sleep,
     ) -> None:
         self._endpoint = central_endpoint_url.rstrip("/")
         self._identity = tailscale_identity_header
+        self._enrollment_id = enrollment_id
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(30.0))
         self._sleep = sleep
 
@@ -93,7 +95,7 @@ class IngestClient:
         response = await self._client.get(
             f"{self._endpoint}/api/bridge/commands",
             params={"providers": ",".join(sorted(providers))},
-            headers={"Tailscale-User-Login": self._identity},
+            headers=self._headers(),
         )
         response.raise_for_status()
         body = response.json()
@@ -110,7 +112,7 @@ class IngestClient:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 resp = await self._client.post(
-                    url, json=payload, headers={"Tailscale-User-Login": self._identity}
+                    url, json=payload, headers=self._headers()
                 )
             except httpx.HTTPError as exc:
                 last_error = f"transport_error: {type(exc).__name__}: {exc}"
@@ -144,6 +146,12 @@ class IngestClient:
         return SubmitResult(
             False, None, last_status, last_error or "max_attempts_exceeded"
         )
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Tailscale-User-Login": self._identity,
+            "X-AdministrateMe-Bridge-Enrollment": self._enrollment_id,
+        }
 
 
 __all__ = [

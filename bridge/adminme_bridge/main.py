@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
+from adminme.bridge_authorization import BRIDGE_PACK_POLICIES, BridgePackPolicy
 
 from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeContext
 from adminme_bridge.config import BridgeConfig, load_config
@@ -69,13 +71,19 @@ def configured_packs(config: BridgeConfig) -> list[PackHandle]:
     }
     built_in_root = Path(__file__).parent / "connector_packs"
     built_ins = {handle.name: handle for handle in discover_packs(built_in_root)}
-    enabled = set(config.enabled_packs) | set(config.pack_config)
-    unknown = enabled - (set(installed) | set(built_ins))
+    enabled = set(config.enabled_packs)
+    if len(enabled) != len(config.enabled_packs):
+        raise PackLoadError("enabled bridge packs must be unique")
+    if not enabled <= set(config.configured_packs):
+        raise PackLoadError("enabled bridge packs not found in configured set")
+    unknown = set(config.configured_packs) - (set(installed) | set(built_ins))
     if unknown:
         raise PackLoadError(f"configured bridge packs not found: {sorted(unknown)}")
-    selected = dict(installed)
+    selected: dict[str, PackHandle] = {}
     for name in enabled:
-        if name in built_ins:
+        if name in installed:
+            selected[name] = installed[name]
+        elif name in built_ins:
             selected[name] = built_ins[name]
     return [selected[name] for name in sorted(selected)]
 
@@ -124,12 +132,21 @@ class BridgeSupervisor:
         return list(self._adapters)
 
     def make_context(self) -> BridgeContext:
+        configuration_sha256 = hashlib.sha256(
+            json.dumps(
+                self._config.pack_config,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
         return BridgeContext(
             member_id=self._config.member_id,
             ingest_client=self._ingest_client,
             correlation_id_factory=lambda: str(uuid.uuid4()),
             now_factory=lambda: datetime.now(timezone.utc),
             tenant_id=self._config.tenant_id,
+            enrollment_id=self._config.enrollment_id,
+            configuration_sha256=configuration_sha256,
         )
 
     async def start(self) -> None:
@@ -190,25 +207,42 @@ class BridgeSupervisor:
                     command_id = str(command["command_id"])
                     result_envelope = self._command_ledger.get(command_id)
                     if result_envelope is None:
-                        adapter = adapters.get(str(command["provider"]))
-                        if adapter is None:
-                            continue
                         try:
-                            result = await getattr(adapter, "apply_write")(
-                                str(command["operation"]),
-                                dict(command.get("payload") or {}),
-                                command.get("target_external_id"),
+                            adapter = self._authorized_command_adapter(
+                                command, adapters
                             )
-                        except RuntimeError as exc:
-                            if "has not finished starting" in str(exc):
-                                continue
-                            result_envelope = self._result_envelope(command, error=exc)
-                        except Exception as exc:  # noqa: BLE001 - typed provider failure
-                            result_envelope = self._result_envelope(command, error=exc)
-                        else:
+                        except ValueError as exc:
                             result_envelope = self._result_envelope(
-                                command, result=result
+                                command, error=exc, provider_called=False
                             )
+                        else:
+                            provider_called = True
+                            try:
+                                result = await getattr(adapter, "apply_write")(
+                                    str(command["operation"]),
+                                    dict(command.get("payload") or {}),
+                                    command.get("target_external_id"),
+                                )
+                            except RuntimeError as exc:
+                                if "has not finished starting" in str(exc):
+                                    continue
+                                result_envelope = self._result_envelope(
+                                    command,
+                                    error=exc,
+                                    provider_called=provider_called,
+                                )
+                            except Exception as exc:  # noqa: BLE001 - provider failure
+                                result_envelope = self._result_envelope(
+                                    command,
+                                    error=exc,
+                                    provider_called=provider_called,
+                                )
+                            else:
+                                result_envelope = self._result_envelope(
+                                    command,
+                                    result=result,
+                                    provider_called=provider_called,
+                                )
                         self._command_ledger.put(command_id, result_envelope)
                     submit = await self._ingest_client.submit(result_envelope)
                     if not submit.ok:
@@ -226,14 +260,102 @@ class BridgeSupervisor:
             except asyncio.CancelledError:
                 return
 
+    @staticmethod
+    def _command_container(
+        policy: BridgePackPolicy, command: dict[str, Any]
+    ) -> str | None:
+        payload = command.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        aliases = {
+            "calendar_identifier": (
+                "calendar_identifier",
+                "calendar_external_id",
+                "calendar_id",
+            ),
+            "target_list_identifier": (
+                "target_list_identifier",
+                "target_list_id",
+                "list_external_id",
+                "list_identifier",
+            ),
+            "container_external_id": ("container_external_id",),
+        }.get(str(policy.container_key), ())
+        for key in aliases:
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _authorized_command_adapter(
+        self, command: dict[str, Any], adapters: dict[str, Any]
+    ) -> Any:
+        """Validate the central command again at the provider-process edge."""
+
+        violations: list[str] = []
+        if int(command.get("schema_version") or 0) != 2:
+            violations.append("schema_version")
+        if command.get("member_id") != self._config.member_id:
+            violations.append("member_id")
+        provider = command.get("provider")
+        matching = [
+            BRIDGE_PACK_POLICIES[pack]
+            for pack in self._config.enabled_packs
+            if BRIDGE_PACK_POLICIES[pack].provider == provider
+        ]
+        policy = matching[0] if len(matching) == 1 else None
+        if policy is None:
+            violations.append("provider")
+        config = self._config.pack_config.get(policy.pack, {}) if policy else {}
+        if command.get("provider_account_id") != config.get("provider_account_id"):
+            violations.append("provider_account_id")
+        if policy is None or command.get("operation") not in policy.write_operations:
+            violations.append("operation")
+        if policy is not None and policy.container_key is not None:
+            container = self._command_container(policy, command)
+            allowed_raw = config.get("allowed_container_ids")
+            allowed_containers = (
+                {str(value) for value in allowed_raw}
+                if isinstance(allowed_raw, list)
+                else set()
+            )
+            if container not in allowed_containers:
+                violations.append("container")
+        for key in (
+            "command_id",
+            "event_id",
+            "domain_approval_event_id",
+            "openclaw_approval_event_id",
+        ):
+            if not isinstance(command.get(key), str) or not command[key]:
+                violations.append(key)
+        fingerprint = command.get("request_fingerprint")
+        if (
+            not isinstance(fingerprint, str)
+            or len(fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in fingerprint)
+        ):
+            violations.append("request_fingerprint")
+        adapter = adapters.get(str(provider))
+        if adapter is None:
+            violations.append("adapter")
+        if violations:
+            raise ValueError(
+                "bridge command contract denied: " + ", ".join(sorted(set(violations)))
+            )
+        return adapter
+
     def _result_envelope(
         self,
         command: dict,
         *,
         result: dict | None = None,
         error: Exception | None = None,
+        provider_called: bool,
     ) -> dict:
         now = datetime.now(timezone.utc)
+        if int(command.get("schema_version") or 1) != 2:
+            raise ValueError("member bridge commands require external_sync v2")
         if error is None:
             event_type = "external_sync.write_completed"
             payload = {
@@ -268,14 +390,25 @@ class BridgeSupervisor:
                 "retryable": not isinstance(error, (LookupError, ValueError)),
                 "failed_at": now.isoformat(),
             }
+        payload.update(
+            {
+                "command_event_id": command["event_id"],
+                "domain_approval_event_id": command["domain_approval_event_id"],
+                "openclaw_approval_event_id": command["openclaw_approval_event_id"],
+                "provider_account_id": command["provider_account_id"],
+                "request_fingerprint": command["request_fingerprint"],
+                "provider_called": provider_called,
+                "origin_proposal_id": command.get("origin_proposal_id"),
+            }
+        )
         return EventEnvelope(
             event_at_ms=int(time.time() * 1000),
             tenant_id=self._config.tenant_id,
             type=event_type,
-            schema_version=1,
+            schema_version=2,
             occurred_at=now.isoformat(),
             source_adapter="adminme-bridge-command-dispatcher",
-            source_account_id=self._config.member_id,
+            source_account_id=str(command["provider_account_id"]),
             owner_scope=f"private:{self._config.member_id}",
             visibility_scope=f"private:{self._config.member_id}",
             sensitivity="normal",
@@ -328,6 +461,7 @@ async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
     ingest_client = IngestClient(
         central_endpoint_url=config.central_endpoint,
         tailscale_identity_header=config.tailscale_identity,
+        enrollment_id=config.enrollment_id,
     )
     supervisor = BridgeSupervisor(
         config=config, ingest_client=ingest_client, packs=packs

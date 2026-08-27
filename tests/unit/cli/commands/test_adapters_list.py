@@ -304,8 +304,9 @@ def test_list_command_finds_three_reference_packs_on_main() -> None:
         assert row.kinds == expected, (
             f"{name}: expected kinds={expected!r}, got {row.kinds!r}"
         )
-        assert row.runtime == "central", (
-            f"{name}: expected runtime='central', got {row.runtime!r}"
+        expected_runtime = "bridge" if name == "reminders-apple-eventkit" else "central"
+        assert row.runtime == expected_runtime, (
+            f"{name}: expected runtime={expected_runtime!r}, got {row.runtime!r}"
         )
 
 

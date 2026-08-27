@@ -311,7 +311,7 @@ class LocalKnowledgeSourceAdapter:
                     payload={
                         "knowledge_id": knowledge_id,
                         "member_id": ctx.member_id,
-                        "source_kind": "apple_notes",
+                        "source_kind": self.source_kind,
                         "source_external_id": external_id,
                         "deleted_at": now.isoformat(),
                     },
@@ -396,7 +396,7 @@ class LocalKnowledgeSourceAdapter:
             ),
             payload={
                 "member_id": ctx.member_id,
-                "source_kind": "apple_notes",
+                "source_kind": self.source_kind,
                 "account_external_id": folder.account_external_id,
                 "folder_external_id": folder.external_id,
                 "folder_path": folder.path,

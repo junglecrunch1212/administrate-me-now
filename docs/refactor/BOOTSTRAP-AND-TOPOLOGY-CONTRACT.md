@@ -124,7 +124,17 @@ Each section has `not_started|in_progress|complete|failed|rolled_back`, versione
 7. **Seed data:** tenant-supplied household/CRM/place/asset/account/recurrence/project data becomes typed events; skipped optional data creates an explicit follow-up, never exemplar defaults.
 8. **Central integrations:** pair selected OpenClaw channels and central Cat-A/B/C/E adapters; set `ADMINME_LIVE_GATE=1` and `OPENCLAW_SOURCE_DIR` only in the disposable lab; enable only the exact pinned bundled `llm-task`, preserve existing `tools.alsoAllow` entries while adding it, validate with OpenClaw's config writer, and require Doctor to prove it runtime-registered; run the live AdministrateMe plugin link/inspect/restart/deep-RPC gate; reconcile the compiled skill, commands, dashboard, and `automations.json`; seed selected shared lists; test enabled adapters with observation-safe actions. Do not proceed on a version/commit mismatch.
 9. **Observation briefing:** enforce active observation, explain the documented 5–7 day trust review, perform a would-have-happened test that is suppressed/audited, show review/disable prerequisites, backup status, member portal, and emergency stop.
-10. **Bridge enrollment:** create one short-lived, member-bound package at a time; verify target Apple identity, Tailscale identity, permissions, allowed Cat-B/D adapters and kid restrictions; enroll centrally; revoke bootstrap material; verify owner-scoped ingest and bridge health.
+10. **Bridge enrollment and capability:** seal reviewed pack/account/container/
+permission/provenance coordinates; create one short-lived, member-bound package
+at a time; verify the target member and Tailscale identity; accept with zero
+enabled provider packs; finalize only the exact owner-scoped bootstrap proof;
+and revoke transfer material. A later explicit member action may enable one
+sealed pack and encounter its macOS permission prompt. Ordinary provider facts
+and commands remain denied until the bridge emits an exact
+`adapter.authenticated@v2` receipt and a separate central `bridge-attest`
+operation promotes only that pack. Readiness distinguishes transport-active
+from provider `not_attested`, `partial`, `attested`, or `not_required` without
+publishing provider identifiers.
 
 Bootstrap completes only when a secret-scanned report lists versions, checks, events, installed capabilities, skipped optionals, observation start/end-not-before, authenticated backup/restore proof, retained rollback predecessor, tagged-host and member-ingress acceptance, Standard-account/recovery proof, provider-binding evidence, OpenClaw account/agent/session isolation, and rollback status. `bootstrap.completed` is not emitted if any required section is incomplete. Service channels that are explicitly optional may remain planned or disabled without blocking the current central release, but their state is never promoted by unrelated readiness.
 
@@ -135,12 +145,13 @@ ADR-0005 assigns to the Settings control plane. Bounded preferences and
 adapter pause state use an atomic secret-free desired-state journal and typed
 receipts. Pause/resume reconciles the existing supervisor; it does not create a
 new daemon or mutate provider data. Add Bridge may create a scoped enrollment
-request, but the reviewed bootstrap ceremony still owns short-lived package
-export, target-member acceptance, Tailscale and OS-permission verification,
-owner-scoped ingest proof, finalization, and bootstrap-material revocation.
-OAuth grants and scope expansion remain provider-specific secure activation
-steps. No password, token, or secure-reference path is returned to browser
-Settings.
+request, but the reviewed bootstrap ceremony still owns configuration sealing,
+short-lived package export, target-member acceptance, owner-scoped transport
+proof, finalization, and bootstrap-material revocation. Provider enablement/OS
+permission and central capability attestation are later, separate operations;
+transport state never substitutes for them. OAuth grants and scope expansion
+remain provider-specific secure activation steps. No password, token, provider
+account, or secure-reference path is returned to browser Settings.
 
 ## Observation trust period
 
@@ -148,7 +159,7 @@ Observation begins before any connector/action becomes live and remains active f
 
 ## Bootstrap acceptance evidence
 
-Release requires fresh install, interrupted resume at every section boundary, repeat no-op, changed-input reconciliation, per-section rollback, corrupted-state fail-closed, secret scan, observation proof, backup and bare-machine restore, uninstall/disable without data destruction, one Apple-member bridge and kid-restriction rehearsal, and a two-instance parallel canary. Production composition must also prove tagged infrastructure identity cannot authenticate as a member, exact A/B ingress isolation, no-enrollment bridge denial plus the narrow provisional proof, global provider ownership validation, explicit envelope-consistent service-channel routing/unresolved denial, current OpenClaw topology rather than configured assertions, Settings/readiness agreement, host/config/release-bound rollback evidence, durable terminal-effect integrity, and zero true/unknown/unsuppressed effects in the current attested observation window. The clean rehearsal is on a disposable macOS host; Windows results do not substitute.
+Release requires fresh install, interrupted resume at every section boundary, repeat no-op, changed-input reconciliation, per-section rollback, corrupted-state fail-closed, secret scan, observation proof, backup and bare-machine restore, uninstall/disable without data destruction, one Apple-member bridge and kid-restriction rehearsal, and a two-instance parallel canary. Production composition must also prove tagged infrastructure identity cannot authenticate as a member, exact A/B ingress isolation, no-enrollment bridge denial plus the narrow provisional proof, transport-only provider denial, exact capability attestation and stale/wrong-coordinate denial, zero central construction of member Apple adapters, global provider and bridge-account ownership validation, private-by-default shared-resource routing, explicit envelope-consistent service-channel routing/unresolved denial, current OpenClaw topology rather than configured assertions, Settings/readiness agreement, host/config/release-bound rollback evidence, durable terminal-effect integrity, and zero true/unknown/unsuppressed effects in the current attested observation window. The clean rehearsal is on a disposable macOS host; Windows results do not substitute.
 
 ## Gate 5 implementation status
 

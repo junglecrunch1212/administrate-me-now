@@ -124,7 +124,7 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     cls_entry = cls_caps[0]
     manifest_entry = manifest.capabilities[0]
     assert cls_entry["kind"] == manifest_entry.kind == "Cat-B"
-    assert cls_entry["runtime"] == manifest_entry.runtime == "central"
+    assert cls_entry["runtime"] == manifest_entry.runtime == "bridge"
     assert (
         cls_entry["event_families"]
         == manifest_entry.event_families
@@ -156,7 +156,7 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
     manifest = parse_adapter_manifest(PACK_ROOT)
 
     assert manifest.capabilities[0].kind == "Cat-B"
-    assert manifest.capabilities[0].runtime == "central"
+    assert manifest.capabilities[0].runtime == "bridge"
     assert manifest.write_capabilities == [
         "create_event",
         "update_event",
@@ -183,12 +183,34 @@ class _FakeEventLog:
         self.calls.append({**envelope.model_dump(), **kwargs})
         return f"event-{len(self.calls)}"
 
+    async def emit(self, envelope: Any) -> Any:
+        self.calls.append(envelope.model_dump())
+        return _BridgeEmitResult()
+
+
+class _BridgeEmitResult:
+    ok = True
+    event_id = "event-bridge-1"
+    error = None
+
+
+class _FakeBridgeSink:
+    def __init__(self) -> None:
+        self.envelopes: list[Any] = []
+
+    async def emit(self, envelope: Any) -> _BridgeEmitResult:
+        self.envelopes.append(envelope)
+        return _BridgeEmitResult()
+
 
 def _make_adapter() -> Any:
     return AppleCalendarAdapter(
         config={
             "calendar_identifier": "apple-calendar-household-001",
             "member_id": "member-001",
+            "provider_account_id": "provider-account:" + "a" * 32,
+            "_bridge_enrollment_id": "bridge-enrollment-test",
+            "_bridge_configuration_sha256": "b" * 64,
         },
     )
 
@@ -197,7 +219,11 @@ def _make_ctx(event_log: _FakeEventLog) -> AdapterContext:
     frozen = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
-        config={},
+        config={
+            "deployment_target": "bridge",
+            "_bridge_member_id": "member-001",
+            "_bridge_sink": event_log,
+        },
         correlation_id_factory=lambda: "corr-pack-internal-1",
         now_factory=lambda: frozen,
     )
@@ -268,6 +294,8 @@ def test_inbound_emit_payload_validates_against_calendar_event_added_v1_schema()
     adapter = _make_adapter()
     event_log = _FakeEventLog()
     ctx = _make_ctx(event_log)
+    bridge_sink = _FakeBridgeSink()
+    adapter._bridge_sink = bridge_sink
 
     event = _PackInternalFakeEKEvent(
         event_identifier="apple-evt-pack-001",
@@ -286,7 +314,11 @@ def test_inbound_emit_payload_validates_against_calendar_event_added_v1_schema()
         )
     )
 
-    added_calls = [c for c in event_log.calls if c["type"] == "calendar.event_added"]
+    added_calls = [
+        envelope.model_dump()
+        for envelope in bridge_sink.envelopes
+        if envelope.type == "calendar.event_added"
+    ]
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
     # extra="forbid" — extras would raise here.

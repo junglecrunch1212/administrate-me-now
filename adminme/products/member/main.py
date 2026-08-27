@@ -23,10 +23,12 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field, ValidationError
 
 from adminme.comms import validate_outbound_communication
+from adminme.bridge_authorization import authorization_from_record
 from adminme.context_fabric import policy_scope_digest
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.extensions import ExtensionError
+from adminme.lib.adapters.contacts_base import normalize_identifier
 from adminme.events.schemas.triage import (
     TriageFeatureCandidateV1,
     TriageRouteV1,
@@ -417,6 +419,19 @@ class ReminderCommandRequest(BaseModel):
     expected_last_event_id: str | None = Field(default=None, max_length=240)
     expected_provider_revision: str | None = Field(default=None, max_length=1000)
     payload: dict[str, Any] = Field(default_factory=dict)
+    request_id: str = Field(min_length=8, max_length=120)
+
+
+class ContactIdentifierCommandRequest(BaseModel):
+    """One sparse, revision-guarded correction to an observed contact endpoint."""
+
+    model_config = {"extra": "forbid"}
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    container_external_id: str = Field(min_length=1, max_length=1000)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    expected_provider_revision: str = Field(min_length=1, max_length=2000)
+    value: str = Field(min_length=1, max_length=2000)
+    label: str | None = Field(default=None, max_length=240)
     request_id: str = Field(min_length=8, max_length=120)
 
 
@@ -1290,46 +1305,27 @@ def _require_configured_external_route(
         raise HTTPException(
             422, "the Google provider route is not configured for this member"
         )
-    if provider in {"apple_calendar", "apple_reminders"}:
-        expected_fragment = (
-            "apple-calendar" if provider == "apple_calendar" else "apple-eventkit"
-        )
-        container_key = (
-            "calendar_identifier"
-            if provider == "apple_calendar"
-            else "target_list_identifier"
-        )
-        for record in runtime.settings.adapter_config.get("adapters", []):
+    if provider in {"apple_calendar", "apple_reminders", "apple_contacts"}:
+        matches = []
+        for record in runtime.settings.bridge_enrollments.values():
             if not isinstance(record, dict):
                 continue
-            connection_id = str(record.get("id") or "")
-            if (
-                connection_id
-                and runtime.settings_control.connection_lifecycle(connection_id)
-                == "paused"
-            ):
+            authorization = authorization_from_record(record)
+            if authorization is None or authorization.member_id != target_member:
                 continue
-            adapter_id = str(record.get("id") or record.get("kind") or "")
-            raw_config = record.get("config")
-            config = raw_config if isinstance(raw_config, dict) else {}
-            configured_account = config.get("provider_account_id") or config.get(
-                "member_id"
-            )
+            policy = authorization.policy_for_provider(provider)
+            if policy is None or policy.container_key is None:
+                continue
+            config = authorization.pack_config.get(policy.pack, {})
             if (
-                expected_fragment in adapter_id
-                and config.get("member_id") == target_member
-                and configured_account == provider_account_id
-                and config.get(container_key) == container_external_id
+                authorization.provider_account_for(policy.pack) == provider_account_id
+                and config.get(policy.container_key) == container_external_id
             ):
-                return
-        active_members = {
-            str(record.get("member_id"))
-            for record in runtime.settings.bridge_enrollments.values()
-            if isinstance(record, dict) and record.get("status") == "active"
-        }
-        if target_member not in active_members or provider_account_id != target_member:
+                matches.append((authorization, policy))
+        if len(matches) != 1:
             raise HTTPException(
-                422, "the member's Apple bridge is not active for this route"
+                422,
+                "the member's exact attested Apple provider route is unavailable",
             )
         return
     raise HTTPException(422, "the external route is not a configured writable adapter")
@@ -5911,6 +5907,147 @@ async def _communication_command_locked(
         "domain_approval_event_id": event_id,
         "state": "awaiting_openclaw_approval",
         "duplicate": duplicate,
+        "observation_mode": runtime._observation_active,
+    }
+
+
+@router.post(
+    "/api/member/v1/people/{party_id}/identifiers/{identifier_id}/commands",
+    status_code=202,
+)
+async def contact_identifier_command(
+    party_id: str,
+    identifier_id: str,
+    body: ContactIdentifierCommandRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Queue D23's sparse Apple Contacts identifier-correction write seam."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "contact corrections are unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "People state is unavailable")
+    row = (
+        runtime.projections.connection("parties")
+        .execute(
+            """
+        SELECT i.identifier_id, i.kind AS identifier_kind,
+               i.value_normalized AS prior_value_normalized, i.label,
+               i.primary_for_kind, i.sensitivity,
+               c.contact_record_id, c.provider, c.provider_account_id,
+               c.container_external_id, c.external_id, c.provider_revision,
+               c.last_event_id
+          FROM identifiers i
+          JOIN contact_records c
+            ON c.tenant_id=i.tenant_id AND c.contact_record_id=i.source_record_id
+         WHERE i.tenant_id=? AND i.party_id=? AND i.identifier_id=?
+           AND i.source_kind='contact_record' AND i.revoked_at IS NULL
+           AND c.member_id=? AND c.deleted_at IS NULL
+        """,
+            (
+                session.tenant_id,
+                party_id,
+                identifier_id,
+                session.auth_member_id,
+            ),
+        )
+        .fetchone()
+    )
+    if row is None or row["provider"] != "apple_contacts":
+        raise HTTPException(404, "Apple contact identifier not found")
+    if (
+        row["provider_account_id"] != body.provider_account_id
+        or row["container_external_id"] != body.container_external_id
+    ):
+        raise HTTPException(422, "contact correction provider route does not match")
+    if row["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "contact changed; refresh before acting")
+    if not row["provider_revision"] or (
+        row["provider_revision"] != body.expected_provider_revision
+    ):
+        raise HTTPException(
+            409, "contact provider revision changed; refresh before acting"
+        )
+    identifier_kind = str(row["identifier_kind"])
+    if identifier_kind not in {"email", "phone", "imessage_handle"}:
+        raise HTTPException(422, "this contact endpoint cannot be corrected")
+    normalized = normalize_identifier(identifier_kind, body.value)
+    if not normalized:
+        raise HTTPException(422, "contact identifier cannot be blank")
+    if normalized == row["prior_value_normalized"]:
+        raise HTTPException(422, "contact identifier has not changed")
+    _require_configured_external_route(
+        runtime,
+        provider="apple_contacts",
+        target_member=session.auth_member_id,
+        provider_account_id=body.provider_account_id,
+        container_external_id=body.container_external_id,
+    )
+    now = EventEnvelope.now_utc_iso()
+    provider_payload = {
+        "member_id": session.auth_member_id,
+        "container_external_id": body.container_external_id,
+        "contact_record_id": row["contact_record_id"],
+        "identifier_id": identifier_id,
+        "identifier_kind": identifier_kind,
+        "prior_value_normalized": row["prior_value_normalized"],
+        "value": body.value.strip(),
+        "value_normalized": normalized,
+        "label": body.label if body.label is not None else row["label"],
+        "primary": bool(row["primary_for_kind"]),
+        "expected_provider_revision": body.expected_provider_revision,
+        "content_privacy_guard": {
+            "member_bound": True,
+            "provider_fields_allowlisted": ["label", "value"],
+            "source_scope": f"private:{session.auth_member_id}",
+        },
+    }
+    command_payload = {
+        "command_id": body.request_id,
+        "member_id": session.auth_member_id,
+        "provider": "apple_contacts",
+        "provider_account_id": body.provider_account_id,
+        "operation": "update_party_identifier",
+        "target_external_id": row["external_id"],
+        "expected_provider_revision": body.expected_provider_revision,
+        "payload": provider_payload,
+        "requested_at": now,
+    }
+    decision = await runtime.guarded_write.check(
+        session, "external_sync.write_requested", command_payload
+    )
+    if not decision.pass_:
+        raise HTTPException(
+            409 if decision.layer_failed == "governance" else 403,
+            {"reason": decision.reason, "correlation_id": decision.correlation_id},
+        )
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    event_id, duplicate = await _append_provider_action_confirmation(
+        runtime,
+        session,
+        command_payload=command_payload,
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+        source_adapter="member-people",
+        sensitivity=cast(Sensitivity, row["sensitivity"] or "normal"),
+        causation_id=body.expected_last_event_id,
+    )
+    return {
+        "accepted": True,
+        "duplicate": duplicate,
+        "command_id": body.request_id,
+        "event_id": event_id,
+        "domain_approval_event_id": event_id,
+        "state": "awaiting_openclaw_approval",
         "observation_mode": runtime._observation_active,
     }
 

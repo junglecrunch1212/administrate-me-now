@@ -27,6 +27,26 @@ def _entry(
     }
 
 
+def _apple_entry(
+    *,
+    kind: str = "calendaring-apple-calendar",
+    deployment_target: str = "bridge",
+) -> dict[str, object]:
+    return {
+        "id": f"{kind}-member-a",
+        "kind": kind,
+        "config": {
+            "member_id": "member-a",
+            "provider_account_id": "provider-account:" + "a" * 32,
+            "deployment_target": deployment_target,
+            "workspace": "personal",
+            "permission_scope": ["eventkit.read", "eventkit.write"],
+            "binding_provenance": "member-bridge-enrollment",
+            "ownership_attested": True,
+        },
+    }
+
+
 def test_explicit_provider_binding_is_accepted() -> None:
     [binding] = validate_provider_bindings(
         {"adapters": [_entry()]},
@@ -104,21 +124,94 @@ def test_disabled_optional_provider_may_remain_unconfigured() -> None:
     )
 
 
-def test_provider_account_may_bind_to_a_distinct_service_principal() -> None:
+def test_enabled_unbound_provider_never_becomes_a_fixture_exemption() -> None:
+    with pytest.raises(ValueError, match="requires binding evidence"):
+        validate_provider_bindings(
+            {"adapters": [{"kind": "calendaring-fixture-provider"}]},
+            member_roles={"member-a": "principal"},
+            household_mapping={},
+        )
+
+
+def test_planned_service_principal_cannot_gain_authority_from_call_site_allowlist() -> (
+    None
+):
+    entry = _entry()
+    entry["id"] = "reviewed-service-channel"
+    entry["kind"] = "messaging-reviewed-service-channel"
+    config = entry["config"]
+    assert isinstance(config, dict)
+    config.pop("member_id")
+    config["service_principal_id"] = "service-principal:chief-of-staff"
+    with pytest.raises(ValueError, match="cannot use a planned service principal"):
+        validate_provider_bindings(
+            {"adapters": [entry]},
+            member_roles={"member-a": "principal"},
+            household_mapping={},
+            service_principal_ids={"service-principal:chief-of-staff"},
+            service_principal_provider_authorizations={
+                "service-principal:chief-of-staff": {
+                    "messaging-reviewed-service-channel"
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "calendaring-apple-calendar",
+        "contacts-apple-contacts",
+        "reminders-apple-eventkit",
+    ],
+)
+def test_current_member_apple_adapters_never_enter_central_inventory(kind: str) -> None:
+    for entry in (
+        _apple_entry(kind=kind, deployment_target="central"),
+        _apple_entry(kind=kind, deployment_target="bridge"),
+    ):
+        with pytest.raises(ValueError, match="bridge-only"):
+            validate_provider_bindings(
+                {"adapters": [entry]},
+                member_roles={"member-a": "principal"},
+                household_mapping={},
+            )
+
+
+def test_planned_service_principal_authorizes_no_provider_binding() -> None:
     entry = _entry()
     config = entry["config"]
     assert isinstance(config, dict)
     config.pop("member_id")
     config["service_principal_id"] = "service-principal:chief-of-staff"
-    [binding] = validate_provider_bindings(
-        {"adapters": [entry]},
-        member_roles={"member-a": "principal"},
-        household_mapping={},
-        service_principal_ids={"service-principal:chief-of-staff"},
-    )
-    assert binding.owner_kind == "service_principal"
-    assert binding.member_id is None
-    assert binding.service_principal_id == "service-principal:chief-of-staff"
+    with pytest.raises(ValueError, match="cannot use a planned service principal"):
+        validate_provider_bindings(
+            {"adapters": [entry]},
+            member_roles={"member-a": "principal"},
+            household_mapping={},
+            service_principal_ids={"service-principal:chief-of-staff"},
+        )
+
+
+def test_provider_account_cannot_equal_service_principal() -> None:
+    entry = _entry()
+    config = entry["config"]
+    assert isinstance(config, dict)
+    config.pop("member_id")
+    config["service_principal_id"] = "service-principal:chief-of-staff"
+    config["provider_account_id"] = "service-principal:chief-of-staff"
+    config["user_email"] = "service-principal:chief-of-staff"
+    config["workspace"] = "service"
+    with pytest.raises(ValueError, match="collapses owner and provider account"):
+        validate_provider_bindings(
+            {"adapters": [entry]},
+            member_roles={"member-a": "principal"},
+            household_mapping={},
+            service_principal_ids={"service-principal:chief-of-staff"},
+            service_principal_provider_authorizations={
+                "service-principal:chief-of-staff": {"messaging-gmail-api"}
+            },
+        )
 
 
 def test_provider_binding_rejects_member_and_service_owner_collapse() -> None:

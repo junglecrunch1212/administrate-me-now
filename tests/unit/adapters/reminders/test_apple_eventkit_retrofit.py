@@ -365,7 +365,7 @@ async def test_apply_write_routes_through_observation_outbound(
 
 
 def test_pack_yaml_capabilities_block_parses_as_cat_b() -> None:
-    """``pack.yaml`` declares one Cat-B capability with runtime=central
+    """``pack.yaml`` declares one Cat-B capability with runtime=bridge
     and ``reminder.list_item.synced`` in event_families. The parser
     MUST round-trip this cleanly with no Pydantic validation errors."""
     manifest = parse_adapter_manifest(REMINDERS_PACK_DIR)
@@ -373,7 +373,7 @@ def test_pack_yaml_capabilities_block_parses_as_cat_b() -> None:
     assert len(manifest.capabilities) == 1
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-B"
-    assert cap.runtime == "central"
+    assert cap.runtime == "bridge"
     assert cap.event_families == [
         "reminder.list_item.synced",
         "list.created",

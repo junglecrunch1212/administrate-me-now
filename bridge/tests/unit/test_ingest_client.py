@@ -69,6 +69,7 @@ async def test_submit_happy_path_returns_event_id() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )
@@ -96,6 +97,7 @@ async def test_submit_5xx_then_success_records_backoff() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )
@@ -119,6 +121,7 @@ async def test_submit_429_respects_retry_after_header() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )
@@ -137,6 +140,7 @@ async def test_submit_4xx_non_429_fails_fast_no_retry() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )
@@ -159,6 +163,7 @@ async def test_submit_transport_error_retries_then_gives_up() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )
@@ -184,6 +189,7 @@ async def test_submit_batch_chunks_at_batch_chunk_size() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )
@@ -216,6 +222,7 @@ async def test_submit_batch_failure_reports_chunk_offset() -> None:
     ic = IngestClient(
         central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
+        enrollment_id="bridge-enrollment-test",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
     )

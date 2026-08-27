@@ -103,7 +103,7 @@ def test_adapter_error_rejects_extra_keys() -> None:
 def test_adapter_authenticated_registered_at_v1() -> None:
     ensure_autoloaded()
     assert registry.get("adapter.authenticated", 1) is AdapterAuthenticatedV1
-    assert registry.latest_version("adapter.authenticated") == 1
+    assert registry.latest_version("adapter.authenticated") == 2
 
 
 def test_adapter_authenticated_minimum_payload_validates() -> None:

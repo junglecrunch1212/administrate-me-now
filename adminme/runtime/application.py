@@ -63,6 +63,7 @@ from adminme.member_chat import (
 )
 from adminme.openclaw_approvals import OpenClawApprovalStore
 from adminme.openclaw_topology import inspect_runtime_topology, member_agent_id
+from adminme.bridge_authorization import validate_bridge_record_set
 from adminme.provider_bindings import ProviderBinding, validate_provider_bindings
 from adminme.service_identities import (
     ServiceChannelAccount,
@@ -179,21 +180,6 @@ class RuntimeSettings:
             raise ValueError("service principals cannot resolve through member ingress")
         object.__setattr__(self, "service_principals", service_principals)
         object.__setattr__(self, "service_channel_accounts", service_channels)
-        bindings: tuple[ProviderBinding, ...] = ()
-        if self.deployment_evidence_required:
-            bindings = validate_provider_bindings(
-                self.adapter_config,
-                member_roles=self.member_roles,
-                household_mapping=self.household_mapping,
-                service_principal_ids={
-                    principal.service_principal_id for principal in service_principals
-                },
-            )
-            if self.host_topology.get("central_identity_collides_with_member") is True:
-                raise ValueError(
-                    "central infrastructure identity must not map to a household member"
-                )
-        object.__setattr__(self, "provider_bindings", bindings)
         valid_bridge_states = {
             "package-created-not-live",
             "package-exported",
@@ -223,6 +209,24 @@ class RuntimeSettings:
             raise ValueError(
                 "strict topology requires one unambiguous bridge identity per member"
             )
+        if self.deployment_evidence_required:
+            validate_bridge_record_set(self.bridge_enrollments)
+        bindings: tuple[ProviderBinding, ...] = ()
+        if self.deployment_evidence_required:
+            bindings = validate_provider_bindings(
+                self.adapter_config,
+                member_roles=self.member_roles,
+                household_mapping=self.household_mapping,
+                service_principal_ids={
+                    principal.service_principal_id for principal in service_principals
+                },
+                service_principal_provider_authorizations={},
+            )
+            if self.host_topology.get("central_identity_collides_with_member") is True:
+                raise ValueError(
+                    "central infrastructure identity must not map to a household member"
+                )
+        object.__setattr__(self, "provider_bindings", bindings)
         if self.openclaw_enabled:
             if not self.openclaw_shared_secret or len(self.openclaw_shared_secret) < 24:
                 raise ValueError(
@@ -758,6 +762,7 @@ class AdministrateMeRuntime:
                         principal.service_principal_id
                         for principal in self.settings.service_principals
                     },
+                    service_principal_provider_authorizations={},
                     validate_bindings=self.settings.deployment_evidence_required,
                 ),
                 ctx_factory=lambda: AdapterContext(

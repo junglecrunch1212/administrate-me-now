@@ -7,7 +7,14 @@
   "additionalProperties": false,
   "required": [
     "target_list_identifier",
-    "member_id"
+    "member_id",
+    "provider_account_id",
+    "deployment_target",
+    "workspace",
+    "permission_scope",
+    "allowed_container_ids",
+    "binding_provenance",
+    "ownership_attested"
   ],
   "properties": {
     "target_list_identifier": {
@@ -18,18 +25,49 @@
     "member_id": {
       "type": "string",
       "minLength": 1,
-      "description": "Household member who owns the EventKit grant for this adapter instance. Stamped onto every reminder.list_item.synced event so downstream consumers can owner-scope correctly."
+      "description": "Household member whose separately enrolled bridge owns the EventKit grant for this adapter instance. The current schema cannot represent the planned CoS service principal."
     },
     "provider_account_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Stable alias for the member's iCloud Reminders account."
+      "pattern": "^provider-account:[0-9a-f]{32,64}$",
+      "description": "Stable content-free reference for the member's iCloud Reminders account; it must not equal the member, enrollment, or service-principal identifier."
     },
     "deployment_target": {
-      "type": "string",
-      "enum": ["central", "bridge"],
-      "default": "central",
-      "description": "Dual-deployment runtime selector per [D18] / [D22] / memo 05 §5.4 (11b-ii-α-2). `central` (default, backwards-compatible): adapter runs on the shared CoS Apple ID and emits via ctx.event_log.append; sharing_model_discriminator value `shared_central`. `bridge`: adapter runs on a per-member bridge Mac Mini signed into that member's iCloud; the bridge connector-pack wrapper (bridge/adminme_bridge/connector_packs/reminders_apple_eventkit_bridge/) injects an IngestClientBridgeSink into the synthesized AdapterContext so the adapter emits via the α-1 bridge sink; sharing_model_discriminator value `per_member_isolated`. Pre-α-2 configs that omit this field default to `central` so existing instances keep working."
+      "const": "bridge",
+      "description": "This current human-member schema runs only inside the separately supervised member bridge."
+    },
+    "workspace": {
+      "const": "personal",
+      "description": "Current member Apple sources remain in the member's personal workspace."
+    },
+    "permission_scope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1},
+      "description": "Exact reviewed EventKit Reminders permission capabilities."
+    },
+    "allowed_container_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1},
+      "description": "Exact reviewed Reminders list identifiers this bridge may read. The write list must be included."
+    },
+    "shared_container_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1},
+      "default": [],
+      "description": "Subset explicitly promoted by AdministrateMe to household visibility; native iCloud sharing never grants this automatically."
+    },
+    "binding_provenance": {
+      "const": "member-bridge-enrollment",
+      "description": "The member bridge enrollment is the binding authority for this OS-permission provider."
+    },
+    "ownership_attested": {
+      "const": true,
+      "description": "Explicit review that the provider account and bridge belong to this member."
     },
     "never_sync_list_substrings": {
       "type": "array",

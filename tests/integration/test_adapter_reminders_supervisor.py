@@ -34,6 +34,7 @@ import importlib.util
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -91,6 +92,10 @@ class _RecordingEventLog:
     async def write(self, envelope: Any, **_kwargs: Any) -> str:
         self.calls.append(envelope.model_dump())
         return f"event-{len(self.calls)}"
+
+    async def emit(self, envelope: Any) -> Any:
+        event_id = await self.write(envelope)
+        return SimpleNamespace(ok=True, event_id=event_id, error=None)
 
     def by_type(self, event_type: str) -> list[dict[str, Any]]:
         return [c for c in self.calls if c.get("type") == event_type]
@@ -242,6 +247,9 @@ def _build_reminders_adapter(
         config={
             "target_list_identifier": target_list_identifier,
             "member_id": member_id,
+            "provider_account_id": f"provider-account:{'c' * 32}",
+            "_bridge_enrollment_id": "enrollment-reminders-supervisor",
+            "_bridge_configuration_sha256": "d" * 64,
         },
         ek_event_store_factory=factory,
         max_outbound_cycles=max_outbound_cycles,
@@ -288,7 +296,11 @@ def _supervisor(
     def _ctx_factory() -> AdapterContext:
         return AdapterContext(
             event_sink=event_log,  # type: ignore[arg-type]
-            config={},
+            config={
+                "deployment_target": "bridge",
+                "_bridge_member_id": "member-001",
+                "_bridge_sink": event_log,
+            },
             correlation_id_factory=_next_corr,
             now_factory=lambda: _FROZEN_NOW,
         )
@@ -359,7 +371,7 @@ async def test_supervisor_inbound_round_trip_emits_synced_inbound(
         # docs/reference/apple-eventkit/access.md.
         assert (
             auth[0]["payload"]["token_storage_ref"]
-            == "op://local-system/reminders/permission"
+            == "keychain://device-permissions/reminders"
         )
 
         # 3 of 4 fixture reminders pass the never-sync filter; one event

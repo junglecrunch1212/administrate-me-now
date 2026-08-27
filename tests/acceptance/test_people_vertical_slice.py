@@ -24,7 +24,11 @@ HEADERS = {
 }
 
 
-def _settings(instance_dir: Path) -> RuntimeSettings:
+def _settings(
+    instance_dir: Path,
+    *,
+    bridge_enrollments: dict[str, dict[str, Any]] | None = None,
+) -> RuntimeSettings:
     instance_dir.mkdir()
     return RuntimeSettings.credential_free(
         instance_dir,
@@ -36,7 +40,40 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
             "people-child.fixture.ts.net": CHILD,
         },
         member_roles={OWNER: "principal", OTHER: "principal", CHILD: "child"},
+        bridge_enrollments=bridge_enrollments or {},
     )
+
+
+def _contacts_bridge_record() -> dict[str, Any]:
+    pack = "contacts-apple-contacts-bridge"
+    account = "provider-account:" + "a" * 32
+    return {
+        "member_id": OWNER,
+        "enrollment_id": "contacts-enrollment-acceptance",
+        "status": "active",
+        "allowed_packs": [pack],
+        "configured_packs": [pack],
+        "enabled_packs": [pack],
+        "authorized_packs": [pack],
+        "adapters_active": [pack],
+        "provider_capability_state": "attested",
+        "pack_capability_states": {pack: "attested"},
+        "capability_attestations": {pack: {"event_id": "event-auth-contacts"}},
+        "pack_config": {
+            pack: {
+                "member_id": OWNER,
+                "provider_account_id": account,
+                "deployment_target": "bridge",
+                "workspace": "personal",
+                "permission_scope": ["contacts.read", "contacts.write"],
+                "binding_provenance": "member-bridge-enrollment",
+                "ownership_attested": True,
+                "container_external_id": "all-containers",
+                "allowed_container_ids": ["all-containers"],
+                "shared_container_ids": [],
+            }
+        },
+    }
 
 
 def _event(
@@ -378,3 +415,103 @@ def test_ac30_people_is_private_qualified_replayable_and_human_gated(
         assert "PRIVATE RELATIONSHIP MEMORY" in js.text
         assert ".people-workspace" in css.text
         assert 'body[data-surface="people"] .chat-panel' in css.text
+
+
+def test_d23_contact_identifier_correction_requires_exact_attested_bridge_route(
+    tmp_path: Path,
+) -> None:
+    identity = "people-owner.fixture.ts.net"
+    account = "provider-account:" + "a" * 32
+    app = create_application(
+        _settings(
+            tmp_path / "contacts-instance",
+            bridge_enrollments={identity: _contacts_bridge_record()},
+        )
+    )
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        last_event_id = _append_and_wait(
+            client,
+            runtime,
+            _event(
+                runtime,
+                "contact.record.observed",
+                {
+                    "contact_record_id": "contact-apple-1",
+                    "member_id": OWNER,
+                    "provider": "apple_contacts",
+                    "provider_account_id": account,
+                    "container_external_id": "all-containers",
+                    "external_id": "native-contact-1",
+                    "provider_revision": "revision-1",
+                    "kind": "person",
+                    "display_name": "Contact Fixture",
+                    "identifiers": [
+                        {
+                            "kind": "email",
+                            "value": "old@example.invalid",
+                            "value_normalized": "old@example.invalid",
+                            "primary": True,
+                        }
+                    ],
+                    "observed_at": EventEnvelope.now_utc_iso(),
+                },
+                source_adapter="contacts-apple-contacts",
+            ),
+            "parties",
+        )
+        people = client.get("/api/member/v1/surfaces/people", headers=HEADERS[OWNER])
+        party_id = people.json()["cockpit"]["directory"][0]["party_id"]
+        detail = client.get(
+            f"/api/member/v1/people/{party_id}", headers=HEADERS[OWNER]
+        ).json()
+        identifier_id = detail["identifiers"][0]["identifier_id"]
+        endpoint = (
+            f"/api/member/v1/people/{party_id}/identifiers/{identifier_id}/commands"
+        )
+        request_body = {
+            "provider_account_id": account,
+            "container_external_id": "all-containers",
+            "expected_last_event_id": last_event_id,
+            "expected_provider_revision": "revision-1",
+            "value": "new@example.invalid",
+            "label": "home",
+            "request_id": "contact-correction-acceptance-1",
+        }
+        accepted = client.post(endpoint, headers=HEADERS[OWNER], json=request_body)
+        assert accepted.status_code == 202, accepted.text
+        receipt = client.portal.call(
+            runtime.event_log.get, accepted.json()["domain_approval_event_id"]
+        )
+        assert receipt is not None
+        assert receipt["type"] == "member.provider_action.confirmed"
+        assert receipt["payload"]["provider"] == "apple_contacts"
+        assert receipt["payload"]["operation"] == "update_party_identifier"
+        assert receipt["payload"]["provider_account_id"] == account
+        command = receipt["payload"]["command_payload"]
+        assert command["container_external_id"] == "all-containers"
+        assert command["prior_value_normalized"] == "old@example.invalid"
+        assert command["value_normalized"] == "new@example.invalid"
+        assert command["expected_provider_revision"] == "revision-1"
+
+        duplicate = client.post(endpoint, headers=HEADERS[OWNER], json=request_body)
+        assert duplicate.status_code == 202, duplicate.text
+        assert duplicate.json()["duplicate"] is True
+
+        wrong_account = client.post(
+            endpoint,
+            headers=HEADERS[OWNER],
+            json={
+                **request_body,
+                "provider_account_id": "provider-account:" + "b" * 32,
+                "request_id": "contact-correction-acceptance-2",
+            },
+        )
+        assert wrong_account.status_code == 422
+
+        view_as = client.post(
+            endpoint,
+            headers={**HEADERS[OWNER], "X-AdminMe-View-Member": OTHER},
+            json={**request_body, "request_id": "contact-correction-acceptance-3"},
+        )
+        assert view_as.status_code == 403

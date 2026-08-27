@@ -88,7 +88,13 @@ def _bridge_envelope() -> dict[str, object]:
     ).model_dump(mode="json")
 
 
-def _strict_settings(tmp_path: Path, *, backup_ready: bool = True) -> RuntimeSettings:
+def _strict_settings(
+    tmp_path: Path,
+    *,
+    backup_ready: bool = True,
+    adapter_config: dict[str, Any] | None = None,
+    bridge_enrollments: dict[str, dict[str, Any]] | None = None,
+) -> RuntimeSettings:
     instance_dir = tmp_path / "strict-instance"
     instance_dir.mkdir()
     now = datetime.now(timezone.utc).isoformat()
@@ -128,6 +134,8 @@ def _strict_settings(tmp_path: Path, *, backup_ready: bool = True) -> RuntimeSet
         repository_root=REPO_ROOT,
         member_identities={"member-a.ts.net": "member-a"},
         member_roles={"member-a": "principal"},
+        adapter_config=adapter_config or {"adapter_supervisor_port": 0, "adapters": []},
+        bridge_enrollments=bridge_enrollments or {},
         openclaw_enabled=True,
         openclaw_shared_secret="strict-test-secret-at-least-24-characters",
         member_chat_enabled_members=frozenset({"member-a"}),
@@ -168,6 +176,29 @@ def _strict_settings(tmp_path: Path, *, backup_ready: bool = True) -> RuntimeSet
         },
         deployment_evidence_required=True,
     )
+
+
+def _strict_apple_adapter(
+    kind: str,
+    *,
+    deployment_target: str,
+    service_owned: bool = False,
+) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "provider_account_id": "provider-account:" + "a" * 32,
+        "deployment_target": deployment_target,
+        "workspace": "service" if service_owned else "personal",
+        "permission_scope": ["eventkit.read", "eventkit.write"],
+        "binding_provenance": (
+            "oauth-subject" if service_owned else "member-bridge-enrollment"
+        ),
+        "ownership_attested": True,
+    }
+    if service_owned:
+        config["service_principal_id"] = "service-principal:chief-of-staff"
+    else:
+        config["member_id"] = "member-a"
+    return {"id": f"{kind}-fixture", "kind": kind, "config": config}
 
 
 def _report_strict_openclaw(
@@ -239,6 +270,167 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
         drift = client.get("/api/system/ready")
         assert drift.status_code == 503
         assert "openclaw" in drift.json()["deployment_readiness"]["blocking_dimensions"]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "calendaring-apple-calendar",
+        "contacts-apple-contacts",
+        "reminders-apple-eventkit",
+    ],
+)
+def test_strict_runtime_rejects_current_apple_central_ownership(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    with pytest.raises(ValueError, match="bridge-only"):
+        _strict_settings(
+            tmp_path,
+            adapter_config={
+                "adapter_supervisor_port": 0,
+                "adapters": [_strict_apple_adapter(kind, deployment_target="central")],
+            },
+        )
+
+
+def test_planned_cos_apple_identity_authorizes_no_provider_row(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="service-owned provider authority"):
+        _strict_settings(
+            tmp_path,
+            adapter_config={
+                "adapter_supervisor_port": 0,
+                "adapters": [
+                    {
+                        "id": "planned-cos-fixture",
+                        "kind": "messaging-fixture-provider",
+                        "config": {
+                            "service_principal_id": "service-principal:chief-of-staff",
+                            "provider_account_id": "provider-account:" + "c" * 32,
+                            "workspace": "service",
+                            "permission_scope": ["fixture.read"],
+                            "binding_provenance": "oauth-subject",
+                            "ownership_attested": True,
+                        },
+                    }
+                ],
+            },
+        )
+
+
+def test_active_bridge_metadata_never_constructs_central_apple_adapter(
+    tmp_path: Path,
+) -> None:
+    bridge_records = {
+        "member-a-bridge.ts.net": {
+            "member_id": "member-a",
+            "enrollment_id": "bridge-enrollment-fixture",
+            "status": "active",
+            "allowed_packs": ["calendaring-apple-calendar-bridge"],
+            "configured_packs": ["calendaring-apple-calendar-bridge"],
+            "enabled_packs": [],
+            "authorized_packs": [],
+            "adapters_active": [],
+            "provider_capability_state": "not_attested",
+            "pack_capability_states": {
+                "calendaring-apple-calendar-bridge": "not_attested"
+            },
+            "capability_attestations": {},
+            "pack_config": {
+                "calendaring-apple-calendar-bridge": {
+                    "member_id": "member-a",
+                    "provider_account_id": "provider-account:" + "a" * 32,
+                    "deployment_target": "bridge",
+                    "workspace": "personal",
+                    "permission_scope": [
+                        "eventkit.calendar.read",
+                        "eventkit.calendar.write",
+                    ],
+                    "binding_provenance": "member-bridge-enrollment",
+                    "ownership_attested": True,
+                    "calendar_identifier": "calendar-personal",
+                    "allowed_container_ids": ["calendar-personal"],
+                    "shared_container_ids": [],
+                }
+            },
+        }
+    }
+    app = create_application(
+        _strict_settings(tmp_path, bridge_enrollments=bridge_records)
+    )
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        assert runtime.adapters is not None
+        assert runtime.adapters._managed == {}  # noqa: SLF001
+        _report_strict_openclaw(client)
+        readiness = client.get("/api/system/ready")
+        assert readiness.status_code == 503
+        bridge_dimension = readiness.json()["deployment_readiness"]["dimensions"][
+            "bridges"
+        ]
+        assert bridge_dimension["state"] == "blocked"
+        assert bridge_dimension["evidence"]["active_count"] == 1
+        assert bridge_dimension["evidence"]["provider_blocked_count"] == 1
+        settings = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        ).json()
+        assert settings["control"]["bridges"][0]["provider_capability_state"] == (
+            "not_attested"
+        )
+
+
+def test_attested_bridge_provider_is_ready_but_never_centrally_constructed(
+    tmp_path: Path,
+) -> None:
+    pack = "calendaring-apple-calendar-bridge"
+    record = {
+        "member_id": "member-a",
+        "enrollment_id": "bridge-enrollment-fixture",
+        "status": "active",
+        "allowed_packs": [pack],
+        "configured_packs": [pack],
+        "enabled_packs": [pack],
+        "authorized_packs": [pack],
+        "adapters_active": [pack],
+        "provider_capability_state": "attested",
+        "pack_capability_states": {pack: "attested"},
+        "capability_attestations": {pack: {"event_id": "event-auth-calendar"}},
+        "pack_config": {
+            pack: {
+                "member_id": "member-a",
+                "provider_account_id": "provider-account:" + "a" * 32,
+                "deployment_target": "bridge",
+                "workspace": "personal",
+                "permission_scope": [
+                    "eventkit.calendar.read",
+                    "eventkit.calendar.write",
+                ],
+                "binding_provenance": "member-bridge-enrollment",
+                "ownership_attested": True,
+                "calendar_identifier": "calendar-personal",
+                "allowed_container_ids": ["calendar-personal"],
+                "shared_container_ids": [],
+            }
+        },
+    }
+    app = create_application(
+        _strict_settings(
+            tmp_path, bridge_enrollments={"member-a-bridge.ts.net": record}
+        )
+    )
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        assert runtime.adapters is not None
+        assert runtime.adapters._managed == {}  # noqa: SLF001
+        _report_strict_openclaw(client)
+        readiness = client.get("/api/system/ready")
+        assert readiness.status_code == 200, readiness.text
+        bridge_dimension = readiness.json()["deployment_readiness"]["dimensions"][
+            "bridges"
+        ]
+        assert bridge_dimension["state"] == "healthy"
+        assert bridge_dimension["evidence"]["provider_blocked_count"] == 0
 
 
 def test_concurrent_http_projection_reads_serialize_on_native_owner_worker(

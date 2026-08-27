@@ -14,6 +14,7 @@ Pins the F-3 hard rules end-to-end at the router seam:
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,6 +26,31 @@ from adminme.products.bridge.auth import (
     DictMemberIdResolver,
     TAILSCALE_IDENTITY_HEADER,
 )
+
+ENROLLMENT_ID = "bridge-enrollment-test"
+
+
+def _headers(identity: str = "m1@example.ts.net") -> dict[str, str]:
+    return {
+        TAILSCALE_IDENTITY_HEADER: identity,
+        "X-AdministrateMe-Bridge-Enrollment": ENROLLMENT_ID,
+    }
+
+
+def _active_bridge_record() -> dict[str, Any]:
+    pack = "knowledge-obsidian"
+    return {
+        "status": "active",
+        "member_id": "m1",
+        "enrollment_id": ENROLLMENT_ID,
+        "configured_packs": [pack],
+        "enabled_packs": [pack],
+        "authorized_packs": [pack],
+        "pack_config": {pack: {"member_id": "m1"}},
+        "pack_capability_states": {pack: "not_required"},
+        "provider_capability_state": "not_required",
+        "capability_attestations": {},
+    }
 
 
 class _FakeEventSink:
@@ -53,10 +79,50 @@ class _FakeEventSink:
         return ids
 
 
+class _FakeEventLog:
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self.events = list(events)
+
+    async def read_since(
+        self,
+        _cursor: str | None = None,
+        *,
+        owner_scope: str | None = None,
+        types: list[str] | None = None,
+        **_kwargs: Any,
+    ):
+        for event in self.events:
+            if owner_scope is not None and event.get("owner_scope") != owner_scope:
+                continue
+            if types is not None and event.get("type") not in types:
+                continue
+            yield event
+
+    async def get(self, event_id: str) -> dict[str, Any] | None:
+        return next(
+            (event for event in self.events if event.get("event_id") == event_id),
+            None,
+        )
+
+    async def get_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        return next(
+            (
+                event
+                for event in self.events
+                if event.get("tenant_id") == tenant_id
+                and event.get("idempotency_key") == idempotency_key
+            ),
+            None,
+        )
+
+
 def _client_with_state(
     *,
     log: _FakeEventSink | None = None,
     resolver: DictMemberIdResolver | None = None,
+    bridge_record: dict[str, Any] | None = None,
 ) -> tuple[TestClient, _FakeEventSink]:
     """Build an app with wired-up state. TestClient triggers lifespan;
     pre-seeded state survives because the lifespan only injects if the
@@ -67,6 +133,9 @@ def _client_with_state(
         {"m1@example.ts.net": "m1"}
     )
     app.state.ingest_count = 0
+    app.state.bridge_enrollments = {
+        "m1@example.ts.net": bridge_record or _active_bridge_record()
+    }
     client = TestClient(app)
     return client, app.state.event_sink
 
@@ -74,7 +143,7 @@ def _client_with_state(
 def _envelope_dict(
     *,
     owner_scope: str = "private:m1",
-    event_type: str = "bridge.enrolled",
+    event_type: str = "member_knowledge.note_added",
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synthesize a JSON-serializable envelope. Defaults satisfy
@@ -85,21 +154,135 @@ def _envelope_dict(
         "type": event_type,
         "schema_version": 1,
         "occurred_at": EventEnvelope.now_utc_iso(),
-        "source_adapter": "bridge",
-        "source_account_id": "bridge-node-001",
+        "source_adapter": "knowledge-obsidian",
+        "source_account_id": "obsidian",
         "owner_scope": owner_scope,
         "visibility_scope": owner_scope,
-        "sensitivity": "normal",
+        "sensitivity": "sensitive",
         "payload": payload
         if payload is not None
         else {
             "member_id": "m1",
-            "bridge_node_id": "bridge-node-001",
-            "tailscale_identity": "m1@example.ts.net",
-            "adapters_active": ["apple-notes"],
-            "enrolled_at": "2026-05-18T12:00:00+00:00",
+            "knowledge_id": "knowledge-test",
+            "title": "Test note",
+            "body": "Bridge ingest contract fixture",
+            "source_kind": "obsidian",
+            "source_external_id": "note-1",
+            "content_sha256": "a" * 64,
+            "captured_at": "2026-05-18T12:00:00+00:00",
         },
     }
+
+
+def _calendar_bridge_record(*, shared: bool) -> dict[str, Any]:
+    pack = "calendaring-apple-calendar-bridge"
+    account = "provider-account:" + "a" * 32
+    calendar_id = "calendar-shared" if shared else "calendar-private"
+    return {
+        "status": "active",
+        "member_id": "m1",
+        "enrollment_id": ENROLLMENT_ID,
+        "configured_packs": [pack],
+        "enabled_packs": [pack],
+        "authorized_packs": [pack],
+        "pack_config": {
+            pack: {
+                "member_id": "m1",
+                "provider_account_id": account,
+                "deployment_target": "bridge",
+                "workspace": "personal",
+                "permission_scope": [
+                    "eventkit.calendar.read",
+                    "eventkit.calendar.write",
+                ],
+                "calendar_identifier": calendar_id,
+                "allowed_container_ids": [calendar_id],
+                "shared_container_ids": [calendar_id] if shared else [],
+                "binding_provenance": "member-bridge-enrollment",
+                "ownership_attested": True,
+            }
+        },
+        "pack_capability_states": {pack: "attested"},
+        "provider_capability_state": "attested",
+        "capability_attestations": {pack: {"event_id": "ev-auth-calendar"}},
+    }
+
+
+def _calendar_envelope(*, calendar_id: str) -> dict[str, Any]:
+    account = "provider-account:" + "a" * 32
+    now = EventEnvelope.now_utc_iso()
+    return {
+        "event_at_ms": int(time.time() * 1000),
+        "tenant_id": "tenant-a",
+        "type": "calendar.event_added",
+        "schema_version": 2,
+        "occurred_at": now,
+        "source_adapter": "calendaring-apple-calendar",
+        "source_account_id": account,
+        "owner_scope": "private:m1",
+        "visibility_scope": "private:m1",
+        "sensitivity": "normal",
+        "payload": {
+            "member_id": "m1",
+            "provider": "apple_calendar",
+            "provider_account_id": account,
+            "calendar_external_id": calendar_id,
+            "external_event_id": "event-1",
+            "summary": "Shared fixture",
+            "start": now,
+            "end": now,
+            "updated_at": now,
+        },
+    }
+
+
+def _calendar_command(*, calendar_id: str) -> dict[str, Any]:
+    account = "provider-account:" + "a" * 32
+    return {
+        "event_id": "ev-command-calendar",
+        "tenant_id": "tenant-a",
+        "type": "external_sync.write_requested",
+        "schema_version": 2,
+        "owner_scope": "private:m1",
+        "payload": {
+            "command_id": "command-calendar",
+            "member_id": "m1",
+            "provider": "apple_calendar",
+            "provider_account_id": account,
+            "operation": "update_event",
+            "target_external_id": "event-1",
+            "expected_provider_revision": "revision-1",
+            "payload": {"calendar_external_id": calendar_id, "summary": "Updated"},
+            "requested_at": "2026-08-27T12:00:00Z",
+            "domain_approval_event_id": "ev-domain-approval",
+            "openclaw_approval_event_id": "ev-openclaw-approval",
+            "request_fingerprint": "b" * 64,
+            "privacy_guard_version": "bridge-test-v1",
+            "origin_proposal_id": None,
+        },
+    }
+
+
+def _command_client(*, command: dict[str, Any]) -> tuple[TestClient, _FakeEventSink]:
+    app = create_app()
+    sink = _FakeEventSink()
+    app.state.event_sink = sink
+    app.state.event_log = _FakeEventLog([command])
+    app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
+    app.state.ingest_count = 0
+    app.state.bridge_enrollments = {
+        "m1@example.ts.net": _calendar_bridge_record(shared=False)
+    }
+
+    class _Observation:
+        async def is_active(self) -> bool:
+            return False
+
+    app.state.runtime = SimpleNamespace(
+        observation=_Observation(),
+        settings=SimpleNamespace(instance=SimpleNamespace(tenant_id="tenant-a")),
+    )
+    return TestClient(app), sink
 
 
 def test_ingest_single_happy_path_returns_202_and_event_id() -> None:
@@ -107,13 +290,108 @@ def test_ingest_single_happy_path_returns_202_and_event_id() -> None:
     resp = client.post(
         "/api/bridge/ingest",
         json=_envelope_dict(),
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["event_id"].startswith("ev_test_")
     assert body["owner_scope"] == "private:m1"
     assert len(log.events) == 1
+
+
+@pytest.mark.parametrize(
+    ("shared", "calendar_id", "expected_scope"),
+    [
+        (False, "calendar-private", "private:m1"),
+        (True, "calendar-shared", "shared:household"),
+    ],
+)
+def test_calendar_sharing_is_promoted_only_by_reviewed_container_grant(
+    shared: bool,
+    calendar_id: str,
+    expected_scope: str,
+) -> None:
+    client, log = _client_with_state(
+        bridge_record=_calendar_bridge_record(shared=shared)
+    )
+    response = client.post(
+        "/api/bridge/ingest",
+        json=_calendar_envelope(calendar_id=calendar_id),
+        headers=_headers(),
+    )
+
+    assert response.status_code == 202, response.text
+    assert len(log.events) == 1
+    assert log.events[0].owner_scope == expected_scope
+    assert log.events[0].visibility_scope == expected_scope
+
+
+def test_bridge_commands_require_exact_authorized_container() -> None:
+    allowed_client, _ = _command_client(
+        command=_calendar_command(calendar_id="calendar-private")
+    )
+    allowed = allowed_client.get(
+        "/api/bridge/commands",
+        params={"providers": "apple_calendar"},
+        headers=_headers(),
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["count"] == 1
+
+    denied_client, _ = _command_client(
+        command=_calendar_command(calendar_id="calendar-not-reviewed")
+    )
+    denied = denied_client.get(
+        "/api/bridge/commands",
+        params={"providers": "apple_calendar"},
+        headers=_headers(),
+    )
+    assert denied.status_code == 200, denied.text
+    assert denied.json()["commands"] == []
+
+
+def test_exact_v2_terminal_result_is_bound_to_real_command_and_container() -> None:
+    command = _calendar_command(calendar_id="calendar-private")
+    client, sink = _command_client(command=command)
+    command_payload = command["payload"]
+    result = {
+        "event_at_ms": int(time.time() * 1000),
+        "tenant_id": "tenant-a",
+        "type": "external_sync.write_completed",
+        "schema_version": 2,
+        "occurred_at": EventEnvelope.now_utc_iso(),
+        "source_adapter": "adminme-bridge-command-dispatcher",
+        "source_account_id": command_payload["provider_account_id"],
+        "owner_scope": "private:m1",
+        "visibility_scope": "private:m1",
+        "sensitivity": "normal",
+        "causation_id": command["event_id"],
+        "idempotency_key": "external-sync-result:command-calendar",
+        "payload": {
+            "command_id": "command-calendar",
+            "member_id": "m1",
+            "provider": "apple_calendar",
+            "operation": "update_event",
+            "external_id": "event-1",
+            "provider_revision": "revision-2",
+            "result": {},
+            "completed_at": EventEnvelope.now_utc_iso(),
+            "suppressed": False,
+            "command_event_id": command["event_id"],
+            "domain_approval_event_id": "ev-domain-approval",
+            "openclaw_approval_event_id": "ev-openclaw-approval",
+            "provider_account_id": command_payload["provider_account_id"],
+            "request_fingerprint": "b" * 64,
+            "provider_called": True,
+            "origin_proposal_id": None,
+        },
+    }
+
+    response = client.post("/api/bridge/ingest", json=result, headers=_headers())
+
+    assert response.status_code == 202, response.text
+    assert len(sink.events) == 1
+    assert sink.events[0].payload["provider_called"] is True
 
 
 def test_ingest_single_missing_tailscale_header_403() -> None:
@@ -130,7 +408,7 @@ def test_ingest_single_unknown_identity_403() -> None:
     resp = client.post(
         "/api/bridge/ingest",
         json=_envelope_dict(),
-        headers={TAILSCALE_IDENTITY_HEADER: "intruder@example.ts.net"},
+        headers=_headers("intruder@example.ts.net"),
     )
     assert resp.status_code == 403
     assert resp.json()["detail"] == "unknown_tailscale_identity"
@@ -144,7 +422,7 @@ def test_ingest_single_owner_scope_claim_mismatch_hard_refuse_403() -> None:
     resp = client.post(
         "/api/bridge/ingest",
         json=_envelope_dict(owner_scope="private:m2"),  # claim disagrees
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 403
     detail = resp.json()["detail"]
@@ -164,7 +442,7 @@ def test_ingest_single_malformed_envelope_returns_422() -> None:
     resp = client.post(
         "/api/bridge/ingest",
         json=bad,
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "envelope_validation_failed"
@@ -182,7 +460,7 @@ def test_ingest_batch_happy_path_returns_202_and_event_ids() -> None:
     resp = client.post(
         "/api/bridge/ingest/batch",
         json=body,
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 202, resp.text
     payload = resp.json()
@@ -205,7 +483,7 @@ def test_ingest_batch_one_bad_envelope_rejects_whole_batch_400_with_offset() -> 
     resp = client.post(
         "/api/bridge/ingest/batch",
         json=body,
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 400
     detail = resp.json()["detail"]
@@ -228,15 +506,44 @@ def test_health_endpoint_returns_status_and_atomic_counter_increment() -> None:
     client.post(
         "/api/bridge/ingest",
         json=_envelope_dict(),
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     client.post(
         "/api/bridge/ingest/batch",
         json={"envelopes": [_envelope_dict(), _envelope_dict()]},
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     health_after = client.get("/api/bridge/health").json()
     assert health_after["ingest_count"] == 3
+
+
+def test_health_distinguishes_transport_from_provider_capability() -> None:
+    transport_client, _ = _client_with_state(
+        bridge_record={
+            **_calendar_bridge_record(shared=False),
+            "authorized_packs": [],
+            "pack_capability_states": {
+                "calendaring-apple-calendar-bridge": "not_attested"
+            },
+            "provider_capability_state": "not_attested",
+            "capability_attestations": {},
+        }
+    )
+    transport = transport_client.get("/api/bridge/health").json()
+    assert transport["enrollment_state"] == "transport-active"
+    assert transport["provider_capability_state"] == "not_attested"
+    assert transport["provider_blocked_count"] == 1
+    assert transport["provider_ready_count"] == 0
+
+    invalid_client, _ = _client_with_state(
+        bridge_record={
+            **_calendar_bridge_record(shared=False),
+            "pack_config": {},
+        }
+    )
+    invalid = invalid_client.get("/api/bridge/health").json()
+    assert invalid["provider_capability_state"] == "invalid"
+    assert invalid["invalid_active_count"] == 1
 
 
 def test_ingest_single_503_when_event_log_unavailable() -> None:
@@ -245,12 +552,13 @@ def test_ingest_single_503_when_event_log_unavailable() -> None:
     app = create_app()
     app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
     app.state.ingest_count = 0
+    app.state.bridge_enrollments = {"m1@example.ts.net": _active_bridge_record()}
     # NB: app.state.event_log deliberately unset.
     client = TestClient(app)
     resp = client.post(
         "/api/bridge/ingest",
         json=_envelope_dict(),
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 503
     assert resp.json()["detail"] == "event_sink_unavailable"
@@ -263,7 +571,7 @@ def test_ingest_batch_empty_envelopes_list_returns_422() -> None:
     resp = client.post(
         "/api/bridge/ingest/batch",
         json={"envelopes": []},
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == 422
 
@@ -287,6 +595,6 @@ def test_ingest_single_owner_scope_claim_only_exact_match_accepted(
     resp = client.post(
         "/api/bridge/ingest",
         json=_envelope_dict(owner_scope=scope_claim),
-        headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
+        headers=_headers(),
     )
     assert resp.status_code == expected_status

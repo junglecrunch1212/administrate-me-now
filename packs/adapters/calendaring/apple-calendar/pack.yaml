@@ -1,21 +1,14 @@
-# Top-level dual-deployment discriminators per docs/11-split-memo-11b-ii-beta.md
-# §2 + docs/04-split-memo-11b-ii.md §2 (11b-ii-β-β). `subkind: state-mirror`
-# matches the bridge runtime's STATE_MIRROR_SUBKIND allow-list shipped by
-# 11b-ii-α-1 (bridge/adminme_bridge/packs/__init__.py); declarative marker
-# for tooling — the central supervisor loads this pack from its own registry,
-# while the bridge daemon loads the separate bridge connector-pack at
-# bridge/adminme_bridge/connector_packs/calendaring_apple_calendar_bridge/.
-# `deployment_targets` enumerates the two deployments the adapter supports
-# per [D18] (Reminders dual-deployment per memo 05 §5.4) + [D22] (Apple
-# Calendar dual-deployment lineage). The runtime deployment switch is the
-# `deployment_target` enum in config.schema.json (default `central`, so
-# pre-β-β instances keep working).
+# This current schema is human-member owned and bridge-only.  The Python class
+# remains reusable behind the separately supervised bridge wrapper, but the
+# central adapter loader must never construct it or request EventKit access.
+# A future service-owned central Apple source requires a new reviewed schema,
+# provider binding, permission gate, and production-composition proof.
 subkind: state-mirror
-deployment_targets: [central, bridge]
+deployment_targets: [bridge]
 
 pack:
   id: adapter:calendaring-apple-calendar
-  name: Apple Calendar central Cat-B adapter
+  name: Apple Calendar member-bridge Cat-B adapter
   version: 2.0.0
   kind: adapter
   family: calendaring
@@ -58,19 +51,17 @@ config:
   example: config.example.yaml
 
 # Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35] / [UT-27].
-# Cat-B central — Apple EventKit (EKEventStore via PyObjC); inbound poll
+# Cat-B member bridge — Apple EventKit (EKEventStore via PyObjC); inbound poll
 # emits the on-main `calendar.event_added@v1` schema (no new schema
 # registered per [D7]); outbound `create_event` saves an `EKEvent`
 # wrapped through `adminme.lib.observation.outbound` per [§6.20].
 # write_capabilities is asymmetric per [UT-27] (only `create_event` is
 # implemented; update_event / delete_event are out of scope per parent
-# draft). Top-level `subkind` + `deployment_targets` were added by
-# 11b-ii-β-β c1 (docs/11-split-memo-11b-ii-beta.md §2); the runtime
-# `capabilities[*].runtime` row stays `central` (the deployment switch
-# lives in the top-level field + the `deployment_target` config enum).
+# draft). The bridge wrapper reuses this implementation by file; the central
+# supervisor rejects this manifest before import or construction.
 capabilities:
   - kind: Cat-B
-    runtime: central
+    runtime: bridge
     event_families: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.event_outcome_recorded]
 write_capabilities:
   - create_event

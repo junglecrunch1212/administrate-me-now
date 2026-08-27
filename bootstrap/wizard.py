@@ -1103,6 +1103,7 @@ class BootstrapWizard:
                 "knowledge-apple-notes",
                 "knowledge-apple-voice-memos",
                 "calendaring-apple-calendar-bridge",
+                "contacts-apple-contacts-bridge",
                 "reminders-apple-eventkit-bridge",
             ]
             if self.answers["bridges"]["obsidian"] and not is_child:
@@ -1122,27 +1123,11 @@ class BootstrapWizard:
                 "owner_scope": f"private:{member_id}",
                 "tailscale_identity": tailscale_identity,
                 "allowed_packs": sorted(allowed_packs),
-                "enabled_packs": [
-                    "calendaring-apple-calendar-bridge",
-                    "knowledge-apple-notes",
-                    "reminders-apple-eventkit-bridge",
-                ],
-                "pack_config": {
-                    "calendaring-apple-calendar-bridge": {
-                        "calendar_identifier": "default",
-                        "provider_account_id": member_id,
-                        "emit_schema_version": 2,
-                    },
-                    "reminders-apple-eventkit-bridge": {
-                        "target_list_identifier": "default",
-                        "provider_account_id": member_id,
-                        "emit_schema_version": 2,
-                    },
-                    "knowledge-apple-notes": {
-                        "automation_mode": "notes_scripting",
-                        "emit_schema_version": 2,
-                    },
-                },
+                # Transport enrollment and provider capability are separate
+                # gates.  A package authorizes no pack or OS permission until
+                # the owner supplies reviewed pack/account coordinates.
+                "enabled_packs": [],
+                "pack_config": {},
                 "release_commit": release_commit,
                 "restrictions": {
                     "kid": is_child,
@@ -1182,6 +1167,9 @@ class BootstrapWizard:
                 "kid_restrictions": is_child,
                 "status": "package-created-not-live",
                 "release_commit": release_commit,
+                "allowed_packs": sorted(allowed_packs),
+                "enabled_packs": [],
+                "provider_capability_state": "not_attested",
             }
         index_path = self.paths.instance_dir / "bridges" / "member-mapping.json"
         atomic_write(

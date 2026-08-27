@@ -169,7 +169,7 @@ def test_lists_projection_registered_in_runner() -> None:
     # registry seam so a future refactor cannot silently rename them.
     instance = ListsProjection()
     assert instance.name == "lists"
-    assert instance.version == 3
+    assert instance.version == 4
     assert list(instance.subscribes_to) == [
         "list.created",
         "list.updated",

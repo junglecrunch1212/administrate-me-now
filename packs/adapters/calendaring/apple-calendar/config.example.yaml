@@ -4,10 +4,22 @@
 # prompt + the EKEventStore.requestFullAccessToEvents flow); no
 # 1Password secret is involved (unlike Google Calendar). The wizard
 # (prompt 16) will own writing real values at install time; until then
-# operators edit by hand.
+# the reviewed member-bridge enrollment supplies these values. This current
+# schema does not authorize a central CoS Apple account.
 
 calendar_identifier: REPLACE_WITH_EKCALENDAR_IDENTIFIER
 member_id: REPLACE_WITH_MEMBER_ID
+provider_account_id: provider-account:00000000000000000000000000000000
+deployment_target: bridge
+workspace: personal
+permission_scope:
+  - eventkit.calendar.read
+  - eventkit.calendar.write
+allowed_container_ids:
+  - REPLACE_WITH_EKCALENDAR_IDENTIFIER
+shared_container_ids: []
+binding_provenance: member-bridge-enrollment
+ownership_attested: true
 poll_window_days: 30
 poll_interval_s: 60
 sensitivity_floor: normal

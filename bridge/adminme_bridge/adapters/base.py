@@ -62,6 +62,8 @@ class BridgeContext:
     now_factory: Callable[[], datetime]
     sink: "BridgeEventSink | None" = None
     tenant_id: str = "tenant-default"
+    enrollment_id: str = ""
+    configuration_sha256: str = ""
 
 
 @runtime_checkable

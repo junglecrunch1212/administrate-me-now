@@ -1864,6 +1864,31 @@ files = [
 pyobjc-core = ">=12.2.1"
 
 [[package]]
+name = "pyobjc-framework-contacts"
+version = "12.2.1"
+description = "Wrappers for the framework Contacts on macOS"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "sys_platform == \"darwin\""
+files = [
+    {file = "pyobjc_framework_contacts-12.2.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:a95f1cc61c2a36b310230976f49d8ec8cf7cf7a8eb81b038f25410bea99a7c50"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:01fea11ba777721add31ccff3497334eb0fde7ba1c69cf2c845a85e1515d5c18"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:9e31c635d1a8ed48d0e3332120d0eafa6a5d40b30fe4832aaa700fa03fe14c8d"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:93facd1772971b6d88243fa28781498ab5f479c0fe286f8c03870f93c515b517"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:d0f73ff7f92986b5920155e9cb16bc74cf049e166e6bc2a7df1621135b4e6d79"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:31d0906bce2e5c348a1453ac390d9e255ce547ca763e93875ea3582deba69070"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:85ec30abb7b27655c715e3b2e01ed6229e24b7f14f235e6c04fb77afedad3983"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:d21bce70f97cb4b5da7cfb35da64897ce69f96ffbecacfe64364ce220b74d075"},
+    {file = "pyobjc_framework_contacts-12.2.1-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:536a46a5a55040142a2cba108ac48045f6da266a042f2fa0ec2bf4b7f8bc1e34"},
+    {file = "pyobjc_framework_contacts-12.2.1.tar.gz", hash = "sha256:b009f1e85d672e659c30cefbba02a1825b4ca2b604e65826445fb8620159725e"},
+]
+
+[package.dependencies]
+pyobjc-core = ">=12.2.1"
+pyobjc-framework-Cocoa = ">=12.2.1"
+
+[[package]]
 name = "pyobjc-framework-corelocation"
 version = "12.2.1"
 description = "Wrappers for the framework CoreLocation on macOS"
@@ -2856,4 +2881,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.14,<3.15"
-content-hash = "1e4b43905134a13a17775e4e2fe65853868f9ea8c7486c8895c4a2110a7b5d1d"
+content-hash = "0b15e57ca3c1541c122e648da4e35ad6d17ea48cebe5f71869e3170394c2a119"

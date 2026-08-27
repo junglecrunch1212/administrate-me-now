@@ -78,7 +78,7 @@ def test_parse_existing_reminders_pack_yaml_yields_cat_b_capability() -> None:
     assert len(manifest.capabilities) == 1
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-B"
-    assert cap.runtime == "central"
+    assert cap.runtime == "bridge"
     assert cap.event_families == [
         "reminder.list_item.synced",
         "list.created",

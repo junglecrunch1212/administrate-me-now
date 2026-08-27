@@ -97,6 +97,23 @@ systems.
 - Each member's private Calendar, Reminders, Contacts, Notes, Voice Memos, and
   similar Apple sources remain behind that member's separately consented
   bridge. A CoS Apple identity and Apple sharing grant no access.
+- Transport configuration, package export, member acceptance, and central
+  finalization establish only one exact active member/enrollment route. They
+  install and start no provider pack. The member must separately enable a pack;
+  until the resulting `adapter.authenticated@v2` is bound to the exact
+  enrollment, normalized configuration digest, provider account, permission
+  reference, and scope set and then centrally attested, ordinary provider facts
+  and commands deny and readiness reports provider capability `not_attested`.
+- Calendar, Reminders, and Contacts require exact personal workspace,
+  content-free provider-account, container allowlist, permission, provenance,
+  and ownership coordinates. One Apple provider account may belong to only one
+  member across active bridge records, while that member may use it for several
+  reviewed Apple packs. The central runtime validates this metadata but never
+  imports, constructs, or supervises a human-member Apple adapter.
+- Native Calendar/Reminders sharing is observation metadata, not authority.
+  Bridge envelopes arrive private; only a central reviewed container grant may
+  promote scope. Shared list projection rows retain every member/account route
+  so one bridge cannot overwrite or delete another bridge's observation.
 
 ### CoS service-channel identity
 
@@ -195,6 +212,9 @@ window after prior live effects.
 | Tagged non-member Central Host and exact A/B ingress acceptance | MODERNIZE | The former prose did not explicitly require a tagged infrastructure identity or fail closed on a member-owned host. |
 | Standard service account plus tested separate recovery path | MODERNIZE | “Dedicated” and “non-root” were insufficient activation predicates. |
 | Global provider-owner/workspace/permission/provenance validation | MODERNIZE | Per-row schemas and defaults could not prove account ownership or uniqueness. |
+| Human-member Apple Calendar, Reminders, and Contacts placement and capability lifecycle | MODERNIZE | The current schemas are bridge-only; transport enrollment, local pack enablement, exact permission evidence, and central attestation are separate gates, and the central supervisor never constructs them. |
+| D22/D25 human-member central Apple variants and default-central schemas | SUPERSEDE | This supersession is narrow: required Apple capabilities remain implemented on member bridges, while a future service-owned central source requires a distinct review. |
+| D18/D22 source privacy, shared-resource deduplication, and D23 sparse Contacts correction | PRESERVE | Native provider sharing never grants household scope; centrally reviewed container grants retain route provenance, and Contacts exposes only the exact identifier-correction write. |
 | Non-human service principal and deterministic CoS channel routing | MODERNIZE | Preserves the intended service persona without weakening member privacy. |
 | Blanket reading of “no Apple ID on the central service account” | SUPERSEDE | The ban continues for member-source ingestion; it does not prohibit a separate dedicated CoS Apple channel identity. This supersession is narrow. |
 | Portal/bridge fail-open defaults and independent Settings readiness | SUPERSEDE | Unknown or absent evidence now denies and one readiness object governs all surfaces. |
@@ -203,8 +223,9 @@ window after prior live effects.
 
 ## Compatibility and rollback
 
-Existing event schema versions remain registered. Messaging v5 is additive;
-current member adapters continue emitting their reviewed versions. Disabled
+Existing event schema versions remain registered. Messaging v5 and
+`adapter.authenticated@v2` are additive; version 1 remains registered for
+generic central adapters. Disabled
 provider rows may remain incomplete. Strict production configuration must add
 explicit provider evidence before the candidate can become ready; that is an
 intentional fail-closed migration.

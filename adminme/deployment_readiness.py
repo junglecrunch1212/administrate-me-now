@@ -5,6 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from adminme.bridge_authorization import (
+    BRIDGE_PACK_POLICIES,
+    authorization_from_record,
+    configuration_from_record,
+    provider_capability_summary,
+)
+
 
 CENTRAL_HOST_TAG = "tag:administrateme-central"
 REQUIRED_DM_SCOPE = "per_account_channel_peer"
@@ -303,12 +310,38 @@ def evaluate_deployment_readiness(
         )
     else:
         statuses = [record.get("status") for record in bridge_enrollments.values()]
-        bridges_ok = all(status in {"active", "revoked"} for status in statuses)
+        capability_counts = provider_capability_summary(
+            record for record in bridge_enrollments.values() if isinstance(record, dict)
+        )
+        invalid_active = 0
+        provider_blocked = 0
+        for record in bridge_enrollments.values():
+            if not isinstance(record, dict) or record.get("status") != "active":
+                continue
+            configuration = configuration_from_record(record)
+            if configuration is None:
+                invalid_active += 1
+                continue
+            provider_packs = {
+                pack
+                for pack in configuration.packs
+                if BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+            }
+            authorization = authorization_from_record(record)
+            if provider_packs and (
+                authorization is None or not provider_packs <= authorization.packs
+            ):
+                provider_blocked += 1
+        bridges_ok = (
+            all(status in {"active", "revoked"} for status in statuses)
+            and invalid_active == 0
+            and provider_blocked == 0
+        )
         dimensions["bridges"] = _dimension(
             "healthy" if bridges_ok else "blocked",
-            "every selected bridge is active or explicitly revoked"
+            "every selected bridge has a valid transport and every configured provider capability is attested"
             if bridges_ok
-            else "a selected bridge remains provisional, expired, or ambiguous",
+            else "a bridge transport, configuration, or provider capability remains unproved",
             evidence={
                 "enrollment_count": len(statuses),
                 "active_count": statuses.count("active"),
@@ -316,6 +349,9 @@ def evaluate_deployment_readiness(
                 "provisional_count": len(statuses)
                 - statuses.count("active")
                 - statuses.count("revoked"),
+                "invalid_active_count": invalid_active,
+                "provider_blocked_count": provider_blocked,
+                "provider_capability_counts": capability_counts,
             },
         )
 

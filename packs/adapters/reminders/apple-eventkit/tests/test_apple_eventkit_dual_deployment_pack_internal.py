@@ -1,6 +1,7 @@
-"""Pack-internal tests for the Apple Reminders dual-deployment landed in
-prompt 11b-ii-α-2 (c1 manifest + c1 config schema + c2 adapter branching +
-c3 bridge connector-pack scaffold).
+"""Pack-internal tests for the Apple Reminders member-bridge contract.
+
+The historical basename remains for discovery compatibility. The current
+manifest, schema, and class admit only the member-bridge runtime.
 
 Sits alongside ``test_apple_eventkit_adapter_pack_internal.py`` (the
 pre-retrofit pack-internal suite), ``test_apple_eventkit_dual_emit_pack_internal.py``
@@ -10,8 +11,7 @@ pre-retrofit pack-internal suite), ``test_apple_eventkit_dual_emit_pack_internal
 c4 deliverable 1 — the pack-side guards that the dual-deployment shape
 landed in c1+c2 stays wired correctly: the manifest declares the new
 top-level ``subkind`` + ``deployment_targets`` fields, the config schema
-accepts the ``deployment_target`` enum with the central default, and the
-11-β six-check validator continues to PASS on the dual-deployment pack.
+requires the bridge target, and the 11-β validator remains clean.
 
 Three load-bearing assertions:
 
@@ -20,23 +20,16 @@ Three load-bearing assertions:
    α-1's bridge loader allow-list constant
    ``STATE_MIRROR_SUBKIND = "state-mirror"`` at
    ``bridge/adminme_bridge/packs/__init__.py``) AND top-level
-   ``deployment_targets: [central, bridge]`` per memo 04 §2 / memo 05 §5.4.
+   ``deployment_targets: [bridge]`` under the current CO-019 boundary.
 
 2. ``test_config_schema_accepts_deployment_target_central_and_bridge_with_central_default``
-   — ``config.schema.json`` adds the ``deployment_target`` enum
-   ``["central", "bridge"]`` with ``default: "central"`` so pre-α-2
-   instances (which omit the field entirely) continue to validate per F-2
-   backwards-compat.
+   — ``config.schema.json`` requires ``deployment_target: bridge``.
 
 3. ``test_pack_validator_accepts_dual_deployment_pack`` — the 11-β
    six-check validator at
    :func:`adminme.lib.pack_registry.validator.validate_adapter_pack`
-   exits with no error findings on the dual-deployment pack: the
-   ``capabilities[*].runtime`` Cat-B central entry coheres with the
-   `deployment_targets` top-level switch (memo 05 §3.1 — α-2 keeps the
-   capability-list row at ``runtime: central`` per §1 item 1; the
-   deployment switch lives in the manifest's top-level + config enum,
-   not in the capability list). NO ``advisory_pending_retrofit`` per
+   exits with no error findings on the bridge-only pack, including its
+   ``capabilities[*].runtime: bridge`` row. NO ``advisory_pending_retrofit`` per
    ``base_class_conformance`` (the retrofit landed in 11r-c).
 
 F-5 (HARD/standing): basename ``test_apple_eventkit_dual_deployment_pack_internal.py``
@@ -64,60 +57,22 @@ import yaml
 PACK_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_pack_manifest_declares_subkind_state_mirror_and_deployment_targets() -> None:
-    """Pack manifest pin (§7 c1 deliverable 1 + §1 item 1).
-
-    ``subkind: state-mirror`` at the TOP LEVEL (not under ``pack:``) so
-    the bridge daemon's ``discover_packs()`` at
-    ``bridge/adminme_bridge/packs/__init__.py`` reads it directly via the
-    ``data.get("subkind")`` lookup against the
-    ``STATE_MIRROR_SUBKIND = "state-mirror"`` allow-list constant.
-
-    ``deployment_targets: [central, bridge]`` at the TOP LEVEL enumerates
-    the two deployment runtimes the adapter supports per [D18] (Reminders
-    dual-deployment per memo 05 §5.4) + [D22] (Apple Calendar
-    dual-deployment lineage). The runtime switch the central adapter's
-    ``start()`` reads is ``config.deployment_target`` (not this list);
-    this list is the *declarative* surface validator + loader tooling
-    inspect to know the pack supports both.
-    """
+def test_pack_manifest_declares_member_bridge_only_runtime() -> None:
+    """Current member Apple sources cannot advertise a central runtime."""
     with (PACK_ROOT / "pack.yaml").open(encoding="utf-8") as fh:
         manifest: Any = yaml.safe_load(fh)
     assert isinstance(manifest, dict)
-    # Top-level subkind matches α-1's STATE_MIRROR_SUBKIND allow-list.
     assert manifest.get("subkind") == "state-mirror"
-    # Top-level deployment_targets enumerates BOTH supported runtimes.
-    deployment_targets = manifest.get("deployment_targets")
-    assert isinstance(deployment_targets, list)
-    assert "central" in deployment_targets
-    assert "bridge" in deployment_targets
-    # 11r-c retrofit's capabilities[*].runtime row stays "central" per
-    # memo 05 §3.1 — α-2 does NOT promote the capability-list row to
-    # ``runtime: dual``; the deployment switch lives in the top-level
-    # + config.schema.json enum, not in the capability list. The bridge
-    # connector-pack at ``bridge/adminme_bridge/connector_packs/
-    # reminders_apple_eventkit_bridge/`` is the bridge-side runtime.
+    assert manifest.get("deployment_targets") == ["bridge"]
     capabilities = manifest.get("capabilities")
     assert isinstance(capabilities, list)
     assert len(capabilities) == 1
     assert capabilities[0]["kind"] == "Cat-B"
-    assert capabilities[0]["runtime"] == "central"
+    assert capabilities[0]["runtime"] == "bridge"
 
 
-def test_config_schema_accepts_deployment_target_central_and_bridge_with_central_default() -> (
-    None
-):
-    """Config schema pin (§7 c1 deliverable 2 + §1 item 2 + F-2).
-
-    ``deployment_target`` is an OPTIONAL string enum
-    ``["central", "bridge"]`` with ``default: "central"``. Optional +
-    central-default is the F-2 backwards-compat guarantee: instances
-    persisted before α-2 do not carry ``deployment_target`` in their
-    config and the schema validator continues to accept them. The
-    central adapter's ``start()`` reads
-    ``ctx.config.get("deployment_target", "central")`` so the runtime
-    default is identical to the schema default.
-    """
+def test_config_schema_requires_explicit_owned_deployment_coordinates() -> None:
+    """The current schema cannot silently authorize a central Apple identity."""
     with (PACK_ROOT / "config.schema.json").open(encoding="utf-8") as fh:
         schema: Any = json.load(fh)
     assert isinstance(schema, dict)
@@ -125,21 +80,26 @@ def test_config_schema_accepts_deployment_target_central_and_bridge_with_central
     assert isinstance(properties, dict)
     dt = properties.get("deployment_target")
     assert isinstance(dt, dict), "config.schema.json must declare deployment_target"
-    assert dt.get("type") == "string"
-    assert dt.get("enum") == ["central", "bridge"]
-    assert dt.get("default") == "central"
-    # F-2 backwards-compat: NOT in the required list, so pre-α-2
-    # configs that omit it validate cleanly and pick up the default.
+    assert dt.get("const") == "bridge"
+    assert "default" not in dt
     required = schema.get("required") or []
-    assert "deployment_target" not in required
-    # Existing required fields preserved unchanged (target_list_identifier
-    # + member_id from 11b-i + 11r-c).
-    assert "target_list_identifier" in required
-    assert "member_id" in required
+    assert set(required) >= {
+        "target_list_identifier",
+        "member_id",
+        "provider_account_id",
+        "deployment_target",
+        "workspace",
+        "permission_scope",
+        "binding_provenance",
+        "ownership_attested",
+    }
+    assert properties["workspace"]["const"] == "personal"
+    assert properties["binding_provenance"]["const"] == "member-bridge-enrollment"
+    assert properties["ownership_attested"]["const"] is True
 
 
 def test_pack_validator_accepts_dual_deployment_pack() -> None:
-    """11-β six-check validator passes on the dual-deployment pack
+    """11-β six-check validator passes on the bridge-only pack
     (§7 c4 verification — ``adminme adapters validate
     packs/adapters/reminders/apple-eventkit`` exits 0 with no error
     findings + no ``advisory_pending_retrofit``).
@@ -147,12 +107,10 @@ def test_pack_validator_accepts_dual_deployment_pack() -> None:
     The validator at :func:`validate_adapter_pack` runs six checks:
     capability-runtime coherence, event-schema registration, projection-
     subscription compatibility, base-class conformance, write-capabilities
-    presence, observation-mode wrapping. The dual-deployment shape adds
-    NEW top-level fields (``subkind`` + ``deployment_targets``) which the
+    presence, observation-mode wrapping. The reviewed shape adds top-level
+    fields (``subkind`` + ``deployment_targets``) which the
     validator's ``AdapterManifest`` parser tolerates (extra-fields-allowed
-    on top-level), and the capability-list row stays ``runtime: central``
-    per the prompt §1 item 1 design choice — so none of the six checks
-    surface a NEW error for α-2.
+    on top-level), and the capability-list row is ``runtime: bridge``.
     """
     from adminme.lib.pack_registry.validator import validate_adapter_pack
 

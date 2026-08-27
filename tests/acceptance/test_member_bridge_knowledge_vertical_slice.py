@@ -58,6 +58,24 @@ class _MutableProvider:
 
 def _settings(instance_dir: Path, key: bytes) -> RuntimeSettings:
     instance_dir.mkdir()
+    configured_packs = [
+        "knowledge-apple-notes",
+        "knowledge-apple-voice-memos",
+        "knowledge-obsidian",
+    ]
+    record = {
+        "member_id": MEMBER_A,
+        "enrollment_id": "bridge-enrollment-test",
+        "status": "active",
+        "configured_packs": configured_packs,
+        "enabled_packs": configured_packs,
+        "authorized_packs": configured_packs,
+        "adapters_active": configured_packs,
+        "pack_config": {pack: {"member_id": MEMBER_A} for pack in configured_packs},
+        "pack_capability_states": {pack: "not_required" for pack in configured_packs},
+        "provider_capability_state": "not_required",
+        "capability_attestations": {},
+    }
     return RuntimeSettings.credential_free(
         instance_dir,
         encryption_key=key,
@@ -76,7 +94,7 @@ def _settings(instance_dir: Path, key: bytes) -> RuntimeSettings:
             AMBIENT: "ambient",
             DEVICE: "device",
         },
-        bridge_enrollments={LOGIN_A: {"member_id": MEMBER_A, "status": "active"}},
+        bridge_enrollments={LOGIN_A: record},
     )
 
 
@@ -195,6 +213,7 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
         ingest_client = IngestClient(
             central_endpoint_url="http://administrateme.fixture",
             tailscale_identity_header=LOGIN_A,
+            enrollment_id="bridge-enrollment-test",
             client=_TestClientAsyncHttp(client_a),  # type: ignore[arg-type]
             sleep=lambda _seconds: asyncio.sleep(0),
         )
@@ -204,6 +223,7 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             correlation_id_factory=lambda: "corr-member-knowledge",
             now_factory=lambda: datetime(2036, 2, 1, 14, tzinfo=timezone.utc),
             tenant_id=settings_a.instance.tenant_id,
+            enrollment_id="bridge-enrollment-test",
         )
 
         event_ids = client_a.portal.call(adapter.scan_once, context, provider)
@@ -466,6 +486,7 @@ def test_every_retained_member_source_reaches_the_real_sink(
         ingest_client = IngestClient(
             central_endpoint_url="http://administrateme.fixture",
             tailscale_identity_header=LOGIN_A,
+            enrollment_id="bridge-enrollment-test",
             client=_TestClientAsyncHttp(client),  # type: ignore[arg-type]
             sleep=lambda _seconds: asyncio.sleep(0),
         )
@@ -475,6 +496,7 @@ def test_every_retained_member_source_reaches_the_real_sink(
             correlation_id_factory=lambda: f"corr-{expected_source}",
             now_factory=lambda: datetime(2036, 3, 1, 12, tzinfo=timezone.utc),
             tenant_id=settings.instance.tenant_id,
+            enrollment_id="bridge-enrollment-test",
         )
         ids = client.portal.call(adapter.scan_once, context, provider)
         assert len(ids) == 1
