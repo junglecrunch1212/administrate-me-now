@@ -639,6 +639,24 @@ def test_preflight_wrong_platform_and_arch_leave_no_partial_instance(
     assert not target.exists()
 
 
+def test_preflight_rejects_explicit_low_disk_capacity(tmp_path: Path) -> None:
+    with pytest.raises(PreflightFailure) as captured:
+        run_preflight(
+            tmp_path / "deployment",
+            system="Darwin",
+            machine="arm64",
+            macos_version="26.0",
+            require_dependencies=False,
+            check_filevault=False,
+            group_names=frozenset(),
+            available_disk_bytes=9 * 1024**3,
+        )
+
+    disk = next(check for check in captured.value.checks if check.name == "disk_space")
+    assert disk.ok is False
+    assert disk.detail == "free disk space is 9 GiB"
+
+
 def test_wizard_accepts_only_the_reviewed_installer_scaffold(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
