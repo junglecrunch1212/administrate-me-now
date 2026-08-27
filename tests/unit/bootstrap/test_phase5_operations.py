@@ -491,6 +491,8 @@ def test_macos_installer_refuses_ambient_test_mode_without_internal_harness(
             str(REPO_ROOT / "bootstrap" / "bootstrap-macos.sh"),
             "--instance-root",
             str(instance_root),
+            "--expected-commit",
+            "0" * 40,
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -500,7 +502,10 @@ def test_macos_installer_refuses_ambient_test_mode_without_internal_harness(
     )
 
     assert completed.returncode == 1
-    assert "local changes" in completed.stderr
+    assert (
+        "reviewed candidate has local changes" in completed.stderr
+        or "does not match reviewed commit" in completed.stderr
+    )
     assert not captured.exists()
     assert not instance_root.exists()
 
