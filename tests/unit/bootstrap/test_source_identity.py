@@ -197,6 +197,51 @@ def _run_fixed_supervisor(
     )
 
 
+def test_supervisor_accepts_safe_virtualenv_link_to_system_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_home = tmp_path / "private-home"
+    private_home.mkdir(mode=0o700)
+    virtualenv = tmp_path / "acceptance-venv"
+    bin_dir = virtualenv / "bin"
+    bin_dir.mkdir(mode=0o700, parents=True)
+    acceptance_python = bin_dir / "python"
+    acceptance_python.symlink_to(Path("/usr/bin/python3"))
+    monkeypatch.setenv("ADMINME_ACCEPTANCE_PYTHON", str(acceptance_python))
+
+    environment = update_supervisor._controller_environment(  # noqa: SLF001
+        private_home,
+        test_mode=True,
+    )
+
+    assert environment["ADMINME_ACCEPTANCE_PYTHON"] == str(acceptance_python)
+    assert environment["ADMINME_TEST_MODE"] == "1"
+
+
+def test_supervisor_rejects_writable_test_interpreter_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_home = tmp_path / "private-home"
+    private_home.mkdir(mode=0o700)
+    virtualenv = tmp_path / "acceptance-venv"
+    bin_dir = virtualenv / "bin"
+    bin_dir.mkdir(mode=0o700, parents=True)
+    writable_target = tmp_path / "writable-python"
+    writable_target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    writable_target.chmod(0o777)
+    acceptance_python = bin_dir / "python"
+    acceptance_python.symlink_to(writable_target)
+    monkeypatch.setenv("ADMINME_ACCEPTANCE_PYTHON", str(acceptance_python))
+
+    with pytest.raises(update_supervisor.SupervisorError, match="unsafe"):
+        update_supervisor._controller_environment(  # noqa: SLF001
+            private_home,
+            test_mode=True,
+        )
+
+
 def test_fixed_blob_supervisor_owns_lock_controller_and_cleanup(tmp_path: Path) -> None:
     repository, commit = _supervisor_repository(tmp_path)
     paths, _active_commit = _supervisor_instance(tmp_path)
