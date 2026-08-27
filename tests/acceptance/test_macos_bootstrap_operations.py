@@ -858,7 +858,7 @@ def test_public_bootstrap_ignores_stale_internal_candidate_coordinates(
     tmp_path: Path,
 ) -> None:
     candidate_a = tmp_path / "candidate-a"
-    _committed_candidate_from_worktree(REPO_ROOT, candidate_a)
+    candidate_a_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate_a)
     candidate_b = tmp_path / "candidate-b"
     subprocess.run(
         ["git", "clone", "-q", "--no-hardlinks", candidate_a, candidate_b],
@@ -929,20 +929,48 @@ def test_public_bootstrap_ignores_stale_internal_candidate_coordinates(
     assert "already running" in completed.stderr
     assert not (paths.app_dir / "tooling").exists()
 
-    # With the lock released, cross the complete public bootstrap shell ->
-    # bounded launcher -> fixed supervisor -> guardian -> fixed controller
-    # boundary. A deliberately wrong reviewed commit stops inside that fixed
-    # controller before macOS, release, backup, or pointer effects.
-    controller_attempt = subprocess.run(
+    # A wrong reviewed commit is refused by the public launcher before the
+    # supervisor can create even the private instance root.
+    mismatch_root = tmp_path / "bootstrap-commit-mismatch"
+    mismatch_environment = environment.copy()
+    mismatch_environment["ADMINME_INSTANCE_ROOT"] = str(mismatch_root)
+    mismatch_attempt = subprocess.run(
         [
             str(candidate_a / "bootstrap" / "bootstrap-macos.sh"),
             "--instance-root",
-            str(paths.root),
+            str(mismatch_root),
             "--expected-commit",
             "f" * 40,
         ],
         cwd=candidate_a,
-        env=environment,
+        env=mismatch_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert mismatch_attempt.returncode == 1
+    assert "STALE_CANDIDATE_EXECUTED" not in mismatch_attempt.stderr
+    assert "does not match reviewed commit" in mismatch_attempt.stderr
+    assert not mismatch_root.exists()
+
+    # With the lock released and the correct reviewed commit, cross the whole
+    # public shell -> launcher -> fixed supervisor -> guardian -> fixed
+    # controller boundary. The explicit internal test-mode marker is first in
+    # the forwarded argument list; the fixed controller then refuses because
+    # the public entry did not authorize the dry-run harness.
+    controller_environment = environment.copy()
+    controller_environment["ADMINME_ACCEPTANCE_PYTHON"] = sys.executable
+    controller_attempt = subprocess.run(
+        [
+            str(candidate_a / "bootstrap" / "bootstrap-macos.sh"),
+            "--test-mode",
+            "--expected-commit",
+            candidate_a_commit,
+        ],
+        cwd=candidate_a,
+        env=controller_environment,
         check=False,
         capture_output=True,
         text=True,
@@ -951,7 +979,9 @@ def test_public_bootstrap_ignores_stale_internal_candidate_coordinates(
 
     assert controller_attempt.returncode == 1
     assert "STALE_CANDIDATE_EXECUTED" not in controller_attempt.stderr
-    assert "does not match reviewed commit" in controller_attempt.stderr
+    assert "fixed bootstrap test mode requires the explicit dry-run harness" in (
+        controller_attempt.stderr
+    )
     assert not (paths.app_dir / "current-release.json").exists()
     assert not (paths.app_dir / "releases").exists()
     assert not paths.backup_dir.exists()

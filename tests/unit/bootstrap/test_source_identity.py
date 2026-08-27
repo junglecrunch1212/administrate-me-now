@@ -2281,6 +2281,42 @@ def test_public_reviewed_launcher_rejects_expected_commit_before_supervisor_load
         )
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ["--expected-commit"],
+        ["--expected-commit", "invalid"],
+        [
+            "--expected-commit",
+            "a" * 40,
+            "--expected-commit",
+            "a" * 40,
+        ],
+    ),
+)
+def test_public_reviewed_launcher_rejects_ambiguous_expected_commit(
+    arguments: list[str],
+) -> None:
+    with pytest.raises(
+        reviewed_launcher.ReviewedLauncherError,
+        match="reviewed expected commit is invalid",
+    ):
+        reviewed_launcher._validate_expected_commit(  # noqa: SLF001
+            "bootstrap", arguments, "a" * 40
+        )
+
+
+def test_public_reviewed_launcher_accepts_matching_or_absent_expected_commit() -> None:
+    commit = "a" * 40
+    reviewed_launcher._validate_expected_commit(  # noqa: SLF001
+        "bootstrap", ["--expected-commit", commit], commit
+    )
+    reviewed_launcher._validate_expected_commit("bootstrap", [], commit)  # noqa: SLF001
+    reviewed_launcher._validate_expected_commit(  # noqa: SLF001
+        "update", ["--expected-commit", "invalid"], commit
+    )
+
+
 def test_public_reviewed_launcher_bounds_and_reaps_git_process_group(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
