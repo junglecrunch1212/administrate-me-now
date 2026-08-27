@@ -42,6 +42,19 @@ from bootstrap.wizard import BootstrapWizard
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _private_acceptance_python(root: Path) -> Path:
+    runtime = root / ".acceptance-runtime"
+    bin_dir = runtime / "bin"
+    bin_dir.mkdir(mode=0o700, parents=True)
+    launcher = bin_dir / "python"
+    launcher.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o700)
+    return launcher
+
+
 def _extract_git_archive(repository: Path, commit: str, destination: Path) -> None:
     """Independently materialize a private release fixture through git archive."""
 
@@ -783,7 +796,9 @@ def test_supported_update_launcher_holds_fixed_controller_lock_through_upgrade(
         capture_output=True,
     ).stdout
     internal_environment = environment.copy()
-    internal_environment["ADMINME_ACCEPTANCE_PYTHON"] = sys.executable
+    internal_environment["ADMINME_ACCEPTANCE_PYTHON"] = str(
+        _private_acceptance_python(tmp_path / "supported-update-acceptance")
+    )
     completed = subprocess.run(
         [
             "/usr/bin/python3",
@@ -961,7 +976,9 @@ def test_public_bootstrap_ignores_stale_internal_candidate_coordinates(
     # the forwarded argument list; the fixed controller then refuses because
     # the public entry did not authorize the dry-run harness.
     controller_environment = environment.copy()
-    controller_environment["ADMINME_ACCEPTANCE_PYTHON"] = sys.executable
+    controller_environment["ADMINME_ACCEPTANCE_PYTHON"] = str(
+        _private_acceptance_python(tmp_path / "bootstrap-acceptance")
+    )
     controller_attempt = subprocess.run(
         [
             str(candidate_a / "bootstrap" / "bootstrap-macos.sh"),

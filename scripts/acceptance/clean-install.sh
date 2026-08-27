@@ -3,14 +3,21 @@ set -Eeuo pipefail
 umask 077
 
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-ADMINME_ACCEPTANCE_PYTHON="$(command -v python)"
-export ADMINME_ACCEPTANCE_PYTHON
+acceptance_python_source="$(command -v python)"
 TEST_PARENT="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 TEST_ROOT="$(mktemp -d "$TEST_PARENT/adminme-clean-install.XXXXXX")"
 cleanup() {
   [[ "$TEST_ROOT" == "$TEST_PARENT"/adminme-clean-install.* ]] && rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
+
+acceptance_runtime="$TEST_ROOT/.acceptance-runtime"
+mkdir -m 0700 "$acceptance_runtime" "$acceptance_runtime/bin"
+ADMINME_ACCEPTANCE_PYTHON="$acceptance_runtime/bin/python"
+printf '#!/bin/sh\nexec %q "$@"\n' "$acceptance_python_source" \
+  >"$ADMINME_ACCEPTANCE_PYTHON"
+chmod 0700 "$ADMINME_ACCEPTANCE_PYTHON"
+export ADMINME_ACCEPTANCE_PYTHON
 
 export ADMINME_REPOSITORY_ROOT="$REPOSITORY_ROOT"
 candidate_commit="$(/usr/bin/git -C "$REPOSITORY_ROOT" rev-parse HEAD)"

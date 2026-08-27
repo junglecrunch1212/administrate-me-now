@@ -6,6 +6,7 @@ import io
 import fcntl
 import os
 import json
+import shlex
 import shutil
 import signal
 import stat
@@ -39,6 +40,19 @@ from bootstrap.upgrade import UpgradeError, UpgradeManager
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _private_acceptance_python(root: Path) -> Path:
+    runtime = root / ".acceptance-runtime"
+    bin_dir = runtime / "bin"
+    bin_dir.mkdir(mode=0o700, parents=True)
+    launcher = bin_dir / "python"
+    launcher.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o700)
+    return launcher
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -177,7 +191,9 @@ def _run_fixed_supervisor(
     ).stdout
     environment = os.environ.copy()
     environment["ADMINME_SUPERVISOR_REPORT"] = str(report)
-    environment["ADMINME_ACCEPTANCE_PYTHON"] = sys.executable
+    environment["ADMINME_ACCEPTANCE_PYTHON"] = str(
+        _private_acceptance_python(report.parent)
+    )
     return subprocess.run(
         [
             "/usr/bin/python3",
