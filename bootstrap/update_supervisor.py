@@ -102,7 +102,7 @@ def _controller_environment(
                 stat.S_ISREG(acceptance_python_metadata.st_mode)
                 or stat.S_ISLNK(acceptance_python_metadata.st_mode)
             )
-            or acceptance_python_metadata.st_uid != os.getuid()
+            or acceptance_python_metadata.st_uid not in {0, os.getuid()}
             or (
                 stat.S_ISREG(acceptance_python_metadata.st_mode)
                 and acceptance_python_metadata.st_mode & 0o022
@@ -110,9 +110,9 @@ def _controller_environment(
             or not stat.S_ISREG(resolved_acceptance_metadata.st_mode)
             or resolved_acceptance_metadata.st_uid not in {0, os.getuid()}
             or resolved_acceptance_metadata.st_mode & 0o022
-            or acceptance_bin_metadata.st_uid != os.getuid()
+            or acceptance_bin_metadata.st_uid not in {0, os.getuid()}
             or acceptance_bin_metadata.st_mode & 0o022
-            or acceptance_venv_metadata.st_uid != os.getuid()
+            or acceptance_venv_metadata.st_uid not in {0, os.getuid()}
             or acceptance_venv_metadata.st_mode & 0o022
             or not os.access(acceptance_python, os.X_OK)
         ):

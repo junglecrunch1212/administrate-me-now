@@ -219,6 +219,24 @@ def test_supervisor_accepts_safe_virtualenv_link_to_system_python(
     assert environment["ADMINME_TEST_MODE"] == "1"
 
 
+def test_supervisor_accepts_safe_root_owned_system_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_home = tmp_path / "private-home"
+    private_home.mkdir(mode=0o700)
+    acceptance_python = Path("/usr/bin/python3")
+    monkeypatch.setenv("ADMINME_ACCEPTANCE_PYTHON", str(acceptance_python))
+
+    environment = update_supervisor._controller_environment(  # noqa: SLF001
+        private_home,
+        test_mode=True,
+    )
+
+    assert environment["ADMINME_ACCEPTANCE_PYTHON"] == str(acceptance_python)
+    assert environment["ADMINME_TEST_MODE"] == "1"
+
+
 def test_supervisor_rejects_writable_test_interpreter_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
