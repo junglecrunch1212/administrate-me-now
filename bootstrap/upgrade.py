@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
+import select
 import shutil
+import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from bootstrap.backup_restore import BackupManager
 from bootstrap.contracts import (
@@ -31,6 +39,16 @@ from bootstrap.source_assessment_repair import (
     load_repair_policy,
     offline_validate_repair_baseline,
     validate_declared_baseline,
+)
+from bootstrap.source_identity import (
+    GENERATED_EXTRA_POLICY,
+    SourceIdentityError,
+    SourceProcessNotReaped,
+    materialize_git_tree,
+    remove_generated_runtime_artifacts,
+    reviewed_candidate_commit,
+    verify_release_source_identity,
+    write_source_marker_at,
 )
 from bootstrap.wizard import install_launch_agents, service_environment_path
 
@@ -62,6 +80,42 @@ _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
 # clock.
 POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 60 * 60
 POST_SWITCH_POLL_SECONDS = 2
+_PREPARATION_STATE_CONTRACT = "administrateme-release-preparation-v1"
+_PREPARATION_STATE_PHASES = frozenset(
+    {"publishing", "publishing_unreaped", "preparing", "complete", "consumed"}
+)
+_PREPARATION_STATE_FIELDS = frozenset(
+    {
+        "contract",
+        "phase",
+        "commit",
+        "release_name",
+        "stage_name",
+        "operation_nonce",
+        "candidate_controller_commit",
+        "uid",
+        "instance_sha256",
+        "pointer_chain_sha256",
+        "generated_policy",
+        "source_manifest_sha256",
+        "source_file_count",
+        "release_device",
+        "release_inode",
+        "activity_device",
+        "activity_inode",
+        "content_exposed",
+    }
+)
+_MAX_RELEASE_POINTER_DEPTH = 64
+_PREPARATION_COMMAND_TIMEOUT_SECONDS = 30 * 60
+
+
+def _is_lower_hex(value: object, length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def validate_candidate(
@@ -165,38 +219,592 @@ class UpgradeManager:
         self.approve_runtime_migration = approve_runtime_migration
         self.approve_source_assessment_repair = approve_source_assessment_repair
         self.services = ServiceManager(paths, test_mode=test_mode)
+        self._active_preparation_activity_descriptor: int | None = None
+        self._active_preparation_activity_path: Path | None = None
+        self._active_preparation_activity_coordinate: tuple[int, int] | None = None
+
+    @staticmethod
+    def _close_descriptors(*descriptors: int | None) -> BaseException | None:
+        first_error: BaseException | None = None
+        for descriptor in descriptors:
+            if descriptor is None:
+                continue
+            try:
+                os.close(descriptor)
+            except BaseException as exc:
+                first_error = first_error or exc
+        return first_error
+
+    @contextmanager
+    def _operation_lock(self) -> Iterator[None]:
+        """Serialize every cooperative activate/rollback operation."""
+
+        self._ensure_private_directory(self.paths.root)
+        self._ensure_private_directory(self.paths.app_dir, parent=self.paths.root)
+        inherited_value = os.environ.get("ADMINME_UPGRADE_OPERATION_LOCK_FD")
+        if inherited_value is not None:
+            try:
+                inherited_descriptor = int(inherited_value)
+                metadata = os.fstat(inherited_descriptor)
+                entry = (self.paths.app_dir / ".upgrade-operation.lock").lstat()
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.getuid()
+                    or metadata.st_nlink != 1
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                    or (metadata.st_dev, metadata.st_ino)
+                    != (entry.st_dev, entry.st_ino)
+                ):
+                    raise UpgradeError("inherited upgrade operation lock is unsafe")
+                fcntl.flock(
+                    inherited_descriptor,
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+                locked = os.fstat(inherited_descriptor)
+                public_after = (self.paths.app_dir / ".upgrade-operation.lock").lstat()
+                if (locked.st_dev, locked.st_ino) != (
+                    public_after.st_dev,
+                    public_after.st_ino,
+                ):
+                    raise UpgradeError("inherited upgrade operation lock changed")
+            except (OSError, ValueError) as exc:
+                raise UpgradeError(
+                    "inherited upgrade operation lock is unsafe"
+                ) from exc
+            yield
+            return
+        app_descriptor: int | None = None
+        lock_descriptor: int | None = None
+        failed = False
+        try:
+            app_descriptor = os.open(
+                self.paths.app_dir,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            lock_descriptor = os.open(
+                ".upgrade-operation.lock",
+                os.O_RDWR
+                | os.O_CREAT
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=app_descriptor,
+            )
+            metadata = os.fstat(lock_descriptor)
+            entry = os.stat(
+                ".upgrade-operation.lock",
+                dir_fd=app_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)
+            ):
+                raise UpgradeError("upgrade operation lock is unsafe")
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise UpgradeError(
+                    "another upgrade or rollback operation is already running"
+                ) from exc
+            entry_after = os.stat(
+                ".upgrade-operation.lock",
+                dir_fd=app_descriptor,
+                follow_symlinks=False,
+            )
+            locked = os.fstat(lock_descriptor)
+            if (entry_after.st_dev, entry_after.st_ino) != (
+                locked.st_dev,
+                locked.st_ino,
+            ):
+                raise UpgradeError("upgrade operation lock changed")
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            if lock_descriptor is not None:
+                try:
+                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                except BaseException as exc:
+                    cleanup_error = cleanup_error or exc
+            close_error = self._close_descriptors(
+                lock_descriptor,
+                app_descriptor,
+            )
+            cleanup_error = cleanup_error or close_error
+            if cleanup_error is not None and not failed:
+                raise UpgradeError(
+                    "upgrade operation lock cleanup failed"
+                ) from cleanup_error
+
+    def _read_release_pointer(self) -> dict[str, Any] | None:
+        pointer = self.paths.app_dir / "current-release.json"
+        if not os.path.lexists(pointer):
+            return None
+        descriptor: int | None = None
+        try:
+            public_before = pointer.lstat()
+            descriptor = os.open(
+                pointer,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.getuid()
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_size <= 0
+                or before.st_size > 1024 * 1024
+                or (before.st_dev, before.st_ino)
+                != (public_before.st_dev, public_before.st_ino)
+            ):
+                raise UpgradeError("active-release pointer is unsafe")
+            payload = bytearray()
+            while len(payload) <= before.st_size:
+                chunk = os.read(
+                    descriptor, min(64 * 1024, before.st_size - len(payload))
+                )
+                if not chunk:
+                    break
+                payload.extend(chunk)
+            after = os.fstat(descriptor)
+            public_after = pointer.lstat()
+            if (
+                len(payload) != before.st_size
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_mode,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+                or (after.st_dev, after.st_ino)
+                != (
+                    public_after.st_dev,
+                    public_after.st_ino,
+                )
+            ):
+                raise UpgradeError("active-release pointer changed while reading")
+            document = json.loads(bytes(payload).decode("utf-8"))
+            if not isinstance(document, dict):
+                raise UpgradeError("active-release pointer is invalid")
+            return document
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise UpgradeError("active-release pointer is invalid") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def _release_pointer_state(
+        self,
+    ) -> tuple[
+        dict[str, Any] | None,
+        Path,
+        frozenset[Path],
+        str,
+        tuple[dict[str, str], ...],
+    ]:
+        document = self._read_release_pointer()
+        if document is None:
+            digest = hashlib.sha256(b"[]").hexdigest()
+            return None, self.root, frozenset(), digest, ()
+        releases = self.paths.app_dir / "releases"
+        protected: set[Path] = set()
+        commits: set[str] = set()
+        rows: list[dict[str, str]] = []
+        current: object = document
+        for _depth in range(_MAX_RELEASE_POINTER_DEPTH):
+            if not isinstance(current, dict):
+                raise UpgradeError("active-release pointer chain is invalid")
+            if not {"commit", "path"}.issubset(current) or not set(current).issubset(
+                {"commit", "path", "previous"}
+            ):
+                raise UpgradeError("active-release pointer chain is invalid")
+            commit = current.get("commit")
+            raw_path = current.get("path")
+            if (
+                not isinstance(commit, str)
+                or not _is_lower_hex(commit, 40)
+                or not isinstance(raw_path, str)
+            ):
+                raise UpgradeError("active-release pointer chain is invalid")
+            expected = releases / commit
+            candidate = Path(raw_path)
+            if not candidate.is_absolute() or candidate != expected:
+                raise UpgradeError("active-release pointer path is invalid")
+            try:
+                metadata = candidate.lstat()
+            except OSError as exc:
+                raise UpgradeError("active-release pointer release is missing") from exc
+            if (
+                candidate.is_symlink()
+                or not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o022
+            ):
+                raise UpgradeError("active-release pointer release is unsafe")
+            resolved = ensure_within(candidate, releases)
+            if commit in commits or resolved in protected:
+                raise UpgradeError(
+                    "active-release pointer chain is duplicated or cyclic"
+                )
+            commits.add(commit)
+            protected.add(resolved)
+            rows.append({"commit": commit, "path": str(resolved)})
+            previous = current.get("previous")
+            if previous is None:
+                break
+            if not isinstance(previous, dict):
+                raise UpgradeError("active-release pointer chain is invalid")
+            current = previous
+        else:
+            raise UpgradeError("active-release pointer chain exceeds the safe depth")
+        digest = hashlib.sha256(
+            json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return (
+            document,
+            Path(rows[0]["path"]),
+            frozenset(protected),
+            digest,
+            tuple(rows),
+        )
+
+    def _release_pointer_snapshot(
+        self,
+    ) -> tuple[Path, frozenset[Path], str, tuple[dict[str, str], ...]]:
+        _document, active, protected, digest, rows = self._release_pointer_state()
+        return active, protected, digest, rows
 
     def _active_release_root(self) -> Path:
-        pointer = self.paths.app_dir / "current-release.json"
-        if not pointer.is_file():
-            return self.root
-        try:
-            active = Path(json.loads(pointer.read_text("utf-8"))["path"])
-            return ensure_within(active, self.paths.app_dir / "releases")
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-            RuntimeError,
-            json.JSONDecodeError,
-        ) as exc:
-            raise UpgradeError("active-release pointer is invalid") from exc
+        return self._release_pointer_snapshot()[0]
 
     def _active_release_commit(self) -> str:
-        pointer = self.paths.app_dir / "current-release.json"
-        if not pointer.is_file():
+        _active, _protected, _digest, rows = self._release_pointer_snapshot()
+        if not rows:
             raise UpgradeError(
                 "declared source-assessment repair requires an active release pointer"
             )
+        return rows[0]["commit"]
+
+    @staticmethod
+    def _atomic_write_at(
+        parent_descriptor: int,
+        name: str,
+        payload: bytes,
+    ) -> None:
+        temporary = f".{name}.{os.getpid()}.{time.time_ns()}"
+        descriptor: int | None = None
         try:
-            commit = str(json.loads(pointer.read_text("utf-8"))["commit"])
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise UpgradeError("active-release pointer has no valid commit") from exc
-        if len(commit) != 40 or any(
-            value not in "0123456789abcdef" for value in commit
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise UpgradeError("release preparation state write was incomplete")
+                view = view[written:]
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+            os.replace(
+                temporary,
+                name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            os.fsync(parent_descriptor)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary, dir_fd=parent_descriptor)
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
+    def _preparation_state_name(commit: str) -> str:
+        return f".release-state-{commit}.json"
+
+    @staticmethod
+    def _preparation_activity_name(commit: str) -> str:
+        return f".release-activity-{commit}.lock"
+
+    def _open_preparation_activity(
+        self,
+        releases_descriptor: int,
+        commit: str,
+        *,
+        expected_coordinate: tuple[int, int] | None,
+    ) -> tuple[int, tuple[int, int]]:
+        name = self._preparation_activity_name(commit)
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        if expected_coordinate is None:
+            flags |= os.O_CREAT
+        try:
+            descriptor = os.open(
+                name,
+                flags,
+                0o600,
+                dir_fd=releases_descriptor,
+            )
+        except OSError as exc:
+            raise UpgradeError("release preparation activity lease is unsafe") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            entry = os.stat(name, dir_fd=releases_descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)
+                or (
+                    expected_coordinate is not None
+                    and (metadata.st_dev, metadata.st_ino) != expected_coordinate
+                )
+            ):
+                raise UpgradeError("release preparation activity lease is unsafe")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise UpgradeError(
+                    "prior candidate preparation worker is still active"
+                ) from exc
+            return descriptor, (metadata.st_dev, metadata.st_ino)
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _load_preparation_state(
+        self,
+        releases_descriptor: int,
+        commit: str,
+    ) -> dict[str, Any] | None:
+        name = self._preparation_state_name(commit)
+        descriptor: int | None = None
+        try:
+            try:
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=releases_descriptor,
+                )
+            except FileNotFoundError:
+                return None
+            metadata = os.fstat(descriptor)
+            entry = os.stat(name, dir_fd=releases_descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size <= 0
+                or metadata.st_size > 16 * 1024
+                or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)
+            ):
+                raise UpgradeError("release preparation state is unsafe")
+            payload = os.read(descriptor, metadata.st_size + 1)
+            after = os.fstat(descriptor)
+            entry_after = os.stat(
+                name,
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                len(payload) != metadata.st_size
+                or (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_mode,
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                    metadata.st_ctime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+                or (after.st_dev, after.st_ino)
+                != (
+                    entry_after.st_dev,
+                    entry_after.st_ino,
+                )
+            ):
+                raise UpgradeError("release preparation state changed while reading")
+            state = json.loads(payload.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise UpgradeError("release preparation state is invalid") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        self._validate_preparation_state(state, expected_commit=commit)
+        return state
+
+    def _validate_preparation_state(
+        self,
+        state: object,
+        *,
+        expected_commit: str,
+    ) -> None:
+        if not isinstance(state, dict):
+            raise UpgradeError("release preparation state is invalid")
+        phase = state.get("phase")
+        nonce = state.get("operation_nonce")
+        stage_name = state.get("stage_name")
+        bound_fields_are_valid = (
+            _is_lower_hex(state.get("commit"), 40)
+            and _is_lower_hex(state.get("candidate_controller_commit"), 40)
+            and _is_lower_hex(state.get("instance_sha256"), 64)
+            and _is_lower_hex(state.get("pointer_chain_sha256"), 64)
+            and _is_lower_hex(nonce, 32)
+            and isinstance(stage_name, str)
+            and stage_name == f".staging-{expected_commit[:12]}.{nonce}"
+        )
+        pending_fields_are_valid = (
+            state.get("source_manifest_sha256") is None
+            and state.get("source_file_count") is None
+            and state.get("release_device") is None
+            and state.get("release_inode") is None
+            and state.get("activity_device") is None
+            and state.get("activity_inode") is None
+        )
+        published_fields_are_valid = (
+            _is_lower_hex(state.get("source_manifest_sha256"), 64)
+            and type(state.get("source_file_count")) is int
+            and state["source_file_count"] >= 0
+            and type(state.get("release_device")) is int
+            and state["release_device"] > 0
+            and type(state.get("release_inode")) is int
+            and state["release_inode"] > 0
+            and type(state.get("activity_device")) is int
+            and state["activity_device"] > 0
+            and type(state.get("activity_inode")) is int
+            and state["activity_inode"] > 0
+        )
+        if (
+            set(state) != _PREPARATION_STATE_FIELDS
+            or state.get("contract") != _PREPARATION_STATE_CONTRACT
+            or state.get("commit") != expected_commit
+            or state.get("candidate_controller_commit") != expected_commit
+            or state.get("release_name") != expected_commit
+            or phase not in _PREPARATION_STATE_PHASES
+            or state.get("generated_policy") != GENERATED_EXTRA_POLICY
+            or type(state.get("uid")) is not int
+            or state["uid"] != os.getuid()
+            or state.get("content_exposed") is not False
+            or state.get("instance_sha256")
+            != hashlib.sha256(str(self.paths.root).encode()).hexdigest()
+            or not bound_fields_are_valid
+            or (
+                phase in {"publishing", "publishing_unreaped"}
+                and not pending_fields_are_valid
+            )
+            or (
+                phase not in {"publishing", "publishing_unreaped"}
+                and not published_fields_are_valid
+            )
         ):
-            raise UpgradeError("active-release pointer commit is invalid")
-        return commit
+            raise UpgradeError("release preparation state is invalid")
+
+    def _write_preparation_state(
+        self,
+        releases_descriptor: int,
+        state: dict[str, Any],
+    ) -> None:
+        commit = state.get("commit")
+        if not isinstance(commit, str):
+            raise UpgradeError("release preparation state is invalid")
+        self._validate_preparation_state(state, expected_commit=commit)
+        self._atomic_write_at(
+            releases_descriptor,
+            self._preparation_state_name(commit),
+            json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        )
+
+    def _remove_preparation_state(
+        self,
+        releases_descriptor: int,
+        commit: str,
+    ) -> None:
+        try:
+            os.unlink(
+                self._preparation_state_name(commit),
+                dir_fd=releases_descriptor,
+            )
+        except FileNotFoundError:
+            return
+        os.fsync(releases_descriptor)
+
+    def _new_preparation_state(
+        self,
+        *,
+        commit: str,
+        stage_name: str,
+        pointer_chain_sha256: str,
+    ) -> dict[str, Any]:
+        controller_commit = os.environ.get("ADMINME_UPGRADE_CONTROLLER_COMMIT")
+        if controller_commit is None and self.test_mode:
+            controller_commit = commit
+        if not _is_lower_hex(controller_commit, 40):
+            raise UpgradeError("upgrade controller provenance is missing")
+        return {
+            "contract": _PREPARATION_STATE_CONTRACT,
+            "phase": "publishing",
+            "commit": commit,
+            "release_name": commit,
+            "stage_name": stage_name,
+            "operation_nonce": stage_name.rsplit(".", 1)[-1],
+            "candidate_controller_commit": controller_commit,
+            "uid": os.getuid(),
+            "instance_sha256": hashlib.sha256(
+                str(self.paths.root).encode()
+            ).hexdigest(),
+            "pointer_chain_sha256": pointer_chain_sha256,
+            "generated_policy": GENERATED_EXTRA_POLICY,
+            "source_manifest_sha256": None,
+            "source_file_count": None,
+            "release_device": None,
+            "release_inode": None,
+            "activity_device": None,
+            "activity_inode": None,
+            "content_exposed": False,
+        }
 
     def _validate_source_repair_online(
         self, policy: SourceAssessmentRepairPolicy
@@ -239,12 +847,31 @@ class UpgradeManager:
             raise UpgradeError(
                 "upgrade controller commit does not match the reviewed candidate"
             )
+        controller_root_value = os.environ.get("ADMINME_UPGRADE_CONTROLLER_ROOT")
+        if controller_root_value is None:
+            if self.test_mode:
+                controller_root = candidate
+            else:
+                raise UpgradeError("fixed upgrade-controller root is missing")
+        else:
+            controller_root = Path(controller_root_value).resolve()
         controller_source = Path(__file__).resolve()
-        candidate_source = (candidate / "bootstrap" / "upgrade.py").resolve()
-        if controller_source != candidate_source:
+        expected_source = (controller_root / "bootstrap" / "upgrade.py").resolve()
+        if controller_source != expected_source:
             raise UpgradeError(
-                "upgrade controller did not load from the reviewed candidate"
+                "upgrade controller did not load from fixed reviewed source"
             )
+        try:
+            verify_release_source_identity(
+                controller_root,
+                repository=candidate,
+                commit=commit,
+                allow_legacy_tree=False,
+                require_tracked_tree=True,
+                retained_by_commit=commit,
+            )
+        except SourceIdentityError as exc:
+            raise UpgradeError("fixed upgrade-controller source is invalid") from exc
 
     @staticmethod
     def _failed_check_names(result: dict[str, Any]) -> set[str]:
@@ -452,9 +1079,26 @@ class UpgradeManager:
                 )
 
     def activate(self, candidate: Path) -> dict[str, Any]:
+        with self._operation_lock():
+            return self._activate_locked(candidate)
+
+    def _activate_locked(self, candidate: Path) -> dict[str, Any]:
         candidate = candidate.resolve()
         commit = self._candidate_commit(candidate)
         self._attest_controller_provenance(candidate, commit)
+        active_root, protected_roots, pointer_digest, pointer_rows = (
+            self._release_pointer_snapshot()
+        )
+        if len(pointer_rows) >= _MAX_RELEASE_POINTER_DEPTH:
+            raise UpgradeError(
+                "active-release pointer chain is at its safe retention limit"
+            )
+        target_release = (self.paths.app_dir / "releases" / commit).resolve()
+        if target_release in protected_roots:
+            raise UpgradeError(
+                "candidate is already selected or retained; installed releases "
+                "cannot be prepared or selected again"
+            )
         repair_policy = (
             load_repair_policy(candidate)
             if self.approve_source_assessment_repair
@@ -467,37 +1111,29 @@ class UpgradeManager:
         )
         evidence = validate_candidate(
             candidate,
-            active_root=self._active_release_root(),
+            active_root=active_root,
             approve_runtime_migration=self.approve_runtime_migration,
         )
-        release = self.paths.app_dir / "releases" / commit
-        ensure_within(release, self.paths.app_dir / "releases")
         self._preflight_keychain_access(candidate)
-        if not release.exists():
-            shutil.copytree(
-                candidate,
-                release,
-                ignore=shutil.ignore_patterns(
-                    ".git",
-                    ".venv",
-                    "node_modules",
-                    "*.db",
-                    "*.log",
-                ),
-            )
-        validate_candidate(
-            release,
-            active_root=self._active_release_root(),
-            approve_runtime_migration=self.approve_runtime_migration,
-        )
-        self._prepare_release(release)
+        release = self._publish_release(candidate, commit)
         backup = BackupManager(
             self.paths,
             root=self.root,
             test_mode=self.test_mode,
         ).create()
         pointer = self.paths.app_dir / "current-release.json"
-        previous = json.loads(pointer.read_text("utf-8")) if pointer.exists() else None
+        (
+            previous,
+            current_active,
+            _protected,
+            current_digest,
+            _rows,
+        ) = self._release_pointer_state()
+        if (
+            current_active.resolve() != active_root.resolve()
+            or current_digest != pointer_digest
+        ):
+            raise UpgradeError("active-release pointer changed before candidate switch")
         previous_release = (
             ensure_within(Path(previous["path"]), self.paths.app_dir / "releases")
             if previous
@@ -531,8 +1167,24 @@ class UpgradeManager:
                     append_requests=True,
                     test_mode=self.test_mode,
                 )
-            self._install_reviewed_openclaw(release)
-            openclaw_switched = True
+            activity_descriptor = self._consume_preparation_state(
+                candidate, commit, release
+            )
+            try:
+                self._install_reviewed_openclaw(release)
+                openclaw_switched = True
+            finally:
+                activity_cleanup_error: BaseException | None = None
+                try:
+                    fcntl.flock(activity_descriptor, fcntl.LOCK_UN)
+                except BaseException as exc:
+                    activity_cleanup_error = exc
+                close_error = self._close_descriptors(activity_descriptor)
+                activity_cleanup_error = activity_cleanup_error or close_error
+                if activity_cleanup_error is not None:
+                    raise UpgradeError(
+                        "consumed preparation activity cleanup failed"
+                    ) from activity_cleanup_error
             if was_running and repair_policy is None:
                 self.services.stop()
             plugin_registration_attempted = True
@@ -637,22 +1289,27 @@ class UpgradeManager:
         }
 
     def rollback(self) -> dict[str, Any]:
+        with self._operation_lock():
+            return self._rollback_locked()
+
+    def _rollback_locked(self) -> dict[str, Any]:
         pointer = self.paths.app_dir / "current-release.json"
-        if not pointer.exists():
+        current, current_release, _protected, _digest, _rows = (
+            self._release_pointer_state()
+        )
+        if current is None:
             raise UpgradeError("no active release pointer exists")
-        current = json.loads(pointer.read_text("utf-8"))
         previous = current.get("previous")
         if not previous:
             raise UpgradeError("no prior release is recorded")
-        release = Path(previous["path"]).resolve()
+        release = Path(previous["path"])
         ensure_within(release, self.paths.app_dir / "releases")
         validate_candidate(
             release,
-            active_root=self._active_release_root(),
+            active_root=current_release,
             approve_runtime_migration=True,
             allow_openclaw_rollback=True,
         )
-        current_release = self._active_release_root()
         stopped = self.services.status().status == "stopped"
         try:
             self._install_reviewed_openclaw(release)
@@ -791,9 +1448,95 @@ class UpgradeManager:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _prepare_release(self, release: Path) -> None:
-        if self.test_mode:
-            return
+    @staticmethod
+    def _probe_runtime_version(
+        executable: Path,
+        *,
+        expected: str,
+        label: str,
+        environment: dict[str, str] | None = None,
+    ) -> None:
+        try:
+            completed = subprocess.run(
+                [str(executable), "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env=environment,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise UpgradeError(f"candidate {label} version probe failed") from exc
+        observed = (completed.stdout or completed.stderr).strip()
+        if completed.returncode or observed != expected:
+            raise UpgradeError(f"candidate preparation found the wrong pinned {label}")
+
+    @staticmethod
+    def _runtime_probe_environment(node_bin: Path | None = None) -> dict[str, str]:
+        environment = {
+            "HOME": "/var/empty",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "PYTHONNOUSERSITE": "1",
+        }
+        if node_bin is not None:
+            environment["PATH"] = f"{node_bin}:{environment['PATH']}"
+        return environment
+
+    @staticmethod
+    def _preparation_environment(node_bin: Path, private_home: Path) -> dict[str, str]:
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            in {
+                "CURL_CA_BUNDLE",
+                "HTTPS_PROXY",
+                "HTTP_PROXY",
+                "NO_PROXY",
+                "REQUESTS_CA_BUNDLE",
+                "SSL_CERT_DIR",
+                "SSL_CERT_FILE",
+                "TMPDIR",
+            }
+        }
+        environment.update(
+            {
+                "HOME": str(private_home),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "NPM_CONFIG_CACHE": str(private_home / "npm-cache"),
+                "NPM_CONFIG_USERCONFIG": os.devnull,
+                "PATH": f"{node_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+                "PIP_CONFIG_FILE": os.devnull,
+                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                "POETRY_CACHE_DIR": str(private_home / "poetry-cache"),
+                "POETRY_CONFIG_DIR": str(private_home / "poetry-config"),
+                "POETRY_NO_INTERACTION": "1",
+                "PYTHONNOUSERSITE": "1",
+            }
+        )
+        return environment
+
+    @staticmethod
+    def _require_private_runtime_directory(path: Path) -> None:
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise UpgradeError("candidate runtime preparation is incomplete") from exc
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o022
+        ):
+            raise UpgradeError("candidate runtime preparation is unsafe")
+
+    def _runtime_coordinates(
+        self,
+        release: Path,
+    ) -> tuple[dict[str, Any], Path, Path, Path, Path]:
         versions = load_versions(release)
         python_formula = str(versions["python"]["formula"])
         python_minor = str(versions["python"]["preferred"]).rsplit(".", 1)[0]
@@ -807,68 +1550,1127 @@ class UpgradeManager:
             )
         python = release / ".venv" / "bin" / "python"
         poetry_version = str(versions["package_managers"]["poetry"])
-        poetry_venv = self.paths.app_dir / "tooling" / f"poetry-{poetry_version}"
-        poetry = poetry_venv / "bin" / "poetry"
-        if not poetry.is_file():
-            subprocess.run(
-                [str(python_executable), "-m", "venv", str(poetry_venv)],
-                check=True,
-            )
-            subprocess.run(
-                [
-                    str(poetry_venv / "bin" / "python"),
-                    "-m",
-                    "pip",
-                    "install",
-                    f"poetry=={poetry_version}",
-                ],
-                check=True,
-            )
-        if not python.is_file():
-            subprocess.run(
-                [str(python_executable), "-m", "venv", str(release / ".venv")],
-                check=True,
-            )
-        poetry_environment = os.environ.copy()
-        poetry_environment.pop("VIRTUAL_ENV", None)
-        node_bin = Path("/opt/homebrew/opt") / str(versions["node"]["formula"]) / "bin"
-        if not (node_bin / "node").is_file():
-            raise UpgradeError(
-                f"candidate preparation requires side-by-side {versions['node']['formula']}; "
-                "the active release was not changed"
-            )
-        poetry_environment["PATH"] = f"{node_bin}:{poetry_environment.get('PATH', '')}"
-        subprocess.run(
-            [
-                str(poetry),
-                "sync",
-                "--only",
-                "main",
-                "--no-interaction",
-            ],
-            cwd=release,
-            check=True,
-            env=poetry_environment,
+        poetry_override = os.environ.get("ADMINME_PREPARATION_POETRY")
+        poetry = (
+            Path(poetry_override)
+            if poetry_override is not None
+            else self.paths.app_dir
+            / "tooling"
+            / f"poetry-{poetry_version}"
+            / "bin"
+            / "poetry"
         )
-        plugin = release / "openclaw" / "administrateme"
-        npm = str(node_bin / "npm")
-        subprocess.run([npm, "ci", "--ignore-scripts"], cwd=plugin, check=True)
-        subprocess.run([npm, "run", "check"], cwd=plugin, check=True)
-        subprocess.run([npm, "run", "build"], cwd=plugin, check=True)
+        poetry_venv = poetry.parent.parent
+        node_bin = Path("/opt/homebrew/opt") / str(versions["node"]["formula"]) / "bin"
+        try:
+            poetry_metadata = poetry.lstat()
+        except OSError as exc:
+            raise UpgradeError(
+                "candidate preparation requires the reviewed pre-provisioned Poetry tool"
+            ) from exc
+        if (
+            poetry.is_symlink()
+            or not stat.S_ISREG(poetry_metadata.st_mode)
+            or poetry_metadata.st_uid != os.getuid()
+            or poetry_metadata.st_nlink != 1
+            or poetry_metadata.st_mode & 0o022
+            or not os.access(poetry, os.X_OK)
+        ):
+            raise UpgradeError(
+                "candidate preparation requires the reviewed pre-provisioned Poetry tool"
+            )
+        self._require_private_runtime_directory(poetry_venv)
+        self._probe_runtime_version(
+            poetry,
+            expected=f"Poetry (version {poetry_version})",
+            label="Poetry",
+            environment=self._runtime_probe_environment(),
+        )
+        return versions, python_executable, python, poetry, node_bin
+
+    def _validate_prepared_runtime(self, release: Path) -> None:
+        if self.test_mode:
+            return
+        versions, python_executable, python, poetry, node_bin = (
+            self._runtime_coordinates(release)
+        )
+        expected_python = f"Python {versions['python']['preferred']}"
+        self._probe_runtime_version(
+            python_executable,
+            expected=expected_python,
+            label="Python formula",
+            environment=self._runtime_probe_environment(),
+        )
+        if not python.is_file() or python.resolve() != python_executable.resolve():
+            raise UpgradeError(
+                "candidate venv interpreter is outside the pinned Python"
+            )
+        self._probe_runtime_version(
+            python,
+            expected=expected_python,
+            label="venv Python",
+            environment=self._runtime_probe_environment(),
+        )
+        poetry_version = str(versions["package_managers"]["poetry"])
+        self._probe_runtime_version(
+            poetry,
+            expected=f"Poetry (version {poetry_version})",
+            label="Poetry",
+            environment=self._runtime_probe_environment(),
+        )
+        environment = self._runtime_probe_environment(node_bin)
+        node = node_bin / "node"
+        if not node.is_file():
+            raise UpgradeError("candidate preparation requires the pinned Node formula")
+        self._probe_runtime_version(
+            node,
+            expected=f"v{versions['node']['preferred']}",
+            label="Node",
+            environment=environment,
+        )
+        for directory in (
+            release / ".venv",
+            release / "openclaw" / "administrateme" / "node_modules",
+            release / "openclaw" / "administrateme" / "dist",
+        ):
+            self._require_private_runtime_directory(directory)
+
+    @staticmethod
+    def _process_group_exists(group_id: int) -> bool:
+        try:
+            os.killpg(group_id, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @classmethod
+    def _terminate_preparation_group(
+        cls,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        for signal_value, timeout in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 30.0)):
+            if not cls._process_group_exists(process.pid):
+                break
+            try:
+                os.killpg(process.pid, signal_value)
+            except ProcessLookupError:
+                break
+            deadline = time.monotonic() + timeout
+            while (
+                cls._process_group_exists(process.pid) and time.monotonic() < deadline
+            ):
+                time.sleep(0.02)
+        if process.poll() is None:
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+        if cls._process_group_exists(process.pid):
+            raise UpgradeError(
+                "candidate preparation process group could not be reaped"
+            )
+
+    def _assert_preparation_activity_coordinate(self) -> None:
+        descriptor = self._active_preparation_activity_descriptor
+        path = self._active_preparation_activity_path
+        expected = self._active_preparation_activity_coordinate
+        if descriptor is None or path is None or expected is None:
+            raise UpgradeError("candidate preparation activity lease is missing")
+        try:
+            metadata = os.fstat(descriptor)
+            public = path.lstat()
+        except OSError as exc:
+            raise UpgradeError("candidate preparation activity lease changed") from exc
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or (metadata.st_dev, metadata.st_ino) != expected
+            or (public.st_dev, public.st_ino) != expected
+        ):
+            raise UpgradeError("candidate preparation activity lease changed")
+
+    def _run_preparation_command(
+        self,
+        command: list[str],
+        *,
+        release: Path,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> None:
+        activity_descriptor = self._active_preparation_activity_descriptor
+        activity_path = self._active_preparation_activity_path
+        activity_coordinate = self._active_preparation_activity_coordinate
+        if (
+            activity_descriptor is None
+            or activity_path is None
+            or activity_coordinate is None
+        ):
+            raise UpgradeError("candidate preparation activity lease is missing")
+        self._assert_preparation_activity_coordinate()
+        lifecycle_path_value = os.environ.get("ADMINME_CONTROLLER_LIFECYCLE_PATH")
+        lifecycle_device_value = os.environ.get("ADMINME_CONTROLLER_LIFECYCLE_DEVICE")
+        lifecycle_inode_value = os.environ.get("ADMINME_CONTROLLER_LIFECYCLE_INODE")
+        operation_lock_value = os.environ.get("ADMINME_UPGRADE_OPERATION_LOCK_FD")
+        owned_operation_lock_descriptor: int | None = None
+        if self.test_mode and not all(
+            (
+                lifecycle_path_value,
+                lifecycle_device_value,
+                lifecycle_inode_value,
+                operation_lock_value,
+            )
+        ):
+            lifecycle_path_value = str(activity_path)
+            lifecycle_device_value = str(activity_coordinate[0])
+            lifecycle_inode_value = str(activity_coordinate[1])
+            # The preparation worker closes the inherited activity descriptor
+            # after reopening that inode independently.  A distinct duplicate
+            # preserves the test-only operation-lock boundary and mirrors the
+            # two independent descriptors supplied by the production
+            # supervisor.
+            owned_operation_lock_descriptor = os.dup(activity_descriptor)
+            operation_lock_value = str(owned_operation_lock_descriptor)
+        try:
+            lifecycle_device = int(str(lifecycle_device_value))
+            lifecycle_inode = int(str(lifecycle_inode_value))
+            operation_lock_descriptor = int(str(operation_lock_value))
+        except (TypeError, ValueError) as exc:
+            raise UpgradeError("controller lifecycle boundary is missing") from exc
+        lifecycle_path = Path(str(lifecycle_path_value))
+        operation_lock_metadata = os.fstat(operation_lock_descriptor)
+        if (
+            not lifecycle_path.is_absolute()
+            or not stat.S_ISREG(operation_lock_metadata.st_mode)
+            or operation_lock_metadata.st_uid != os.getuid()
+            or operation_lock_metadata.st_nlink != 1
+            or stat.S_IMODE(operation_lock_metadata.st_mode) != 0o600
+        ):
+            raise UpgradeError("controller lifecycle boundary is unsafe")
+        process: subprocess.Popen[bytes] | None = None
+        failed = False
+        ready_read, ready_write = os.pipe()
+        controller_read, controller_write = os.pipe()
+        try:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(release / "bootstrap" / "preparation_worker.py"),
+                    str(activity_path),
+                    str(activity_descriptor),
+                    str(ready_write),
+                    str(controller_read),
+                    str(activity_coordinate[0]),
+                    str(activity_coordinate[1]),
+                    str(lifecycle_path),
+                    str(lifecycle_device),
+                    str(lifecycle_inode),
+                    str(operation_lock_descriptor),
+                    str(_PREPARATION_COMMAND_TIMEOUT_SECONDS),
+                    "--",
+                    *command,
+                ],
+                cwd=cwd,
+                env=environment,
+                start_new_session=True,
+                pass_fds=(
+                    activity_descriptor,
+                    ready_write,
+                    controller_read,
+                    operation_lock_descriptor,
+                ),
+            )
+            os.close(ready_write)
+            ready_write = -1
+            os.close(controller_read)
+            controller_read = -1
+            readable, _writable, _exceptional = select.select(
+                [ready_read],
+                [],
+                [],
+                30,
+            )
+            if not readable or os.read(ready_read, 1) != b"1":
+                raise UpgradeError(
+                    "candidate preparation worker did not acquire its lease"
+                )
+            self._assert_preparation_activity_coordinate()
+            return_code = process.wait(
+                timeout=_PREPARATION_COMMAND_TIMEOUT_SECONDS + 60
+            )
+            if return_code:
+                raise subprocess.CalledProcessError(return_code, command)
+            if self._process_group_exists(process.pid):
+                self._terminate_preparation_group(process)
+                raise UpgradeError(
+                    "candidate preparation command left a background process"
+                )
+            self._assert_preparation_activity_coordinate()
+        except BaseException:
+            failed = True
+            if controller_write >= 0:
+                os.close(controller_write)
+                controller_write = -1
+            if process is not None:
+                try:
+                    process.wait(timeout=40)
+                except subprocess.TimeoutExpired as exc:
+                    # The worker may be the deliberate lease-owning keeper for
+                    # a command whose native process group could not be proven
+                    # terminal.  Killing that keeper would release all three
+                    # cleanup-visible leases while the detached command might
+                    # still be alive.  Leave it for the outer controller
+                    # lifecycle boundary to keep the operation locked and the
+                    # fixed workspace retained.
+                    raise UpgradeError(
+                        "candidate preparation terminality is unknown; "
+                        "cleanup authority retained"
+                    ) from exc
+            raise
+        finally:
+            os.close(ready_read)
+            if ready_write >= 0:
+                os.close(ready_write)
+            if controller_read >= 0:
+                os.close(controller_read)
+            if controller_write >= 0:
+                os.close(controller_write)
+            if process is not None and not failed and process.poll() is None:
+                self._terminate_preparation_group(process)
+            if owned_operation_lock_descriptor is not None:
+                os.close(owned_operation_lock_descriptor)
+
+    def _prepare_release(self, release: Path) -> None:
+        if self.test_mode:
+            return
+        versions, python_executable, python, poetry, node_bin = (
+            self._runtime_coordinates(release)
+        )
+        expected_python = f"Python {versions['python']['preferred']}"
+        self._probe_runtime_version(
+            python_executable,
+            expected=expected_python,
+            label="Python formula",
+            environment=self._runtime_probe_environment(),
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="administrateme-release-preparation-"
+        ) as temporary:
+            private_home = Path(temporary)
+            private_home.chmod(0o700)
+            poetry_environment = self._preparation_environment(node_bin, private_home)
+            if not python.is_file():
+                self._run_preparation_command(
+                    [str(python_executable), "-m", "venv", str(release / ".venv")],
+                    release=release,
+                    environment=poetry_environment,
+                )
+            if not python.is_file() or python.resolve() != python_executable.resolve():
+                raise UpgradeError(
+                    "candidate venv interpreter is outside the pinned Python"
+                )
+            self._probe_runtime_version(
+                python,
+                expected=expected_python,
+                label="venv Python",
+                environment=self._runtime_probe_environment(),
+            )
+            if not (node_bin / "node").is_file():
+                raise UpgradeError(
+                    f"candidate preparation requires side-by-side {versions['node']['formula']}; "
+                    "the active release was not changed"
+                )
+            self._probe_runtime_version(
+                node_bin / "node",
+                expected=f"v{versions['node']['preferred']}",
+                label="Node",
+                environment=poetry_environment,
+            )
+            self._run_preparation_command(
+                [
+                    str(poetry),
+                    "sync",
+                    "--only",
+                    "main",
+                    "--no-interaction",
+                ],
+                release=release,
+                cwd=release,
+                environment=poetry_environment,
+            )
+            plugin = release / "openclaw" / "administrateme"
+            npm = str(node_bin / "npm")
+            self._run_preparation_command(
+                [npm, "ci", "--ignore-scripts"],
+                release=release,
+                cwd=plugin,
+                environment=poetry_environment,
+            )
+            self._run_preparation_command(
+                [npm, "run", "check"],
+                release=release,
+                cwd=plugin,
+                environment=poetry_environment,
+            )
+            self._run_preparation_command(
+                [npm, "run", "build"],
+                release=release,
+                cwd=plugin,
+                environment=poetry_environment,
+            )
+        self._validate_prepared_runtime(release)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _remove_release_stage(
+        self,
+        stage: Path,
+        releases: Path,
+        *,
+        releases_descriptor: int | None = None,
+    ) -> None:
+        if releases_descriptor is not None:
+            if not stage.name.startswith(".staging-"):
+                raise UpgradeError("failed release staging cannot be safely removed")
+            try:
+                metadata = os.stat(
+                    stage.name,
+                    dir_fd=releases_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                raise UpgradeError(
+                    "failed release staging cannot be safely removed"
+                ) from exc
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077
+                or not shutil.rmtree.avoids_symlink_attacks
+            ):
+                raise UpgradeError("failed release staging cannot be safely removed")
+            shutil.rmtree(stage.name, dir_fd=releases_descriptor)
+            os.fsync(releases_descriptor)
+            return
+        try:
+            ensure_within(stage, releases)
+            metadata = stage.lstat()
+        except FileNotFoundError:
+            return
+        except (OSError, RuntimeError) as exc:
+            raise UpgradeError(
+                "failed release staging cannot be safely removed"
+            ) from exc
+        if (
+            not stage.name.startswith(".staging-")
+            or stage.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o077
+        ):
+            raise UpgradeError("failed release staging cannot be safely removed")
+        shutil.rmtree(stage)
+        self._fsync_directory(releases)
+
+    def _verify_published_release(
+        self,
+        release: Path,
+        *,
+        repository: Path,
+        commit: str,
+    ) -> dict[str, object]:
+        try:
+            return verify_release_source_identity(
+                release,
+                repository=repository,
+                commit=commit,
+                allow_legacy_tree=False,
+                require_tracked_tree=True,
+                retained_by_commit=commit,
+            )
+        except SourceIdentityError as exc:
+            raise UpgradeError("candidate release source identity is invalid") from exc
+
+    @staticmethod
+    def _ensure_private_directory(path: Path, *, parent: Path | None = None) -> None:
+        if os.path.lexists(path):
+            metadata = path.lstat()
+            if (
+                path.is_symlink()
+                or not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+            ):
+                raise UpgradeError("release publication directory is unsafe")
+            return
+        if parent is not None:
+            UpgradeManager._ensure_private_directory(parent)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            # A concurrent creator must satisfy the same no-follow contract.
+            pass
+        metadata = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise UpgradeError("release publication directory is unsafe")
+
+    @staticmethod
+    def _acquire_publication_lock(releases: Path) -> tuple[int, int, os.stat_result]:
+        releases_descriptor = os.open(
+            releases,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        releases_metadata = os.fstat(releases_descriptor)
+        try:
+            lock_descriptor = os.open(
+                ".publication.lock",
+                os.O_RDWR
+                | os.O_CREAT
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=releases_descriptor,
+            )
+        except BaseException:
+            os.close(releases_descriptor)
+            raise
+        metadata = os.fstat(lock_descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            os.close(lock_descriptor)
+            os.close(releases_descriptor)
+            raise UpgradeError("release publication lock is unsafe")
+        try:
+            entry = os.stat(
+                ".publication.lock",
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+        except BaseException:
+            UpgradeManager._close_descriptors(
+                lock_descriptor,
+                releases_descriptor,
+            )
+            raise
+        if (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino):
+            os.close(lock_descriptor)
+            os.close(releases_descriptor)
+            raise UpgradeError("release publication lock changed")
+        try:
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            UpgradeManager._close_descriptors(lock_descriptor, releases_descriptor)
+            raise UpgradeError(
+                "another release publication is already running"
+            ) from exc
+        try:
+            locked = os.fstat(lock_descriptor)
+            entry = os.stat(
+                ".publication.lock",
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+        except BaseException:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                UpgradeManager._close_descriptors(
+                    lock_descriptor,
+                    releases_descriptor,
+                )
+            raise
+        if (locked.st_dev, locked.st_ino) != (entry.st_dev, entry.st_ino):
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                UpgradeManager._close_descriptors(lock_descriptor, releases_descriptor)
+            raise UpgradeError("release publication lock changed")
+        return lock_descriptor, releases_descriptor, releases_metadata
+
+    @staticmethod
+    def _assert_directory_coordinate(
+        path: Path,
+        descriptor: int,
+        expected: os.stat_result,
+    ) -> None:
+        try:
+            current = path.lstat()
+            opened = os.fstat(descriptor)
+        except OSError as exc:
+            raise UpgradeError("release publication directory changed") from exc
+        expected_coordinate = (
+            expected.st_dev,
+            expected.st_ino,
+            expected.st_mode,
+            expected.st_uid,
+        )
+        if (
+            path.is_symlink()
+            or (
+                current.st_dev,
+                current.st_ino,
+                current.st_mode,
+                current.st_uid,
+            )
+            != expected_coordinate
+            or (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_mode,
+                opened.st_uid,
+            )
+            != expected_coordinate
+        ):
+            raise UpgradeError("release publication directory changed")
+
+    @staticmethod
+    def _release_coordinate(
+        releases_descriptor: int,
+        release_name: str,
+    ) -> tuple[int, int]:
+        descriptor = os.open(
+            release_name,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=releases_descriptor,
+        )
+        try:
+            metadata = os.fstat(descriptor)
+            entry = os.stat(
+                release_name,
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o022
+                or (metadata.st_dev, metadata.st_ino) != (entry.st_dev, entry.st_ino)
+            ):
+                raise UpgradeError("candidate release coordinate is unsafe")
+            return metadata.st_dev, metadata.st_ino
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _assert_entry_coordinate(
+        parent_descriptor: int,
+        name: str,
+        expected: tuple[int, int],
+    ) -> None:
+        try:
+            entry = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except OSError as exc:
+            raise UpgradeError("release publication coordinate changed") from exc
+        if (entry.st_dev, entry.st_ino) != expected:
+            raise UpgradeError("release publication coordinate changed")
+
+    def _cleanup_failed_publication(
+        self,
+        *,
+        stage: Path,
+        release: Path,
+        releases: Path,
+        releases_descriptor: int,
+        commit: str,
+    ) -> None:
+        """Remove only an unpublished stage; preserve state after a completed rename."""
+
+        try:
+            final_entry = os.stat(
+                release.name,
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            final_entry = None
+        if final_entry is not None:
+            if (
+                not stat.S_ISDIR(final_entry.st_mode)
+                or final_entry.st_uid != os.getuid()
+            ):
+                raise UpgradeError("published release coordinate is unsafe")
+            # A BaseException may land after rename(2) committed but before the
+            # Python stage variable advanced.  The durable publishing record is
+            # the only authority that makes this exact final coordinate retryable.
+            return
+        self._remove_release_stage(
+            stage,
+            releases,
+            releases_descriptor=releases_descriptor,
+        )
+        self._remove_preparation_state(releases_descriptor, commit)
+
+    @staticmethod
+    def _assert_state_release_coordinate(
+        state: dict[str, Any],
+        coordinate: tuple[int, int],
+    ) -> None:
+        if (
+            state.get("release_device") != coordinate[0]
+            or state.get("release_inode") != coordinate[1]
+        ):
+            raise UpgradeError("release preparation state does not match the candidate")
+
+    def _prepare_owned_release(
+        self,
+        release: Path,
+        *,
+        candidate: Path,
+        commit: str,
+        active_root: Path,
+        protected_roots: frozenset[Path],
+        pointer_chain_sha256: str,
+        state: dict[str, Any] | None,
+        releases_descriptor: int,
+    ) -> None:
+        evidence = self._verify_published_release(
+            release,
+            repository=candidate,
+            commit=commit,
+        )
+        validate_candidate(
+            release,
+            active_root=active_root,
+            approve_runtime_migration=self.approve_runtime_migration,
+        )
+        resolved_release = release.resolve()
+        if resolved_release in protected_roots:
+            self._validate_prepared_runtime(release)
+            if resolved_release == active_root.resolve():
+                return
+            raise UpgradeError(
+                "candidate is retained for rollback and cannot be prepared; use rollback"
+            )
+        if state is None:
+            raise UpgradeError(
+                "existing candidate has no durable preparation ownership"
+            )
+        if state.get("pointer_chain_sha256") != pointer_chain_sha256:
+            raise UpgradeError("release preparation state has stale pointer binding")
+        coordinate = self._release_coordinate(releases_descriptor, commit)
+        phase = str(state["phase"])
+        if phase in {"preparing", "complete", "consumed"}:
+            self._assert_state_release_coordinate(state, coordinate)
+        if phase in {"preparing", "complete", "consumed"} and state.get(
+            "source_manifest_sha256"
+        ) != evidence.get("tracked_source_manifest_sha256"):
+            raise UpgradeError("release preparation source binding changed")
+        if phase == "consumed":
+            raise UpgradeError(
+                "candidate preparation authority was already consumed by an activation"
+            )
+        if phase not in {"publishing", "preparing", "complete"}:
+            raise UpgradeError("release preparation state has an invalid phase")
+        expected_activity_coordinate = (
+            (int(state["activity_device"]), int(state["activity_inode"]))
+            if phase in {"preparing", "complete"}
+            else None
+        )
+        activity_descriptor, activity_coordinate = self._open_preparation_activity(
+            releases_descriptor,
+            commit,
+            expected_coordinate=expected_activity_coordinate,
+        )
+        try:
+            if phase == "publishing":
+                state = {
+                    **state,
+                    "phase": "preparing",
+                    "source_manifest_sha256": evidence[
+                        "tracked_source_manifest_sha256"
+                    ],
+                    "source_file_count": evidence["tracked_source_file_count"],
+                    "release_device": coordinate[0],
+                    "release_inode": coordinate[1],
+                    "activity_device": activity_coordinate[0],
+                    "activity_inode": activity_coordinate[1],
+                }
+                self._write_preparation_state(releases_descriptor, state)
+            elif phase == "complete":
+                state = {**state, "phase": "preparing"}
+                self._write_preparation_state(releases_descriptor, state)
+            remove_generated_runtime_artifacts(
+                release,
+                repository=candidate,
+                commit=commit,
+                expected_coordinate=coordinate,
+            )
+            cleaned = self._verify_published_release(
+                release,
+                repository=candidate,
+                commit=commit,
+            )
+            if cleaned.get("tracked_source_manifest_sha256") != state.get(
+                "source_manifest_sha256"
+            ):
+                raise UpgradeError("candidate source changed during generated cleanup")
+            fcntl.flock(activity_descriptor, fcntl.LOCK_SH)
+            self._active_preparation_activity_descriptor = activity_descriptor
+            self._active_preparation_activity_path = (
+                release.parent / self._preparation_activity_name(commit)
+            )
+            self._active_preparation_activity_coordinate = activity_coordinate
+            try:
+                self._prepare_release(release)
+            finally:
+                self._active_preparation_activity_descriptor = None
+                self._active_preparation_activity_path = None
+                self._active_preparation_activity_coordinate = None
+            metadata = os.fstat(activity_descriptor)
+            public = os.stat(
+                self._preparation_activity_name(commit),
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+            if (metadata.st_dev, metadata.st_ino) != activity_coordinate or (
+                public.st_dev,
+                public.st_ino,
+            ) != activity_coordinate:
+                raise UpgradeError("candidate preparation activity lease changed")
+            try:
+                fcntl.flock(activity_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise UpgradeError(
+                    "candidate preparation worker remained active after its command"
+                ) from exc
+            validate_candidate(
+                release,
+                active_root=active_root,
+                approve_runtime_migration=self.approve_runtime_migration,
+            )
+            prepared = self._verify_published_release(
+                release,
+                repository=candidate,
+                commit=commit,
+            )
+            if prepared.get("tracked_source_manifest_sha256") != state.get(
+                "source_manifest_sha256"
+            ):
+                raise UpgradeError("candidate source changed during preparation")
+            self._validate_prepared_runtime(release)
+            self._fsync_directory(release)
+            public = os.stat(
+                self._preparation_activity_name(commit),
+                dir_fd=releases_descriptor,
+                follow_symlinks=False,
+            )
+            if (public.st_dev, public.st_ino) != activity_coordinate:
+                raise UpgradeError("candidate preparation activity lease changed")
+            self._write_preparation_state(
+                releases_descriptor,
+                {**state, "phase": "complete"},
+            )
+        except (OSError, SourceIdentityError, subprocess.SubprocessError) as exc:
+            raise UpgradeError(
+                "candidate runtime preparation failed at its stable release path"
+            ) from exc
+        finally:
+            os.close(activity_descriptor)
+
+    def _consume_preparation_state(
+        self,
+        candidate: Path,
+        commit: str,
+        release: Path,
+    ) -> int:
+        releases = self.paths.app_dir / "releases"
+        (
+            lock_descriptor,
+            releases_descriptor,
+            releases_metadata,
+        ) = self._acquire_publication_lock(releases)
+        activity_descriptor: int | None = None
+        failed = False
+        try:
+            self._assert_directory_coordinate(
+                releases, releases_descriptor, releases_metadata
+            )
+            _active, protected, pointer_digest, _rows = self._release_pointer_snapshot()
+            if release.resolve() in protected:
+                raise UpgradeError(
+                    "candidate became selected before preparation settled"
+                )
+            state = self._load_preparation_state(releases_descriptor, commit)
+            if state is None or state.get("phase") != "complete":
+                raise UpgradeError("candidate preparation is not complete")
+            if state.get("pointer_chain_sha256") != pointer_digest:
+                raise UpgradeError("candidate preparation pointer binding changed")
+            coordinate = self._release_coordinate(releases_descriptor, commit)
+            self._assert_state_release_coordinate(state, coordinate)
+            evidence = self._verify_published_release(
+                release,
+                repository=candidate,
+                commit=commit,
+            )
+            if evidence.get("tracked_source_manifest_sha256") != state.get(
+                "source_manifest_sha256"
+            ):
+                raise UpgradeError("candidate preparation source binding changed")
+            activity_descriptor, activity_coordinate = self._open_preparation_activity(
+                releases_descriptor,
+                commit,
+                expected_coordinate=(
+                    int(state["activity_device"]),
+                    int(state["activity_inode"]),
+                ),
+            )
+            if activity_coordinate != (
+                int(state["activity_device"]),
+                int(state["activity_inode"]),
+            ):
+                raise UpgradeError("candidate preparation activity lease changed")
+            self._validate_prepared_runtime(release)
+            self._write_preparation_state(
+                releases_descriptor,
+                {**state, "phase": "consumed"},
+            )
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+            close_error = self._close_descriptors(lock_descriptor, releases_descriptor)
+            cleanup_error = cleanup_error or close_error
+            if failed and activity_descriptor is not None:
+                activity_close_error = self._close_descriptors(activity_descriptor)
+                cleanup_error = cleanup_error or activity_close_error
+                activity_descriptor = None
+            if cleanup_error is not None and not failed:
+                self._close_descriptors(activity_descriptor)
+                raise UpgradeError(
+                    "release publication lock cleanup failed"
+                ) from cleanup_error
+        assert activity_descriptor is not None
+        return activity_descriptor
+
+    def _publish_release(self, candidate: Path, commit: str) -> Path:
+        """Publish fixed source, then prepare only at its stable final coordinate."""
+
+        self._ensure_private_directory(self.paths.root)
+        self._ensure_private_directory(self.paths.app_dir, parent=self.paths.root)
+        releases = self.paths.app_dir / "releases"
+        self._ensure_private_directory(releases, parent=self.paths.app_dir)
+        (
+            lock_descriptor,
+            releases_descriptor,
+            releases_metadata,
+        ) = self._acquire_publication_lock(releases)
+        release = releases / commit
+        ensure_within(release, releases)
+        stage: Path | None = None
+        stage_coordinate: tuple[int, int] | None = None
+        failed = False
+        try:
+            self._assert_directory_coordinate(
+                releases, releases_descriptor, releases_metadata
+            )
+            active_root, protected_roots, pointer_digest, _rows = (
+                self._release_pointer_snapshot()
+            )
+            state = self._load_preparation_state(releases_descriptor, commit)
+            if os.path.lexists(release):
+                if release.is_symlink() or not release.is_dir():
+                    raise UpgradeError("existing candidate release is unsafe")
+                self._prepare_owned_release(
+                    release,
+                    candidate=candidate,
+                    commit=commit,
+                    active_root=active_root,
+                    protected_roots=protected_roots,
+                    pointer_chain_sha256=pointer_digest,
+                    state=state,
+                    releases_descriptor=releases_descriptor,
+                )
+                return release
+            if state is not None:
+                if state.get("phase") != "publishing":
+                    raise UpgradeError(
+                        "release preparation state exists without its candidate"
+                    )
+                if state.get("pointer_chain_sha256") != pointer_digest:
+                    raise UpgradeError(
+                        "release preparation state has stale pointer binding"
+                    )
+                stale_stage = releases / str(state["stage_name"])
+                self._remove_release_stage(
+                    stale_stage,
+                    releases,
+                    releases_descriptor=releases_descriptor,
+                )
+                self._remove_preparation_state(releases_descriptor, commit)
+            if release.resolve() == active_root.resolve():
+                raise UpgradeError("active release pointer selects a missing release")
+
+            stage = releases / f".staging-{commit[:12]}.{uuid.uuid4().hex}"
+            ensure_within(stage, releases)
+            state = self._new_preparation_state(
+                commit=commit,
+                stage_name=stage.name,
+                pointer_chain_sha256=pointer_digest,
+            )
+            self._write_preparation_state(releases_descriptor, state)
+            try:
+                stage_coordinate = materialize_git_tree(
+                    candidate,
+                    commit,
+                    stage,
+                    parent_descriptor=releases_descriptor,
+                )
+                self._assert_directory_coordinate(
+                    releases, releases_descriptor, releases_metadata
+                )
+                validate_candidate(
+                    stage,
+                    active_root=active_root,
+                    approve_runtime_migration=self.approve_runtime_migration,
+                )
+                try:
+                    stage_descriptor = os.open(
+                        stage.name,
+                        os.O_RDONLY
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_CLOEXEC", 0),
+                        dir_fd=releases_descriptor,
+                    )
+                    try:
+                        write_source_marker_at(stage_descriptor, commit)
+                    finally:
+                        os.close(stage_descriptor)
+                except SourceIdentityError as exc:
+                    raise UpgradeError(
+                        "candidate release marker could not be written"
+                    ) from exc
+                self._verify_published_release(
+                    stage,
+                    repository=candidate,
+                    commit=commit,
+                )
+                self._fsync_directory(stage)
+                self._assert_directory_coordinate(
+                    releases, releases_descriptor, releases_metadata
+                )
+                if os.path.lexists(release):
+                    raise UpgradeError("candidate release appeared during publication")
+                assert stage_coordinate is not None
+                self._assert_entry_coordinate(
+                    releases_descriptor,
+                    stage.name,
+                    stage_coordinate,
+                )
+                os.rename(
+                    stage.name,
+                    release.name,
+                    src_dir_fd=releases_descriptor,
+                    dst_dir_fd=releases_descriptor,
+                )
+                stage = None
+                os.fsync(releases_descriptor)
+                if self._release_coordinate(releases_descriptor, release.name) != (
+                    stage_coordinate
+                ):
+                    raise UpgradeError("published release coordinate changed")
+                self._assert_directory_coordinate(
+                    releases, releases_descriptor, releases_metadata
+                )
+            except SourceProcessNotReaped as exc:
+                self._write_preparation_state(
+                    releases_descriptor,
+                    {**state, "phase": "publishing_unreaped"},
+                )
+                raise UpgradeError(
+                    "candidate release publication terminality is unknown; "
+                    "private stage retained"
+                ) from exc
+            except (OSError, SourceIdentityError, subprocess.SubprocessError) as exc:
+                if stage is not None:
+                    self._cleanup_failed_publication(
+                        stage=stage,
+                        release=release,
+                        releases=releases,
+                        releases_descriptor=releases_descriptor,
+                        commit=commit,
+                    )
+                raise UpgradeError("candidate release publication failed") from exc
+            except BaseException:
+                if stage is not None:
+                    self._cleanup_failed_publication(
+                        stage=stage,
+                        release=release,
+                        releases=releases,
+                        releases_descriptor=releases_descriptor,
+                        commit=commit,
+                    )
+                raise
+
+            self._prepare_owned_release(
+                release,
+                candidate=candidate,
+                commit=commit,
+                active_root=active_root,
+                protected_roots=protected_roots,
+                pointer_chain_sha256=pointer_digest,
+                state=state,
+                releases_descriptor=releases_descriptor,
+            )
+            return release
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+            close_error = self._close_descriptors(lock_descriptor, releases_descriptor)
+            cleanup_error = cleanup_error or close_error
+            if cleanup_error is not None and not failed:
+                raise UpgradeError(
+                    "release publication lock cleanup failed"
+                ) from cleanup_error
 
     def _candidate_commit(self, candidate: Path) -> str:
-        completed = subprocess.run(
-            ["git", "-C", str(candidate), "rev-parse", "HEAD"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode:
-            return (
-                "release-"
-                + __import__("hashlib").sha256(str(candidate).encode()).hexdigest()[:12]
-            )
-        return completed.stdout.strip()
+        try:
+            return reviewed_candidate_commit(candidate)
+        except SourceIdentityError as exc:
+            raise UpgradeError(
+                "upgrade requires one clean reviewed Git commit"
+            ) from exc
 
 
 __all__ = ["UpgradeError", "UpgradeManager", "validate_candidate"]

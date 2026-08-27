@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import tarfile
 import tempfile
 import time
@@ -47,6 +46,11 @@ from bootstrap.contracts import (
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
+from bootstrap.source_identity import (
+    SourceIdentityError,
+    reviewed_candidate_commit,
+    verify_release_source_identity,
+)
 
 
 class BackupError(RuntimeError):
@@ -1372,7 +1376,7 @@ class BackupManager:
             maximum_size=_MAX_BACKUP_BYTES,
         )
         isolation_before = self._isolation_snapshot()
-        predecessor = self._predecessor_evidence()
+        predecessor = self._predecessor_evidence(candidate_commit)
         if isolation_before["pointer"] != predecessor["pointer_sha256"]:
             raise BackupError("active predecessor changed during evidence capture")
         instance_fingerprint = hashlib.sha256(
@@ -1488,7 +1492,7 @@ class BackupManager:
             ending_candidate_commit = self._candidate_commit(candidate_root)
             if ending_candidate_commit != candidate_commit:
                 raise BackupError("candidate identity changed during rehearsal")
-            ending_predecessor = self._predecessor_evidence()
+            ending_predecessor = self._predecessor_evidence(candidate_commit)
             if ending_predecessor != predecessor:
                 raise BackupError("active predecessor changed during rehearsal")
             tested_at = datetime.now(timezone.utc).isoformat()
@@ -1758,27 +1762,11 @@ class BackupManager:
         if not self.test_mode and Path(__file__).resolve().parents[1] != candidate:
             raise BackupError("rehearsal controller is not the reviewed candidate")
         try:
-            commit = subprocess.run(
-                ["git", "-C", str(candidate), "rev-parse", "HEAD"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            ).stdout.strip()
-            dirty = subprocess.run(
-                ["git", "-C", str(candidate), "status", "--porcelain"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            ).stdout.strip()
-        except (OSError, subprocess.SubprocessError) as exc:
+            return reviewed_candidate_commit(candidate)
+        except SourceIdentityError as exc:
             raise BackupError("candidate Git identity cannot be established") from exc
-        if _HEX_40.fullmatch(commit) is None or dirty:
-            raise BackupError("candidate checkout is dirty or has an invalid commit")
-        return commit
 
-    def _predecessor_evidence(self) -> dict[str, Any]:
+    def _predecessor_evidence(self, candidate_commit: str) -> dict[str, Any]:
         pointer = self.paths.app_dir / "current-release.json"
         if pointer.is_symlink() or not pointer.is_file():
             raise BackupError("active predecessor pointer is missing or unsafe")
@@ -1789,33 +1777,46 @@ class BackupManager:
         try:
             document = json.loads(encoded.decode("utf-8"))
             commit = str(document["commit"])
+            raw_release = Path(document["path"])
+            if not raw_release.is_absolute() or raw_release.is_symlink():
+                raise ValueError("active predecessor path is unsafe")
             release = ensure_within(
-                Path(document["path"]),
+                raw_release,
                 self.paths.app_dir / "releases",
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise BackupError("active predecessor pointer is invalid") from exc
-        if _HEX_40.fullmatch(commit) is None or not release.is_dir():
+        if (
+            _HEX_40.fullmatch(commit) is None
+            or raw_release != release
+            or not release.is_dir()
+        ):
             raise BackupError("active predecessor release is invalid")
-        if release.is_symlink() or release.name != commit:
+        release_metadata = release.lstat()
+        if (
+            release.is_symlink()
+            or release.name != commit
+            or not stat.S_ISDIR(release_metadata.st_mode)
+            or release_metadata.st_uid != os.getuid()
+            or release_metadata.st_mode & 0o022
+        ):
             raise BackupError("active predecessor release identity is invalid")
-        marker = release / ".administrateme-source-commit"
-        marker_matches = False
-        if marker.is_file() and not marker.is_symlink():
-            marker_metadata = marker.lstat()
-            marker_matches = (
-                stat.S_ISREG(marker_metadata.st_mode)
-                and marker_metadata.st_uid == os.getuid()
-                and marker.read_text("utf-8").strip() == commit
+        try:
+            source_identity = verify_release_source_identity(
+                release,
+                repository=self.root,
+                commit=commit,
+                allow_legacy_tree=True,
+                retained_by_commit=candidate_commit,
             )
-        if not marker_matches:
-            raise BackupError("active predecessor source identity is invalid")
+        except SourceIdentityError as exc:
+            raise BackupError("active predecessor source identity is invalid") from exc
         return {
             "commit": commit,
             "pointer_sha256": hashlib.sha256(encoded).hexdigest(),
             "retained": True,
             "path_commit_coordinate_matches": True,
-            "source_marker_matches": True,
+            **source_identity,
             "immutable_release_valid": "not_evaluated",
             "rollback_compatible": "not_evaluated",
             "automatic_rollback_eligible": "not_evaluated",
