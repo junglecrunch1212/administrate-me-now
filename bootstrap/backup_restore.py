@@ -1524,8 +1524,8 @@ class BackupManager:
                     "commit": candidate_commit,
                     "clean_checkout_at_start": True,
                     "clean_checkout_at_end": True,
-                    "controller_coordinate_matches": (
-                        Path(__file__).resolve().parents[1] == candidate_root
+                    "controller_coordinate_matches": self._controller_coordinate_matches(
+                        candidate_root, candidate_commit
                     ),
                     "execution_immutability": "not_evaluated",
                 },
@@ -1779,12 +1779,39 @@ class BackupManager:
     def _candidate_commit(self, candidate: Path) -> str:
         if not candidate.is_dir() or candidate.is_symlink():
             raise BackupError("candidate checkout is missing or unsafe")
-        if not self.test_mode and Path(__file__).resolve().parents[1] != candidate:
-            raise BackupError("rehearsal controller is not the reviewed candidate")
         try:
-            return reviewed_candidate_commit(candidate)
+            commit = reviewed_candidate_commit(candidate)
         except SourceIdentityError as exc:
             raise BackupError("candidate Git identity cannot be established") from exc
+        if not self.test_mode and not self._controller_coordinate_matches(
+            candidate, commit
+        ):
+            raise BackupError("rehearsal controller is not the reviewed candidate")
+        return commit
+
+    def _controller_coordinate_matches(self, candidate: Path, commit: str) -> bool:
+        controller_root = Path(__file__).resolve().parents[1]
+        if controller_root == candidate:
+            return True
+        declared_commit = os.environ.get("ADMINME_UPGRADE_CONTROLLER_COMMIT")
+        declared_root = os.environ.get("ADMINME_UPGRADE_CONTROLLER_ROOT")
+        if declared_commit != commit or declared_root is None:
+            return False
+        fixed_root = Path(declared_root).resolve()
+        if controller_root != fixed_root:
+            return False
+        try:
+            verify_release_source_identity(
+                fixed_root,
+                repository=candidate,
+                commit=commit,
+                allow_legacy_tree=False,
+                require_tracked_tree=True,
+                retained_by_commit=commit,
+            )
+        except SourceIdentityError:
+            return False
+        return True
 
     def _predecessor_evidence(self, candidate_commit: str) -> dict[str, Any]:
         pointer = self.paths.app_dir / "current-release.json"

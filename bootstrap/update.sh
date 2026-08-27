@@ -44,9 +44,17 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   instance_root="${ADMINME_INSTANCE_ROOT:-${HOME}/Library/Application Support/AdministrateMe}"
   [[ "$instance_root" == /* ]] || die "instance root must be absolute"
   candidate=""
+  pending_attestation=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
       --approve-runtime-migration | --approve-declared-source-assessment-repair) ;;
+      --pending-attestation-id=*)
+        [[ -z "$pending_attestation" ]] \
+          || die "pending-attestation identifier was repeated"
+        pending_attestation="${argument#*=}"
+        [[ "$pending_attestation" =~ ^[0-9a-f]{32}$ ]] \
+          || die "pending-attestation identifier must be 32 lowercase hex"
+        ;;
       --*) die "unknown update option: $argument" ;;
       *)
         [[ -z "$candidate" ]] || die "upgrade accepts exactly one candidate path"
@@ -54,8 +62,10 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         ;;
     esac
   done
+  [[ -n "$pending_attestation" ]] \
+    || die "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
   [[ -n "$candidate" && "$candidate" == /* && -d "$candidate" ]] \
-    || die "usage: update.sh [options] /absolute/path/to/reviewed-candidate"
+    || die "usage: update.sh --pending-attestation-id=<id> [options] /absolute/path/to/reviewed-candidate"
   candidate="$(cd "$candidate" && pwd -P)"
   exec /usr/bin/python3 -I "$SCRIPT_DIR/reviewed_launcher.py" \
     update "$instance_root" "$candidate" "${requested_args[@]}"
@@ -107,6 +117,7 @@ PY
 
 approve_flag=""
 source_repair_flag=""
+pending_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -117,12 +128,23 @@ while [[ "${1:-}" == --* ]]; do
       [[ -z "$source_repair_flag" ]] || fail "source-repair approval was repeated"
       source_repair_flag="$1"
       ;;
+    --pending-attestation-id=*)
+      [[ -z "$pending_flag" ]] || fail "pending-attestation identifier was repeated"
+      pending_value="${1#*=}"
+      [[ "$pending_value" =~ ^[0-9a-f]{32}$ ]] \
+        || fail "pending-attestation identifier must be 32 lowercase hex"
+      pending_flag="$1"
+      ;;
     *)
       fail "unknown update option: $1"
       ;;
   esac
   shift
 done
+
+if [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" ]]; then
+  fail "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
+fi
 
 candidate="${1:-}"
 [[ -n "$candidate" ]] \
@@ -301,6 +323,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$pending_flag" ]]; then
+  upgrade_args+=("$pending_flag")
+fi
 if [[ -n "$approve_flag" ]]; then
   upgrade_args+=("$approve_flag")
 fi

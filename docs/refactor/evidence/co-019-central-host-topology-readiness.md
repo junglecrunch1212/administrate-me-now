@@ -131,7 +131,7 @@ configuration change invalidates and repeats HTR-05 and HTR-08 as applicable.
 | HTR-06 | Prove separate administrator and FileVault recovery/unlock path | Physical access, keyboard/display, recovery material available outside CoS systems | Successful reboot/unlock/login evidence; autologin remains off; CoS mailbox not sole recovery root | Any uncertainty about credentials, recovery key, enabled users, or remote-only access | Stop before logout/reboot where possible; use the existing separate admin/recovery process |
 | HTR-07 | Reconcile exact OpenClaw member agents/accounts/actors and DM scope | Correct real channel account choices; observation active | Unique agents/accounts, exact member sets, `per-account-channel-peer`, current plugin health | Shared account, missing actor, extra member, stale heartbeat, or topology mismatch | Restore reviewed OpenClaw config backup; keep member chat/write admission blocked |
 | HTR-08 — **OWNER-GATED / NOT EXECUTED** | Record the last pre-switch, content-free candidate deployment attestation after HTR-01 through HTR-04, HTR-06 through HTR-07, HTR-10, and preliminary HTR-05 are complete | Every confirmation actually observed; protected instance root; final OpenClaw/config coordinates; retained active predecessor; exact clean candidate absent from the recursive pointer chain; exact HTR-10 review receipt and observation-window start; exact strengthened preliminary rehearsal receipt and encrypted artifact. | Append-only mode-0600 `candidate-deployment-readiness-v1` at `app/readiness/candidate-pending/<attestation-id>.json`; candidate/predecessor/pointer-chain/host/instance/service-account/config/rehearsal/artifact/watermark fingerprints match; all prerequisite timestamps are recent and expiry is no later than the earliest 31-day bound; `candidate_active:false`, `activation_authorized:false`, later updater backup/rollback/replacement/live-Doctor/post-switch fields `not_evaluated`; no secret/content. The active `state/config/deployment-readiness.json` inode and bytes remain unchanged, and runtime/Settings/Doctor ignore the pending path. | Active predecessor writer is invoked, any confirmation is assumed, candidate is active/retained, any file/coordinate/digest changes, private ownership/mode/link safety fails, evidence is stale, or the operation lock is held | Leave the active attestation untouched. A post-link drift may retain only the immutable artifact by ID; it is unselected, authorizes nothing, and must never be consumed without full revalidation. Repeat HTR-05/HTR-08 after final configuration or evidence changes. |
-| HTR-09 — **EXECUTABLY BLOCKED** | Authorize and run guarded candidate activation | HTR-01 through HTR-04, HTR-06 through HTR-08, HTR-10, and preliminary HTR-05 complete; merged immutable SHA; green checks; observation active; no separate provider/channel mutation. The future updater must verify pending HTR-08, rehearse the exact fresh artifact, establish predecessor/rollback eligibility, and durably stage mechanical plus human evidence. Under the operation lock it must consume the source-preparation record and journal every later selector/recovery transition; the source-preparation record and cooperative lock are not readiness or crash-recovery evidence. | Future guarded-updater report, exact active SHA, exact newly created backup rehearsal, predecessor compatibility, crash-recoverable switch, all readiness dimensions healthy, settlement/browser/backup/rollback/effects proof | Current updater path, or any prerequisite/readiness/Doctor/source-assurance/browser/privacy/backup/effect regression | Do not invoke the current updater; after implementation, require automatic rollback and use the documented explicit rollback only from separate admin access if necessary |
+| HTR-09 — **OWNER-GATED / NOT EXECUTED** | Authorize and run guarded candidate activation | HTR-01 through HTR-04, HTR-06 through HTR-08, HTR-10, and preliminary HTR-05 complete; merged immutable SHA; green checks; observation active; no separate provider/channel mutation. Supply the exact HTR-08 artifact ID. Under the operation lock the updater revalidates it, journals before backup quiescence, creates and rehearses one exact fresh artifact, proves retained-predecessor source/runtime/OpenClaw/LaunchAgent rollback eligibility, stages derived active evidence, consumes the source-preparation record, and records intent before every selector/service mutation. | Guarded-updater report, exact active SHA, exact newly created backup and rehearsal hashes, predecessor-eligibility hash, committed mode-0600 activation history, candidate-bound active readiness, healthy post-switch Doctor, then settlement/browser/privacy/isolation/backup/rollback/effects proof. Fixture execution is mechanism evidence only. | Missing/stale/drifted pending evidence, wrong candidate, rehearsal/authentication/source/runtime failure, journal ownership failure, or any readiness/Doctor/source-assurance/browser/privacy/backup/effect regression | Ordinary failure and the next guarded invocation after process death restore the exact predecessor pointer/readiness bytes, OpenClaw/plugin/LaunchAgents, and prior running state before new work. If recovery cannot converge, services remain stopped and the active journal remains authoritative; use the documented explicit rollback only from separate admin access. |
 | HTR-10 | Review metadata-only historical attribution and terminal-effect integrity | HTR-04 bindings validated; fixed event watermark; no content access | Every historical source is matched or explicitly classified; terminal ledger has zero missing/duplicate/malformed/orphan/unknown/correlation failures; raw identifiers/content absent | Any row needs content inference, ownership is ambiguous, or an effect cannot be accounted | Keep activation blocked. Correct only protected binding metadata under a separate reviewed request; a legacy terminal that inherently lacks effect evidence requires a separately reviewed additive reconciliation design and cannot be attested away here. |
 
 No member bridge is required when none is selected. If a member later requests
@@ -170,15 +170,15 @@ and send gates. A common namespace does not let one gate authorize another.
 
 ## Post-merge Phase B activation packet
 
-This packet is **reference-only and not currently executable**. Owner
-authorization is necessary but insufficient: the candidate-pending contract
-exists, but no owner HTR-08 artifact has been authorized or recorded, and the
-updater still cannot consume it, rehearse its exact fresh backup, or recover a
-crash across replacement. After those remaining paths are implemented and
-merged, this packet becomes usable only when an owner explicitly requests
-deployment of the exact merged commit. Substitute only reviewed absolute paths
-and the 40-character merged SHA. Do not paste credentials or identities into
-shell history, issues, or reports.
+This packet is **reference-only and not currently authorized for execution**.
+The pending contract and journaled updater mechanics exist, but no owner
+HTR-08 artifact has been authorized or recorded and HTR-09 has not been
+requested. The packet becomes usable only after this implementation is merged,
+the preceding HTR rows are genuinely completed, and an owner explicitly
+requests deployment of the exact merged commit. Substitute only reviewed
+absolute paths, the 32-character pending artifact ID, and the 40-character
+merged SHA. Do not paste credentials or identities into shell history, issues,
+or reports.
 
 ### 1. Preconditions — no switch
 
@@ -213,25 +213,34 @@ verified, stop before invoking the updater.
 
 ### 2. Guarded switch — only with a separate owner request
 
-From the dedicated service context, use the existing reviewed launcher:
+From the dedicated service context, use the reviewed launcher with the exact
+HTR-08 artifact ID:
 
 ```bash
-./bootstrap/update.sh /absolute/path/to/clean-reviewed-candidate
+./bootstrap/update.sh \
+  --pending-attestation-id=0123456789abcdef0123456789abcdef \
+  /absolute/path/to/clean-reviewed-candidate
 ```
 
 If and only if the candidate changes the supported Python/Node runtime and the
 owner separately authorizes that migration, use the documented migration form:
 
 ```bash
-./bootstrap/update.sh --approve-runtime-migration /absolute/path/to/clean-reviewed-candidate
+./bootstrap/update.sh \
+  --pending-attestation-id=0123456789abcdef0123456789abcdef \
+  --approve-runtime-migration \
+  /absolute/path/to/clean-reviewed-candidate
 ```
 
-The updater must attest controller provenance, recheck the clean exact commit,
-prepare side-by-side runtimes, preserve the active release, authenticate backup
-evidence, keep observation, quiesce safely, switch the immutable pointer,
-restart both services, and run post-switch Doctor. Its built-in failure path
-must restore the predecessor and continue rollback cleanup even if one cleanup
-step fails.
+The updater attests controller provenance, rechecks the clean exact commit,
+prepares side-by-side runtimes, preserves the active release, revalidates the
+pending artifact, journals the exact predecessor before quiescence, creates and
+rehearses its exact fresh backup, proves rollback eligibility, keeps
+observation, switches the immutable pointer, promotes derived active readiness
+before service start, restarts both services, and runs post-switch Doctor. Its
+failure path and the next guarded invocation after process death restore the
+exact predecessor; a recovery failure leaves services stopped and the journal
+in place.
 
 ### 3. Bounded verification
 

@@ -167,6 +167,13 @@ def build_parser() -> argparse.ArgumentParser:
         elif name == "upgrade":
             child.add_argument("candidate", type=Path)
             child.add_argument(
+                "--pending-attestation-id",
+                help=(
+                    "consume one exact candidate-pending readiness artifact "
+                    "during the journaled activation"
+                ),
+            )
+            child.add_argument(
                 "--approve-runtime-migration",
                 action="store_true",
                 help=("authorize a separately rehearsed Python/Node baseline cutover"),
@@ -416,6 +423,9 @@ def main(argv: list[str] | None = None) -> int:
                 bool(args.approve_declared_source_assessment_repair)
                 if args.command == "upgrade"
                 else False
+            ),
+            pending_attestation_id=(
+                args.pending_attestation_id if args.command == "upgrade" else None
             ),
         )
         if args.command == "upgrade":

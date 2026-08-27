@@ -1031,6 +1031,140 @@ def validate_pending_attestation(
     return value
 
 
+def load_pending_attestation_for_activation(
+    paths: DeploymentPaths,
+    *,
+    attestation_id: str,
+    candidate: Path,
+    candidate_commit: str,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], str, DeploymentSnapshot]:
+    """Load one explicit pending artifact and rebind it to current coordinates.
+
+    The pending directory has no selector.  The guarded updater must receive an
+    exact artifact identifier and repeat every machine-observable binding before
+    backup creation and again immediately before the first selector mutation.
+    """
+
+    if _HEX_32.fullmatch(attestation_id) is None:
+        raise CandidateReadinessError("pending attestation identifier is invalid")
+    if _HEX_40.fullmatch(candidate_commit) is None:
+        raise CandidateReadinessError("candidate commit is invalid")
+    candidate_root = candidate.resolve()
+    try:
+        observed_commit = reviewed_candidate_commit(candidate_root)
+    except SourceIdentityError as exc:
+        raise CandidateReadinessError("candidate source identity is invalid") from exc
+    if observed_commit != candidate_commit:
+        raise CandidateReadinessError("candidate changed after pending attestation")
+    pending_path = (
+        paths.app_dir / "readiness" / "candidate-pending" / f"{attestation_id}.json"
+    )
+    payload, _metadata = _read_private_file(pending_path)
+    value = validate_pending_attestation(
+        _json_no_duplicates(payload, label="candidate-pending readiness"),
+        now=now,
+    )
+    if value["attestation_id"] != attestation_id:
+        raise CandidateReadinessError("pending attestation path does not match payload")
+    binding = value["deployment_binding"]
+    if binding["candidate_commit"] != candidate_commit:
+        raise CandidateReadinessError(
+            "pending attestation belongs to another candidate"
+        )
+    snapshot = capture_deployment_snapshot(paths)
+    expected = snapshot.public()
+    for field, observed in expected.items():
+        if binding.get(field) != observed:
+            raise CandidateReadinessError(
+                f"pending attestation deployment binding drifted: {field}"
+            )
+    if candidate_commit in _pointer_commits(paths):
+        raise CandidateReadinessError("pending candidate is already active or retained")
+    if value["human_evidence"]["htr_03"]["member_ids"] != _member_ids(paths):
+        raise CandidateReadinessError("pending member identity binding drifted")
+    return value, hashlib.sha256(payload).hexdigest(), snapshot
+
+
+def build_active_attestation_from_pending(
+    pending: Mapping[str, Any],
+    *,
+    pending_sha256: str,
+    fresh_backup_sha256: str,
+    fresh_rehearsal_receipt_sha256: str,
+    rollback_eligibility_sha256: str,
+    tested_at: str,
+) -> dict[str, Any]:
+    """Derive active v1 evidence only from pending plus updater mechanics.
+
+    This pure builder performs no publication.  Only the crash-journaled updater
+    may call it, after rehearsing its own exact fresh artifact and proving the
+    retained predecessor.  Runtime compatibility stays on the existing active
+    contract while the extra activation evidence remains content-free.
+    """
+
+    value = validate_pending_attestation(dict(pending))
+    for digest in (
+        pending_sha256,
+        fresh_backup_sha256,
+        fresh_rehearsal_receipt_sha256,
+        rollback_eligibility_sha256,
+    ):
+        if _HEX_64.fullmatch(digest) is None:
+            raise CandidateReadinessError("active readiness digest is invalid")
+    current_time = datetime.now(timezone.utc)
+    tested = _parse_time(tested_at, label="activation rehearsal", now=current_time)
+    binding = value["deployment_binding"]
+    human = value["human_evidence"]
+    recovery_time = min(
+        _parse_time(human[name]["observed_at"], label=name.upper(), now=current_time)
+        for name in ("htr_02", "htr_06")
+    )
+    return {
+        "contract": ACTIVE_CONTRACT,
+        "deployment_binding": {
+            "release_commit": binding["candidate_commit"],
+            "instance_fingerprint": binding["instance_fingerprint"],
+            "host_fingerprint": binding["host_fingerprint"],
+            "configuration_fingerprint": binding["configuration_fingerprint"],
+        },
+        "identity_acceptance": {
+            "member_ids": list(human["htr_03"]["member_ids"]),
+            "distinct_identities": True,
+            "tested_at": human["htr_03"]["observed_at"],
+        },
+        "recovery": {
+            "separate_admin_available": True,
+            "filevault_unlock_tested": True,
+            "automatic_login_disabled": True,
+            "tested_at": recovery_time.isoformat(),
+        },
+        "backup_rollback": {
+            "encrypted_backup_authenticated": True,
+            "restore_rehearsed": True,
+            "prior_release_retained": True,
+            "automatic_rollback_eligible": True,
+            "tested_at": tested.isoformat(),
+        },
+        "provider_effect_window": {
+            "started_at": value["pre_switch_state"]["provider_effect_window_started_at"]
+        },
+        "activation_evidence": {
+            "contract": "deployment-activation-evidence-v1",
+            "candidate_pending_attestation_id": value["attestation_id"],
+            "candidate_pending_attestation_sha256": pending_sha256,
+            "fresh_backup_artifact_sha256": fresh_backup_sha256,
+            "fresh_rehearsal_receipt_sha256": fresh_rehearsal_receipt_sha256,
+            "predecessor_rollback_eligibility_sha256": rollback_eligibility_sha256,
+            "crash_recoverable_replacement": True,
+            "candidate_live_doctor": "pending_post_switch",
+            "post_switch_acceptance": "pending_post_switch",
+            "content_exposed": False,
+        },
+        "content_exposed": False,
+    }
+
+
 def _validate_private_directory(path: Path) -> os.stat_result:
     try:
         metadata = path.lstat()
@@ -1440,10 +1574,12 @@ __all__ = [
     "HTR10_CONTRACT",
     "PENDING_CONTRACT",
     "build_htr10_review",
+    "build_active_attestation_from_pending",
     "build_pending_attestation",
     "capture_deployment_snapshot",
     "deployment_operation_lock",
     "record_htr10_review",
     "record_pending_attestation",
+    "load_pending_attestation_for_activation",
     "validate_pending_attestation",
 ]

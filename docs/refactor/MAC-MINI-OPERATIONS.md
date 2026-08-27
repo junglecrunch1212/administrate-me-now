@@ -277,10 +277,10 @@ backup and bind predecessor compatibility after backup quiescence and before
 any active candidate or OpenClaw selector, plugin registration, or
 release-pointer mutation; full live Doctor is post-switch. Do not mark all of
 HTR-05 or deployment readiness complete from the preliminary receipt alone.
-The candidate-pending contract is implemented, but no household HTR-08
-evidence is authorized or recorded. Until the updater can consume one exact
-artifact, rehearse its fresh backup, and recover crash-interrupted replacement,
-activation remains blocked.
+The candidate-pending contract and journaled consumer are implemented, but no
+household HTR-08 evidence is authorized or recorded and HTR-09 has not been
+requested. Repository fixtures prove mechanics only; they do not authorize an
+artifact, a service stop, or activation.
 
 Restore only a file inside the configured backup directory:
 
@@ -380,21 +380,25 @@ selection/start transaction. A command result is not HTR completion when its
 inputs are fixtures.
 
 Never run a floating OpenClaw upgrade. The commands in this section are
-reference-only until the updater-consumed exact fresh rehearsal and
-crash-recoverable replacement paths are implemented and merged, and an owner
-has separately completed HTR-08. Owner authorization alone does not make the
-current updater executable. After those prerequisites exist, prepare and
-review a candidate checkout, then run:
+reference-only until this implementation is merged, an owner has separately
+completed HTR-08, every bound fact remains current, and the owner explicitly
+requests HTR-09 for the exact protected-main SHA. Prepare and review that
+candidate checkout, then run with the exact append-only HTR-08 artifact ID:
 
 ```bash
-./bootstrap/update.sh /absolute/path/to/reviewed-candidate
+./bootstrap/update.sh \
+  --pending-attestation-id=0123456789abcdef0123456789abcdef \
+  /absolute/path/to/reviewed-candidate
 ```
 
 For a separately rehearsed Python/Node baseline change, the reviewed command
 is instead:
 
 ```bash
-./bootstrap/update.sh --approve-runtime-migration /absolute/path/to/clean-reviewed-candidate
+./bootstrap/update.sh \
+  --pending-attestation-id=0123456789abcdef0123456789abcdef \
+  --approve-runtime-migration \
+  /absolute/path/to/clean-reviewed-candidate
 ```
 
 Both forms refuse a dirty or non-Git candidate and materialize the reviewed
@@ -459,19 +463,37 @@ fails, the verified source remains inactive and no backup, service stop,
 selector, plugin registration, or pointer mutation has occurred. One private
 cooperative operation lock covers the supported fixed-commit activate launcher
 from the first active-deployment read through disposable controller cleanup;
-the direct rollback command acquires the same canonical manager lock for its
-own rollback operation. A loser fails before tooling, backup, or selector
-effects. The lock is not a
-crash journal and does not make HTR-09 runnable. Immediately before the first
-selector mutation, the updater consumes the completed preparation record, which
-can never grant retry authority again. The prepared candidate then receives a
-pre-upgrade encrypted backup, atomic release pointer switch, launchd
-reconciliation, restart, and Doctor. Failure restores both the previous pointer
-and its launchd definitions. The lower-level rollback command is:
+direct rollback acquires the same canonical manager lock. A loser fails before
+tooling, backup, or selector effects.
+
+Inside that lock the updater revalidates the explicit pending artifact, then
+creates a mode-0600 activation journal before backup quiescence. It creates and
+rehearses one exact fresh encrypted artifact, proves the retained predecessor's
+source, prepared runtime, OpenClaw, and LaunchAgent rollback coordinates, and
+revalidates the pending binding again before selector authority exists.
+Immediately before the first selector mutation it consumes the completed
+preparation record, which can never grant retry authority again.
+
+The journal stores exact predecessor pointer/readiness bytes and the prior
+running state. It fsyncs intent before OpenClaw selection, service quiescence,
+plugin selection, pointer selection, readiness promotion, required-tool and
+LaunchAgent selection, restart, and Doctor. Candidate-bound active readiness is
+published only after the candidate pointer and before candidate services start.
+An ordinary failure invokes the same recovery path immediately; SIGKILL or
+host death leaves the journal for the next guarded activate/rollback invocation,
+which performs recovery and returns without beginning new work. Recovery
+restores the predecessor selectors and exact control bytes, then restores its
+running/stopped state. Failure to converge leaves services stopped and the
+journal in place. A committed activation history is also the sole authority
+for journaled explicit rollback, including restoration of the predecessor's
+exact readiness bytes. These mechanics do not execute HTR-08 or HTR-09 and do
+not substitute for post-switch browser/privacy/isolation/effect acceptance.
 
 For central services and post-switch Doctor, the candidate manifest's
 formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older
 side-by-side global Node installation out of the candidate runtime.
+
+The lower-level rollback command is:
 
 ```bash
 python -m bootstrap.cli rollback
