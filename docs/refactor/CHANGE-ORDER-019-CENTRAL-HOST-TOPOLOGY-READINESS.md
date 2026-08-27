@@ -1,6 +1,6 @@
 # Change Order 019 — Central Host topology and service-channel readiness
 
-Status: **PHASE A RECOVERY IMPLEMENTATION COMPLETE; PHASE B BLOCKED ON CANDIDATE-ATTESTATION, UPDATER-CONSUMED FRESH REHEARSAL, AND CRASH-RECOVERABLE REPLACEMENT; OWNER ACTIONS NOT AUTHORIZED**
+Status: **PHASE A RECOVERY AND CANDIDATE-PENDING CONTRACT IMPLEMENTED; PHASE B BLOCKED ON OWNER-GATED HTR-08 EVIDENCE, UPDATER-CONSUMED FRESH REHEARSAL, AND CRASH-RECOVERABLE REPLACEMENT; OWNER ACTIONS NOT AUTHORIZED**
 
 Date: 2026-08-26
 
@@ -266,12 +266,36 @@ eligibility. HTR-05 is therefore two-stage: the preliminary exact-candidate
 rehearsal precedes HTR-08; the updater must create and rehearse its own exact
 fresh backup and prove predecessor compatibility after backup quiescence and
 before any active candidate or OpenClaw selector, plugin-registration, or
-release-pointer mutation, with full Doctor still post-switch. The current
-attestation writer is active-predecessor-bound and cannot issue the required
-candidate-pending HTR-08 evidence, and destructive replacement is not yet
-crash-recoverable. Until those paths are implemented and consume this ordering,
-HTR-08, HTR-09, and deployment readiness remain executably blocked; owner
-authorization alone cannot make the activation packet runnable.
+release-pointer mutation, with full Doctor still post-switch.
+
+The separate `candidate-deployment-readiness-v1` writer now records an
+append-only, mode-0600 artifact at
+`app/readiness/candidate-pending/<attestation-id>.json` under the same
+cooperative operation lock as upgrade and rollback. It requires one clean,
+explicit candidate commit that is absent from the active/retained pointer
+chain; the full pointer-chain and pointer-byte digests; host, instance, service
+account, and fixed configuration fingerprints; the exact preliminary
+rehearsal receipt, encrypted artifact, and watermark; recent typed HTR-01,
+HTR-02, HTR-03, HTR-04, HTR-06, HTR-07, and HTR-10 evidence; and the retained
+provider-effect observation-window start. The rehearsal itself captures and
+revalidates the same deployment binding. Every input is revalidated after the
+immutable artifact is linked. Drift can therefore leave only an unselected
+append-only artifact and an error; there is no mutable pending selector or
+promotion operation in this implementation.
+
+The pending artifact uses a contract and path that the runtime, Settings,
+Doctor, and active `deployment-readiness-v1` loader never consume. It says
+`candidate_active:false` and `activation_authorized:false`, and reports the
+updater-created backup, rollback compatibility/eligibility, crash-recoverable
+replacement, candidate live Doctor, and post-switch acceptance as
+`not_evaluated`. This **MODERNIZES** candidate-pending evidence while
+**PRESERVING** active readiness, human authority, the 31-day freshness limit,
+observation, and every activation prerequisite. HTR-08 is now owner-gated and
+not executed; HTR-09 and deployment remain executably blocked until the
+updater can explicitly consume one artifact by ID, rehearse its own fresh
+backup, prove predecessor compatibility, and journal recovery across every
+selector transition. Owner authorization alone cannot make the current
+activation packet runnable.
 
 This compatibility boundary is classified as **MODERNIZE** for source-identity
 evidence, bounded public-entry Git validation and supervisor handoff,

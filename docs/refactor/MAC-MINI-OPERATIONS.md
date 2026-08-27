@@ -277,9 +277,10 @@ backup and bind predecessor compatibility after backup quiescence and before
 any active candidate or OpenClaw selector, plugin registration, or
 release-pointer mutation; full live Doctor is post-switch. Do not mark all of
 HTR-05 or deployment readiness complete from the preliminary receipt alone.
-Until the candidate-pending attestation, updater-consumed fresh rehearsal, and
-crash-recoverable replacement paths are implemented, activation remains
-blocked.
+The candidate-pending contract is implemented, but no household HTR-08
+evidence is authorized or recorded. Until the updater can consume one exact
+artifact, rehearse its fresh backup, and recover crash-interrupted replacement,
+activation remains blocked.
 
 Restore only a file inside the configured backup directory:
 
@@ -312,11 +313,78 @@ remains `planned` / `account_not_created` unless the owner separately
 authorizes each account, recovery, host, permission, transport, enrollment,
 observation, and sending gate. It never grants member Apple-source access.
 
+### Candidate-pending readiness (reference only)
+
+After a separate owner request completes HTR-01 through HTR-04, HTR-06,
+HTR-07, HTR-10, and the preliminary HTR-05 rehearsal against the final merged
+candidate and configuration, record HTR-08 from that exact clean candidate:
+
+First save the authenticated `/api/system/historical-attribution` result and
+the exact `source-assurance-v1` details from the same `/api/system/ready`
+watermark as separate owner-only mode-0600 JSON files inside the configured
+backup directory. Review the pseudonymized attribution groups and terminal
+effect counts, then reduce them without copying group rows or event IDs:
+
+```bash
+python -m bootstrap.htr10_review \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe" \
+  --historical-attribution /absolute/path/inside/backups/historical.json \
+  --source-assurance /absolute/path/inside/backups/source-assurance.json \
+  --observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-reviewed
+```
+
+The reducer requires both audits to be healthy at one watermark, zero
+unattributed sources, terminal-effect integrity, and zero true, unknown, or
+unsuppressed effects in the already configured observation window. It reads
+that window start from active readiness and cannot reset it. Its append-only
+`htr-10-review-v1` receipt contains only counts and hashes. A fixture or an
+unreviewed export is not HTR-10 completion.
+
+```bash
+python -m bootstrap.candidate_readiness \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe" \
+  --candidate /absolute/path/to/exact-clean-candidate \
+  --expected-candidate-commit 0123456789abcdef0123456789abcdef01234567 \
+  --preliminary-rehearsal-receipt /absolute/path/inside/backups/rehearsal.json \
+  --preliminary-backup-artifact /absolute/path/inside/backups/backup.ambackup \
+  --htr-10-review /absolute/path/inside/backups/htr-10-review.json \
+  --confirm-htr-01 --htr-01-observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-htr-02 --htr-02-observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-htr-03 --htr-03-observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-htr-04 --htr-04-observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-htr-06 --htr-06-observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-htr-07 --htr-07-observed-at 2026-01-01T00:00:00+00:00 \
+  --confirm-htr-10
+```
+
+The timestamps above are placeholders, not evidence. Use the actual aware UTC
+observation times only after the named human checks occur. The HTR-10 input is
+an owner-reviewed, self-hashed, content-free `htr-10-review-v1` receipt bound
+to the fixed event watermark, historical attribution result, source-assurance
+result, and original provider-effect observation-window start; it is not a
+generic checkbox and cannot reset that window.
+
+The command holds the canonical cooperative deployment-operation lock, checks
+the full active/retained pointer chain, hashes fixed configuration coordinates,
+streams the exact encrypted backup digest, validates the strengthened
+`backup-rehearsal-v1` receipt, and writes one append-only mode-0600
+`app/readiness/candidate-pending/<attestation-id>.json`. It never replaces
+`state/config/deployment-readiness.json`, selects the candidate, stops a
+service, touches Keychain values, calls a provider, constructs the updater, or
+promotes the pending artifact. Runtime, Settings, and Doctor ignore it. There
+is deliberately no mutable "current pending" pointer: a future journaled
+updater must receive one explicit attestation ID, revalidate every binding and
+freshness predicate, and derive active readiness only inside its recoverable
+selection/start transaction. A command result is not HTR completion when its
+inputs are fixtures.
+
 Never run a floating OpenClaw upgrade. The commands in this section are
-reference-only until the candidate-pending attestation, updater-consumed exact
-fresh rehearsal, and crash-recoverable replacement paths are implemented and
-merged. Owner authorization alone does not make them executable. After those
-prerequisites exist, prepare and review a candidate checkout, then run:
+reference-only until the updater-consumed exact fresh rehearsal and
+crash-recoverable replacement paths are implemented and merged, and an owner
+has separately completed HTR-08. Owner authorization alone does not make the
+current updater executable. After those prerequisites exist, prepare and
+review a candidate checkout, then run:
 
 ```bash
 ./bootstrap/update.sh /absolute/path/to/reviewed-candidate

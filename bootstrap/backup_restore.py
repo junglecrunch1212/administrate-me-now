@@ -43,6 +43,10 @@ from bootstrap.contracts import (
     repository_root,
     sha256_file,
 )
+from bootstrap.candidate_readiness import (
+    CandidateReadinessError,
+    capture_deployment_snapshot,
+)
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
@@ -1379,6 +1383,15 @@ class BackupManager:
         predecessor = self._predecessor_evidence(candidate_commit)
         if isolation_before["pointer"] != predecessor["pointer_sha256"]:
             raise BackupError("active predecessor changed during evidence capture")
+        try:
+            deployment_binding = capture_deployment_snapshot(self.paths)
+        except CandidateReadinessError as exc:
+            raise BackupError("deployment binding cannot be established") from exc
+        if (
+            deployment_binding.predecessor_commit != predecessor["commit"]
+            or deployment_binding.pointer_sha256 != predecessor["pointer_sha256"]
+        ):
+            raise BackupError("deployment binding disagrees with predecessor evidence")
         instance_fingerprint = hashlib.sha256(
             str(self.paths.root).encode("utf-8")
         ).hexdigest()
@@ -1495,6 +1508,12 @@ class BackupManager:
             ending_predecessor = self._predecessor_evidence(candidate_commit)
             if ending_predecessor != predecessor:
                 raise BackupError("active predecessor changed during rehearsal")
+            try:
+                ending_deployment_binding = capture_deployment_snapshot(self.paths)
+            except CandidateReadinessError as exc:
+                raise BackupError("deployment binding cannot be revalidated") from exc
+            if ending_deployment_binding != deployment_binding:
+                raise BackupError("deployment binding changed during rehearsal")
             tested_at = datetime.now(timezone.utc).isoformat()
             result: dict[str, Any] = {
                 "contract": _REHEARSAL_CONTRACT,
@@ -1511,6 +1530,7 @@ class BackupManager:
                     "execution_immutability": "not_evaluated",
                 },
                 "predecessor": predecessor,
+                "deployment_binding": deployment_binding.public(),
                 "artifact": {
                     "format": _BACKUP_FORMAT,
                     "version": BACKUP_FORMAT_VERSION,
