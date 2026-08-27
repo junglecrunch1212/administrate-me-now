@@ -206,6 +206,31 @@ def _reviewed_commit(candidate: Path) -> tuple[Path, str]:
     return resolved, commit
 
 
+def _validate_expected_commit(
+    mode: str, controller_arguments: list[str], commit: str
+) -> None:
+    if mode != "bootstrap":
+        return
+    positions = [
+        index
+        for index, argument in enumerate(controller_arguments)
+        if argument == "--expected-commit"
+    ]
+    if not positions:
+        return
+    if len(positions) != 1 or positions[0] + 1 >= len(controller_arguments):
+        raise ReviewedLauncherError("reviewed expected commit is invalid")
+    expected = controller_arguments[positions[0] + 1]
+    if len(expected) != 40 or any(
+        character not in "0123456789abcdef" for character in expected
+    ):
+        raise ReviewedLauncherError("reviewed expected commit is invalid")
+    if expected != commit:
+        raise ReviewedLauncherError(
+            f"checked-out commit {commit} does not match reviewed commit {expected}"
+        )
+
+
 def _execute_supervisor(
     mode: str,
     instance: Path,
@@ -213,6 +238,7 @@ def _execute_supervisor(
     controller_arguments: list[str],
 ) -> NoReturn:
     candidate, commit = _reviewed_commit(candidate)
+    _validate_expected_commit(mode, controller_arguments, commit)
     source = _run_git(
         candidate,
         ["show", f"{commit}:bootstrap/update_supervisor.py"],

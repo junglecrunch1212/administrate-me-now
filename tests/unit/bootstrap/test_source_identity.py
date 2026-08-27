@@ -2251,6 +2251,36 @@ def test_public_reviewed_launcher_resolves_only_one_clean_commit(
         reviewed_launcher._reviewed_commit(repository)  # noqa: SLF001
 
 
+def test_public_reviewed_launcher_rejects_expected_commit_before_supervisor_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    commit = "a" * 40
+    monkeypatch.setattr(
+        reviewed_launcher,
+        "_reviewed_commit",
+        lambda _candidate: (candidate, commit),
+    )
+
+    def unexpected_git(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("supervisor source must not load after commit mismatch")
+
+    monkeypatch.setattr(reviewed_launcher, "_run_git", unexpected_git)
+
+    with pytest.raises(
+        reviewed_launcher.ReviewedLauncherError,
+        match="does not match reviewed commit",
+    ):
+        reviewed_launcher._execute_supervisor(  # noqa: SLF001
+            "bootstrap",
+            tmp_path / "instance",
+            candidate,
+            ["--expected-commit", "b" * 40],
+        )
+
+
 def test_public_reviewed_launcher_bounds_and_reaps_git_process_group(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
