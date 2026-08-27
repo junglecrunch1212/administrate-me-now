@@ -8,7 +8,7 @@ Gate 5 realization: `bootstrap/` now implements the ten-section encrypted journa
 
 The first supported central deployment contains exactly:
 
-1. `adminme-runtime`: one long-lived Python process composing the event log, bus, all thirteen domain projections plus Triage, reactive pipelines, adapter supervisors, xlsx forward/reverse services, product router namespaces, health/Doctor, and built family assets.
+1. `adminme-runtime`: one long-lived Python process composing the event log, bus, all thirteen domain projections plus Triage and the non-authoritative Context Fabric, reactive pipelines, adapter supervisors, xlsx forward/reverse services, product router namespaces, health/Doctor, and built family assets.
 2. One OpenClaw Gateway process pinned to package/source version `2026.7.2` / commit `ce67ffb70e83e5ebb56ea02e814e577153f84f61`, owning generic assistant runtime concerns.
 3. Operator-owned platform services that are not AdministrateMe runtimes: Tailscale Serve, 1Password, backup tooling, and external channel servers when selected.
 

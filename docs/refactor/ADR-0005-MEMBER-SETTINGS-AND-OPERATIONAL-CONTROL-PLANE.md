@@ -51,5 +51,7 @@ consent is self-owned; principals may govern child bridges only.
   inventory that combines supervisor and adapter-native evidence.
 - Profiles and personas remain validated data. Fine tuning is range-constrained
   and deterministic; an LLM cannot select or infer it.
-- Exactly fourteen projections and the one-runtime topology remain unchanged.
+- Exactly fifteen projections (thirteen domain truth projections plus Triage
+  and the non-authoritative Context Fabric) and the one-runtime topology remain
+  unchanged.
 - AC-31 owns process, isolation, redaction, reconciliation, and browser proof.
