@@ -31,7 +31,7 @@ from bootstrap.bridge_enrollment import (
     MemberBridgeInstaller,
     MemberBridgePaths,
 )
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
@@ -40,6 +40,19 @@ from bootstrap.upgrade import UpgradeError, UpgradeManager
 from bootstrap.wizard import BootstrapWizard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _reviewed_release_runtimes_available() -> bool:
+    versions = load_versions(REPO_ROOT)
+    python_minor = str(versions["python"]["preferred"]).rsplit(".", 1)[0]
+    executables = (
+        Path("/opt/homebrew/opt")
+        / str(versions["python"]["formula"])
+        / "bin"
+        / f"python{python_minor}",
+        Path("/opt/homebrew/opt") / str(versions["node"]["formula"]) / "bin" / "node",
+    )
+    return all(path.is_file() and os.access(path, os.X_OK) for path in executables)
 
 
 def _private_acceptance_python(root: Path) -> Path:
@@ -638,8 +651,11 @@ def test_cli_upgrade_publishes_fixed_source_before_backup_and_pointer(
 @pytest.mark.skipif(
     sys.platform != "darwin"
     or not Path("/opt/homebrew/bin/brew").is_file()
-    or shutil.which("python3.14") is None,
-    reason="the supported updater process proof requires the reviewed macOS toolchain",
+    or not _reviewed_release_runtimes_available(),
+    reason=(
+        "the supported updater process proof requires the reviewed side-by-side "
+        "macOS Python and Node toolchain"
+    ),
 )
 def test_supported_update_launcher_holds_fixed_controller_lock_through_upgrade(
     tmp_path: Path,
@@ -1006,8 +1022,13 @@ def test_public_bootstrap_ignores_stale_internal_candidate_coordinates(
 
 
 @pytest.mark.skipif(
-    sys.platform != "darwin" or shutil.which("poetry") is None,
-    reason="stable-coordinate dependency preparation requires the reviewed macOS toolchain",
+    sys.platform != "darwin"
+    or shutil.which("poetry") is None
+    or not _reviewed_release_runtimes_available(),
+    reason=(
+        "stable-coordinate dependency preparation requires the reviewed side-by-side "
+        "macOS Python, Node, and Poetry toolchain"
+    ),
 )
 def test_macos_non_test_release_preparation_uses_stable_coordinate(
     tmp_path: Path,
