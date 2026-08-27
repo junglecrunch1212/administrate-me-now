@@ -55,14 +55,15 @@ rollback rehearsal. The actual family instance then still requires a separate
 operator decision.
 
 Every upgrade launcher requires a clean reviewed Git checkout, resolves its
-commit before execution, and self-hosts that candidate's controller in a
-commit-versioned tooling venv. A same-baseline update builds the controller on
+commit before execution, and materializes that commit's controller source into
+a private fixed-coordinate workspace with a commit-versioned tooling venv. A
+same-baseline update builds the controller on
 the active release's Python and Node runtime; an explicitly approved baseline
 migration builds it on the side-by-side candidate runtime. Poetry remains
 outside the environment it synchronizes. Immediately before execution the
 launcher rechecks commit and worktree cleanliness, proves that
-`bootstrap.upgrade` resolves from the candidate checkout, and passes the exact
-commit as an independently verified controller receipt. The upgrade manager
+`bootstrap.upgrade` resolves from the fixed commit materialization, and passes
+the exact commit as an independently verified controller receipt. The upgrade manager
 refuses a missing or mismatched receipt and refuses to run if its own source is
 not the reviewed candidate source.
 
@@ -170,7 +171,9 @@ release gate.
 
 - **PRESERVE:** topology, encrypted truth, exact OpenClaw pin, SQLCipher
   boundary, release-local environments, backup, rollback, and observation.
-- **MODERNIZE:** Python, Node, npm, Poetry, manifests, CI, and installer paths.
+- **MODERNIZE:** Python, Node, npm, Poetry, manifests, CI, installer paths,
+  bounded public-entry Git validation, fixed-source supervisor handoff, and
+  private commit-materialized controller execution.
 - **SUPERSEDE:** D10 as the future runtime baseline, implicit same-runtime
   upgrade assumptions, and active-controller ownership of candidate policy.
 - **DEFER:** no runtime-baseline or controller-boundary requirement. Provider

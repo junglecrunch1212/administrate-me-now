@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
+import io
 import json
 import os
+import shlex
+import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -25,14 +31,114 @@ from bootstrap.bridge_enrollment import (
     MemberBridgeInstaller,
     MemberBridgePaths,
 )
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
+from bootstrap.source_identity import verify_release_source_identity
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from bootstrap.wizard import BootstrapWizard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _reviewed_release_runtimes_available() -> bool:
+    versions = load_versions(REPO_ROOT)
+    python_minor = str(versions["python"]["preferred"]).rsplit(".", 1)[0]
+    executables = (
+        Path("/opt/homebrew/opt")
+        / str(versions["python"]["formula"])
+        / "bin"
+        / f"python{python_minor}",
+        Path("/opt/homebrew/opt") / str(versions["node"]["formula"]) / "bin" / "node",
+    )
+    return all(path.is_file() and os.access(path, os.X_OK) for path in executables)
+
+
+def _private_acceptance_python(root: Path) -> Path:
+    runtime = root / ".acceptance-runtime"
+    bin_dir = runtime / "bin"
+    bin_dir.mkdir(mode=0o700, parents=True)
+    launcher = bin_dir / "python"
+    launcher.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o700)
+    return launcher
+
+
+def _extract_git_archive(repository: Path, commit: str, destination: Path) -> None:
+    """Independently materialize a private release fixture through git archive."""
+
+    payload = subprocess.run(
+        ["git", "--no-replace-objects", "-C", str(repository), "archive", commit],
+        check=True,
+        capture_output=True,
+    ).stdout
+    destination.mkdir(mode=0o700)
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+        archive.extractall(destination, filter="data")
+    destination.chmod(0o700)
+    for path in destination.rglob("*"):
+        if path.is_dir():
+            path.chmod(0o700)
+        elif path.is_file():
+            path.chmod(0o700 if path.stat().st_mode & 0o100 else 0o600)
+
+
+def _committed_candidate_from_worktree(source: Path, destination: Path) -> str:
+    destination.mkdir(mode=0o700)
+    inventory = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\x00")
+    for encoded in inventory:
+        if not encoded:
+            continue
+        relative = Path(encoded.decode("utf-8"))
+        source_path = source / relative
+        if not os.path.lexists(source_path):
+            continue
+        destination_path = destination / relative
+        destination_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if source_path.is_symlink():
+            destination_path.symlink_to(os.readlink(source_path))
+        else:
+            shutil.copy2(source_path, destination_path)
+    subprocess.run(["git", "init", "-q", str(destination)], check=True)
+    subprocess.run(["git", "-C", str(destination), "add", "--all"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(destination),
+            "-c",
+            "user.name=Process Candidate Fixture",
+            "-c",
+            "user.email=process-candidate-fixture.invalid",
+            "commit",
+            "-qm",
+            "candidate",
+        ],
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(destination), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def test_member_bridge_helpers_execute_from_the_archived_release() -> None:
@@ -97,13 +203,35 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
     backup = manager.create()
     assert backup["encrypted"] is True
-    predecessor_commit = "1" * 40
-    predecessor_release = paths.app_dir / "releases" / predecessor_commit
-    predecessor_release.mkdir(parents=True)
-    (predecessor_release / ".administrateme-source-commit").write_text(
-        predecessor_commit,
-        encoding="utf-8",
+    candidate = tmp_path / "clean-rehearsal-candidate"
+    candidate.mkdir()
+    subprocess.run(["git", "init", "-q", str(candidate)], check=True)
+    (candidate / "candidate.txt").write_text("reviewed predecessor\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(candidate), "add", "candidate.txt"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate),
+            "-c",
+            "user.name=Rehearsal Fixture",
+            "-c",
+            "user.email=rehearsal-fixture.invalid",
+            "commit",
+            "-qm",
+            "predecessor",
+        ],
+        check=True,
     )
+    predecessor_commit = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    predecessor_release = paths.app_dir / "releases" / predecessor_commit
+    predecessor_release.parent.mkdir(parents=True, mode=0o700)
+    _extract_git_archive(candidate, predecessor_commit, predecessor_release)
     predecessor_pointer = paths.app_dir / "current-release.json"
     predecessor_pointer.write_text(
         json.dumps(
@@ -115,11 +243,12 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
         encoding="utf-8",
     )
     predecessor_pointer.chmod(0o600)
-    candidate = tmp_path / "clean-rehearsal-candidate"
-    candidate.mkdir()
-    (candidate / "candidate.txt").write_text("reviewed candidate\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q", str(candidate)], check=True)
-    subprocess.run(["git", "-C", str(candidate), "add", "candidate.txt"], check=True)
+    (candidate / "candidate-next.txt").write_text(
+        "reviewed candidate\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "-C", str(candidate), "add", "candidate-next.txt"], check=True
+    )
     subprocess.run(
         [
             "git",
@@ -146,7 +275,7 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
         "bootstrap.backup_restore.ServiceManager",
         _service_manager_must_not_be_constructed,
     )
-    rehearsal = BackupManager(paths, root=REPO_ROOT, test_mode=True).rehearse(
+    rehearsal = BackupManager(paths, root=candidate, test_mode=True).rehearse(
         Path(backup["path"]),
         candidate=candidate,
     )
@@ -168,8 +297,15 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     assert rehearsal["content_emitted_in_receipt"] is False
     assert rehearsal["candidate"]["controller_coordinate_matches"] is False
     assert rehearsal["candidate"]["execution_immutability"] == "not_evaluated"
+    assert rehearsal["predecessor"]["source_identity_method"] == ("legacy-git-tree-v1")
+    assert rehearsal["predecessor"]["source_marker_matches"] is False
+    assert rehearsal["predecessor"]["tracked_source_tree_matches"] is True
+    assert rehearsal["predecessor"]["immutable_release_valid"] == "not_evaluated"
+    assert rehearsal["predecessor"]["rollback_compatible"] == "not_evaluated"
     assert live_sentinel.read_text("utf-8") == "unchanged"
 
+    cli_environment = os.environ.copy()
+    cli_environment["ADMINME_REPOSITORY_ROOT"] = str(candidate)
     cli_rehearsal = subprocess.run(
         [
             sys.executable,
@@ -182,6 +318,7 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
             str(candidate),
         ],
         cwd=REPO_ROOT,
+        env=cli_environment,
         check=True,
         capture_output=True,
         text=True,
@@ -189,6 +326,10 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     )
     cli_receipt = json.loads(cli_rehearsal.stdout)
     assert cli_receipt["status"] == "healthy"
+    assert cli_receipt["predecessor"]["source_identity_method"] == (
+        "legacy-git-tree-v1"
+    )
+    assert cli_receipt["predecessor"]["tracked_source_tree_matches"] is True
     assert cli_receipt["isolation"]["staging_destroyed"] is True
     assert cli_receipt["offline_replay_checks"]["activation_eligible"] is False
     receipts = list(paths.backup_dir.glob("backup-rehearsal-*.json"))
@@ -198,6 +339,21 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
         b"neutral-content-must-not-enter-rehearsal-receipt" not in receipt.read_bytes()
         for receipt in receipts
     )
+
+    tracked_predecessor = predecessor_release / "candidate.txt"
+    tracked_predecessor.write_text("source drift\n", encoding="utf-8")
+    with pytest.raises(BackupError, match="predecessor source identity"):
+        BackupManager(paths, root=candidate, test_mode=True).rehearse(
+            Path(backup["path"]),
+            candidate=candidate,
+        )
+    tracked_predecessor.write_text("reviewed predecessor\n", encoding="utf-8")
+    assert list(paths.backup_dir.glob("backup-rehearsal-*.json")) == receipts
+    instance_fingerprint = hashlib.sha256(str(paths.root).encode()).hexdigest()
+    rehearsal_parent = Path(tempfile.gettempdir()) / (
+        f"administrateme-backup-rehearsal-{instance_fingerprint[:16]}"
+    )
+    assert not list(rehearsal_parent.glob("run-*"))
 
     tampered_path = paths.backup_dir / "tampered.ambackup"
     tampered_envelope = json.loads(Path(backup["path"]).read_text("utf-8"))
@@ -212,14 +368,10 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     )
     tampered_path.chmod(0o600)
     with pytest.raises(BackupError, match="backup_rehearsal_validation_failed"):
-        BackupManager(paths, root=REPO_ROOT, test_mode=True).rehearse(
+        BackupManager(paths, root=candidate, test_mode=True).rehearse(
             tampered_path,
             candidate=candidate,
         )
-    instance_fingerprint = hashlib.sha256(str(paths.root).encode()).hexdigest()
-    rehearsal_parent = Path(tempfile.gettempdir()) / (
-        f"administrateme-backup-rehearsal-{instance_fingerprint[:16]}"
-    )
     assert not list(rehearsal_parent.glob("run-*"))
     assert list(paths.backup_dir.glob("backup-rehearsal-*.json")) == receipts
 
@@ -239,7 +391,7 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
             _fail_rehearsal_parent_fsync,
         )
         with pytest.raises(OSError, match="rehearsal parent fsync failure"):
-            BackupManager(paths, root=REPO_ROOT, test_mode=True).rehearse(
+            BackupManager(paths, root=candidate, test_mode=True).rehearse(
                 Path(backup["path"]),
                 candidate=candidate,
             )
@@ -291,10 +443,12 @@ def test_reviewed_candidate_controller_completes_guarded_upgrade(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    candidate = tmp_path / "candidate-in-process"
+    commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-upgrade")
     BootstrapWizard(
         paths,
-        root=REPO_ROOT,
+        root=candidate,
         fixture="two-adult-one-child",
         test_mode=True,
         dry_run=True,
@@ -304,13 +458,6 @@ def test_reviewed_candidate_controller_completes_guarded_upgrade(
             "macos_version": "26.0",
         },
     ).run()
-    commit = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
     reconciled: list[tuple[Path, bool]] = []
 
     def reconcile(_paths, release: Path, *, test_mode: bool = False):
@@ -321,20 +468,727 @@ def test_reviewed_candidate_controller_completes_guarded_upgrade(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
         reconcile,
     )
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_attest_controller_provenance",
+        lambda self, candidate, commit: None,
+    )
 
     result = UpgradeManager(
         paths,
-        root=REPO_ROOT,
+        root=candidate,
         test_mode=True,
-    ).activate(REPO_ROOT)
+    ).activate(candidate)
 
     assert result["status"] == "upgraded"
     assert result["commit"] == commit
     assert result["upgrade_controller_attested"] is True
     pointer = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
     assert pointer["commit"] == commit
-    assert Path(pointer["path"]).is_dir()
+    release = Path(pointer["path"])
+    assert release.is_dir()
+    marker = release / ".administrateme-source-commit"
+    assert marker.read_text("ascii").strip() == commit
+    assert marker.stat().st_mode & 0o077 == 0
     assert reconciled == [(Path(pointer["path"]), True)]
+
+
+def test_cli_upgrade_publishes_fixed_source_before_backup_and_pointer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    candidate = tmp_path / "candidate"
+    commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-cli-upgrade")
+    BootstrapWizard(
+        paths,
+        root=candidate,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir(mode=0o700)
+    subprocess.run(["git", "init", "-q", str(unrelated)], check=True)
+    controller = tmp_path / "fixed-controller"
+    _extract_git_archive(candidate, commit, controller)
+    controller_marker = controller / ".administrateme-source-commit"
+    controller_marker.write_text(f"{commit}\n", encoding="ascii")
+    controller_marker.chmod(0o600)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ADMINME_TEST_MODE": "1",
+            "ADMINME_REPOSITORY_ROOT": str(candidate),
+            "ADMINME_UPGRADE_CONTROLLER_COMMIT": commit,
+            "ADMINME_UPGRADE_CONTROLLER_ROOT": str(controller),
+            "PYTHONPATH": f"{controller / 'bridge'}:{controller}",
+            "GIT_DIR": str(unrelated / ".git"),
+            "GIT_WORK_TREE": str(unrelated),
+            "GIT_COMMON_DIR": str(unrelated / ".git"),
+            "GIT_OBJECT_DIRECTORY": str(unrelated / ".git" / "objects"),
+            "GIT_INDEX_FILE": str(unrelated / ".git" / "index"),
+        }
+    )
+    backups_before = set(paths.backup_dir.glob("*.ambackup"))
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "upgrade",
+            str(candidate),
+        ],
+        cwd=controller,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    result = json.loads(completed.stdout)
+    assert result["status"] == "upgraded"
+    assert result["commit"] == commit
+    assert result["upgrade_controller_attested"] is True
+    backups_after = set(paths.backup_dir.glob("*.ambackup"))
+    assert len(backups_after - backups_before) == 1
+    pointer_path = paths.app_dir / "current-release.json"
+    pointer = json.loads(pointer_path.read_text("utf-8"))
+    release = paths.app_dir / "releases" / commit
+    assert pointer["path"] == str(release)
+    assert pointer["commit"] == commit
+    marker = release / ".administrateme-source-commit"
+    assert marker.read_bytes() == f"{commit}\n".encode("ascii")
+    assert marker.stat().st_mode & 0o777 == 0o600
+    assert (
+        verify_release_source_identity(
+            release,
+            repository=candidate,
+            commit=commit,
+            allow_legacy_tree=False,
+            require_tracked_tree=True,
+            retained_by_commit=commit,
+        )["tracked_source_tree_matches"]
+        is True
+    )
+    assert not list((paths.app_dir / "releases").glob(".staging-*"))
+
+    unsupported = candidate / "unsupported-link"
+    unsupported.symlink_to("poetry.lock")
+    subprocess.run(["git", "-C", str(candidate), "add", "unsupported-link"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate),
+            "-c",
+            "user.name=Process Candidate Fixture",
+            "-c",
+            "user.email=process-candidate-fixture.invalid",
+            "commit",
+            "-qm",
+            "unsupported candidate",
+        ],
+        check=True,
+    )
+    unsupported_commit = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    unsupported_controller = tmp_path / "fixed-controller-unsupported"
+    _extract_git_archive(candidate, unsupported_commit, unsupported_controller)
+    unsupported_controller_marker = (
+        unsupported_controller / ".administrateme-source-commit"
+    )
+    unsupported_controller_marker.write_text(
+        f"{unsupported_commit}\n", encoding="ascii"
+    )
+    unsupported_controller_marker.chmod(0o600)
+    environment["ADMINME_UPGRADE_CONTROLLER_COMMIT"] = unsupported_commit
+    environment["ADMINME_UPGRADE_CONTROLLER_ROOT"] = str(unsupported_controller)
+    environment["PYTHONPATH"] = (
+        f"{unsupported_controller / 'bridge'}:{unsupported_controller}"
+    )
+    backups_before_failure = set(paths.backup_dir.glob("*.ambackup"))
+    pointer_before_failure = pointer_path.read_bytes()
+    failed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "upgrade",
+            str(candidate),
+        ],
+        cwd=unsupported_controller,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert failed.returncode == 1
+    failure = json.loads(failed.stdout)
+    assert failure["status"] == "failed"
+    assert set(paths.backup_dir.glob("*.ambackup")) == backups_before_failure
+    assert pointer_path.read_bytes() == pointer_before_failure
+    assert not (paths.app_dir / "releases" / unsupported_commit).exists()
+    assert not list((paths.app_dir / "releases").glob(".staging-*"))
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin"
+    or not Path("/opt/homebrew/bin/brew").is_file()
+    or not _reviewed_release_runtimes_available(),
+    reason=(
+        "the supported updater process proof requires the reviewed side-by-side "
+        "macOS Python and Node toolchain"
+    ),
+)
+def test_supported_update_launcher_holds_fixed_controller_lock_through_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    candidate = tmp_path / "candidate-supported-update"
+    predecessor_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-supported-update")
+    BootstrapWizard(
+        paths,
+        root=candidate,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    releases = paths.app_dir / "releases"
+    releases.mkdir(mode=0o700)
+    predecessor = releases / predecessor_commit
+    _extract_git_archive(candidate, predecessor_commit, predecessor)
+    marker = predecessor / ".administrateme-source-commit"
+    marker.write_text(f"{predecessor_commit}\n", encoding="ascii")
+    marker.chmod(0o600)
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", predecessor / ".venv"],
+        check=True,
+        timeout=60,
+    )
+    pointer_path = paths.app_dir / "current-release.json"
+    pointer_path.write_text(
+        json.dumps({"path": str(predecessor), "commit": predecessor_commit}),
+        encoding="utf-8",
+    )
+    pointer_path.chmod(0o600)
+
+    candidate_canary = candidate / "supported-update-candidate.txt"
+    candidate_canary.write_text("fixed candidate\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(candidate), "add", candidate_canary.name],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate),
+            "-c",
+            "user.name=Supported Update Fixture",
+            "-c",
+            "user.email=supported-update-fixture.invalid",
+            "commit",
+            "-qm",
+            "supported update candidate",
+        ],
+        check=True,
+    )
+    candidate_commit = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bash_canary = tmp_path / "ambient-bash-code-ran"
+    bash_environment = tmp_path / "ambient-bash-environment"
+    bash_environment.write_text(
+        f"printf ran > {shlex.quote(str(bash_canary))}\n",
+        encoding="utf-8",
+    )
+    python_canary = tmp_path / "ambient-python-code-ran"
+    python_path = tmp_path / "ambient-python-path"
+    python_path.mkdir(mode=0o700)
+    (python_path / "sitecustomize.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(python_canary)!r}).write_text('ran', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ADMINME_INSTANCE_ROOT": str(paths.root),
+            "ADMINME_TEST_MODE": "1",
+            "BASH_ENV": str(bash_environment),
+            "GIT_DIR": str(tmp_path / "poisoned-git-dir"),
+            "GIT_WORK_TREE": str(tmp_path / "poisoned-worktree"),
+            "PYTHONPATH": str(python_path),
+        }
+    )
+    command = [
+        str(candidate / "bootstrap" / "update.sh"),
+        str(candidate),
+    ]
+    lock_path = paths.app_dir / ".upgrade-operation.lock"
+    lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(lock_descriptor, 0o600)
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        refused = subprocess.run(
+            command,
+            cwd=candidate,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
+    assert refused.returncode == 1
+    assert "already running" in refused.stderr
+    assert not (releases / candidate_commit).exists()
+    assert not list(paths.backup_dir.glob("*.ambackup"))
+    assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+    assert not bash_canary.exists()
+    assert not python_canary.exists()
+
+    # With the cooperative lock released, the real public shell, bounded
+    # launcher, fixed supervisor, guardian, and fixed controller all run. The
+    # production controller must still reject this deliberately test-secret
+    # fixture before backup or selector effects; the internal harness below is
+    # the separate credential-free success proof.
+    public_controller_attempt = subprocess.run(
+        command,
+        cwd=candidate,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    public_output = public_controller_attempt.stdout + public_controller_attempt.stderr
+    assert public_controller_attempt.returncode == 1, public_output
+    assert "secret reference belongs to another instance" in public_output
+    assert json.loads(pointer_path.read_text("utf-8"))["commit"] == predecessor_commit
+    assert not list(paths.backup_dir.glob("*.ambackup"))
+    assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+    assert not bash_canary.exists()
+    assert not python_canary.exists()
+
+    supervisor_source = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(candidate),
+            "show",
+            f"{candidate_commit}:bootstrap/update_supervisor.py",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    internal_environment = environment.copy()
+    internal_environment["ADMINME_ACCEPTANCE_PYTHON"] = str(
+        _private_acceptance_python(tmp_path / "supported-update-acceptance")
+    )
+    completed = subprocess.run(
+        [
+            "/usr/bin/python3",
+            "-I",
+            "-",
+            str(paths.root),
+            str(candidate),
+            candidate_commit,
+            "--test-mode",
+            str(candidate),
+        ],
+        cwd=candidate,
+        env=internal_environment,
+        input=supervisor_source.decode("utf-8"),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    pointer = json.loads(pointer_path.read_text("utf-8"))
+    release = releases / candidate_commit
+    assert pointer["commit"] == candidate_commit
+    assert pointer["path"] == str(release)
+    assert release.is_dir() and not release.is_symlink()
+    assert (release / candidate_canary.name).read_text("utf-8") == "fixed candidate\n"
+    release_marker = release / ".administrateme-source-commit"
+    assert release_marker.read_text("ascii").strip() == candidate_commit
+    assert stat.S_IMODE(release_marker.stat().st_mode) == 0o600
+    assert len(list(paths.backup_dir.glob("*.ambackup"))) == 1
+    assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+    assert not list(releases.glob(".staging-*"))
+    assert not bash_canary.exists()
+    assert not python_canary.exists()
+
+
+def test_public_update_refuses_symlinked_instance_before_deployment_writes(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate-symlink-instance"
+    _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = DeploymentPaths.from_root(tmp_path / "symlink-instance-target")
+    paths.root.mkdir(mode=0o700)
+    paths.app_dir.mkdir(mode=0o700)
+    instance_link = tmp_path / "instance-link"
+    instance_link.symlink_to(paths.root, target_is_directory=True)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ADMINME_INSTANCE_ROOT": str(instance_link),
+            "ADMINME_TEST_MODE": "1",
+        }
+    )
+
+    completed = subprocess.run(
+        [str(candidate / "bootstrap" / "update.sh"), str(candidate)],
+        cwd=candidate,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert "instance root is unsafe" in completed.stderr
+    assert not (paths.app_dir / ".upgrade-operation.lock").exists()
+    assert not (paths.app_dir / "tooling").exists()
+
+
+def test_public_bootstrap_ignores_stale_internal_candidate_coordinates(
+    tmp_path: Path,
+) -> None:
+    candidate_a = tmp_path / "candidate-a"
+    candidate_a_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate_a)
+    candidate_b = tmp_path / "candidate-b"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", candidate_a, candidate_b],
+        check=True,
+    )
+    stale_supervisor = candidate_b / "bootstrap" / "update_supervisor.py"
+    stale_supervisor.write_text(
+        "import sys\n"
+        "def main():\n"
+        "    print('STALE_CANDIDATE_EXECUTED', file=sys.stderr)\n"
+        "    return 91\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main())\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(candidate_b), "add", "--all"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate_b),
+            "-c",
+            "user.name=Stale Candidate Fixture",
+            "-c",
+            "user.email=stale-candidate-fixture.invalid",
+            "commit",
+            "-qm",
+            "stale candidate",
+        ],
+        check=True,
+    )
+    paths = DeploymentPaths.from_root(tmp_path / "bootstrap-stale-coordinate")
+    paths.root.mkdir(mode=0o700)
+    paths.app_dir.mkdir(mode=0o700)
+    lock_path = paths.app_dir / ".upgrade-operation.lock"
+    lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(lock_descriptor, 0o600)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ADMINME_SUPERVISED_CANDIDATE_ROOT": str(candidate_b),
+            "ADMINME_FIXED_CONTROLLER_ROOT": str(candidate_b),
+            "ADMINME_INSTANCE_ROOT": str(paths.root),
+            "ADMINME_TEST_MODE": "1",
+        }
+    )
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed = subprocess.run(
+            [
+                str(candidate_a / "bootstrap" / "bootstrap-macos.sh"),
+                "--instance-root",
+                str(paths.root),
+            ],
+            cwd=candidate_a,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
+
+    assert completed.returncode == 1
+    assert "STALE_CANDIDATE_EXECUTED" not in completed.stderr
+    assert "already running" in completed.stderr
+    assert not (paths.app_dir / "tooling").exists()
+
+    # A wrong reviewed commit is refused by the public launcher before the
+    # supervisor can create even the private instance root.
+    mismatch_root = tmp_path / "bootstrap-commit-mismatch"
+    mismatch_environment = environment.copy()
+    mismatch_environment["ADMINME_INSTANCE_ROOT"] = str(mismatch_root)
+    mismatch_attempt = subprocess.run(
+        [
+            str(candidate_a / "bootstrap" / "bootstrap-macos.sh"),
+            "--instance-root",
+            str(mismatch_root),
+            "--expected-commit",
+            "f" * 40,
+        ],
+        cwd=candidate_a,
+        env=mismatch_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert mismatch_attempt.returncode == 1
+    assert "STALE_CANDIDATE_EXECUTED" not in mismatch_attempt.stderr
+    assert "does not match reviewed commit" in mismatch_attempt.stderr
+    assert not mismatch_root.exists()
+
+    # With the lock released and the correct reviewed commit, cross the whole
+    # public shell -> launcher -> fixed supervisor -> guardian -> fixed
+    # controller boundary. The explicit internal test-mode marker is first in
+    # the forwarded argument list; the fixed controller then refuses because
+    # the public entry did not authorize the dry-run harness.
+    controller_environment = environment.copy()
+    controller_environment["ADMINME_ACCEPTANCE_PYTHON"] = str(
+        _private_acceptance_python(tmp_path / "bootstrap-acceptance")
+    )
+    controller_attempt = subprocess.run(
+        [
+            str(candidate_a / "bootstrap" / "bootstrap-macos.sh"),
+            "--test-mode",
+            "--expected-commit",
+            candidate_a_commit,
+        ],
+        cwd=candidate_a,
+        env=controller_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert controller_attempt.returncode == 1
+    assert "STALE_CANDIDATE_EXECUTED" not in controller_attempt.stderr
+    assert "fixed bootstrap test mode requires the explicit dry-run harness" in (
+        controller_attempt.stderr
+    )
+    assert not (paths.app_dir / "current-release.json").exists()
+    assert not (paths.app_dir / "releases").exists()
+    assert not paths.backup_dir.exists()
+    assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin"
+    or shutil.which("poetry") is None
+    or not _reviewed_release_runtimes_available(),
+    reason=(
+        "stable-coordinate dependency preparation requires the reviewed side-by-side "
+        "macOS Python, Node, and Poetry toolchain"
+    ),
+)
+def test_macos_non_test_release_preparation_uses_stable_coordinate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = tmp_path / "candidate-real-prepare"
+    commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-real-prepare")
+    paths.root.mkdir(mode=0o700)
+    paths.app_dir.mkdir(mode=0o700)
+    poetry = Path(shutil.which("poetry") or "")
+    tooling = paths.app_dir / "tooling" / "poetry-2.4.1" / "bin"
+    tooling.mkdir(mode=0o700, parents=True)
+    wrapper = tooling / "poetry"
+    wrapper.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(str(poetry))} "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o700)
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    lifecycle = paths.app_dir / ".test-controller-lifecycle.lock"
+    lifecycle.write_text("\n", encoding="ascii")
+    lifecycle.chmod(0o600)
+    lifecycle_metadata = lifecycle.stat()
+    operation_lock_path = paths.app_dir / ".upgrade-operation.lock"
+    operation_lock_path.write_text("\n", encoding="ascii")
+    operation_lock_path.chmod(0o600)
+    operation_lock = os.open(operation_lock_path, os.O_RDWR)
+    fcntl.flock(operation_lock, fcntl.LOCK_EX)
+    monkeypatch.setenv("ADMINME_CONTROLLER_LIFECYCLE_PATH", str(lifecycle))
+    monkeypatch.setenv(
+        "ADMINME_CONTROLLER_LIFECYCLE_DEVICE",
+        str(lifecycle_metadata.st_dev),
+    )
+    monkeypatch.setenv(
+        "ADMINME_CONTROLLER_LIFECYCLE_INODE",
+        str(lifecycle_metadata.st_ino),
+    )
+    monkeypatch.setenv("ADMINME_UPGRADE_OPERATION_LOCK_FD", str(operation_lock))
+
+    try:
+        release = UpgradeManager(
+            paths,
+            root=candidate,
+            test_mode=False,
+        )._publish_release(candidate, commit)  # noqa: SLF001
+    finally:
+        fcntl.flock(operation_lock, fcntl.LOCK_UN)
+        os.close(operation_lock)
+
+    assert release == paths.app_dir / "releases" / commit
+    python = release / ".venv" / "bin" / "python"
+    expected_python = json.loads(
+        (candidate / "bootstrap" / "versions.json").read_text("utf-8")
+    )["python"]["preferred"]
+    assert (
+        subprocess.run(
+            [str(python), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == f"Python {expected_python}"
+    )
+    console_scripts = [
+        path
+        for path in (release / ".venv" / "bin").iterdir()
+        if path.is_file() and os.access(path, os.X_OK)
+    ]
+    assert console_scripts
+    for script in console_scripts:
+        payload = script.read_bytes()
+        assert b".staging-" not in payload
+    assert (release / "openclaw" / "administrateme" / "node_modules").is_dir()
+    assert (release / "openclaw" / "administrateme" / "dist").is_dir()
+    assert (
+        verify_release_source_identity(
+            release,
+            repository=candidate,
+            commit=commit,
+            allow_legacy_tree=False,
+            require_tracked_tree=True,
+            retained_by_commit=commit,
+        )["tracked_source_tree_matches"]
+        is True
+    )
+    assert not list((paths.app_dir / "releases").glob(".staging-*"))
+
+
+@pytest.mark.parametrize("operation", ("upgrade", "rollback"))
+def test_cli_deployment_operation_lock_rejects_competing_process_before_effects(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    candidate = tmp_path / f"candidate-operation-lock-{operation}"
+    commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = DeploymentPaths.from_root(tmp_path / f"deployment-lock-{operation}")
+    paths.root.mkdir(mode=0o700)
+    paths.app_dir.mkdir(mode=0o700)
+    lock_path = paths.app_dir / ".upgrade-operation.lock"
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl,os,sys; "
+                "fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600); "
+                "os.fchmod(fd,0o600); fcntl.flock(fd,fcntl.LOCK_EX); "
+                "print('ready',flush=True); sys.stdin.buffer.read(1)"
+            ),
+            str(lock_path),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None
+    assert holder.stdout.readline().strip() == "ready"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ADMINME_TEST_MODE": "1",
+            "ADMINME_REPOSITORY_ROOT": str(candidate),
+            "ADMINME_UPGRADE_CONTROLLER_COMMIT": commit,
+            "PYTHONPATH": str(candidate / "bridge"),
+        }
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "bootstrap.cli",
+        "--instance-root",
+        str(paths.root),
+        operation,
+    ]
+    if operation == "upgrade":
+        command.append(str(candidate))
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=candidate,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.write("x")
+        holder.stdin.flush()
+        holder.wait(timeout=5)
+
+    assert completed.returncode == 1
+    report = json.loads(completed.stdout)
+    assert report["status"] == "failed"
+    assert "already running" in report["message"]
+    assert not list(paths.backup_dir.glob("*.ambackup"))
+    assert not (paths.app_dir / "current-release.json").exists()
+    assert not (paths.app_dir / "releases" / commit).exists()
 
 
 def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
@@ -362,7 +1216,9 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    monkeypatch.setattr(
+        UpgradeManager, "_candidate_commit", lambda _self, _candidate: commit
+    )
     policy = object()
     online_validations: list[object] = []
     offline_states: list[str] = []
@@ -496,7 +1352,9 @@ def test_declared_source_repair_rolls_back_on_new_post_switch_degradation(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    monkeypatch.setattr(
+        UpgradeManager, "_candidate_commit", lambda _self, _candidate: commit
+    )
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
         lambda *_args, **_kwargs: {"ok": True},
@@ -505,6 +1363,19 @@ def test_declared_source_repair_rolls_back_on_new_post_switch_degradation(
     UpgradeManager(paths, root=REPO_ROOT, test_mode=True).activate(REPO_ROOT)
     previous = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
     ServiceManager(paths, test_mode=True).start()
+    candidate = tmp_path / "candidate-degraded-successor"
+    candidate_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", candidate_commit)
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_candidate_commit",
+        lambda _self, _candidate: candidate_commit,
+    )
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_attest_controller_provenance",
+        lambda _self, _candidate, _commit: None,
+    )
     policy = object()
     monkeypatch.setattr(
         "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy
@@ -539,10 +1410,10 @@ def test_declared_source_repair_rolls_back_on_new_post_switch_degradation(
     with pytest.raises(UpgradeError, match="candidate failed post-switch Doctor"):
         UpgradeManager(
             paths,
-            root=REPO_ROOT,
+            root=candidate,
             test_mode=True,
             approve_source_assessment_repair=True,
-        ).activate(REPO_ROOT)
+        ).activate(candidate)
 
     restored = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
     assert restored == previous
@@ -574,7 +1445,9 @@ def test_declared_source_repair_stops_before_selection_on_stopped_receipt_drift(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    monkeypatch.setattr(
+        UpgradeManager, "_candidate_commit", lambda _self, _candidate: commit
+    )
     policy = object()
     monkeypatch.setattr(
         "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy
@@ -644,7 +1517,9 @@ def test_declared_source_repair_restarts_predecessor_when_both_stop_attempts_fai
         capture_output=True,
         text=True,
     ).stdout.strip()
-    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    monkeypatch.setattr(
+        UpgradeManager, "_candidate_commit", lambda _self, _candidate: commit
+    )
     policy = object()
     monkeypatch.setattr(
         "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy

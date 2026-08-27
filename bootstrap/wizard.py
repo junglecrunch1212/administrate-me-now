@@ -374,8 +374,10 @@ class BootstrapWizard:
                 require_dependencies=not self.test_mode,
                 check_filevault=not self.test_mode,
                 # Disposable tests do not emulate the target macOS account
-                # directory. Production always samples the real group list.
+                # directory or its production disk capacity. Production always
+                # samples the real group list and filesystem.
                 group_names=frozenset() if self.test_mode else None,
+                available_disk_bytes=20 * 1024**3 if self.test_mode else None,
             )
             self.paths.create()
             bootstrap_reference = self.store.put("bootstrap-state", os.urandom(32))

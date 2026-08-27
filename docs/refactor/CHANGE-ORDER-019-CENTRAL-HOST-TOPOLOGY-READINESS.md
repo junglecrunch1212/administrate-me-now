@@ -192,14 +192,14 @@ window after prior live effects.
 | Change | Classification | Rationale |
 |---|---|---|
 | One Python runtime, one pinned Gateway, loopback, Serve-only edge, member bridge privacy, observation, governance, independent approvals, terminal audit | PRESERVE | Existing constitutional boundaries remain authoritative. |
-| Tagged non-member Central Host and exact A/B ingress acceptance | MODERNIZE / HARDEN | The former prose did not explicitly require a tagged infrastructure identity or fail closed on a member-owned host. |
-| Standard service account plus tested separate recovery path | MODERNIZE / HARDEN | “Dedicated” and “non-root” were insufficient activation predicates. |
-| Global provider-owner/workspace/permission/provenance validation | MODERNIZE / HARDEN | Per-row schemas and defaults could not prove account ownership or uniqueness. |
+| Tagged non-member Central Host and exact A/B ingress acceptance | MODERNIZE | The former prose did not explicitly require a tagged infrastructure identity or fail closed on a member-owned host. |
+| Standard service account plus tested separate recovery path | MODERNIZE | “Dedicated” and “non-root” were insufficient activation predicates. |
+| Global provider-owner/workspace/permission/provenance validation | MODERNIZE | Per-row schemas and defaults could not prove account ownership or uniqueness. |
 | Non-human service principal and deterministic CoS channel routing | MODERNIZE | Preserves the intended service persona without weakening member privacy. |
-| Blanket reading of “no Apple ID on the central service account” | Narrow SUPERSEDE | The ban continues for member-source ingestion; it does not prohibit a separate dedicated CoS Apple channel identity. |
+| Blanket reading of “no Apple ID on the central service account” | SUPERSEDE | The ban continues for member-source ingestion; it does not prohibit a separate dedicated CoS Apple channel identity. This supersession is narrow. |
 | Portal/bridge fail-open defaults and independent Settings readiness | SUPERSEDE | Unknown or absent evidence now denies and one readiness object governs all surfaces. |
-| Exact OpenClaw account-aware topology, terminal integrity, and phase-bounded zero-effect accounting | HARDEN | Heartbeat/liveness alone cannot prove isolation; intentional later live writes cannot poison health forever. |
-| Apple/iMessage connectivity, account creation, BlueBubbles/Twilio enrollment, permissions, and live sends | Not authorized | These remain separate Phase B owner gates, not deferred required product functions. |
+| Exact OpenClaw account-aware topology, terminal integrity, and phase-bounded zero-effect accounting | MODERNIZE | Heartbeat/liveness alone cannot prove isolation; intentional later live writes cannot poison health forever. |
+| Apple/iMessage connectivity, account creation, BlueBubbles/Twilio enrollment, permissions, and live sends | PRESERVE | These remain separate Phase B owner gates, not deferred required product functions, and remain unauthorized by this change. |
 
 ## Compatibility and rollback
 
@@ -251,3 +251,50 @@ candidate-pending HTR-08 evidence, and destructive replacement is not yet
 crash-recoverable. Until those paths are implemented and consume this ordering,
 HTR-08, HTR-09, and deployment readiness remain executably blocked; owner
 authorization alone cannot make the activation packet runnable.
+
+This compatibility boundary is classified as **MODERNIZE** for source-identity
+evidence, bounded public-entry Git validation and supervisor handoff,
+fixed-commit controller supervision, bootstrap routing, forward publication,
+preparation ownership/activity leases, and cooperative operation serialization.
+It **PRESERVES** the prohibitions on installed-release repair
+and on promoting preliminary evidence to immutability, rollback, or
+activation. An exact mode-0600 marker remains the ordinary proof, while a
+markerless retained release using the legacy compatibility path must match
+every tracked regular file and executable bit in the pointer commit retained
+by the same clean candidate repository and contain no
+residue outside a versioned generated-runtime policy. A malformed or wrong
+present marker fails terminally. The proof emits only counts, classifications,
+and digests and does not read unexpected residue. It does not promote full
+immutability, dependency/build identity, rollback compatibility, or automatic
+rollback eligibility. Forward updater publication is instead constructed from
+fixed Git objects in a private sibling directory, revalidated, marked mode
+0600, fsynced, and atomically renamed to its final commit path before runtime
+preparation. An unprovably reaped materializer retains the private stage and a
+`publishing_unreaped` record without cleanup, retry, backup, or activation
+authority. A private parent-side `publishing` record is fsynced before staging
+and binds candidate, controller, instance, full recursive pointer-chain digest,
+stage nonce, release coordinate, and generated-policy version while explicitly
+leaving the preparation-activity coordinate unbound. After atomic source
+publication, and before generated-root cleanup or runtime preparation, the
+updater creates the private preparation-activity inode, acquires it exclusively,
+binds that exact coordinate, and transitions the record to `preparing`. The
+controller retains exclusive ownership through retry cleanup, downgrades to a
+shared cleanup-visible lease while each active command guardian/worker holds
+its own shared lease, and reacquires exclusive ownership after worker
+terminality for completion. Controller disconnect, timeout,
+coordinate replacement, or an unreaped command fails closed without cleanup
+authority. The source marker alone never grants retry authority. Preparation runs only at the stable,
+non-selected path while that exact record is pending. A retry must first
+reverify the unchanged tracked source, marker, record, pointer chain, and
+release coordinate; it then deletes all allowlisted generated roots no-follow,
+rebuilds them from scratch, and verifies exact preferred Python in both formula
+and venv plus exact Node and Poetry. Every active or recursively retained
+predecessor remains read-only. The supported fixed-commit activate launcher
+holds one cooperative operation lock through controller cleanup; direct
+rollback acquires the same canonical manager lock for its own operation. This
+does not survive a crash or replace
+the required activation journal. The preparation record is consumed before
+the first selector mutation and cannot authorize preparation again. Ignored
+worktree files are never copied into a marker-attested release. This fixes
+preliminary HTR-05 source compatibility only and does not remove the
+HTR-08/HTR-09 blockers above.

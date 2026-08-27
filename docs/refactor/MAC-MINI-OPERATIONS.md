@@ -236,6 +236,21 @@ lease and removes payload before validated inactive control residue. The
 rehearsal never constructs the service manager, replaces active state, changes
 the release pointer or rollback tree, connects a provider, or appends an event.
 
+Before creating plaintext staging, the rehearsal also validates the pointer's
+retained source identity. The normal proof is a UID-owned, mode-0600 source
+marker that exactly names the pointer commit. A markerless retained release
+using the legacy compatibility path may instead compare every tracked regular
+file and executable bit with the pointer commit
+retained by this same clean candidate repository. It also rejects every
+source-adjacent entry outside the explicit generated-runtime policy for the
+release virtual environment, native-plugin dependencies/build output, and
+narrow Python bytecode caches. A malformed, public, symlinked, or mismatching
+present marker fails without fallback. The receipt records counts and digests,
+not paths or contents. This establishes tracked-source identity only: excluded
+runtime/build artifacts, full release immutability, rollback compatibility,
+and automatic rollback eligibility remain `not_evaluated`. Never add a marker
+to the installed predecessor to make this check pass.
+
 The receipt's offline check is deliberately not full Doctor. It records live
 checks and activation eligibility as `not_evaluated`/false, and it records
 rollback compatibility and automatic rollback eligibility as `not_evaluated`.
@@ -298,14 +313,15 @@ is instead:
 ./bootstrap/update.sh --approve-runtime-migration /absolute/path/to/clean-reviewed-candidate
 ```
 
-Both forms refuse a dirty or non-Git candidate and self-host the reviewed
-candidate controller in a commit-versioned tooling venv. A same-baseline update
+Both forms refuse a dirty or non-Git candidate and materialize the reviewed
+commit's controller source into a private fixed-coordinate workspace with a
+commit-versioned tooling venv. A same-baseline update
 uses the active release's Python and Node only as the controller runtime; a
 separately approved baseline migration uses the side-by-side candidate runtime.
 Neither form runs the new controller inside, or synchronizes, the active
 release's venv. The launcher rechecks the candidate commit and clean worktree
-after dependency preparation, attests that the loaded upgrade module is the
-candidate file, and passes that exact commit to the manager. A missing,
+after dependency preparation, attests the loaded upgrade module against that
+fixed commit materialization, and passes the exact commit to the manager. A missing,
 mismatched, or active-release controller fails before backup, service stop, or
 pointer mutation.
 
@@ -325,16 +341,49 @@ source is missing, the copy cannot be verified, an alias is invalid, or an ACL
 prompt remains. An older rollback release ignores the alias map and keeps using
 the original untouched items.
 
-Compatibility validation happens before backup, service stop, release copy,
+Compatibility validation happens before backup, service stop, release publication,
 or pointer replacement. The same-runtime shell gate independently refuses a
 Python/Node compatibility range, preferred version, or formula change before
 executing candidate code. A different
 OpenClaw version, undeclared successor commit, or plugin API is refused. A
-compatible candidate receives an isolated Python environment and native-plugin
-build before service replacement, then a pre-upgrade encrypted backup, atomic
-release pointer switch, launchd reconciliation, restart, and Doctor. Failure
-restores both the previous pointer and its launchd definitions. The lower-level
-rollback command is:
+compatible candidate first passes the cheap source/runtime compatibility
+checks. Before staging, it fsyncs a private parent-side `publishing` record bound
+to the candidate/controller commits, instance, full recursive pointer-chain
+digest, stage nonce, final path, and generated-policy version, with the
+preparation-activity coordinate explicitly unbound. The fixed Git tree and
+private exact source marker are verified, fsynced, and atomically published
+together at the final commit path; ignored or untracked worktree files are not
+copied. An unprovably reaped materializer leaves a private
+`publishing_unreaped` record and stage for reviewed recovery and grants no
+cleanup, retry, backup, or activation authority. After successful source
+publication, and before generated-root cleanup or runtime preparation, the
+updater creates the exact private preparation-activity inode, acquires it
+exclusively, binds that coordinate, and transitions the record to `preparing`.
+The controller retains exclusive ownership through retry cleanup, downgrades to
+a shared cleanup-visible lease while each active command guardian/worker holds
+its own shared lease, and reacquires exclusive ownership after worker
+terminality for completion. Controller disconnect, timeout,
+activity-coordinate replacement, or an unreaped command fails closed. Only
+then is the isolated Python environment and native-plugin build prepared at the
+stable, non-selected final path. Preparation authority comes from that pending
+record, never from the marker alone. Every retry revalidates the record, source,
+marker, pointer chain, and release coordinate; deletes every allowed generated
+root without following links; rebuilds from scratch; and verifies exact
+preferred Python at both the formula and venv coordinates plus exact Node and
+Poetry. Active and recursively retained releases are read-only. If preparation
+fails, the verified source remains inactive and no backup, service stop,
+selector, plugin registration, or pointer mutation has occurred. One private
+cooperative operation lock covers the supported fixed-commit activate launcher
+from the first active-deployment read through disposable controller cleanup;
+the direct rollback command acquires the same canonical manager lock for its
+own rollback operation. A loser fails before tooling, backup, or selector
+effects. The lock is not a
+crash journal and does not make HTR-09 runnable. Immediately before the first
+selector mutation, the updater consumes the completed preparation record, which
+can never grant retry authority again. The prepared candidate then receives a
+pre-upgrade encrypted backup, atomic release pointer switch, launchd
+reconciliation, restart, and Doctor. Failure restores both the previous pointer
+and its launchd definitions. The lower-level rollback command is:
 
 For central services and post-switch Doctor, the candidate manifest's
 formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older

@@ -72,6 +72,7 @@ def run_preflight(
     require_dependencies: bool = True,
     check_filevault: bool = True,
     group_names: frozenset[str] | None = None,
+    available_disk_bytes: int | None = None,
 ) -> list[PreflightCheck]:
     """Perform all checks before target-root mutation and raise on failure."""
     versions = load_versions()
@@ -121,7 +122,11 @@ def run_preflight(
     existing_parent = parent
     while not existing_parent.exists() and existing_parent != existing_parent.parent:
         existing_parent = existing_parent.parent
-    free_bytes = shutil.disk_usage(existing_parent).free
+    free_bytes = (
+        shutil.disk_usage(existing_parent).free
+        if available_disk_bytes is None
+        else available_disk_bytes
+    )
     checks.append(
         PreflightCheck(
             "disk_space",

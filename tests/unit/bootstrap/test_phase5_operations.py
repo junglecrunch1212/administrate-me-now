@@ -131,13 +131,19 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     installer = (REPO_ROOT / "bootstrap" / "bootstrap-macos.sh").read_text("utf-8")
     assert "--expected-commit" in installer
     assert 'ADMINME_REVIEWED_COMMIT="$commit"' in installer
-    assert ".administrateme-source-commit" in installer
-    assert ".administrateme-installed-commit" in installer
-    assert 'mktemp -d "$release_parent/.staging.XXXXXX"' in installer
+    assert "UpgradeManager" in installer
+    assert "._publish_release" in installer
+    assert 'ADMINME_UPGRADE_CONTROLLER_COMMIT="$commit"' in installer
+    assert 'ADMINME_PREPARATION_POETRY="$poetry_venv/bin/poetry"' in installer
+    assert 'archive --format=tar "$commit"' not in installer
+    assert "core.fsmonitor=false" in installer
+    assert '"$BOOTSTRAP_DIR/reviewed_launcher.py"' in installer
+    assert "ADMINME_BOOTSTRAP_SUPERVISED" in installer
     assert "internal test-harness option" in installer
-    assert "status --porcelain --untracked-files=all" in installer
+    assert "status --porcelain=v1 -z --untracked-files=all" in installer
     assert "npm install --global" not in installer
-    assert 'poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.4.1"' in installer
+    assert 'poetry_venv="${ADMINME_CONTROLLER_RUNTIME_ROOT:-' in installer
+    assert "poetry-$poetry_preferred" in installer
     assert '"$poetry_venv/bin/poetry" sync --only main' in installer
     assert 'openclaw plugins install --link --force "$release_dir/' in installer
     assert "openclaw plugins uninstall administrateme --force --keep-files" in installer
@@ -148,13 +154,18 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
     assert 'OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"' in installer
     updater = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")
-    assert "upgrade requires a clean reviewed Git checkout" in updater
-    assert (
-        'controller="$ADMINME_INSTANCE_ROOT/app/tooling/upgrade-controller-' in updater
-    )
+    launcher = (REPO_ROOT / "bootstrap" / "reviewed_launcher.py").read_text("utf-8")
+    assert "reviewed candidate has local changes" in launcher
+    assert 'if [[ "$git_environment_name" == GIT_* ]]' in updater
+    assert "safe_git()" in updater
+    assert "core.fsmonitor=false" in updater
+    assert '"$SCRIPT_DIR/reviewed_launcher.py"' in updater
+    assert '["show", f"{commit}:bootstrap/update_supervisor.py"]' in launcher
+    assert 'controller="$controller_tooling/controller"' in updater
     assert 'VIRTUAL_ENV="$controller"' in updater
-    assert 'ADMINME_REPOSITORY_ROOT="$candidate"' in updater
-    assert 'ADMINME_UPGRADE_CONTROLLER_COMMIT="$candidate_commit"' in updater
+    assert 'ADMINME_REPOSITORY_ROOT="$fixed_controller_root"' in updater
+    assert 'ADMINME_UPGRADE_CONTROLLER_ROOT="$fixed_controller_root"' in updater
+    assert 'ADMINME_UPGRADE_CONTROLLER_COMMIT="$supervised_commit"' in updater
     assert "candidate upgrade-controller provenance attestation failed" in updater
     assert (
         'resolve_formula_node "$active_node_formula" "$active_node_preferred"'
@@ -163,7 +174,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert 'active_node="$(command -v node || true)"' not in updater
     assert "run_cli upgrade" not in updater
     assert (
-        '"$active_python" "$candidate/bootstrap/keychain_runtime_migration.py"'
+        '"$active_python" "$fixed_controller_root/bootstrap/keychain_runtime_migration.py"'
         in updater
     )
     assert 'upgrade_args=(upgrade "$candidate")' in updater
@@ -452,10 +463,10 @@ def test_required_llm_tool_probe_fails_closed_without_a_gateway_credential() -> 
     assert result["credentials_in_report"] is False
 
 
-def test_macos_installer_dispatches_without_optional_passthrough_args(
+def test_macos_installer_refuses_ambient_test_mode_without_internal_harness(
     tmp_path: Path,
 ) -> None:
-    """The real first run has no fixture args and must work under macOS Bash 3."""
+    """Ambient test controls cannot bypass the public fixed-source boundary."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     captured = tmp_path / "python-args.txt"
@@ -474,27 +485,29 @@ def test_macos_installer_dispatches_without_optional_passthrough_args(
         }
     )
 
-    subprocess.run(
+    completed = subprocess.run(
         [
             "/bin/bash",
             str(REPO_ROOT / "bootstrap" / "bootstrap-macos.sh"),
             "--instance-root",
             str(instance_root),
+            "--expected-commit",
+            "0" * 40,
         ],
         cwd=REPO_ROOT,
         env=env,
-        check=True,
+        check=False,
         text=True,
         capture_output=True,
     )
 
-    assert captured.read_text("utf-8").splitlines() == [
-        "-m",
-        "bootstrap.cli",
-        "--instance-root",
-        str(instance_root),
-        "bootstrap",
-    ]
+    assert completed.returncode == 1
+    assert (
+        "reviewed candidate has local changes" in completed.stderr
+        or "does not match reviewed commit" in completed.stderr
+    )
+    assert not captured.exists()
+    assert not instance_root.exists()
 
 
 def test_interactive_answers_allow_deferred_child_tailscale_identity(
@@ -624,6 +637,24 @@ def test_preflight_wrong_platform_and_arch_leave_no_partial_instance(
             check_filevault=False,
         )
     assert not target.exists()
+
+
+def test_preflight_rejects_explicit_low_disk_capacity(tmp_path: Path) -> None:
+    with pytest.raises(PreflightFailure) as captured:
+        run_preflight(
+            tmp_path / "deployment",
+            system="Darwin",
+            machine="arm64",
+            macos_version="26.0",
+            require_dependencies=False,
+            check_filevault=False,
+            group_names=frozenset(),
+            available_disk_bytes=9 * 1024**3,
+        )
+
+    disk = next(check for check in captured.value.checks if check.name == "disk_space")
+    assert disk.ok is False
+    assert disk.detail == "free disk space is 9 GiB"
 
 
 def test_wizard_accepts_only_the_reviewed_installer_scaffold(
@@ -1760,7 +1791,8 @@ def test_production_upgrade_controller_must_be_the_reviewed_candidate(
         manager._attest_controller_provenance(REPO_ROOT, commit)
 
     monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
-    manager._attest_controller_provenance(REPO_ROOT, commit)
+    with pytest.raises(UpgradeError, match="fixed upgrade-controller root is missing"):
+        manager._attest_controller_provenance(REPO_ROOT, commit)
 
 
 def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
@@ -2341,6 +2373,11 @@ def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
     previous_release = releases / ("b" * 40)
     current_release.mkdir(parents=True)
     previous_release.mkdir()
+    test_paths.root.chmod(0o700)
+    test_paths.app_dir.chmod(0o700)
+    releases.chmod(0o700)
+    current_release.chmod(0o700)
+    previous_release.chmod(0o700)
     previous = {
         "path": str(previous_release),
         "commit": "b" * 40,
@@ -2353,6 +2390,7 @@ def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
     }
     pointer = test_paths.app_dir / "current-release.json"
     pointer.write_text(json.dumps(current), encoding="utf-8")
+    pointer.chmod(0o600)
 
     monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
     monkeypatch.setattr(
