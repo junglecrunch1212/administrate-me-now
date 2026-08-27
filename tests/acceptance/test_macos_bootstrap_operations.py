@@ -17,6 +17,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from bootstrap.bridge_enrollment import (
     MemberBridgePaths,
 )
 from bootstrap.contracts import DeploymentPaths, load_versions
+from bootstrap.candidate_readiness import validate_pending_attestation
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
@@ -140,6 +142,97 @@ def _committed_candidate_from_worktree(source: Path, destination: Path) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _write_htr10_fixture(
+    paths: DeploymentPaths, *, candidate: Path, now: datetime
+) -> Path:
+    """Run the production reducer on content-free fixtures, not human evidence."""
+
+    historical = paths.backup_dir / "fixture-historical-attribution.json"
+    source = paths.backup_dir / "fixture-source-assurance.json"
+    historical.write_text(
+        json.dumps(
+            {
+                "contract": "historical-attribution-v1",
+                "state": "healthy",
+                "watermark_event_id": "fixture-watermark",
+                "source_event_count": 0,
+                "attributed_event_count": 0,
+                "unattributed_event_count": 0,
+                "groups": [],
+                "content_exposed": False,
+                "raw_identifiers_exposed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    zero_counts = {
+        "provider_called_true": 0,
+        "provider_called_false": 0,
+        "provider_called_unknown": 0,
+        "suppressed_true": 0,
+        "suppressed_false_or_unknown": 0,
+        "missing_terminal": 0,
+        "duplicate_terminal": 0,
+        "approval_correlation_missing": 0,
+        "duplicate_request": 0,
+        "malformed_request": 0,
+        "orphan_terminal": 0,
+    }
+    source.write_text(
+        json.dumps(
+            {
+                "contract": "source-assurance-v1",
+                "state": "healthy",
+                "watermark_event_id": "fixture-watermark",
+                "counts": {"missing": 0, "pending": 0, "failed": 0},
+                "provider_effects": {
+                    "state": "healthy",
+                    "counts": zero_counts,
+                    "observation_window": {
+                        "state": "healthy",
+                        "started_at_configured": True,
+                        "counts": zero_counts,
+                        "content_exposed": False,
+                    },
+                    "content_exposed": False,
+                },
+                "content_exposed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    historical.chmod(0o600)
+    source.chmod(0o600)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.htr10_review",
+            "--instance-root",
+            str(paths.root),
+            "--historical-attribution",
+            str(historical),
+            "--source-assurance",
+            str(source),
+            "--observed-at",
+            (now - timedelta(minutes=10)).isoformat(),
+            "--confirm-reviewed",
+        ],
+        cwd=candidate,
+        env={
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("ADMINME_") and key != "PYTHONPATH"
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    result = json.loads(completed.stdout)
+    return paths.backup_dir / f"htr-10-review-{result['receipt_id']}.json"
 
 
 def test_member_bridge_helpers_execute_from_the_archived_release() -> None:
@@ -437,6 +530,209 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     for reference in references.values():
         secret = store.get(reference)
         assert secret not in backup_bytes
+
+
+def test_candidate_pending_readiness_process_never_changes_active_deployment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production command composition records only immutable pending evidence."""
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "pending-deployment")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    paths.root.chmod(0o700)
+    paths.app_dir.chmod(0o700)
+    openclaw_activation = paths.instance_dir / "config" / "openclaw-activation.json"
+    openclaw_activation.write_text(
+        json.dumps({"configured": True, "fixture_only": True}), encoding="utf-8"
+    )
+    openclaw_activation.chmod(0o600)
+    openclaw_runtime = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    openclaw_runtime.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    openclaw_runtime.write_text(
+        json.dumps({"agents": {}, "bindings": []}), encoding="utf-8"
+    )
+    openclaw_runtime.chmod(0o600)
+
+    candidate = tmp_path / "pending-candidate"
+    predecessor_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    predecessor_release = paths.app_dir / "releases" / predecessor_commit
+    predecessor_release.parent.mkdir(parents=True, mode=0o700)
+    _extract_git_archive(candidate, predecessor_commit, predecessor_release)
+    pointer = paths.app_dir / "current-release.json"
+    pointer.write_text(
+        json.dumps({"commit": predecessor_commit, "path": str(predecessor_release)}),
+        encoding="utf-8",
+    )
+    pointer.chmod(0o600)
+    (candidate / "candidate-pending-boundary.txt").write_text(
+        "candidate pending boundary\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "-C", str(candidate), "add", "candidate-pending-boundary.txt"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate),
+            "-c",
+            "user.name=Pending Candidate Fixture",
+            "-c",
+            "user.email=pending-candidate-fixture.invalid",
+            "commit",
+            "-qm",
+            "candidate",
+        ],
+        check=True,
+    )
+    candidate_commit = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    manager = BackupManager(paths, root=candidate, test_mode=True)
+    backup = manager.create()
+    receipt_path = paths.backup_dir / "pending-preliminary-rehearsal.json"
+    rehearsal_environment = {
+        **os.environ,
+        "ADMINME_TEST_MODE": "1",
+        "ADMINME_REPOSITORY_ROOT": str(candidate),
+    }
+    rehearsal_process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "rehearse-restore",
+            str(backup["path"]),
+            str(candidate),
+            "--receipt",
+            str(receipt_path),
+        ],
+        cwd=candidate,
+        env=rehearsal_environment,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert (
+        json.loads(rehearsal_process.stdout)["candidate"][
+            "controller_coordinate_matches"
+        ]
+        is True
+    )
+    now = datetime.now(timezone.utc)
+    active_readiness = paths.instance_dir / "config" / "deployment-readiness.json"
+    active_readiness.write_text(
+        json.dumps(
+            {
+                "contract": "deployment-readiness-v1",
+                "sentinel": True,
+                "provider_effect_window": {
+                    "started_at": (now - timedelta(days=1)).isoformat()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    active_readiness.chmod(0o600)
+    htr10 = _write_htr10_fixture(paths, candidate=candidate, now=now)
+    active_before = (active_readiness.read_bytes(), active_readiness.stat().st_ino)
+    pointer_before = pointer.read_bytes()
+    services_before = (
+        paths.service_state_path.read_bytes()
+        if paths.service_state_path.is_file()
+        else None
+    )
+    backup_before = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths.backup_dir.iterdir()
+        if path.is_file()
+    }
+    observed_at = (now - timedelta(minutes=20)).isoformat()
+    command = [
+        sys.executable,
+        "-m",
+        "bootstrap.candidate_readiness",
+        "--instance-root",
+        str(paths.root),
+        "--candidate",
+        str(candidate),
+        "--expected-candidate-commit",
+        candidate_commit,
+        "--preliminary-rehearsal-receipt",
+        str(receipt_path),
+        "--preliminary-backup-artifact",
+        str(backup["path"]),
+        "--htr-10-review",
+        str(htr10),
+    ]
+    for htr in ("01", "02", "03", "04", "06", "07"):
+        command.extend(
+            [f"--confirm-htr-{htr}", f"--htr-{htr}-observed-at", observed_at]
+        )
+    command.append("--confirm-htr-10")
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("ADMINME_") and key != "PYTHONPATH"
+    }
+    completed = subprocess.run(
+        command,
+        cwd=candidate,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["status"] == "candidate_pending_recorded"
+    assert result["activation_authorized"] is False
+    pending = (
+        paths.app_dir
+        / "readiness"
+        / "candidate-pending"
+        / f"{result['attestation_id']}.json"
+    )
+    stored = validate_pending_attestation(json.loads(pending.read_text("utf-8")))
+    assert stored["deployment_binding"]["candidate_commit"] == candidate_commit
+    assert stored["activation_boundary"]["candidate_active"] is False
+    assert (
+        active_readiness.read_bytes(),
+        active_readiness.stat().st_ino,
+    ) == active_before
+    assert pointer.read_bytes() == pointer_before
+    assert (
+        paths.service_state_path.read_bytes()
+        if paths.service_state_path.is_file()
+        else None
+    ) == services_before
+    assert {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths.backup_dir.iterdir()
+        if path.is_file()
+    } == backup_before
+    assert not paths.rollback_dir.exists() or not any(paths.rollback_dir.iterdir())
 
 
 def test_reviewed_candidate_controller_completes_guarded_upgrade(
