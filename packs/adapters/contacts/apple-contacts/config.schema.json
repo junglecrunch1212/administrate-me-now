@@ -3,14 +3,39 @@
   "title": "Apple Contacts adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["member_id", "provider_account_id"],
+  "required": [
+    "member_id",
+    "provider_account_id",
+    "deployment_target",
+    "workspace",
+    "permission_scope",
+    "binding_provenance",
+    "ownership_attested",
+    "container_external_id",
+    "allowed_container_ids"
+  ],
   "properties": {
     "member_id": {"type": "string", "minLength": 1},
-    "provider_account_id": {"type": "string", "minLength": 1},
+    "provider_account_id": {"type": "string", "pattern": "^provider-account:[0-9a-f]{32,64}$"},
+    "deployment_target": {"const": "bridge"},
+    "workspace": {"const": "personal"},
+    "permission_scope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "binding_provenance": {"const": "member-bridge-enrollment"},
+    "ownership_attested": {"const": true},
     "account_label": {"type": "string", "minLength": 1},
-    "container_external_id": {"type": "string", "default": "all-containers"},
+    "container_external_id": {"type": "string", "minLength": 1},
+    "allowed_container_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
     "poll_interval_s": {"type": "integer", "minimum": 10, "default": 300},
-    "bridge_socket": {"type": "string", "minLength": 1},
     "sensitivity_floor": {"type": "string", "enum": ["normal", "privileged"], "default": "normal"}
   }
 }

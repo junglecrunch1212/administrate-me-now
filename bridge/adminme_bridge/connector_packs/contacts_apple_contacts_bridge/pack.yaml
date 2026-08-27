@@ -1,0 +1,27 @@
+kind: adapter
+subkind: state-mirror
+family: contacts
+entrypoint: adminme_bridge.connector_packs.contacts_apple_contacts_bridge:AppleContactsBridgeAdapter
+
+pack:
+  name: contacts-apple-contacts-bridge
+  version: 2.0.0
+  author: built-in
+  license: Apache-2.0
+write_capabilities: [update_party_identifier]
+capabilities:
+  - kind: Cat-B
+    runtime: bridge
+    event_families: [contact.record.observed, contact.record.deleted, contact.group.observed]
+source_assurance:
+  - source_events: [contact.record.observed, contact.record.deleted, contact.group.observed]
+    mode: canonical_projection
+    projections: [parties]
+config:
+  defaults:
+    container_external_id: all-containers
+    poll_interval_s: 300
+documentation:
+  central_pack: packs/adapters/contacts/apple-contacts/
+  deployment_target: bridge
+  governing_decision: D23

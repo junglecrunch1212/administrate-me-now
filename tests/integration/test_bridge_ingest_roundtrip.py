@@ -15,6 +15,7 @@ binding. The :class:`EventLog` is a real SQLCipher database under
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,16 +46,17 @@ def _envelope_dict(
         "type": "bridge.enrolled",
         "schema_version": 1,
         "occurred_at": EventEnvelope.now_utc_iso(),
-        "source_adapter": "bridge",
-        "source_account_id": bridge_node_id,
+        "source_adapter": "member-bridge-bootstrap",
+        "source_account_id": "bridge-enrollment-test",
         "owner_scope": owner_scope,
         "visibility_scope": owner_scope,
         "sensitivity": "normal",
+        "idempotency_key": "bridge-enrollment:bridge-enrollment-test",
         "payload": {
             "member_id": "m1",
             "bridge_node_id": bridge_node_id,
             "tailscale_identity": "m1@example.ts.net",
-            "adapters_active": ["apple-notes", "voice-notes"],
+            "adapters_active": [],
             "enrolled_at": "2026-05-18T12:00:00+00:00",
         },
     }
@@ -70,7 +72,17 @@ async def rig(tmp_path: Path):
     await bus.start()
     app = create_app()
     app.state.event_sink = EventWriter(log, bus)
-    app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
+    app.state.member_id_resolver = DictMemberIdResolver({})
+    app.state.bridge_enrollments = {
+        "m1@example.ts.net": {
+            "member_id": "m1",
+            "enrollment_id": "bridge-enrollment-test",
+            "status": "package-exported",
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+        }
+    }
     app.state.ingest_count = 0
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -79,6 +91,7 @@ async def rig(tmp_path: Path):
         ingest = IngestClient(
             central_endpoint_url="http://central",
             tailscale_identity_header="m1@example.ts.net",
+            enrollment_id="bridge-enrollment-test",
             client=http,
         )
         try:
@@ -134,7 +147,8 @@ async def test_bridge_ingest_roundtrip_owner_scope_stamped_from_identity(
     bad = await ingest.submit(_envelope_dict(owner_scope="private:m2"))
     assert bad.ok is False
     assert bad.status_code == 403
-    assert "owner_scope_claim_mismatch" in (bad.error or "")
+    assert "provisional_enrollment_contract_denied" in (bad.error or "")
+    assert "owner_scope" in (bad.error or "")
     assert await log.count() == pre_count
 
 

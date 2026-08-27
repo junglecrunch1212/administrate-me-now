@@ -215,7 +215,15 @@ The `tasks` projection's `reminder.*` subscription is retired (UT-22 closure). `
 
 **Corollary 1:** D4 ("products own surfaces, projections own data, events move state") still applies. Lists are just one more projection family.
 
-**Corollary 2:** [§6.12] (identity-first privacy) interacts with iCloud-shared-list mechanism: an `icloud_shared_list` is `shared:household` in owner_scope but per-bridge in observation surface — each invited family member's bridge sees the list independently, and the deduplication invariant `(external_id_kind, external_list_id)` ensures the shared list collapses to one `lists` row regardless of how many bridges observe it.
+**Corollary 2:** [§6.12] (identity-first privacy) interacts with the
+iCloud-shared-list mechanism. Every member bridge first submits a private,
+exact member/account/container observation. Apple-native sharing is not an
+AdministrateMe grant and cannot self-promote that fact. Only a reviewed
+content-free `shared_container_ids` grant sealed into the active bridge
+authorization may restamp the container `shared:household`; the `lists`
+projection then collapses the shared provider/container identity while
+retaining every member/account observation for provenance and last-observer
+deletion. Private observations remain route-separated.
 
 ### D19 — Adapter taxonomy is by epistemic role; runtime is orthogonal; capabilities are a list
 
@@ -229,7 +237,17 @@ Adapter classification is by **epistemic role**, not by runtime substrate. Five 
 - **Cat-D — Personal-Knowledge.** Per-member knowledge captures from each member's own preferred tool. Owner-scope is always `private:<member_id>`. Examples: Apple Notes (prose half), Apple Voice Memos, Obsidian.
 - **Cat-E — Outbound-Action.** System acts in the world via the adapter; outbound-primary with minimal-confirmation inbound. Examples: Twilio outbound voice/SMS (per D21), Home Assistant service calls (per D24), future brokerage trading and postal mail.
 
-Runtime substrate (central / bridge / dual-deployment) is an **orthogonal secondary axis**. A category does not dictate a runtime: Cat-B has both central (Google Tasks) and dual-deployment (Apple Reminders, Apple Calendar, Apple Contacts) variants; Cat-D is bridge-only by current convention but architecturally permits central. Multi-capability adapters declare each capability as its own seam: Apple Notes-checklists declares Cat-D (prose) + Cat-B (checklists); Home Assistant declares Cat-C (state-read) + Cat-E (service-call).
+Runtime substrate (central / bridge / separately reviewed service-owned
+implementation) is an **orthogonal secondary axis**. A category does not
+dictate a runtime: Cat-B has central Google variants and member-bridge Apple
+variants. The current human-member Apple Calendar, Reminders, and Contacts
+schemas are bridge-only; a future central Apple service source requires a
+distinct owner/schema/permission review and cannot reuse a member credential
+boundary. Cat-D is bridge-only by current convention but architecturally
+permits a separately reviewed central implementation. Multi-capability
+adapters declare each capability as its own seam: Apple Notes-checklists
+declares Cat-D (prose) + Cat-B (checklists); Home Assistant declares Cat-C
+(state-read) + Cat-E (service-call).
 
 **Corollary:** the framework's five abstract base classes (per BUILD.md §ADAPTER FRAMEWORK §3.2) — `CommunicationAdapter`, `ExternalStateMirrorAdapter`, `InboundDataAdapter`, `PersonalKnowledgeAdapter`, `OutboundActionAdapter` — match one-to-one with the categories. A capability inherits from exactly one base class; multi-capability adapters compose multiple capability classes within a single pack manifest.
 
@@ -256,18 +274,34 @@ If a future v2 build adds inbound SMS handling (alphanumeric short codes, two-wa
 **Partially superseded by D28:** two-way Twilio SMS/MMS and WhatsApp are now
 admitted Cat-A capabilities; proactive SMS/voice remains Cat-E.
 
-### D22 — Apple Calendar is dual-deployment Cat-B; v1 scope expands
+### D22 — Apple Calendar is Cat-B; current human-member source is bridge-only
 
-**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** v1 calendar gap for Apple-using households — the pre-Amendment-2 plan had Google Calendar (central) and CalDAV (deferred to v2), leaving an Apple-using household without an Apple-side calendar adapter in v1.
+**Decided:** 2026-04-29-B. **Clarified:** 2026-08-27 under CO-019.
+**Status:** CONFIRMED AS MODERNIZED. **Resolves:** v1 calendar gap for
+Apple-using households without collapsing a member Apple identity into the
+Central Host or the planned CoS service identity.
 
-Apple Calendar is a Cat-B (External-State-Mirror) adapter with dual-deployment shape, parallel to Apple Reminders per [D18]. Two variants:
+Apple Calendar is a Cat-B (External-State-Mirror) adapter. The current
+human-member implementation runs only inside each selected member's separately
+supervised bridge against that member's Apple ID. Its manifest and schema
+require `deployment_target: bridge`, an exact content-free provider-account
+reference, personal workspace, exact container allowlist, permission scope,
+binding provenance, and ownership attestation. The one central adapter loader
+validates but never imports or constructs it.
 
-- **Central variant.** Runs on the CoS Mac Mini's assistant Apple ID. Mirrors household-shared calendars and the assistant's own calendar.
-- **Bridge variant.** Runs on each member's bridge Mac Mini against the member's Apple ID. Mirrors the member's private calendars.
+Transport enrollment alone grants no Calendar authority. A member explicitly
+enables the sealed pack, the bridge emits `adapter.authenticated@v2` bound to
+the enrollment, full configuration digest, provider account, and exact EventKit
+scopes, and the central owner separately attests that retained event before
+ordinary Calendar facts or commands are admitted. Native calendar sharing
+remains private until an exact reviewed shared-container grant promotes it.
 
-Both variants emit `calendar_event.added@v1` / `.updated@v1` / `.cancelled@v1` events; deduplication uses `(external_id_kind = 'apple_calendar', external_event_id)`. Sharing-model discriminator on each row (`private` | `shared_household` | `icloud_shared_calendar`).
-
-**Modifies prompt 11b's scope** (Apple Calendar dual-deployment + Google Calendar central; CalDAV deferred per [D25]).
+The former human-member **central variant is narrowly SUPERSEDED**. The planned
+CoS Apple service identity remains a channel identity with no account,
+permission, provider binding, or source authority. Any future service-owned
+central Calendar implementation requires a distinct reviewed adapter/schema
+and provider gate. Google Calendar remains central; CalDAV remains outside v1
+per [D25].
 
 ### D23 — Apple Contacts (bridge per-member) + Google Contacts (central)
 
@@ -310,14 +344,22 @@ Phase A v1 inventory cleanup:
 - **Google Drive.** **DEFERRED to v2.** The Drive-as-document-source role is covered for Apple-using households by Apple Notes (prose) per [D17]; Google-Workspace-only households can defer document ingestion to a later prompt without blocking the v1 CRM/Triage/lists/calendars/finance core.
 - **iOS Shortcuts webhooks.** **REMOVED.** Functionally retired by [D17] — knowledge-source ingestion via member bridges supersedes the Shortcuts webhook pattern. The webhook adapter pattern remains available in the framework (any Cat-A/B/C/D/E adapter can run a webhook receiver as its inbound source) but iOS Shortcuts as a named v1 adapter is retired.
 - **iCloud (as separate adapter).** **CLARIFIED.** iCloud is not its own adapter; it is accessed via the Apple Reminders / Apple Notes / iMessage / Apple Calendar / Apple Contacts adapters' use of the relevant Apple ID. The `iCloud` row formerly in L1 inventory is removed.
-- **Apple Reminders.** **CLARIFIED to dual-deployment per [D18].** Central variant on CoS Apple ID + bridge variant per member Apple ID.
-- **Apple Calendar.** **NEW v1 per [D22].** Dual-deployment parallel to Apple Reminders.
+- **Apple Reminders.** **MODERNIZED under CO-019.** The current human-member
+  source is member-bridge-only. The former central human-member variant is
+  narrowly **SUPERSEDED**; a future service-owned source requires a distinct
+  contract.
+- **Apple Calendar.** **NEW v1 per [D22], MODERNIZED under CO-019.** The current
+  human-member source is member-bridge-only with separate transport and exact
+  permission-attestation gates.
 - **Apple Contacts.** **NEW v1 per [D23].** Bridge runtime per-member.
 - **Google Contacts.** **NEW v1 per [D23].** Central runtime.
 
 **Net inventory delta:** −5 (CalDAV, Drive, Shortcuts, iCloud, Lob/Privacy.com as Phase A entries) +3 (Apple Calendar, Apple Contacts, Google Contacts) = −2 v1 line items + 1 multi-capability cross-cat extension (Apple Notes gains checklist B-half).
 
-**Modifies prompts 11b (Apple Calendar dual-deployment + Google Tasks central + CalDAV removed), 11c-ii (Apple Notes-checklists B-half), and adds new prompts 11e (Contacts) + 11f (lists projection) + 11g (Home Assistant).**
+**Modifies prompts 11b (member-bridge Apple Calendar and Reminders + Google
+Tasks central + CalDAV removed), 11c-ii (Apple Notes-checklists B-half), and
+adds new prompts 11e (Contacts) + 11f (lists projection) + 11g (Home
+Assistant).**
 
 ### D26 — Triage is the human gate for derived household candidates
 

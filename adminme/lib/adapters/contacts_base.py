@@ -117,23 +117,37 @@ class ContactMirrorAdapter(ExternalStateMirrorAdapter):
         self._client = self._client_factory(self._config)
         self._status.state = "running"
         self._status.started_at = ctx.now_factory()
+        bridge_enrollment_id = self._config.get("_bridge_enrollment_id")
+        bridge_configuration_sha256 = self._config.get("_bridge_configuration_sha256")
+        auth_payload = {
+            "adapter_name": self.name,
+            "adapter_family": self.family,
+            "token_storage_ref": str(
+                self._config.get("credentials_ref") or "device-permission"
+            ),
+            "authenticated_at": ctx.now_factory().isoformat().replace("+00:00", "Z"),
+            "scopes": list(self._config.get("scopes") or []),
+        }
+        auth_schema_version = 1
+        if isinstance(bridge_enrollment_id, str) and isinstance(
+            bridge_configuration_sha256, str
+        ):
+            auth_schema_version = 2
+            auth_payload.update(
+                {
+                    "bridge_enrollment_id": bridge_enrollment_id,
+                    "configuration_sha256": bridge_configuration_sha256,
+                    "provider_account_id": account_id,
+                }
+            )
         await write_adapter_event(
             ctx,
             adapter_name=self.name,
             sensitivity_floor=self.sensitivity_floor,
             config=self._config,
             event_type="adapter.authenticated",
-            payload={
-                "adapter_name": self.name,
-                "adapter_family": self.family,
-                "token_storage_ref": str(
-                    self._config.get("credentials_ref") or "device-permission"
-                ),
-                "authenticated_at": ctx.now_factory()
-                .isoformat()
-                .replace("+00:00", "Z"),
-                "scopes": list(self._config.get("scopes") or []),
-            },
+            schema_version=auth_schema_version,
+            payload=auth_payload,
         )
         cycles = 0
         while not self._stop_requested:
@@ -302,9 +316,11 @@ class ContactMirrorAdapter(ExternalStateMirrorAdapter):
         if self._client is None:
             raise RuntimeError("contact adapter is not started")
         payload = dict(operation.payload)
-        if operation.kind in {"update_contact", "delete_contact"} and not payload.get(
-            "expected_provider_revision"
-        ):
+        if operation.kind in {
+            "update_contact",
+            "update_party_identifier",
+            "delete_contact",
+        } and not payload.get("expected_provider_revision"):
             raise ProviderConflictError(
                 "contact write requires expected provider revision"
             )

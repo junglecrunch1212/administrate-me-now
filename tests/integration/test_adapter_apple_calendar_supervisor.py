@@ -65,6 +65,7 @@ import asyncio
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -128,13 +129,21 @@ class _IntegrationEventLog:
         self.calls.append(envelope.model_dump())
         return f"event-{len(self.calls)}"
 
+    async def emit(self, envelope: Any) -> Any:
+        event_id = await self.write(envelope)
+        return SimpleNamespace(ok=True, event_id=event_id, error=None)
+
 
 def _make_integration_ctx(
     event_log: _IntegrationEventLog,
 ) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
-        config={},
+        config={
+            "deployment_target": "bridge",
+            "_bridge_member_id": "member-001",
+            "_bridge_sink": event_log,
+        },
         correlation_id_factory=lambda: "corr-integration-1",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
     )
@@ -235,6 +244,7 @@ def _make_adapter(
         config={
             "calendar_identifier": "apple-calendar-household-001",
             "member_id": "member-001",
+            "provider_account_id": "provider-account:calendar-integration",
         },
     )
     if store is not None:

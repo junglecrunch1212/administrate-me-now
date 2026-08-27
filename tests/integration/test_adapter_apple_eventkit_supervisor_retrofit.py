@@ -53,6 +53,7 @@ import asyncio
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -243,6 +244,10 @@ class _IntegrationEventLog:
         self.calls.append(envelope.model_dump())
         return f"event-{len(self.calls)}"
 
+    async def emit(self, envelope: Any) -> Any:
+        event_id = await self.write(envelope)
+        return SimpleNamespace(ok=True, event_id=event_id, error=None)
+
 
 class _IntegrationEKReminder:
     """Stand-in for ``EKReminder`` for the dual-emit integration tests."""
@@ -312,6 +317,7 @@ def _make_dual_emit_adapter(ek_store: _IntegrationEKEventStore) -> Any:
         config={
             "target_list_identifier": "list-household-001",
             "member_id": "member-integ",
+            "provider_account_id": "provider-account:reminders-integration",
         },
         ek_event_store_factory=lambda: ek_store,
         member_role_resolver=lambda _mid: "adult",
@@ -323,7 +329,11 @@ def _make_dual_emit_adapter(ek_store: _IntegrationEKEventStore) -> Any:
 def _make_dual_emit_ctx(event_log: _IntegrationEventLog) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
-        config={},
+        config={
+            "deployment_target": "bridge",
+            "_bridge_member_id": "member-integ",
+            "_bridge_sink": event_log,
+        },
         correlation_id_factory=lambda: "corr-integ-dual-emit",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
     )

@@ -111,6 +111,14 @@ class _FakeEventLog:
         self.calls.append({**envelope.model_dump(), **kwargs})
         return f"event-{len(self.calls)}"
 
+    async def emit(self, envelope: Any) -> Any:
+        self.calls.append(envelope.model_dump())
+        return type(
+            "BridgeEmitResult",
+            (),
+            {"ok": True, "event_id": f"event-{len(self.calls)}", "error": None},
+        )()
+
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     """Build an AdapterContext with deterministic clock + correlation
@@ -118,7 +126,11 @@ def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     ``self._config`` so this ctx's ``config`` is left empty."""
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
-        config={},
+        config={
+            "deployment_target": "bridge",
+            "_bridge_member_id": "member-001",
+            "_bridge_sink": event_log,
+        },
         correlation_id_factory=lambda: "corr-test",
         now_factory=lambda: _FROZEN_NOW,
     )
@@ -245,6 +257,9 @@ def _make_adapter(
     config: dict[str, Any] = {
         "target_list_identifier": "list-household-001",
         "member_id": "member-001",
+        "provider_account_id": "provider-account:" + "a" * 32,
+        "_bridge_enrollment_id": "bridge-enrollment-test",
+        "_bridge_configuration_sha256": "b" * 64,
     }
     if config_overrides:
         config.update(config_overrides)
@@ -981,6 +996,7 @@ async def test_eventkit_permission_failure_emits_adapter_error_for_supervisor() 
         config={
             "target_list_identifier": "list-household-001",
             "member_id": "member-001",
+            "provider_account_id": "provider-account:" + "a" * 32,
         },
         ek_event_store_factory=factory,
     )

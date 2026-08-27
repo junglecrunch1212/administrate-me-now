@@ -27,6 +27,7 @@ from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap import backup_restore as backup_restore_module
 from bootstrap.backup_restore import BackupError, BackupManager
 from bootstrap.bridge_enrollment import (
+    BridgeEnrollmentError,
     BridgeEnrollmentManager,
     MemberBridgeInstaller,
     MemberBridgePaths,
@@ -1683,7 +1684,10 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
                     "source_adapter": "ordinary-bridge-adapter",
                     "idempotency_key": "ordinary-before-finalize",
                 },
-                headers={"Tailscale-User-Login": transfer["tailscale_identity"]},
+                headers={
+                    "Tailscale-User-Login": transfer["tailscale_identity"],
+                    "X-AdministrateMe-Bridge-Enrollment": transfer["enrollment_id"],
+                },
             )
             assert denied.status_code == 403, denied.text
             assert denied.json()["detail"]["error"] == (
@@ -1692,7 +1696,10 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
             response = client.post(
                 "/api/bridge/ingest",
                 json=envelope,
-                headers={"Tailscale-User-Login": transfer["tailscale_identity"]},
+                headers={
+                    "Tailscale-User-Login": transfer["tailscale_identity"],
+                    "X-AdministrateMe-Bridge-Enrollment": transfer["enrollment_id"],
+                },
             )
         assert response.status_code == 202, response.text
         return response.json()["event_id"]
@@ -1739,9 +1746,18 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
         active_response = client.post(
             "/api/bridge/ingest",
             json=active_event,
-            headers={"Tailscale-User-Login": "principal-a@example.invalid"},
+            headers={
+                "Tailscale-User-Login": "principal-a@example.invalid",
+                "X-AdministrateMe-Bridge-Enrollment": index[
+                    "principal-a@example.invalid"
+                ]["enrollment_id"],
+            },
         )
-    assert active_response.status_code == 202, active_response.text
+    assert active_response.status_code == 403, active_response.text
+    assert active_response.json()["detail"] == {
+        "error": "bridge_pack_contract_denied",
+        "violations": ["source_account_id", "source_adapter"],
+    }
     assert (
         json.loads(paths.public_config_path.read_text("utf-8"))["bootstrap_complete"]
         is False
@@ -1753,3 +1769,196 @@ def test_member_bridge_export_accept_finalize_uses_production_ingest_composition
         json.loads(paths.public_config_path.read_text("utf-8"))["bootstrap_complete"]
         is True
     )
+
+
+def test_member_bridge_provider_capability_requires_enable_evidence_and_attestation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Transport enrollment alone never grants Apple provider authority."""
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "central")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    ServiceManager(paths, test_mode=True).start()
+    manager = BridgeEnrollmentManager(paths, root=REPO_ROOT, test_mode=True)
+    member_id = "member_fixture_principal_a"
+    identity = "principal-a@example.invalid"
+    pack = "calendaring-apple-calendar-bridge"
+    account = "provider-account:" + "a" * 32
+    calendar_id = "calendar-private"
+    configured = {
+        pack: {
+            "member_id": member_id,
+            "provider_account_id": account,
+            "deployment_target": "bridge",
+            "workspace": "personal",
+            "permission_scope": [
+                "eventkit.calendar.read",
+                "eventkit.calendar.write",
+            ],
+            "calendar_identifier": calendar_id,
+            "allowed_container_ids": [calendar_id],
+            "shared_container_ids": [],
+            "binding_provenance": "member-bridge-enrollment",
+            "ownership_attested": True,
+        }
+    }
+    manager.configure(
+        member_id,
+        {"configured_packs": [pack], "pack_config": configured},
+    )
+    transfer_path = tmp_path / "provider-capability.adminmebridge"
+    exported = manager.export(
+        member_id,
+        transfer_path,
+        central_url="https://central.example-tailnet.ts.net",
+        transfer_key=b"q" * 32,
+    )
+    submitted_enrollment: dict[str, object] = {}
+
+    def settings_for(index: dict[str, dict]) -> RuntimeSettings:
+        references = json.loads(
+            (paths.instance_dir / "config" / "secret-references.json").read_text(
+                "utf-8"
+            )
+        )["references"]
+        return RuntimeSettings.credential_free(
+            paths.instance_dir,
+            encryption_key=secret_store(paths, test_mode=True).get(
+                references["event_log"]
+            ),
+            repository_root=REPO_ROOT,
+            member_identities={identity: member_id},
+            bridge_enrollments=index,
+            member_roles={member_id: "principal"},
+        )
+
+    def submitter(transfer: dict, envelope: dict) -> str:
+        submitted_enrollment.update(envelope)
+        with TestClient(
+            create_application(
+                settings_for(json.loads(manager.index_path.read_text("utf-8")))
+            )
+        ) as client:
+            response = client.post(
+                "/api/bridge/ingest",
+                json=envelope,
+                headers={
+                    "Tailscale-User-Login": transfer["tailscale_identity"],
+                    "X-AdministrateMe-Bridge-Enrollment": transfer["enrollment_id"],
+                },
+            )
+        assert response.status_code == 202, response.text
+        return response.json()["event_id"]
+
+    member_paths = MemberBridgePaths.from_root(tmp_path / "member")
+    installer = MemberBridgeInstaller(
+        member_paths,
+        root=REPO_ROOT,
+        test_mode=True,
+        submitter=submitter,
+    )
+    installer.accept(
+        transfer_path,
+        exported.transfer_code,
+        identity_override=identity,
+        node_override="node-principal-a",
+    )
+    manager.finalize(member_id)
+    transport_index = json.loads(manager.index_path.read_text("utf-8"))
+    assert transport_index[identity]["provider_capability_state"] == "not_attested"
+    assert transport_index[identity]["authorized_packs"] == []
+
+    ordinary = {
+        "event_at_ms": int(time.time() * 1000),
+        "tenant_id": submitted_enrollment["tenant_id"],
+        "type": "calendar.event_added",
+        "schema_version": 2,
+        "occurred_at": "2026-08-27T12:00:00+00:00",
+        "source_adapter": "calendaring-apple-calendar",
+        "source_account_id": account,
+        "owner_scope": f"private:{member_id}",
+        "visibility_scope": f"private:{member_id}",
+        "sensitivity": "normal",
+        "payload": {
+            "member_id": member_id,
+            "provider": "apple_calendar",
+            "provider_account_id": account,
+            "calendar_external_id": calendar_id,
+            "external_event_id": "event-private",
+            "summary": "Private fixture",
+            "start": "2026-08-27T12:00:00+00:00",
+            "end": "2026-08-27T13:00:00+00:00",
+            "updated_at": "2026-08-27T11:00:00+00:00",
+        },
+    }
+    headers = {
+        "Tailscale-User-Login": identity,
+        "X-AdministrateMe-Bridge-Enrollment": exported.public["enrollment_id"],
+    }
+    with TestClient(create_application(settings_for(transport_index))) as client:
+        denied = client.post("/api/bridge/ingest", json=ordinary, headers=headers)
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == {
+        "error": "bridge_pack_contract_denied",
+        "violations": ["source_account_id", "source_adapter"],
+    }
+
+    enabled = installer.enable_pack(pack)
+    assert enabled["central_provider_authority"] is False
+    configuration_sha256 = hashlib.sha256(
+        json.dumps(configured, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    evidence = {
+        **ordinary,
+        "type": "adapter.authenticated",
+        "idempotency_key": "calendar-capability-evidence",
+        "payload": {
+            "adapter_name": "calendaring-apple-calendar",
+            "adapter_family": "calendaring",
+            "token_storage_ref": "keychain://device-permissions/calendar",
+            "authenticated_at": "2026-08-27T12:01:00+00:00",
+            "scopes": [
+                "eventkit.calendar.read",
+                "eventkit.calendar.write",
+            ],
+            "bridge_enrollment_id": exported.public["enrollment_id"],
+            "configuration_sha256": configuration_sha256,
+            "provider_account_id": account,
+        },
+    }
+    with TestClient(create_application(settings_for(transport_index))) as client:
+        evidence_response = client.post(
+            "/api/bridge/ingest", json=evidence, headers=headers
+        )
+    assert evidence_response.status_code == 202, evidence_response.text
+
+    attested = manager.attest(member_id, [pack])
+    assert attested["provider_capability_state"] == "attested"
+    attested_index = json.loads(manager.index_path.read_text("utf-8"))
+    assert attested_index[identity]["authorized_packs"] == [pack]
+    with TestClient(create_application(settings_for(attested_index))) as client:
+        accepted = client.post("/api/bridge/ingest", json=ordinary, headers=headers)
+    assert accepted.status_code == 202, accepted.text
+
+    prior_index = manager.index_path.read_bytes()
+
+    def fail_restart() -> bool:
+        raise BridgeEnrollmentError("injected attestation restart failure")
+
+    monkeypatch.setattr(manager, "_restart_if_running", fail_restart)
+    with pytest.raises(BridgeEnrollmentError, match="injected attestation"):
+        manager.attest(member_id, [pack])
+    assert manager.index_path.read_bytes() == prior_index

@@ -319,3 +319,146 @@ def test_apply_list_item_added_distinct_items_within_list_distinct_rows() -> Non
         ("list-A",),
     ).fetchall()
     assert [r["title"] for r in rows] == ["Milk", "Eggs"]
+
+
+def test_shared_item_collapses_canonically_but_retains_each_bridge_observation() -> (
+    None
+):
+    conn = _conn()
+    first = _envelope(
+        event_id="evt-shared-a",
+        payload=_payload(
+            member_id="member-a",
+            provider="apple_reminders",
+            provider_account_id="provider-account-a",
+            title="Shared from A",
+        ),
+    )
+    second = _envelope(
+        event_id="evt-shared-b",
+        payload=_payload(
+            member_id="member-b",
+            provider="apple_reminders",
+            provider_account_id="provider-account-b",
+            title="Shared from B",
+        ),
+    )
+
+    handlers.apply_event(first, conn)
+    handlers.apply_event(second, conn)
+
+    assert conn.execute("SELECT count(*) FROM list_items").fetchone()[0] == 1
+    assert (
+        conn.execute("SELECT count(*) FROM list_item_observations").fetchone()[0] == 2
+    )
+    routes = conn.execute(
+        """
+        SELECT member_id, provider_account_id, owner_scope
+          FROM list_item_observations ORDER BY member_id
+        """
+    ).fetchall()
+    assert [tuple(route) for route in routes] == [
+        ("member-a", "provider-account-a", "shared:household"),
+        ("member-b", "provider-account-b", "shared:household"),
+    ]
+    canonical = conn.execute("SELECT * FROM list_items").fetchone()
+    assert canonical is not None
+    assert canonical["owner_scope"] == "shared:household"
+    assert canonical["visibility_scope"] == "shared:household"
+
+
+def test_shared_item_delete_removes_only_the_reporting_bridge_observation() -> None:
+    conn = _conn()
+    for member, account in (
+        ("member-a", "provider-account-a"),
+        ("member-b", "provider-account-b"),
+    ):
+        handlers.apply_event(
+            _envelope(
+                event_id=f"evt-add-{member}",
+                payload=_payload(
+                    member_id=member,
+                    provider="apple_reminders",
+                    provider_account_id=account,
+                ),
+            ),
+            conn,
+        )
+    delete_payload = {
+        "member_id": "member-a",
+        "provider": "apple_reminders",
+        "provider_account_id": "provider-account-a",
+        "list_external_id": "list-A",
+        "item_external_id": "item-1",
+        "deleted_at": "2026-08-27T12:00:00Z",
+        "sync_cycle_id": "cycle-delete",
+    }
+
+    handlers.apply_event(
+        _envelope(
+            event_type="list_item.deleted",
+            event_id="evt-delete-a",
+            payload=delete_payload,
+        ),
+        conn,
+    )
+
+    assert conn.execute("SELECT count(*) FROM list_items").fetchone()[0] == 1
+    remaining = conn.execute("SELECT member_id FROM list_item_observations").fetchone()
+    assert remaining is not None and remaining["member_id"] == "member-b"
+
+    handlers.apply_event(
+        _envelope(
+            event_type="list_item.deleted",
+            event_id="evt-delete-b",
+            payload={
+                **delete_payload,
+                "member_id": "member-b",
+                "provider_account_id": "provider-account-b",
+            },
+        ),
+        conn,
+    )
+    assert conn.execute("SELECT count(*) FROM list_items").fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT count(*) FROM list_item_observations").fetchone()[0] == 0
+    )
+
+
+def test_shared_list_collapses_across_accounts_and_retains_both_routes() -> None:
+    conn = _conn()
+    base = {
+        "provider": "apple_reminders",
+        "list_external_id": "shared-list",
+        "list_name": "Household",
+        "is_default": False,
+        "changed_at": "2026-08-27T12:00:00Z",
+    }
+    for member, account in (
+        ("member-a", "provider-account-a"),
+        ("member-b", "provider-account-b"),
+    ):
+        handlers.apply_event(
+            _envelope(
+                event_type="list.created",
+                event_id=f"evt-list-{member}",
+                payload={
+                    **base,
+                    "member_id": member,
+                    "provider_account_id": account,
+                },
+            ),
+            conn,
+        )
+
+    canonical = conn.execute("SELECT * FROM lists").fetchall()
+    assert len(canonical) == 1
+    assert canonical[0]["provider_account_id"] == "shared:household"
+    assert canonical[0]["owner_scope"] == "shared:household"
+    observations = conn.execute(
+        "SELECT member_id, provider_account_id FROM list_observations ORDER BY member_id"
+    ).fetchall()
+    assert [tuple(row) for row in observations] == [
+        ("member-a", "provider-account-a"),
+        ("member-b", "provider-account-b"),
+    ]

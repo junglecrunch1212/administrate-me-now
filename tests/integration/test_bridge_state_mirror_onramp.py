@@ -30,7 +30,7 @@ from typing import Any, ClassVar
 import httpx
 import pytest
 
-import adminme.events.schemas.bridge  # noqa: F401  — registers bridge.enrolled@v1
+import adminme.events.schemas.knowledge  # noqa: F401 — registers member knowledge
 from adminme.events.envelope import EventEnvelope
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
@@ -56,31 +56,46 @@ TEST_KEY = b"B" * 32
 
 
 def _envelope(*, correlation_id: str | None = None) -> EventEnvelope:
-    """Build a valid ``bridge.enrolled@v1`` envelope.
-
-    Reuses 11c-i's `c1` registered schema so the central ingest router
-    accepts the envelope without registering a new α-1 schema (which
-    would be out-of-scope per §1 "pure infrastructure")."""
+    """Build one ordinary event authorized by the active bridge pack."""
     return EventEnvelope(
         event_at_ms=int(time.time() * 1000),
         tenant_id="tenant-a",
-        type="bridge.enrolled",
+        type="member_knowledge.note_added",
         schema_version=1,
         occurred_at=EventEnvelope.now_utc_iso(),
-        source_adapter="test-state-mirror",
-        source_account_id="mock-cat-b-node",
+        source_adapter="knowledge-obsidian",
+        source_account_id="obsidian",
         owner_scope="private:m1",
         visibility_scope="private:m1",
-        sensitivity="normal",
+        sensitivity="sensitive",
         correlation_id=correlation_id,
         payload={
             "member_id": "m1",
-            "bridge_node_id": "mock-cat-b-node",
-            "tailscale_identity": "m1@example.ts.net",
-            "adapters_active": ["mock-cat-b"],
-            "enrolled_at": "2026-05-19T12:00:00+00:00",
+            "knowledge_id": "knowledge-test",
+            "title": "Test note",
+            "body": "Bridge ingest contract fixture",
+            "source_kind": "obsidian",
+            "source_external_id": "note-1",
+            "content_sha256": "a" * 64,
+            "captured_at": "2026-05-19T12:00:00+00:00",
         },
     )
+
+
+def _active_bridge_record() -> dict[str, Any]:
+    pack = "knowledge-obsidian"
+    return {
+        "status": "active",
+        "member_id": "m1",
+        "enrollment_id": "bridge-enrollment-test",
+        "configured_packs": [pack],
+        "enabled_packs": [pack],
+        "authorized_packs": [pack],
+        "pack_config": {pack: {"member_id": "m1"}},
+        "pack_capability_states": {pack: "not_required"},
+        "provider_capability_state": "not_required",
+        "capability_attestations": {},
+    }
 
 
 @dataclass
@@ -119,6 +134,7 @@ class _MockCatBAdapter:
 def _config() -> BridgeConfig:
     return BridgeConfig(
         member_id="m1",
+        enrollment_id="bridge-enrollment-test",
         central_endpoint="http://central",
         tailscale_identity="m1@example.ts.net",
     )
@@ -140,6 +156,7 @@ async def central_rig(tmp_path: Path):
     app = create_app()
     app.state.event_sink = EventWriter(log, bus)
     app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
+    app.state.bridge_enrollments = {"m1@example.ts.net": _active_bridge_record()}
     app.state.ingest_count = 0
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -148,6 +165,7 @@ async def central_rig(tmp_path: Path):
         ingest = IngestClient(
             central_endpoint_url="http://central",
             tailscale_identity_header="m1@example.ts.net",
+            enrollment_id="bridge-enrollment-test",
             client=http,
         )
         try:
@@ -193,12 +211,12 @@ async def test_mock_cat_b_adapter_emits_via_ingest_client_sink_end_to_end(
 
     stored = await log.get(adapter.emit_result.event_id)
     assert stored is not None
-    assert stored["type"] == "bridge.enrolled"
+    assert stored["type"] == "member_knowledge.note_added"
     # F-3 inherited: owner_scope was stamped by the central router from
     # the Tailscale-resolved identity — the on-ramp does not weaken this.
     assert stored["owner_scope"] == "private:m1"
-    assert stored["source_adapter"] == "test-state-mirror"
-    assert stored["payload"]["bridge_node_id"] == "mock-cat-b-node"
+    assert stored["source_adapter"] == "knowledge-obsidian"
+    assert stored["payload"]["source_external_id"] == "note-1"
 
 
 async def test_mock_cat_b_adapter_emits_via_event_log_sink_for_test_fixture(
@@ -225,6 +243,7 @@ async def test_mock_cat_b_adapter_emits_via_event_log_sink_for_test_fixture(
         ingest_for_supervisor_only = IngestClient(
             central_endpoint_url="http://unused",
             tailscale_identity_header="m1@example.ts.net",
+            enrollment_id="bridge-enrollment-test",
             client=httpx.AsyncClient(),
         )
         try:
@@ -249,7 +268,7 @@ async def test_mock_cat_b_adapter_emits_via_event_log_sink_for_test_fixture(
 
         stored = await log.get(adapter.emit_result.event_id)
         assert stored is not None
-        assert stored["type"] == "bridge.enrolled"
+        assert stored["type"] == "member_knowledge.note_added"
         # [D8] addition 2: correlation_id flowed envelope → sink → kwarg → row.
         assert stored["correlation_id"] == "cor-α1-fallback"
         # F-8: EventLogBridgeSink writes the envelope's declared owner_scope

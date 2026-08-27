@@ -54,6 +54,14 @@ from adminme_bridge.ingest_client import IngestClient
 
 
 _FROZEN_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
+_PROVIDER_ACCOUNT = "provider-account:" + "a" * 32
+
+
+def _reminder_config() -> dict[str, Any]:
+    return {
+        "target_list_identifier": "test-list",
+        "provider_account_id": _PROVIDER_ACCOUNT,
+    }
 
 
 class _FakeBridgeSink:
@@ -77,6 +85,7 @@ def _make_ingest_client() -> IngestClient:
     return IngestClient(
         central_endpoint_url="http://127.0.0.1:0",
         tailscale_identity_header="member-bridge-test",
+        enrollment_id="bridge-enrollment-test",
         client=httpx.AsyncClient(timeout=httpx.Timeout(0.1)),
     )
 
@@ -160,9 +169,7 @@ def test_apple_eventkit_bridge_adapter_satisfies_state_mirror_bridge_adapter_pro
     """Structural Protocol pin: ``AppleEventKitBridgeAdapter`` carries
     ``family`` + the ``start``/``stop``/``status`` methods so an
     instance passes the runtime-checkable Protocol isinstance check."""
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     assert isinstance(wrapper, StateMirrorBridgeAdapter)
 
 
@@ -177,9 +184,7 @@ def test_status_returns_default_when_never_started() -> None:
     """``status()`` MUST NOT raise when called before ``start()`` — the
     bridge supervisor's snapshot endpoint polls every registered
     wrapper, including ones whose ``start()`` task hasn't fired yet."""
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     status = wrapper.status()
     assert isinstance(status, AdapterStatus)
     assert status.state == "starting"
@@ -200,9 +205,7 @@ def test_wrapper_synthesizes_adapter_context_with_deployment_target_bridge(
     captured = _swap_internal_with_capture(monkeypatch)
 
     sink = _FakeBridgeSink()
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx(member_id="member-bridge-bob", sink=sink)
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -227,9 +230,7 @@ def test_wrapper_passes_member_id_into_internal_constructor_config(
     per-member emit scope."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx(member_id="member-bridge-carol")
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -252,9 +253,7 @@ def test_wrapper_propagates_factories_from_bridge_context(
     adapter's emit sites mint ids via these factories."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx()
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -279,9 +278,7 @@ def test_wrapper_prefers_ctx_sink_when_present_per_a5(
     captured = _swap_internal_with_capture(monkeypatch)
 
     injected = _FakeBridgeSink()
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx(sink=injected)
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -299,9 +296,7 @@ def test_wrapper_falls_back_to_ingest_client_bridge_sink_when_ctx_sink_none(
     ``ctx.ingest_client``."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx(sink=None)
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -323,9 +318,7 @@ def test_wrapper_forwards_stop_to_internal_adapter(monkeypatch: Any) -> None:
     and Cat-B bridge adapters."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx()
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -339,9 +332,7 @@ def test_wrapper_stop_is_safe_before_start() -> None:
     """``stop()`` MUST be safe to call on a wrapper that never started
     — the bridge supervisor's shutdown sweep iterates every registered
     wrapper regardless of start state."""
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     asyncio.run(wrapper.stop())  # MUST NOT raise
 
 
@@ -353,9 +344,7 @@ def test_wrapper_status_forwards_to_internal_after_start(
     status — same ``state`` + ``started_at`` + ``restart_count``."""
     _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
-    )
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminder_config())
     bridge_ctx = _make_bridge_ctx()
     asyncio.run(wrapper.start(ctx=bridge_ctx))
 

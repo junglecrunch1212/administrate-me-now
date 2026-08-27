@@ -66,6 +66,30 @@ CREATE INDEX IF NOT EXISTS idx_list_items_tenant_completed
 CREATE INDEX IF NOT EXISTS idx_list_items_tenant_due
     ON list_items(tenant_id, due_at);
 
+-- One native iCloud-shared item may be observed independently by several
+-- member bridges.  The canonical ``list_items`` row remains collapsed by the
+-- provider external ids, while this table retains every exact member/account
+-- observation so projection updates never erase provenance.
+CREATE TABLE IF NOT EXISTS list_item_observations (
+    tenant_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    list_external_id TEXT NOT NULL,
+    item_external_id TEXT NOT NULL,
+    owner_scope TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    PRIMARY KEY (
+        tenant_id, provider, provider_account_id, member_id,
+        list_external_id, item_external_id
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_list_item_observations_canonical
+    ON list_item_observations(tenant_id, provider, list_external_id, item_external_id);
+
 CREATE TABLE IF NOT EXISTS lists (
     tenant_id TEXT NOT NULL,
     member_id TEXT NOT NULL,
@@ -86,6 +110,24 @@ CREATE TABLE IF NOT EXISTS lists (
 
 CREATE INDEX IF NOT EXISTS idx_lists_tenant_member
     ON lists(tenant_id, member_id, provider);
+
+CREATE TABLE IF NOT EXISTS list_observations (
+    tenant_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    list_external_id TEXT NOT NULL,
+    owner_scope TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    PRIMARY KEY (
+        tenant_id, provider, provider_account_id, member_id, list_external_id
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_list_observations_canonical
+    ON list_observations(tenant_id, provider, list_external_id);
 
 CREATE TABLE IF NOT EXISTS reminder_cues (
     tenant_id TEXT NOT NULL,

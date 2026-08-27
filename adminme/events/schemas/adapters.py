@@ -70,6 +70,19 @@ class AdapterAuthenticatedV1(BaseModel):
     scopes: list[str] = Field(default_factory=list)
 
 
+class AdapterAuthenticatedV2(AdapterAuthenticatedV1):
+    """Member-bridge capability proof bound to one sealed configuration.
+
+    Version 1 remains the generic central-adapter authentication event. Version
+    2 is intentionally stricter: it cannot be copied across bridge enrollments
+    or configuration changes, and it contains only content-free coordinates.
+    """
+
+    bridge_enrollment_id: str = Field(min_length=1)
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_account_id: str = Field(pattern=r"^provider-account:[0-9a-f]{32,64}$")
+
+
 class AdapterCursorAdvancedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -97,5 +110,6 @@ class AdapterRecordQuarantinedV1(BaseModel):
 
 registry.register("adapter.error", 1, AdapterErrorV1)
 registry.register("adapter.authenticated", 1, AdapterAuthenticatedV1)
+registry.register("adapter.authenticated", 2, AdapterAuthenticatedV2)
 registry.register("adapter.cursor_advanced", 1, AdapterCursorAdvancedV1)
 registry.register("adapter.record.quarantined", 1, AdapterRecordQuarantinedV1)

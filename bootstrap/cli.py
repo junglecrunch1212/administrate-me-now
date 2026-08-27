@@ -7,6 +7,7 @@ import getpass
 import json
 import os
 import secrets
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,22 @@ def _paths(value: str | None) -> DeploymentPaths:
 
 def _print(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def _private_bridge_configuration(path: Path) -> dict[str, Any]:
+    candidate = path.expanduser()
+    info = candidate.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_uid != int(getattr(os, "getuid", lambda: 0)())
+        or stat.S_IMODE(info.st_mode) & 0o077
+    ):
+        raise RuntimeError("bridge configuration must be an owner-only regular file")
+    value = yaml.safe_load(candidate.read_text("utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError("bridge configuration must contain one mapping")
+    return value
 
 
 def _saved_answers(paths: DeploymentPaths, *, test_mode: bool) -> dict[str, Any]:
@@ -128,12 +145,15 @@ def build_parser() -> argparse.ArgumentParser:
         "rollback",
         "activate-openclaw",
         "bridge-export",
+        "bridge-configure",
+        "bridge-attest",
         "bridge-finalize",
         "bridge-revoke",
         "bridge-status",
         "bridge-accept",
         "bridge-disable",
         "bridge-local-status",
+        "bridge-enable-pack",
     ):
         child = subparsers.add_parser(name)
         if name == "backup":
@@ -160,10 +180,19 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("member_id")
             child.add_argument("output", type=Path)
             child.add_argument("--central-url", required=True)
+        elif name == "bridge-configure":
+            child.add_argument("member_id")
+            child.add_argument("configuration", type=Path)
+        elif name == "bridge-attest":
+            child.add_argument("member_id")
+            child.add_argument("--pack", action="append", dest="packs")
         elif name in {"bridge-finalize", "bridge-revoke"}:
             child.add_argument("member_id")
         elif name == "bridge-accept":
             child.add_argument("package", type=Path)
+            child.add_argument("--bridge-root", type=Path)
+        elif name == "bridge-enable-pack":
+            child.add_argument("pack")
             child.add_argument("--bridge-root", type=Path)
         elif name in {"bridge-disable", "bridge-local-status"}:
             child.add_argument("--bridge-root", type=Path)
@@ -297,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command in {
             "bridge-export",
+            "bridge-configure",
+            "bridge-attest",
             "bridge-finalize",
             "bridge-revoke",
             "bridge-status",
@@ -318,6 +349,15 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(exported.transfer_code, file=sys.stderr)
                 _print(exported.public)
+            elif args.command == "bridge-configure":
+                _print(
+                    enrollments.configure(
+                        args.member_id,
+                        _private_bridge_configuration(args.configuration),
+                    )
+                )
+            elif args.command == "bridge-attest":
+                _print(enrollments.attest(args.member_id, args.packs))
             elif args.command == "bridge-finalize":
                 _print(enrollments.finalize(args.member_id))
             elif args.command == "bridge-revoke":
@@ -329,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
             "bridge-accept",
             "bridge-disable",
             "bridge-local-status",
+            "bridge-enable-pack",
         }:
             bridge_paths = (
                 MemberBridgePaths.from_root(
@@ -348,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
                     "Paste the one-time bridge transfer code (it will not display): "
                 )
                 _print(installer.accept(args.package, code))
+            elif args.command == "bridge-enable-pack":
+                _print(installer.enable_pack(args.pack))
             elif args.command == "bridge-disable":
                 _print(installer.disable())
             else:

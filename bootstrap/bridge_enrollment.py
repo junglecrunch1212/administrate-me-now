@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import hashlib
 import importlib
 import json
 import os
@@ -21,6 +22,12 @@ from urllib.parse import urlparse
 import yaml
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from adminme.bridge_authorization import (
+    BRIDGE_PACK_POLICIES,
+    configuration_from_record,
+    validate_bridge_record_set,
+    validate_configured_pack_config,
+)
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from bootstrap.contracts import DeploymentPaths, atomic_write, repository_root
@@ -38,9 +45,20 @@ BUILT_IN_BRIDGE_PACKS = frozenset(
         "knowledge-apple-voice-memos",
         "knowledge-obsidian",
         "calendaring-apple-calendar-bridge",
+        "contacts-apple-contacts-bridge",
         "reminders-apple-eventkit-bridge",
     }
 )
+
+
+def _unique_pack_names(value: object, *, label: str) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(set(value)) != len(value)
+    ):
+        raise BridgeEnrollmentError(f"{label} must be a unique string list")
+    return list(value)
 
 
 def _uid() -> int:
@@ -264,6 +282,86 @@ class BridgeEnrollmentManager:
                 )
         return running
 
+    def configure(
+        self, member_id: str, configuration: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Seal reviewed pack coordinates without enrolling or touching providers."""
+
+        index = self._index()
+        _identity, record = self._record_for_member(index, member_id)
+        if record.get("status") != "package-created-not-live":
+            raise BridgeEnrollmentError(
+                "bridge pack configuration must be sealed before export"
+            )
+        package = self._load_internal(member_id)
+        configured = _unique_pack_names(
+            configuration.get("configured_packs"), label="configured_packs"
+        )
+        allowed = _unique_pack_names(
+            package.get("allowed_packs"), label="allowed_packs"
+        )
+        if not set(configured) <= set(allowed):
+            raise BridgeEnrollmentError(
+                "configured bridge packs exceed the reviewed member allowlist"
+            )
+        try:
+            normalized = validate_configured_pack_config(
+                member_id=member_id,
+                enrollment_id=None,
+                configured_packs=configured,
+                pack_config=configuration.get("pack_config", {}),
+            )
+        except ValueError as exc:
+            raise BridgeEnrollmentError(str(exc)) from exc
+        prior_package = copy.deepcopy(package)
+        prior_index = copy.deepcopy(index)
+        package.update(
+            {
+                "configured_packs": sorted(configured),
+                # Provider packs never start as a side effect of transport
+                # export/accept. The member explicitly enables one later.
+                "enabled_packs": [],
+                "pack_config": normalized,
+            }
+        )
+        digest = hashlib.sha256(
+            json.dumps(normalized, separators=(",", ":"), sort_keys=True).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        record.update(
+            {
+                "configured_packs": sorted(configured),
+                "enabled_packs": [],
+                "configured_pack_count": len(configured),
+                "pack_config_sha256": digest,
+                "provider_capability_state": (
+                    "not_attested"
+                    if any(
+                        BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+                        for pack in configured
+                    )
+                    else "not_required"
+                ),
+            }
+        )
+        try:
+            self._save_internal(member_id, package)
+            self._save_index(index)
+            self._sync_public_report(index)
+        except Exception:
+            self._save_internal(member_id, prior_package)
+            self._save_index(prior_index)
+            self._sync_public_report(prior_index)
+            raise
+        return {
+            "status": "configured-not-live",
+            "member_id": member_id,
+            "configured_pack_count": len(configured),
+            "provider_capability_state": record["provider_capability_state"],
+            "content_exposed": False,
+        }
+
     def export(
         self,
         member_id: str,
@@ -315,7 +413,9 @@ class BridgeEnrollmentManager:
             "tailscale_identity": identity,
             "role": package["role"],
             "allowed_packs": package["allowed_packs"],
-            "enabled_packs": package.get("enabled_packs", []),
+            "configured_packs": package.get("configured_packs", []),
+            # Transport acceptance never starts provider packs.
+            "enabled_packs": [],
             "pack_config": package.get("pack_config", {}),
             "restrictions": package["restrictions"],
             "central_url": central_url,
@@ -350,6 +450,26 @@ class BridgeEnrollmentManager:
                     "exported_at": issued_at.isoformat(),
                     "expires_at": expires_at.isoformat(),
                     "export_path": str(output),
+                    "allowed_packs": sorted(
+                        _unique_pack_names(
+                            package.get("allowed_packs"), label="allowed_packs"
+                        )
+                    ),
+                    "configured_packs": sorted(
+                        _unique_pack_names(
+                            package.get("configured_packs", []),
+                            label="configured_packs",
+                        )
+                    ),
+                    "enabled_packs": [],
+                    "pack_config_sha256": hashlib.sha256(
+                        json.dumps(
+                            package.get("pack_config", {}),
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "provider_capability_state": "not_attested",
                 }
             )
             self._save_index(index)
@@ -417,6 +537,173 @@ class BridgeEnrollmentManager:
             await log.close()
         return None
 
+    async def _find_capability_events(
+        self, record: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        configured = configuration_from_record(record)
+        if configured is None:
+            raise BridgeEnrollmentError("active bridge configuration is invalid")
+        references = json.loads(
+            (self.paths.instance_dir / "config" / "secret-references.json").read_text(
+                "utf-8"
+            )
+        )["references"]
+        log = EventLog(
+            self.paths.instance_dir / "events" / "events.db",
+            self.store.get(references["event_log"]),
+        )
+        matches: dict[str, dict[str, Any]] = {}
+        activation_event_id = record.get("event_id")
+        if not isinstance(activation_event_id, str) or not activation_event_id:
+            await log.close()
+            raise BridgeEnrollmentError("active bridge activation event is missing")
+        configuration_sha256 = hashlib.sha256(
+            json.dumps(
+                configured.pack_config,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        try:
+            # Event ids are the durable log ordering boundary.  Comparing the
+            # receipt's microsecond timestamp with SQLite's second-precision
+            # ``recorded_at`` can incorrectly discard valid evidence emitted
+            # immediately after activation in the same wall-clock second.
+            async for event in log.read_since(
+                activation_event_id, types=["adapter.authenticated"]
+            ):
+                for pack in configured.packs:
+                    policy = BRIDGE_PACK_POLICIES[pack]
+                    if not policy.requires_capability_attestation:
+                        continue
+                    payload = event.get("payload", {})
+                    expected_account = configured.source_account_for(policy)
+                    expected_scope = f"private:{configured.member_id}"
+                    if (
+                        event.get("source_adapter") == policy.source_adapter
+                        and event.get("source_account_id") == expected_account
+                        and event.get("owner_scope") == expected_scope
+                        and event.get("visibility_scope") == expected_scope
+                        and int(event.get("schema_version") or 1) == 2
+                        and payload.get("adapter_name") == policy.source_adapter
+                        and payload.get("adapter_family") == policy.family
+                        and payload.get("token_storage_ref")
+                        == policy.permission_reference
+                        and frozenset(payload.get("scopes") or [])
+                        == policy.permission_scopes
+                        and payload.get("bridge_enrollment_id")
+                        == configured.enrollment_id
+                        and payload.get("configuration_sha256") == configuration_sha256
+                        and payload.get("provider_account_id") == expected_account
+                    ):
+                        matches[pack] = event
+        finally:
+            await log.close()
+        return matches
+
+    def attest(self, member_id: str, packs: list[str] | None = None) -> dict[str, Any]:
+        """Promote exact provider permission evidence; never call a provider."""
+
+        index = self._index()
+        prior_index = copy.deepcopy(index)
+        services_were_running = self.services.status().status != "stopped"
+        _identity, record = self._record_for_member(index, member_id)
+        configured = configuration_from_record(record)
+        if configured is None:
+            raise BridgeEnrollmentError("member bridge transport is not active")
+        requested = sorted(configured.packs if packs is None else set(packs))
+        if not set(requested) <= configured.packs:
+            raise BridgeEnrollmentError(
+                "capability attestation names an unconfigured pack"
+            )
+        states = record.get("pack_capability_states")
+        attestations = record.get("capability_attestations")
+        if not isinstance(states, dict) or not isinstance(attestations, dict):
+            raise BridgeEnrollmentError("bridge capability record is invalid")
+        evidence = asyncio.run(self._find_capability_events(record))
+        missing = [
+            pack
+            for pack in requested
+            if BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+            and pack not in evidence
+        ]
+        if missing:
+            raise BridgeEnrollmentError(
+                f"no exact adapter permission evidence for bridge packs: {missing}"
+            )
+        now = self.now().isoformat()
+        for pack in requested:
+            policy = BRIDGE_PACK_POLICIES[pack]
+            if not policy.requires_capability_attestation:
+                states[pack] = "not_required"
+                continue
+            event = evidence[pack]
+            states[pack] = "attested"
+            attestations[pack] = {
+                "event_id": event["event_id"],
+                "authenticated_at": event["payload"]["authenticated_at"],
+                "attested_at": now,
+                "permission_count": len(policy.permission_scopes),
+                "content_exposed": False,
+            }
+        authorized = sorted(
+            pack
+            for pack in configured.packs
+            if states.get(pack)
+            == (
+                "attested"
+                if BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+                else "not_required"
+            )
+        )
+        provider_states = [
+            states.get(pack)
+            for pack in configured.packs
+            if BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+        ]
+        provider_state = (
+            "not_required"
+            if not provider_states
+            else "attested"
+            if all(state == "attested" for state in provider_states)
+            else "partial"
+            if any(state == "attested" for state in provider_states)
+            else "not_attested"
+        )
+        record.update(
+            {
+                "authorized_packs": authorized,
+                "adapters_active": sorted(attestations),
+                "pack_capability_states": states,
+                "capability_attestations": attestations,
+                "provider_capability_state": provider_state,
+                "capability_attested_at": now,
+            }
+        )
+        try:
+            self._save_index(index)
+            self._sync_public_report(index)
+            restarted = self._restart_if_running()
+        except Exception:
+            self._save_index(prior_index)
+            self._sync_public_report(prior_index)
+            if services_were_running:
+                try:
+                    if self.services.status().status != "stopped":
+                        self.services.stop()
+                    self.services.start()
+                except Exception:
+                    pass
+            raise
+        return {
+            "status": "attested",
+            "member_id": member_id,
+            "authorized_pack_count": len(authorized),
+            "provider_capability_state": provider_state,
+            "services_restarted": restarted,
+            "content_exposed": False,
+        }
+
     def _delete_transfer_material(
         self,
         member_id: str,
@@ -458,19 +745,89 @@ class BridgeEnrollmentManager:
             raise BridgeEnrollmentError(
                 "no owner-scoped enrollment proof has reached the central event log"
             )
-        self._load_internal(member_id)
+        package = self._load_internal(member_id)
+        allowed = _unique_pack_names(
+            package.get("allowed_packs"), label="allowed_packs"
+        )
+        configured = _unique_pack_names(
+            package.get("configured_packs", []), label="configured_packs"
+        )
+        claimed_active = _unique_pack_names(
+            event.get("payload", {}).get("adapters_active", []),
+            label="bridge.enrolled adapters_active",
+        )
+        if (
+            not set(configured) <= set(allowed)
+            or not set(allowed) <= BUILT_IN_BRIDGE_PACKS
+        ):
+            raise BridgeEnrollmentError("sealed bridge pack permissions are invalid")
+        if not set(claimed_active) <= set(configured):
+            raise BridgeEnrollmentError(
+                "bridge enrollment claimed a pack outside the sealed enabled set"
+            )
+        if claimed_active:
+            raise BridgeEnrollmentError(
+                "transport enrollment cannot attest provider capability"
+            )
+        try:
+            normalized_config = validate_configured_pack_config(
+                member_id=member_id,
+                enrollment_id=str(record.get("enrollment_id") or ""),
+                configured_packs=configured,
+                pack_config=package.get("pack_config", {}),
+            )
+        except ValueError as exc:
+            raise BridgeEnrollmentError(str(exc)) from exc
         prior_index = copy.deepcopy(index)
         services_were_running = self.services.status().status != "stopped"
+        capability_states = {
+            pack: (
+                "not_attested"
+                if BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+                else "not_required"
+            )
+            for pack in configured
+        }
+        initially_authorized = sorted(
+            pack for pack, state in capability_states.items() if state == "not_required"
+        )
+        provider_states = [
+            state
+            for pack, state in capability_states.items()
+            if BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+        ]
         record.update(
             {
                 "status": "active",
                 "activated_at": self.now().isoformat(),
                 "event_id": event["event_id"],
                 "bridge_node_id": event.get("payload", {}).get("bridge_node_id"),
-                "adapters_active": event.get("payload", {}).get("adapters_active", []),
+                "allowed_packs": sorted(allowed),
+                "configured_packs": sorted(configured),
+                "enabled_packs": [],
+                "authorized_packs": initially_authorized,
+                "adapters_active": [],
+                "provider_capability_state": (
+                    "not_attested" if provider_states else "not_required"
+                ),
+                "pack_capability_states": capability_states,
+                "capability_attestations": {},
+                "pack_config": normalized_config,
+                "pack_config_sha256": hashlib.sha256(
+                    json.dumps(
+                        normalized_config,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest(),
             }
         )
         try:
+            # The active record is not independently safe merely because its
+            # local fields validate.  Enforce the household-wide one-member /
+            # one-enrollment / one-Apple-account ownership invariants before
+            # the authoritative index is published.
+            validate_bridge_record_set(index)
             self._save_index(index)
             self._sync_public_report(index)
             restarted = self._restart_if_running()
@@ -739,6 +1096,7 @@ class MemberBridgeInstaller:
             client = ingest_client_class(
                 central_endpoint_url=transfer["central_url"],
                 tailscale_identity_header=transfer["tailscale_identity"],
+                enrollment_id=transfer["enrollment_id"],
             )
             try:
                 result = await client.submit(envelope)
@@ -775,18 +1133,33 @@ class MemberBridgeInstaller:
             raise BridgeEnrollmentError(
                 "bridge package and checked-out reviewed release do not match"
             )
-        allowed = transfer.get("allowed_packs")
-        enabled = transfer.get("enabled_packs")
+        allowed = _unique_pack_names(
+            transfer.get("allowed_packs"), label="allowed_packs"
+        )
+        configured = _unique_pack_names(
+            transfer.get("configured_packs", []), label="configured_packs"
+        )
+        enabled = _unique_pack_names(
+            transfer.get("enabled_packs", []), label="enabled_packs"
+        )
         pack_config = transfer.get("pack_config")
         if (
-            not isinstance(allowed, list)
-            or not set(allowed) <= BUILT_IN_BRIDGE_PACKS
-            or not isinstance(enabled, list)
-            or not set(enabled) <= set(allowed)
+            not set(allowed) <= BUILT_IN_BRIDGE_PACKS
+            or not set(configured) <= set(allowed)
+            or enabled
             or not isinstance(pack_config, dict)
-            or not set(pack_config) <= set(enabled)
+            or set(pack_config) != set(configured)
         ):
             raise BridgeEnrollmentError("bridge pack permissions are invalid")
+        try:
+            normalized_config = validate_configured_pack_config(
+                member_id=str(transfer["member_id"]),
+                enrollment_id=str(transfer["enrollment_id"]),
+                configured_packs=configured,
+                pack_config=pack_config,
+            )
+        except ValueError as exc:
+            raise BridgeEnrollmentError(str(exc)) from exc
         restrictions = transfer.get("restrictions")
         if not isinstance(restrictions, dict):
             raise BridgeEnrollmentError("bridge restrictions are missing")
@@ -843,13 +1216,15 @@ class MemberBridgeInstaller:
         prior_pointer = pointer_path.read_bytes() if pointer_path.exists() else None
         config = {
             "member_id": transfer["member_id"],
+            "enrollment_id": transfer["enrollment_id"],
             "tenant_id": transfer["tenant_id"],
             "central_endpoint": central_url,
             "tailscale_identity": transfer["tailscale_identity"],
             "packs_dir": str(self.paths.root / "packs"),
             "cursor_db_path": str(self.paths.root / "adapter-cursors.db"),
-            "enabled_packs": enabled,
-            "pack_config": pack_config,
+            "configured_packs": configured,
+            "enabled_packs": [],
+            "pack_config": normalized_config,
             "log_level": "info",
         }
         try:
@@ -876,7 +1251,7 @@ class MemberBridgeInstaller:
                     "member_id": transfer["member_id"],
                     "bridge_node_id": observed_node,
                     "tailscale_identity": transfer["tailscale_identity"],
-                    "adapters_active": enabled,
+                    "adapters_active": [],
                     "enrolled_at": now.isoformat(),
                 },
             ).model_dump(mode="json")
@@ -890,7 +1265,16 @@ class MemberBridgeInstaller:
                 "central_url": central_url,
                 "event_id": event_id,
                 "accepted_at": now.isoformat(),
-                "enabled_packs": enabled,
+                "configured_packs": configured,
+                "enabled_packs": [],
+                "provider_capability_state": (
+                    "not_attested"
+                    if any(
+                        BRIDGE_PACK_POLICIES[pack].requires_capability_attestation
+                        for pack in configured
+                    )
+                    else "not_required"
+                ),
                 "transfer_material_retained": False,
             }
             atomic_write(
@@ -953,13 +1337,19 @@ class MemberBridgeInstaller:
                 stderr=subprocess.DEVNULL,
             )
             service = "running" if completed.returncode == 0 else "stopped"
+        provider_state = str(receipt.get("provider_capability_state") or "not_attested")
+        transport_active = service == "running" and receipt.get("status") == "active"
         return {
             "status": "healthy"
-            if service == "running" and receipt.get("status") == "active"
+            if transport_active and provider_state in {"attested", "not_required"}
+            else "transport-ready"
+            if transport_active
             else "stopped"
             if service == "stopped"
             else "degraded",
             "service": service,
+            "transport_state": "active" if transport_active else "inactive",
+            "provider_capability_state": provider_state,
             "configuration_present": self.paths.config_path.is_file(),
             "launch_agent_present": self.paths.launch_agent_path.is_file(),
             "enrollment": {
@@ -974,6 +1364,62 @@ class MemberBridgeInstaller:
                 )
                 if key in receipt
             },
+        }
+
+    def enable_pack(self, pack: str) -> dict[str, Any]:
+        """Explicit member-side provider/permission action.
+
+        Transport acceptance never calls this method. Running it may cause the
+        selected adapter to request a macOS permission, so the stable CLI keeps
+        it behind its own owner-invoked command.
+        """
+
+        if not self.paths.config_path.is_file():
+            raise BridgeEnrollmentError("member bridge configuration is missing")
+        raw = self.paths.config_path.read_bytes()
+        value = yaml.safe_load(raw) or {}
+        if not isinstance(value, dict):
+            raise BridgeEnrollmentError("member bridge configuration is invalid")
+        configured = _unique_pack_names(
+            value.get("configured_packs", []), label="configured_packs"
+        )
+        enabled = _unique_pack_names(
+            value.get("enabled_packs", []), label="enabled_packs"
+        )
+        if pack not in configured:
+            raise BridgeEnrollmentError(
+                "pack is not in the sealed bridge configuration"
+            )
+        if pack in enabled:
+            return {
+                "status": "enabled-awaiting-central-attestation",
+                "pack": pack,
+                "idempotent": True,
+            }
+        enabled.append(pack)
+        value["enabled_packs"] = sorted(enabled)
+        service_was_running = self.status().get("service") == "running"
+        try:
+            if service_was_running:
+                self._stop()
+            atomic_write(
+                self.paths.config_path,
+                yaml.safe_dump(value, sort_keys=True).encode("utf-8"),
+            )
+            self._start()
+        except Exception:
+            atomic_write(self.paths.config_path, raw)
+            if service_was_running:
+                try:
+                    self._start()
+                except Exception:
+                    pass
+            raise
+        return {
+            "status": "enabled-awaiting-central-attestation",
+            "pack": pack,
+            "provider_capability_state": "not_attested",
+            "central_provider_authority": False,
         }
 
     def disable(self) -> dict[str, Any]:

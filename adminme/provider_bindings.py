@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from collections.abc import Mapping, Set
 from typing import Any, Iterable
 
 
@@ -22,6 +23,13 @@ ACCOUNT_KEYS = (
     "user_email",
     "subject_email",
     "source_account_id",
+)
+MEMBER_BRIDGE_ONLY_ADAPTER_KINDS = frozenset(
+    {
+        "calendaring-apple-calendar",
+        "contacts-apple-contacts",
+        "reminders-apple-eventkit",
+    }
 )
 
 
@@ -108,13 +116,14 @@ def validate_provider_bindings(
     member_roles: dict[str, str],
     household_mapping: dict[str, Any],
     service_principal_ids: set[str] | None = None,
+    service_principal_provider_authorizations: Mapping[str, Set[str]] | None = None,
 ) -> tuple[ProviderBinding, ...]:
     """Validate every enabled provider row as one explicit owned binding.
 
     Disabled rows may remain incomplete so optional integrations can be kept
-    truthfully off.  Enabled fixture adapters without provider credentials are
-    excluded; every enabled real provider row fails closed on missing or
-    contradictory coordinates.
+    truthfully off. Every enabled row must carry complete binding evidence;
+    fixture-only adapters bypass this production validator rather than looking
+    indistinguishable from an unbound OS-permission provider.
     """
 
     adapters = config.get("adapters", [])
@@ -122,6 +131,11 @@ def validate_provider_bindings(
         raise ValueError("adapter_config.adapters must be a list")
     known_members = _known_member_ids(member_roles, household_mapping)
     known_service_principals = set(service_principal_ids or ())
+    # The current service-identity catalog contains planned channel identities,
+    # not provider-account authority. Keep the parameter for source-compatible
+    # callers, but no caller may turn a planned principal into an enabled
+    # provider binding by supplying an in-memory kind allowlist.
+    del service_principal_provider_authorizations
     bindings: list[ProviderBinding] = []
     for index, entry in enumerate(adapters):
         if not isinstance(entry, dict):
@@ -132,6 +146,11 @@ def validate_provider_bindings(
         adapter_config = entry.get("config") or {}
         if not isinstance(adapter_config, dict):
             raise ValueError(f"adapter entry {index} config must be a mapping")
+        if kind in MEMBER_BRIDGE_ONLY_ADAPTER_KINDS:
+            raise ValueError(
+                f"enabled member Apple adapter {index} is bridge-only and cannot "
+                "be configured in the central adapter inventory"
+            )
         has_provider_credential = any(
             isinstance(value, str) and value.startswith(("op://", "keychain://"))
             for key, value in adapter_config.items()
@@ -139,7 +158,9 @@ def validate_provider_bindings(
         )
         account_id = _account_id(adapter_config)
         if not has_provider_credential and account_id is None:
-            continue
+            raise ValueError(
+                f"enabled provider adapter {index} requires binding evidence"
+            )
         member_id = adapter_config.get("member_id")
         service_principal_id = adapter_config.get("service_principal_id")
         workspace = adapter_config.get("workspace")
@@ -164,6 +185,16 @@ def validate_provider_bindings(
         if account_id is None:
             raise ValueError(
                 f"enabled provider adapter {index} requires provider_account_id"
+            )
+        owner_coordinate = str(member_id if member_owner else service_principal_id)
+        if account_id.casefold() == owner_coordinate.casefold():
+            raise ValueError(
+                f"enabled provider adapter {index} collapses owner and provider account"
+            )
+        if service_owner:
+            raise ValueError(
+                f"enabled provider adapter {index} cannot use a planned service "
+                "principal; service-owned provider authority is not implemented"
             )
         if workspace not in WORKSPACES:
             raise ValueError(
@@ -249,6 +280,7 @@ def public_binding_inventory(bindings: Iterable[ProviderBinding]) -> dict[str, A
 __all__ = [
     "ACCOUNT_KEYS",
     "PROVENANCE_KINDS",
+    "MEMBER_BRIDGE_ONLY_ADAPTER_KINDS",
     "ProviderBinding",
     "WORKSPACES",
     "public_binding_inventory",

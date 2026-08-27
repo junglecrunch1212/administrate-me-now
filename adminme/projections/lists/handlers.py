@@ -24,6 +24,82 @@ def _provider(envelope: dict[str, Any], payload: dict[str, Any]) -> str:
     return "google_tasks" if "google-tasks" in source else "apple_reminders"
 
 
+def _envelope_json(envelope: dict[str, Any]) -> str:
+    return json.dumps(envelope, default=_iso, separators=(",", ":"), sort_keys=True)
+
+
+def _record_list_observation(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    conn.execute(
+        """
+        INSERT INTO list_observations (
+            tenant_id, provider, provider_account_id, member_id,
+            list_external_id, owner_scope, visibility_scope, last_event_id,
+            envelope_json
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(
+            tenant_id, provider, provider_account_id, member_id, list_external_id
+        ) DO UPDATE SET owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            last_event_id=excluded.last_event_id,
+            envelope_json=excluded.envelope_json
+        """,
+        (
+            envelope["tenant_id"],
+            payload["provider"],
+            payload["provider_account_id"],
+            payload["member_id"],
+            payload["list_external_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["event_id"],
+            _envelope_json(envelope),
+        ),
+    )
+
+
+def _record_list_item_observation(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    provider = _provider(envelope, payload)
+    account = payload.get("provider_account_id")
+    if not isinstance(account, str) or not account:
+        # v1 facts predate route-complete provider coordinates.  They remain
+        # canonical facts but cannot be presented as exact bridge observations.
+        return
+    conn.execute(
+        """
+        INSERT INTO list_item_observations (
+            tenant_id, provider, provider_account_id, member_id,
+            list_external_id, item_external_id, owner_scope, visibility_scope,
+            last_event_id, envelope_json
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(
+            tenant_id, provider, provider_account_id, member_id,
+            list_external_id, item_external_id
+        ) DO UPDATE SET owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            last_event_id=excluded.last_event_id,
+            envelope_json=excluded.envelope_json
+        """,
+        (
+            envelope["tenant_id"],
+            provider,
+            account,
+            payload["member_id"],
+            payload["list_external_id"],
+            payload["item_external_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["event_id"],
+            _envelope_json(envelope),
+        ),
+    )
+
+
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     event_type = envelope["type"]
     if event_type in {"list.created", "list.updated"}:
@@ -49,6 +125,12 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
 
 def apply_list_changed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
+    _record_list_observation(envelope, conn)
+    canonical_account = (
+        "shared:household"
+        if envelope["owner_scope"] == "shared:household"
+        else p["provider_account_id"]
+    )
     conn.execute(
         """
         INSERT INTO lists (
@@ -68,7 +150,7 @@ def apply_list_changed(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             envelope["tenant_id"],
             p["member_id"],
             p["provider"],
-            p["provider_account_id"],
+            canonical_account,
             p["list_external_id"],
             p["list_name"],
             p.get("color"),
@@ -86,11 +168,40 @@ def apply_list_changed(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
 def apply_list_deleted(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     conn.execute(
-        "DELETE FROM lists WHERE tenant_id=? AND provider=? AND provider_account_id=? AND list_external_id=?",
+        """
+        DELETE FROM list_observations
+         WHERE tenant_id=? AND provider=? AND provider_account_id=?
+           AND member_id=? AND list_external_id=?
+        """,
         (
             envelope["tenant_id"],
             p["provider"],
             p["provider_account_id"],
+            p["member_id"],
+            p["list_external_id"],
+        ),
+    )
+    shared_observations = conn.execute(
+        """
+        SELECT count(*) FROM list_observations
+         WHERE tenant_id=? AND provider=? AND list_external_id=?
+           AND owner_scope='shared:household'
+        """,
+        (envelope["tenant_id"], p["provider"], p["list_external_id"]),
+    ).fetchone()[0]
+    canonical_account = (
+        "shared:household"
+        if envelope["owner_scope"] == "shared:household"
+        else p["provider_account_id"]
+    )
+    if envelope["owner_scope"] == "shared:household" and shared_observations:
+        return
+    conn.execute(
+        "DELETE FROM lists WHERE tenant_id=? AND provider=? AND provider_account_id=? AND list_external_id=?",
+        (
+            envelope["tenant_id"],
+            p["provider"],
+            canonical_account,
             p["list_external_id"],
         ),
     )
@@ -104,6 +215,7 @@ def apply_list_item_snapshot(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     p = envelope["payload"]
+    _record_list_item_observation(envelope, conn)
     v2 = int(envelope.get("schema_version", 1)) >= 2
     due = p.get("due") if v2 else None
     due_at = p.get("due_at")
@@ -200,6 +312,40 @@ def apply_list_item_deleted(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     p = envelope["payload"]
+    provider = _provider(envelope, p)
+    account = p.get("provider_account_id")
+    if isinstance(account, str) and account:
+        conn.execute(
+            """
+            DELETE FROM list_item_observations
+             WHERE tenant_id=? AND provider=? AND provider_account_id=?
+               AND member_id=? AND list_external_id=? AND item_external_id=?
+            """,
+            (
+                envelope["tenant_id"],
+                provider,
+                account,
+                p["member_id"],
+                p["list_external_id"],
+                p["item_external_id"],
+            ),
+        )
+    if envelope["owner_scope"] == "shared:household":
+        remaining = conn.execute(
+            """
+            SELECT count(*) FROM list_item_observations
+             WHERE tenant_id=? AND provider=? AND list_external_id=?
+               AND item_external_id=? AND owner_scope='shared:household'
+            """,
+            (
+                envelope["tenant_id"],
+                provider,
+                p["list_external_id"],
+                p["item_external_id"],
+            ),
+        ).fetchone()[0]
+        if remaining:
+            return
     conn.execute(
         "DELETE FROM list_items WHERE tenant_id=? AND list_external_id=? AND item_external_id=?",
         (envelope["tenant_id"], p["list_external_id"], p["item_external_id"]),

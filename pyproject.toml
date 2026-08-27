@@ -50,6 +50,7 @@ google-auth = "*"
 # Member-bridge EventKit transport. Poetry evaluates the marker so central
 # Linux/Windows development never attempts to install PyObjC.
 pyobjc-framework-EventKit = { version = "*", markers = "sys_platform == 'darwin'" }
+pyobjc-framework-Contacts = { version = "*", markers = "sys_platform == 'darwin'" }
 pyobjc-framework-CoreLocation = { version = "*", markers = "sys_platform == 'darwin'" }
 pyobjc-framework-Quartz = { version = "*", markers = "sys_platform == 'darwin'" }
 

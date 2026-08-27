@@ -1,27 +1,13 @@
-"""Framework-level tests for the Apple Reminders dual-deployment branch
-(prompt 11b-ii-α-2 c2 implementation).
+"""Framework tests for the Apple Reminders member-bridge runtime.
 
-Closes prompt 11b-ii-α-2 §7 c3 deliverable 5a (framework
-dual-deployment tests). Verifies that
-``AppleEventKitAdapter.start(ctx)`` reads ``ctx.config["deployment_target"]``
-and branches credential resolution + emit dispatch + the
-``sharing_model_discriminator`` row value per [D18] / [D22] / memo 04
-§2.2 / memo 05 §5.4:
-
-  - ``"central"`` (default — F-2 byte-for-byte preserved): existing
-    constructor-config credential source; ``_sharing_model_value ==
-    "shared_central"``; ``_append`` routes via
-    ``ctx.event_sink.write(...)``.
-  - ``"bridge"``: ``_bridge_member_id`` overrides ``config["member_id"]``;
-    ``_bridge_sink`` is required and is the emit destination;
-    ``_sharing_model_value == "per_member_isolated"``; ``_append`` routes
-    via the injected ``BridgeEventSink`` per memo 04 §2.2 / [§6.19].
+The historical basename is retained for compatibility. These tests prove
+that the human-member adapter refuses central construction and emits only
+through the wrapper-injected member bridge sink.
 
 F-4 (HARD): observation-mode suppression skips ALL emits uniformly —
 the deployment_target branch does NOT alter the F-3 invariant from 11b-i
 (neither legacy ``reminder.list_item.synced@v1`` nor canonical
 ``list_item.*@v1`` fires when the wrap returns ``suppressed=True``).
-Both deployment paths share this rule.
 
 F-5 (HARD): basename ``test_apple_eventkit_dual_deployment.py`` is
 unique across the repo (verified against
@@ -117,6 +103,9 @@ def _make_adapter() -> Any:
         config={
             "target_list_identifier": "list-household-001",
             "member_id": "member-central",
+            "provider_account_id": "provider-account:" + "a" * 32,
+            "_bridge_enrollment_id": "bridge-enrollment-test",
+            "_bridge_configuration_sha256": "b" * 64,
         },
         ek_event_store_factory=lambda: object(),
         member_role_resolver=lambda _mid: "adult",
@@ -160,26 +149,18 @@ def _start(adapter: Any, ctx: AdapterContext) -> None:
 # ===========================================================================
 
 
-def test_deployment_target_defaults_to_central_when_unspecified() -> None:
-    """Backwards-compat F-2: when ``ctx.config`` omits ``deployment_target``,
-    the adapter defaults to ``"central"`` and the existing 11b-i + 11r-c
-    behavior is byte-for-byte preserved."""
+def test_missing_deployment_target_rejects_human_member_adapter() -> None:
+    """A human-member Apple credential cannot default into central runtime."""
     adapter = _make_adapter()
-    ctx = _make_ctx()  # no deployment_target in config
-    _start(adapter, ctx)
-    assert adapter._deployment_target == "central"
-    assert adapter._sharing_model_value == "shared_central"
-    assert adapter._bridge_sink is None
+    with pytest.raises(ValueError, match="requires.*deployment_target='bridge'"):
+        _start(adapter, _make_ctx())
 
 
-def test_deployment_target_central_explicit_keeps_shared_central_value() -> None:
-    """Explicitly setting ``deployment_target=central`` is semantically
-    identical to the unset default (A-1)."""
+def test_explicit_central_target_rejects_human_member_adapter() -> None:
+    """Future service-owned central Apple support needs a distinct adapter."""
     adapter = _make_adapter()
-    ctx = _make_ctx(deployment_target="central")
-    _start(adapter, ctx)
-    assert adapter._deployment_target == "central"
-    assert adapter._sharing_model_value == "shared_central"
+    with pytest.raises(ValueError, match="requires.*deployment_target='bridge'"):
+        _start(adapter, _make_ctx(deployment_target="central"))
 
 
 def test_deployment_target_bridge_sets_per_member_isolated_value() -> None:
@@ -272,28 +253,21 @@ def test_deployment_target_bridge_requires_member_id_string() -> None:
 # ===========================================================================
 
 
-def test_central_path_uses_event_log_append_for_emit() -> None:
-    """In central mode ``_append`` routes to ``ctx.event_sink.write``
-    — the existing 11b-i / 11r-c shape preserved byte-for-byte (F-2)."""
+def test_bridge_only_emit_never_falls_back_to_central_event_log() -> None:
+    """Missing bridge composition cannot silently emit through central state."""
     adapter = _make_adapter()
     event_log = _FakeEventLog()
-    ctx = _make_ctx(event_log=event_log)  # central default
-    _start(adapter, ctx)
-    event_log.calls.clear()  # drop the adapter.authenticated emit from start()
-
-    asyncio.run(
-        adapter._append(
-            ctx=ctx,
-            event_type="reminder.list_item.synced",
-            payload={"member_id": "member-central", "direction": "outbound"},
-            causation_id="evt-up-1",
+    ctx = _make_ctx(event_log=event_log)
+    with pytest.raises(RuntimeError, match="bridge sink is not configured"):
+        asyncio.run(
+            adapter._append(
+                ctx=ctx,
+                event_type="reminder.list_item.synced",
+                payload={"member_id": "member-central", "direction": "outbound"},
+                causation_id="evt-up-1",
+            )
         )
-    )
-    assert len(event_log.calls) == 1
-    call = event_log.calls[0]
-    assert call["type"] == "reminder.list_item.synced"
-    assert call["causation_id"] == "evt-up-1"
-    assert call["correlation_id"] == "corr-dual-dep"
+    assert event_log.calls == []
 
 
 def test_bridge_path_uses_injected_sink_for_emit() -> None:
@@ -424,16 +398,13 @@ def test_bridge_path_does_not_invoke_central_writer() -> None:
 # ===========================================================================
 
 
-def test_dual_deployment_observation_suppressed_skips_all_emits_uniformly(
+def test_bridge_observation_suppressed_skips_provider_write_and_emit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """F-4 (HARD): when ``observation_outbound`` returns
     ``OutboundResult(suppressed=True)``, ``_apply_write_impl`` returns
     ``WriteResult(applied=False, suppressed=True)`` and
-    ``_write_one_outbound`` early-returns before EITHER emit fires —
-    regardless of ``deployment_target``. Pinned for BOTH central and
-    bridge deployments to guarantee the suppression invariant from
-    11b-i F-3 is uniform across the deployment branch."""
+    ``_write_one_outbound`` early-returns before either emit fires."""
 
     async def _suppressing_outbound(
         _session: Any,
@@ -448,17 +419,6 @@ def test_dual_deployment_observation_suppressed_skips_all_emits_uniformly(
 
     monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
-    # ----- central deployment -----
-    adapter_c = _make_adapter()
-    adapter_c._observation_session = object()
-    adapter_c._observation_manager = object()
-    adapter_c._observation_event_log = object()
-    event_log = _FakeEventLog()
-    ctx_c = _make_ctx(event_log=event_log)
-    _start(adapter_c, ctx_c)
-    event_log.calls.clear()  # drop the adapter.authenticated emit
-
-    # ----- bridge deployment -----
     adapter_b = _make_adapter()
     adapter_b._observation_session = object()
     adapter_b._observation_manager = object()
@@ -513,15 +473,6 @@ def test_dual_deployment_observation_suppressed_skips_all_emits_uniformly(
 
         def list_name_for_identifier(self, lid: str) -> str:
             return lid
-
-    store_c = _FakeEKStore()
-    adapter_c._ek_store = store_c
-    result_c = asyncio.run(_attempt_suppressed_write(adapter_c))
-    assert result_c.applied is False
-    assert result_c.suppressed is True
-    # Central path: no emits fired; the wrapped save did NOT execute.
-    assert event_log.calls == []
-    assert store_c.saves == []
 
     store_b = _FakeEKStore()
     adapter_b._ek_store = store_b

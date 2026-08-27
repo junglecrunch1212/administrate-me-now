@@ -135,8 +135,14 @@ configuration change invalidates and repeats HTR-05 and HTR-08 as applicable.
 | HTR-10 | Review metadata-only historical attribution and terminal-effect integrity | HTR-04 bindings validated; fixed event watermark; no content access | Every historical source is matched or explicitly classified; terminal ledger has zero missing/duplicate/malformed/orphan/unknown/correlation failures; raw identifiers/content absent | Any row needs content inference, ownership is ambiguous, or an effect cannot be accounted | Keep activation blocked. Correct only protected binding metadata under a separate reviewed request; a legacy terminal that inherently lacks effect evidence requires a separately reviewed additive reconciliation design and cannot be attested away here. |
 
 No member bridge is required when none is selected. If a member later requests
-one, the existing per-member export/accept/finalize/revoke ceremony is a
-separate provider/permission gate and must prove owner-scoped ingest.
+one, configuration sealing plus export/accept/finalize proves transport only
+and starts no provider pack. The member's separate `bridge-enable-pack` action
+may request the exact OS permission; ordinary provider facts and commands stay
+denied until `adapter.authenticated@v2` binds enrollment, configuration digest,
+provider account, permission reference, and exact scopes and the central owner
+runs `bridge-attest`. Revocation remains independent. This repository proof
+uses fakes only and authorizes no Apple account, permission, enrollment, or
+provider effect on a real device.
 
 ## Future CoS Apple/channel authorization register
 
@@ -239,9 +245,12 @@ new current process:
   unknown, duplicate, and cross-member paths deny;
 - all fifteen projections and required subscribers settle at the current
   watermark with deterministic replay/isolation proof;
-- every enabled provider binding validates with no identifier exposed;
+- every enabled central provider binding and active bridge provider capability
+  validates with no identifier exposed; transport-only/not-attested bridges
+  remain blocked rather than false-green;
 - zero selected bridges reports not applicable; any selected bridge proves one
-  active exact enrollment and cross-member denial;
+  exact enrollment, cross-member denial, zero central Apple construction, and
+  exact attestation for every enabled provider pack;
 - exact OpenClaw member agents, account bindings, actors, DM scope, current
   heartbeat, and no shared session/account;
 - `/api/system/ready`, runtime diagnostics, Doctor, and authenticated Settings

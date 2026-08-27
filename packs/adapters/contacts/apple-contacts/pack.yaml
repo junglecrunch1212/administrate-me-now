@@ -7,6 +7,7 @@ pack:
   author: built-in
   license: Apache-2.0
   min_platform: 0.4.0
+deployment_targets: [bridge]
 sensitivity_floor: normal
 runtime:
   language: python
@@ -26,7 +27,7 @@ capabilities:
   - kind: Cat-B
     runtime: bridge
     event_families: [contact.record.observed, contact.record.deleted, contact.group.observed]
-write_capabilities: [create_contact, update_contact, delete_contact]
+write_capabilities: [update_party_identifier]
 sensitivity_default: normal
 sharing_model_discriminator: member_id
 observation_mode_required: true

@@ -112,6 +112,12 @@ duplicates, leaves foreign jobs untouched, verifies the final state, and rolls
 back partial changes. Selected member bridges remain an explicit action-required
 state until their 30-minute encrypted package is accepted on the matching
 Tailscale member Mac and finalized from a real owner-scoped event, or revoked.
+Finalization proves transport only and starts no provider pack. Seal provider
+coordinates before export with `bridge-configure`; after finalization, the
+member separately invokes `bridge-enable-pack` and reviews any macOS permission
+prompt. Ordinary provider facts and commands remain blocked until the exact
+`adapter.authenticated@v2` event is retained centrally and `bridge-attest`
+promotes that pack. Never treat `active` transport as provider health.
 
 ## macOS permissions and OAuth
 
@@ -141,6 +147,16 @@ share is not an AdministrateMe grant. Do not activate contact create/update/
 delete/group/photo operations until the exact operation has passed the normal
 approval, privacy, revision, observation, and terminal-reconciliation review;
 provider deletion always receives a separate confirmation.
+
+Calendar, Reminders, and Contacts configuration uses content-free provider
+account references distinct from member and enrollment IDs. It also seals the
+personal workspace, exact container allowlist, least permission set,
+`member-bridge-enrollment` provenance, and ownership attestation. Native Apple
+sharing does not promote AdministrateMe visibility; only an explicit central
+shared-container grant may do so. Contacts writes remain limited to the D23
+`update_party_identifier` correction seam. A future central service-owned Apple
+source is a different adapter/schema review; the planned CoS identity cannot
+reuse these human-member packs.
 
 OAuth opens the provider's own page. Confirm the expected provider and least
 privilege before granting access. OpenClaw owns assistant-provider credentials.

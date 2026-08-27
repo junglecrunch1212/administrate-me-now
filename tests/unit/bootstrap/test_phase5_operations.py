@@ -505,6 +505,7 @@ def test_macos_installer_refuses_ambient_test_mode_without_internal_harness(
     assert (
         "reviewed candidate has local changes" in completed.stderr
         or "does not match reviewed commit" in completed.stderr
+        or "reviewed launcher refused" in completed.stderr
     )
     assert not captured.exists()
     assert not instance_root.exists()
@@ -887,6 +888,7 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
             "knowledge-apple-voice-memos",
             "knowledge-obsidian",
             "calendaring-apple-calendar-bridge",
+            "contacts-apple-contacts-bridge",
             "reminders-apple-eventkit-bridge",
         }
         if package["restrictions"]["kid"]:

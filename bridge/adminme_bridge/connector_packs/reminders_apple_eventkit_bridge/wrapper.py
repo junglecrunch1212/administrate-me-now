@@ -38,6 +38,7 @@ support is a wrapper, not a second base class.
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -104,6 +105,16 @@ class AppleEventKitBridgeAdapter:
             raise ValueError(
                 "reminders bridge requires pack_config.target_list_identifier"
             )
+        provider_account_id = internal_config.get("provider_account_id")
+        if (
+            not isinstance(provider_account_id, str)
+            or re.fullmatch(r"provider-account:[0-9a-f]{32,64}", provider_account_id)
+            is None
+        ):
+            raise ValueError(
+                "reminders bridge requires a distinct content-free "
+                "pack_config.provider_account_id"
+            )
         # The internal central adapter is constructed lazily on first
         # start() so importing this module never requires the central
         # pack to be on sys.path at import time.
@@ -133,7 +144,8 @@ class AppleEventKitBridgeAdapter:
         internal_config: dict[str, Any] = dict(self._internal_config)
         internal_config["member_id"] = ctx.member_id
         internal_config["tenant_id"] = ctx.tenant_id
-        internal_config.setdefault("provider_account_id", ctx.member_id)
+        internal_config["_bridge_enrollment_id"] = ctx.enrollment_id
+        internal_config["_bridge_configuration_sha256"] = ctx.configuration_sha256
         internal_config.setdefault("emit_schema_version", 2)
 
         internal = AppleEventKitAdapter(config=internal_config)

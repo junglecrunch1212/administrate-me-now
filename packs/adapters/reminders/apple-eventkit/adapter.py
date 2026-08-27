@@ -145,7 +145,7 @@ default_event_store: Any = _shim_mod.default_event_store
 # per docs/reference/apple-eventkit/access.md; no 1Password secret is
 # involved (unlike Gmail's service-account JSON or Plaid's item access
 # token). The string is recorded on ``adapter.authenticated`` for audit.
-_OS_TOKEN_STORAGE_REF = "op://local-system/reminders/permission"
+_OS_TOKEN_STORAGE_REF = "keychain://device-permissions/reminders"
 
 _DEFAULT_INBOUND_INTERVAL_S = 30
 _DEFAULT_OUTBOUND_INTERVAL_S = 30
@@ -258,7 +258,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     capabilities: ClassVar[list[Any]] = [
         {
             "kind": "Cat-B",
-            "runtime": "central",
+            "runtime": "bridge",
             "event_families": [
                 "reminder.list_item.synced",
                 "list.created",
@@ -409,15 +409,8 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         self._observation_manager: Any = None
         self._observation_event_log: Any = None
 
-        # [D18, D22, memo 04 §2.2] Dual-deployment instance state.
-        # Defaults preserve the central path byte-for-byte (F-2); bridge
-        # branch flips these in :meth:`start`. ``_sharing_model_value``
-        # surfaces the per-A-1 row discriminator (memo 05 §2.5 / §5.4)
-        # as an instance attribute rather than via payload, because the
-        # registered schemas use ``extra="forbid"`` and α-2 registers
-        # no new schemas (§1).
-        self._deployment_target: Literal["central", "bridge"] = "central"
-        self._sharing_model_value: str = "shared_central"
+        self._deployment_target: Literal["bridge"] = "bridge"
+        self._sharing_model_value: str = "per_member_isolated"
         self._bridge_sink: Any = None
 
     # ------------------------------------------------------------------
@@ -437,49 +430,27 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         blocking on the loop; this method is the supervisor-facing
         lifecycle hook only.
 
-        Dual-deployment (α-2): ``ctx.config["deployment_target"]`` selects
-        ``"central"`` (default — existing 11b-i + 11r-c behavior, byte-
-        for-byte per F-2) or ``"bridge"`` (per-member iCloud, emit via
-        the wrapper-injected sink per memo 04 §2.2 / [§6.19]).
+        The current human-member EventKit adapter is bridge-only. A future
+        central service-owned implementation must use a distinct reviewed
+        adapter and schema.
         """
-        # [D18, D22, docs/10-split-memo-11b-ii-alpha.md §2] Resolve the
-        # deployment branch from ctx.config. Default ``"central"`` keeps
-        # existing instances backwards-compatible (F-2).
-        deployment_target = ctx.config.get("deployment_target", "central")
-        if deployment_target not in ("central", "bridge"):
+        # [D18, D22, CO-019] Member Apple credentials are bridge-only.
+        deployment_target = ctx.config.get("deployment_target")
+        if deployment_target != "bridge":
             raise ValueError(
-                "config.deployment_target must be 'central' or 'bridge'; "
-                f"got {deployment_target!r}"
+                "Apple Reminders' human-member adapter requires "
+                "config.deployment_target='bridge'"
             )
-        self._deployment_target = deployment_target
-        # [A-1, memo 05 §2.5 / §5.4] central rows on the ``lists``
-        # projection carry ``"shared_central"``; bridge rows carry
-        # ``"per_member_isolated"``. Surfaced as an instance attribute
-        # for downstream projection annotation (schemas are
-        # ``extra="forbid"`` — no payload modification per §1).
-        self._sharing_model_value = (
-            "per_member_isolated" if deployment_target == "bridge" else "shared_central"
+        bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
+            "member_id"
         )
-
-        if deployment_target == "bridge":
-            # [§1.4, A-3, memo 04 §2.2] Wrapper synthesizes ctx.config
-            # with the per-member Apple ID identity + injected sink.
-            bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
-                "member_id"
-            )
-            if not isinstance(bridge_member_id, str) or not bridge_member_id:
-                raise ValueError(
-                    "bridge deployment requires ctx.config['_bridge_member_id'] "
-                    "or ctx.config['member_id'] as a non-empty string"
-                )
-            self._config["member_id"] = bridge_member_id
-            sink = ctx.config.get("_bridge_sink")
-            if sink is None:
-                raise ValueError(
-                    "bridge deployment requires ctx.config['_bridge_sink'] "
-                    "(an adminme_bridge.adapters.sinks.BridgeEventSink)"
-                )
-            self._bridge_sink = sink
+        if not isinstance(bridge_member_id, str) or not bridge_member_id:
+            raise ValueError("bridge deployment requires config._bridge_member_id")
+        self._config["member_id"] = bridge_member_id
+        sink = ctx.config.get("_bridge_sink")
+        if sink is None:
+            raise ValueError("bridge deployment requires config._bridge_sink")
+        self._bridge_sink = sink
 
         target_list_identifier = self._config.get("target_list_identifier")
         member_id = self._config.get("member_id")
@@ -1504,9 +1475,21 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "adapter_family": self.family,
             "token_storage_ref": _OS_TOKEN_STORAGE_REF,
             "authenticated_at": _to_iso(ctx.now_factory()),
-            "scopes": ["reminders:read", "reminders:write"],
+            "scopes": ["eventkit.reminders.read", "eventkit.reminders.write"],
+            "bridge_enrollment_id": str(
+                self._config.get("_bridge_enrollment_id") or ""
+            ),
+            "configuration_sha256": str(
+                self._config.get("_bridge_configuration_sha256") or ""
+            ),
+            "provider_account_id": str(self._config.get("provider_account_id") or ""),
         }
-        await self._append(ctx=ctx, event_type="adapter.authenticated", payload=payload)
+        await self._append(
+            ctx=ctx,
+            event_type="adapter.authenticated",
+            payload=payload,
+            schema_version=2,
+        )
 
     async def _emit_error(
         self,
@@ -1541,13 +1524,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         causation_id: str | None = None,
         schema_version: int = 1,
     ) -> None:
-        """Write through the typed event sink before advancing local sync state.
+        """Write through the typed bridge sink before advancing sync state.
 
-        α-2 dual-deployment branch: ``deployment_target=="bridge"``
-        dispatches through the wrapper-injected ``BridgeEventSink``
-        (memo 04 §2.2); central path preserved byte-for-byte (F-2). F-4:
-        the observation-mode gate upstream of every emit site is
-        unchanged, so suppressed writes skip ALL emits uniformly."""
+        The wrapper-injected ``BridgeEventSink`` carries the member-scoped
+        envelope to the central ingest boundary.  The observation-mode gate
+        upstream of every emit site is unchanged, so suppressed writes skip
+        every emit uniformly.
+        """
         if self._deployment_target == "bridge":  # [§D18, memo 04 §2.2]
             await self._append_via_bridge_sink(
                 ctx=ctx,
@@ -1585,9 +1568,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         central path. Memo 04 §2.2: provisional ``private:<member_id>``
         scopes are re-stamped by the central :3330 router from
         Tailscale identity post-receipt."""
-        sink = self._bridge_sink
+        sink = self._bridge_sink or ctx.config.get("_bridge_sink")
         if sink is None:
-            return
+            raise RuntimeError("Apple Reminders bridge sink is not configured")
         member_id = str(self._config.get("member_id") or "")
         now = ctx.now_factory()
         provisional_owner_scope = (
@@ -1601,7 +1584,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             occurred_at=_to_iso(now),
             recorded_at="",
             source_adapter=self.name,
-            source_account_id=member_id or self.name,
+            source_account_id=str(self._config.get("provider_account_id") or ""),
             owner_scope=provisional_owner_scope,
             visibility_scope=provisional_owner_scope,
             sensitivity=self.sensitivity_floor,
@@ -1609,11 +1592,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             causation_id=causation_id,
             payload=payload,
         )
-        await self._dispatch_bridge_emit(envelope)
+        await self._dispatch_bridge_emit(envelope, sink=sink)
 
-    async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
+    async def _dispatch_bridge_emit(
+        self, envelope: EventEnvelope, *, sink: Any | None = None
+    ) -> None:
         """Require a durable central-ingest acknowledgement before returning."""
-        sink = self._bridge_sink
+        sink = sink or self._bridge_sink
         if sink is None:
             raise RuntimeError("Apple Reminders bridge sink is not configured")
         result = await sink.emit(envelope)

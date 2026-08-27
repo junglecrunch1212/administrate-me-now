@@ -1,6 +1,7 @@
-"""Integration tests for the Apple Reminders dual-deployment landed in
-prompt 11b-ii-α-2 (c1 manifest + c2 adapter branching + c3 bridge
-connector-pack scaffold).
+"""Integration tests for the Apple Reminders member-bridge boundary.
+
+The historical basename is retained for compatibility. The current contract
+is bridge-only for human-member Apple credentials.
 
 Three cross-cutting deliverables (§7 c4):
 
@@ -11,12 +12,9 @@ Three cross-cutting deliverables (§7 c4):
    loader contract end-to-end (subkind allow-list + entrypoint + pack
    name) is exercised on a clean copy of the c3-shipped manifest.
 
-2. ``test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_target_central``
-   — F-2 regression: the central pack stays validator-clean, the
-   ``AppleEventKitAdapter`` constructs cleanly with the
-   pre-α-2 config shape (no ``deployment_target`` key), and
-   ``start()`` defaults to ``"central"`` per the c2 implementation.
-   Central supervisor surface unchanged.
+2. ``test_human_member_eventkit_pack_refuses_central_runtime`` — the
+   human-member class refuses a missing/central target and therefore cannot
+   touch EventKit from the central composition root.
 
 3. ``test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_router_end_to_end``
    — full end-to-end: :class:`BridgeSupervisor` hosts an
@@ -46,6 +44,8 @@ unique across ``tests/integration/`` and the repo (verified against
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,7 +55,7 @@ import httpx
 import pytest
 import yaml
 
-import adminme.events.schemas.bridge  # noqa: F401  — registers bridge.enrolled@v1
+import adminme.events.schemas.adapters  # noqa: F401 — capability evidence schema
 from adminme.events.envelope import EventEnvelope
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
@@ -82,6 +82,9 @@ from adminme_bridge.packs import (
 )
 
 TEST_KEY = b"D" * 32
+ENROLLMENT_ID = "bridge-enrollment-test"
+REMINDERS_PACK = "reminders-apple-eventkit-bridge"
+PROVIDER_ACCOUNT = "provider-account:" + "a" * 32
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CENTRAL_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
@@ -92,6 +95,39 @@ BRIDGE_PACK_DIR = (
     / "connector_packs"
     / "reminders_apple_eventkit_bridge"
 )
+
+
+def _reminders_pack_config() -> dict[str, Any]:
+    return {
+        "member_id": "m1",
+        "provider_account_id": PROVIDER_ACCOUNT,
+        "deployment_target": "bridge",
+        "workspace": "personal",
+        "binding_provenance": "member-bridge-enrollment",
+        "ownership_attested": True,
+        "target_list_identifier": "test-list",
+        "allowed_container_ids": ["test-list"],
+        "shared_container_ids": [],
+        "permission_scope": [
+            "eventkit.reminders.read",
+            "eventkit.reminders.write",
+        ],
+    }
+
+
+def _transport_record() -> dict[str, Any]:
+    return {
+        "status": "active",
+        "member_id": "m1",
+        "enrollment_id": ENROLLMENT_ID,
+        "configured_packs": [REMINDERS_PACK],
+        "enabled_packs": [REMINDERS_PACK],
+        "authorized_packs": [],
+        "pack_config": {REMINDERS_PACK: _reminders_pack_config()},
+        "pack_capability_states": {REMINDERS_PACK: "not_attested"},
+        "provider_capability_state": "not_attested",
+        "capability_attestations": {},
+    }
 
 
 # ===========================================================================
@@ -140,32 +176,20 @@ def test_bridge_supervisor_loads_apple_eventkit_bridge_connector_pack(
 
 
 # ===========================================================================
-# 2. Central pack regression — defaults to central, validator-clean
+# 2. Central composition refusal — validator-clean, no EventKit construction
 # ===========================================================================
 
 
-def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_target_central() -> (
-    None
-):
-    """F-2 regression: the central pack still loads cleanly through the
-    validator, the central ``AppleEventKitAdapter`` constructs with the
-    pre-α-2 config shape (no ``deployment_target`` key), and
-    ``start()`` resolves ``deployment_target`` to ``"central"`` so the
-    11b-i + 11r-c emit shape is byte-for-byte preserved (per c2's F-2
-    implementation guarantee).
-
-    This is the install-time + runtime regression net for the central
-    deployment — α-2 must not break any existing operator's installed
-    central pack."""
-    # ----- install-time: validator surface still clean for the central -----
+def test_human_member_reminders_pack_refuses_central_runtime() -> None:
+    """The reusable class remains valid, but the member credential boundary
+    is bridge-only and fails before any EventKit store construction."""
     result = validate_adapter_pack(CENTRAL_PACK_DIR)
     errors = [f for f in result.findings if f.severity == "error"]
     assert errors == [], (
-        "central pack regression: validate_adapter_pack surfaced unexpected "
-        f"errors on the dual-deployment pack: {[(f.check, f.message) for f in errors]}"
+        "bridge-only pack regression: validate_adapter_pack surfaced unexpected "
+        f"errors: {[(f.check, f.message) for f in errors]}"
     )
 
-    # ----- runtime: AppleEventKitAdapter constructs without deployment_target ----
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -177,20 +201,24 @@ def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_ta
     spec.loader.exec_module(module)
     AppleEventKitAdapter = module.AppleEventKitAdapter
 
+    store_constructed = False
+
+    def _store_factory() -> object:
+        nonlocal store_constructed
+        store_constructed = True
+        return object()
+
     adapter = AppleEventKitAdapter(
         config={
-            # No ``deployment_target`` key — pre-α-2 config shape.
             "target_list_identifier": "list-household-central",
             "member_id": "member-central",
         },
-        ek_event_store_factory=lambda: object(),
+        ek_event_store_factory=_store_factory,
         member_role_resolver=lambda _mid: "adult",
         max_outbound_cycles=0,
         max_inbound_cycles=0,
     )
 
-    # Drive start() with an empty ctx.config so the adapter must take
-    # the default branch.
     from adminme.adapters.base import AdapterContext
 
     class _FakeEventLog:
@@ -208,21 +236,14 @@ def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_ta
     event_log = _FakeEventLog()
     ctx = AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
-        config={},  # no deployment_target → default "central"
+        config={},  # no deployment target must fail closed
         correlation_id_factory=lambda: "corr-regression",
         now_factory=lambda: datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc),
     )
-    asyncio.run(adapter.start(ctx=ctx))
-    assert adapter._deployment_target == "central"
-    assert adapter._sharing_model_value == "shared_central"
-    # No bridge sink ever wired — central path doesn't consult one.
-    assert adapter._bridge_sink is None
-    # adapter.authenticated landed in the local fake event log via the
-    # central typed event-sink path (NOT routed through any bridge sink) —
-    # this is the byte-for-byte preserved 11b-i / 11r-c emit shape.
-    auth = [c for c in event_log.calls if c.get("type") == "adapter.authenticated"]
-    assert len(auth) == 1
-    assert auth[0]["payload"]["adapter_name"] == "reminders-apple-eventkit"
+    with pytest.raises(ValueError, match="requires.*deployment_target='bridge'"):
+        asyncio.run(adapter.start(ctx=ctx))
+    assert store_constructed is False
+    assert event_log.calls == []
 
 
 # ===========================================================================
@@ -233,25 +254,8 @@ def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_ta
 _FROZEN_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
-class _StubInternalEmitsBridgeEnrolledOnStart:
-    """Stand-in for the central ``AppleEventKitAdapter`` that emits ONE
-    ``bridge.enrolled@v1`` envelope via the wrapper-injected sink on
-    ``start()``. We deliberately use ``bridge.enrolled@v1`` (registered
-    by α-1's schema module) rather than the central
-    ``adapter.authenticated@v1`` because the latter pins
-    ``token_storage_ref`` to an ``op://...`` pattern incompatible with
-    the central ``os://reminders-permission`` literal — that pin is a
-    pre-existing concern of the central-only path and is orthogonal to
-    the α-2 bridge sink end-to-end this test exercises. Mirrors the
-    α-1 mock-adapter approach
-    (``test_bridge_state_mirror_onramp.py::_MockCatBAdapter``).
-
-    The wrapper hands this stub a synthesized
-    :class:`AdapterContext` carrying the
-    :class:`IngestClientBridgeSink` under ``config["_bridge_sink"]``;
-    the stub emits via that sink so the wrapper layer's synthesis +
-    injection contract is exercised on the production-shaped chain.
-    """
+class _StubInternalEmitsCapabilityEvidenceOnStart:
+    """Emit exact content-free provider capability evidence through the wrapper."""
 
     def __init__(self, *, config: dict[str, Any]) -> None:
         self.config = dict(config)
@@ -268,24 +272,38 @@ class _StubInternalEmitsBridgeEnrolledOnStart:
         self.started = True
         sink = ctx.config["_bridge_sink"]
         member_id = ctx.config["_bridge_member_id"]
+        configuration_sha256 = hashlib.sha256(
+            json.dumps(
+                {REMINDERS_PACK: _reminders_pack_config()},
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        assert ctx.config["_bridge_configuration_sha256"] == configuration_sha256
         envelope = EventEnvelope(
             event_at_ms=int(time.time() * 1000),
             tenant_id="tenant-a",
-            type="bridge.enrolled",
-            schema_version=1,
+            type="adapter.authenticated",
+            schema_version=2,
             occurred_at=EventEnvelope.now_utc_iso(),
             source_adapter="reminders-apple-eventkit",
-            source_account_id=member_id,
+            source_account_id=PROVIDER_ACCOUNT,
             owner_scope=f"private:{member_id}",
             visibility_scope=f"private:{member_id}",
             sensitivity="normal",
             correlation_id=ctx.correlation_id_factory(),
             payload={
-                "member_id": member_id,
-                "bridge_node_id": "bridge-node-α2-test",
-                "tailscale_identity": "m1@example.ts.net",
-                "adapters_active": ["reminders-apple-eventkit"],
-                "enrolled_at": "2026-05-20T12:00:00+00:00",
+                "adapter_name": "reminders-apple-eventkit",
+                "adapter_family": "reminders",
+                "token_storage_ref": "keychain://device-permissions/reminders",
+                "authenticated_at": "2026-05-20T12:00:00Z",
+                "scopes": [
+                    "eventkit.reminders.read",
+                    "eventkit.reminders.write",
+                ],
+                "bridge_enrollment_id": ENROLLMENT_ID,
+                "configuration_sha256": configuration_sha256,
+                "provider_account_id": PROVIDER_ACCOUNT,
             },
         )
         self.emit_result = await sink.emit(envelope)
@@ -315,6 +333,7 @@ async def central_rig(tmp_path: Path):
     app = create_app()
     app.state.event_sink = EventWriter(log, bus)
     app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
+    app.state.bridge_enrollments = {"m1@example.ts.net": _transport_record()}
     app.state.ingest_count = 0
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -323,6 +342,7 @@ async def central_rig(tmp_path: Path):
         ingest = IngestClient(
             central_endpoint_url="http://central",
             tailscale_identity_header="m1@example.ts.net",
+            enrollment_id=ENROLLMENT_ID,
             client=http,
         )
         try:
@@ -335,8 +355,12 @@ async def central_rig(tmp_path: Path):
 def _bridge_config() -> BridgeConfig:
     return BridgeConfig(
         member_id="m1",
+        enrollment_id=ENROLLMENT_ID,
         central_endpoint="http://central",
         tailscale_identity="m1@example.ts.net",
+        configured_packs=[REMINDERS_PACK],
+        enabled_packs=[REMINDERS_PACK],
+        pack_config={REMINDERS_PACK: _reminders_pack_config()},
     )
 
 
@@ -378,24 +402,22 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
       :class:`BridgeSupervisor` adapter list).
     """
     # Monkeypatch the wrapper's central-adapter loader so the internal
-    # adapter is the stub-that-emits-bridge.enrolled rather than the
-    # real central AppleEventKitAdapter — the central
-    # ``adapter.authenticated`` emit ships an
-    # ``os://reminders-permission`` token_storage_ref incompatible with
-    # the central schema's ``op://...`` pattern (a pre-existing
-    # concern of the central-only path, orthogonal to α-2's bridge
-    # chain).
+    # adapter is the deterministic evidence stub rather than constructing an
+    # OS EventKit store in a repository-only process test.
     monkeypatch.setattr(
         wrapper_mod,
         "_load_central_adapter_class",
-        lambda: _StubInternalEmitsBridgeEnrolledOnStart,
+        lambda: _StubInternalEmitsCapabilityEvidenceOnStart,
     )
 
     log: EventLog = central_rig["log"]
     ingest: IngestClient = central_rig["ingest"]
 
     wrapper = AppleEventKitBridgeAdapter(
-        internal_config={"target_list_identifier": "test-list"}
+        internal_config={
+            "target_list_identifier": "test-list",
+            "provider_account_id": "provider-account:" + "a" * 32,
+        }
     )
     supervisor = BridgeSupervisor(
         config=_bridge_config(),
@@ -404,7 +426,7 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     )
     await supervisor.start()
     # Yield until the wrapper's internal-stub emit-and-return finishes.
-    captured: list[_StubInternalEmitsBridgeEnrolledOnStart] = []
+    captured: list[_StubInternalEmitsCapabilityEvidenceOnStart] = []
     for _ in range(100):
         await asyncio.sleep(0.01)
         internal = getattr(wrapper, "_internal", None)
@@ -421,7 +443,7 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
 
     stored = await log.get(emit_result.event_id)
     assert stored is not None
-    assert stored["type"] == "bridge.enrolled"
+    assert stored["type"] == "adapter.authenticated"
     # [§6.19] / memo 04 §2.2: central :3337 router re-stamped
     # ``owner_scope`` from the Tailscale identity (DictMemberIdResolver
     # maps ``m1@example.ts.net → m1``). The wrapper's provisional
@@ -430,7 +452,8 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     # is the Tailscale-derived value, NOT a wrapper-controlled one.
     assert stored["owner_scope"] == "private:m1"
     assert stored["source_adapter"] == "reminders-apple-eventkit"
-    assert stored["payload"]["adapters_active"] == ["reminders-apple-eventkit"]
+    assert stored["payload"]["bridge_enrollment_id"] == ENROLLMENT_ID
+    assert stored["payload"]["provider_account_id"] == PROVIDER_ACCOUNT
 
 
 def test_apple_eventkit_bridge_connector_pack_module_exports_wrapper() -> None:

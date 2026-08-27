@@ -670,6 +670,11 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "role": record.get("role"),
                 "identity_bound": bool(identity),
                 "adapters_active": list(record.get("adapters_active") or []),
+                "configured_pack_count": len(record.get("configured_packs") or []),
+                "authorized_pack_count": len(record.get("authorized_packs") or []),
+                "provider_capability_state": record.get(
+                    "provider_capability_state", "not_attested"
+                ),
                 "activated_at": record.get("activated_at"),
             }
         )

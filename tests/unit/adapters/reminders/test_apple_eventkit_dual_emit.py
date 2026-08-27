@@ -42,6 +42,7 @@ import asyncio
 import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -96,11 +97,19 @@ class _FakeEventLog:
         self.calls.append(envelope.model_dump())
         return f"event-{len(self.calls)}"
 
+    async def emit(self, envelope: Any) -> Any:
+        event_id = await self.write(envelope)
+        return SimpleNamespace(ok=True, event_id=event_id, error=None)
+
 
 def _make_ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
-        config={},
+        config={
+            "deployment_target": "bridge",
+            "_bridge_member_id": "member-001",
+            "_bridge_sink": event_log,
+        },
         correlation_id_factory=lambda: "corr-dual-emit",
         now_factory=lambda: _FROZEN_NOW,
     )
@@ -204,11 +213,13 @@ def _make_adapter(
         config={
             "target_list_identifier": "list-household-001",
             "member_id": "member-001",
+            "provider_account_id": "provider-account:reminders-test",
         },
         ek_event_store_factory=lambda: store,
         member_role_resolver=lambda _mid: member_role,
     )
     adapter._ek_store = store
+    adapter._bridge_sink = None
     return adapter
 
 

@@ -92,6 +92,7 @@ class _RecordingStateMirrorAdapter:
 def _config() -> BridgeConfig:
     return BridgeConfig(
         member_id="m1",
+        enrollment_id="bridge-enrollment-test",
         central_endpoint="http://127.0.0.1:3330",
         tailscale_identity="m1@example.ts.net",
     )
@@ -100,17 +101,21 @@ def _config() -> BridgeConfig:
 def test_configured_builtin_knowledge_packs_are_real_and_opt_in(
     tmp_path: Path,
 ) -> None:
+    packs = [
+        "knowledge-apple-notes",
+        "knowledge-apple-voice-memos",
+        "knowledge-obsidian",
+    ]
     config = BridgeConfig(
         member_id="m1",
+        enrollment_id="bridge-enrollment-test",
         tenant_id="tenant-one",
         central_endpoint="http://127.0.0.1:3330",
         tailscale_identity="m1@example.ts.net",
         packs_dir=str(tmp_path / "installed-packs"),
-        enabled_packs=[
-            "knowledge-apple-notes",
-            "knowledge-apple-voice-memos",
-            "knowledge-obsidian",
-        ],
+        configured_packs=packs,
+        enabled_packs=packs,
+        pack_config={pack: {"member_id": "m1"} for pack in packs},
     )
     handles = configured_packs(config)
     assert [handle.name for handle in handles] == config.enabled_packs

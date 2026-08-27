@@ -4,8 +4,9 @@
 # the Reminders adapter does NOT use a 1Password reference: EventKit
 # access is an OS-level permission grant per
 # docs/reference/apple-eventkit/access.md. The bootstrap-wizard
-# (prompt 16) wires `EKEventStore.requestFullAccessToReminders` at
-# install time; until then operators grant access manually.
+# (prompt 16) wires `EKEventStore.requestFullAccessToReminders` on a reviewed
+# member bridge. This current schema does not authorize a central CoS Apple
+# account.
 #
 # sensitivity_floor is hardcoded `normal` at the pack level per
 # SYSTEM_INVARIANTS.md §6 invariant 10 — adapters never auto-elevate.
@@ -15,6 +16,17 @@
 
 target_list_identifier: "AdministrateMe Household"
 member_id: member-001
+provider_account_id: provider-account:00000000000000000000000000000000
+deployment_target: bridge
+workspace: personal
+permission_scope:
+  - eventkit.reminders.read
+  - eventkit.reminders.write
+allowed_container_ids:
+  - "AdministrateMe Household"
+shared_container_ids: []
+binding_provenance: member-bridge-enrollment
+ownership_attested: true
 never_sync_list_substrings:
   - "Work"
   - "Case"

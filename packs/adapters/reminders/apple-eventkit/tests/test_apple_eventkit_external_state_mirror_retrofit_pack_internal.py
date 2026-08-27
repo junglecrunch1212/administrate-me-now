@@ -87,7 +87,7 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     cls_entry = cls_caps[0]
     manifest_entry = manifest.capabilities[0]
     assert cls_entry["kind"] == manifest_entry.kind == "Cat-B"
-    assert cls_entry["runtime"] == manifest_entry.runtime == "central"
+    assert cls_entry["runtime"] == manifest_entry.runtime == "bridge"
     assert (
         cls_entry["event_families"]
         == manifest_entry.event_families
