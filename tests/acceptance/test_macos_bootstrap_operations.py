@@ -10,6 +10,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -532,7 +533,7 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
         assert secret not in backup_bytes
 
 
-def test_candidate_pending_readiness_process_never_changes_active_deployment(
+def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -733,6 +734,144 @@ def test_candidate_pending_readiness_process_never_changes_active_deployment(
         if path.is_file()
     } == backup_before
     assert not paths.rollback_dir.exists() or not any(paths.rollback_dir.iterdir())
+
+    # The guarded CLI is the only consumer. It creates and rehearses a second,
+    # exact fresh artifact before any selector, then durably commits the active
+    # pointer/readiness pair and archives the transaction journal.
+    activation = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "upgrade",
+            str(candidate),
+            "--pending-attestation-id",
+            result["attestation_id"],
+        ],
+        cwd=candidate,
+        env={
+            **environment,
+            "ADMINME_TEST_MODE": "1",
+            "ADMINME_REPOSITORY_ROOT": str(candidate),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert activation.returncode == 0, activation.stdout + activation.stderr
+    activated = json.loads(activation.stdout)
+    assert activated["status"] == "upgraded"
+    assert activated["commit"] == candidate_commit
+    assert activated["pending_attestation_id"] == result["attestation_id"]
+    assert activated["fresh_backup_sha256"]
+    assert activated["fresh_rehearsal_receipt_sha256"]
+    selected = json.loads(pointer.read_text("utf-8"))
+    assert selected["commit"] == candidate_commit
+    assert selected["previous"]["commit"] == predecessor_commit
+    promoted = json.loads(active_readiness.read_text("utf-8"))
+    assert promoted["contract"] == "deployment-readiness-v1"
+    assert promoted["deployment_binding"]["release_commit"] == candidate_commit
+    assert promoted["activation_evidence"]["candidate_live_doctor"] is True
+    assert promoted["activation_evidence"]["post_switch_acceptance"] == (
+        "pending_post_switch"
+    )
+    journal_root = paths.app_dir / "activation"
+    assert not (journal_root / "active.json").exists()
+    histories = list((journal_root / "history").glob("*.json"))
+    assert len(histories) == 1
+    assert json.loads(histories[0].read_text("utf-8"))["phase"] == "committed"
+    assert len(list(paths.backup_dir.glob("activation-*.ambackup"))) == 1
+    assert len(list(paths.backup_dir.glob("activation-rehearsal-*.json"))) == 1
+    promoted_bytes = active_readiness.read_bytes()
+
+    interrupted = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "rollback",
+        ],
+        cwd=candidate,
+        env={
+            **environment,
+            "ADMINME_TEST_MODE": "1",
+            "ADMINME_REPOSITORY_ROOT": str(candidate),
+            "ADMINME_TEST_ACTIVATION_CRASH_AFTER": "pointer_selected",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert interrupted.returncode == -signal.SIGKILL
+    assert (journal_root / "active.json").is_file()
+    assert json.loads(pointer.read_text("utf-8"))["commit"] == predecessor_commit
+    assert active_readiness.read_bytes() == promoted_bytes
+
+    recovery = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "rollback",
+        ],
+        cwd=candidate,
+        env={
+            **environment,
+            "ADMINME_TEST_MODE": "1",
+            "ADMINME_REPOSITORY_ROOT": str(candidate),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert recovery.returncode == 0, recovery.stdout + recovery.stderr
+    recovered = json.loads(recovery.stdout)
+    assert recovered["status"] == "recovered"
+    assert json.loads(pointer.read_text("utf-8"))["commit"] == candidate_commit
+    assert active_readiness.read_bytes() == promoted_bytes
+    assert not (journal_root / "active.json").exists()
+
+    rollback = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "rollback",
+        ],
+        cwd=candidate,
+        env={
+            **environment,
+            "ADMINME_TEST_MODE": "1",
+            "ADMINME_REPOSITORY_ROOT": str(candidate),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert rollback.returncode == 0, rollback.stdout + rollback.stderr
+    rolled_back = json.loads(rollback.stdout)
+    assert rolled_back["status"] == "rolled_back"
+    assert rolled_back["commit"] == predecessor_commit
+    assert pointer.read_bytes() == pointer_before
+    assert active_readiness.read_bytes() == active_before[0]
+    histories = list((journal_root / "history").glob("*.json"))
+    assert len(histories) == 3
+    assert {json.loads(path.read_text("utf-8"))["operation"] for path in histories} == {
+        "activate",
+        "rollback",
+    }
 
 
 def test_reviewed_candidate_controller_completes_guarded_upgrade(
@@ -1047,6 +1186,7 @@ def test_supported_update_launcher_holds_fixed_controller_lock_through_upgrade(
     )
     command = [
         str(candidate / "bootstrap" / "update.sh"),
+        f"--pending-attestation-id={'0' * 32}",
         str(candidate),
     ]
     lock_path = paths.app_dir / ".upgrade-operation.lock"
@@ -1076,9 +1216,9 @@ def test_supported_update_launcher_holds_fixed_controller_lock_through_upgrade(
 
     # With the cooperative lock released, the real public shell, bounded
     # launcher, fixed supervisor, guardian, and fixed controller all run. The
-    # production controller must still reject this deliberately test-secret
-    # fixture before backup or selector effects; the internal harness below is
-    # the separate credential-free success proof.
+    # production controller must reject the deliberately absent exact pending
+    # artifact before backup or selector effects; the internal harness below is
+    # the separate credential-free legacy-composition proof.
     public_controller_attempt = subprocess.run(
         command,
         cwd=candidate,
@@ -1090,7 +1230,7 @@ def test_supported_update_launcher_holds_fixed_controller_lock_through_upgrade(
     )
     public_output = public_controller_attempt.stdout + public_controller_attempt.stderr
     assert public_controller_attempt.returncode == 1, public_output
-    assert "secret reference belongs to another instance" in public_output
+    assert "candidate-pending readiness is not eligible" in public_output
     assert json.loads(pointer_path.read_text("utf-8"))["commit"] == predecessor_commit
     assert not list(paths.backup_dir.glob("*.ambackup"))
     assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
@@ -1167,7 +1307,11 @@ def test_public_update_refuses_symlinked_instance_before_deployment_writes(
     )
 
     completed = subprocess.run(
-        [str(candidate / "bootstrap" / "update.sh"), str(candidate)],
+        [
+            str(candidate / "bootstrap" / "update.sh"),
+            f"--pending-attestation-id={'0' * 32}",
+            str(candidate),
+        ],
         cwd=candidate,
         env=environment,
         check=False,

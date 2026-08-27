@@ -1,6 +1,6 @@
 # Change Order 019 — Central Host topology and service-channel readiness
 
-Status: **PHASE A RECOVERY AND CANDIDATE-PENDING CONTRACT IMPLEMENTED; PHASE B BLOCKED ON OWNER-GATED HTR-08 EVIDENCE, UPDATER-CONSUMED FRESH REHEARSAL, AND CRASH-RECOVERABLE REPLACEMENT; OWNER ACTIONS NOT AUTHORIZED**
+Status: **PHASE A RECOVERY, CANDIDATE-PENDING, AND JOURNALED ACTIVATION MECHANICS IMPLEMENTED; PHASE B BLOCKED ON OWNER-GATED HTR-08/HTR-09 EXECUTION; OWNER ACTIONS NOT AUTHORIZED**
 
 Date: 2026-08-26
 
@@ -290,12 +290,22 @@ updater-created backup, rollback compatibility/eligibility, crash-recoverable
 replacement, candidate live Doctor, and post-switch acceptance as
 `not_evaluated`. This **MODERNIZES** candidate-pending evidence while
 **PRESERVING** active readiness, human authority, the 31-day freshness limit,
-observation, and every activation prerequisite. HTR-08 is now owner-gated and
-not executed; HTR-09 and deployment remain executably blocked until the
-updater can explicitly consume one artifact by ID, rehearse its own fresh
-backup, prove predecessor compatibility, and journal recovery across every
-selector transition. Owner authorization alone cannot make the current
-activation packet runnable.
+observation, and every activation prerequisite. HTR-08 is owner-gated and not
+executed. The guarded updater now accepts only one explicit pending artifact
+ID, revalidates it before backup and before selection, creates and rehearses
+its own exact fresh encrypted artifact, proves the retained predecessor's
+tracked source/runtime/OpenClaw/LaunchAgent rollback coordinates, and derives
+active readiness only after the pointer switch inside one durable transaction.
+The mode-0600 journal captures the exact predecessor pointer/readiness bytes
+and running state before backup quiescence, records intent before each
+OpenClaw/plugin/pointer/readiness/tool/LaunchAgent/service transition, and
+restores the predecessor on ordinary failure or the next guarded invocation
+after process death. Explicit rollback uses the committed activation history
+and the same journaling rule. This **MODERNIZES** HTR-09's mechanical boundary
+while **PRESERVING** human authority, observation mode, post-switch Doctor and
+acceptance, and the rule that fixture evidence is not HTR completion. HTR-09
+and deployment are therefore owner-gated and not executed, not authorized by
+this change.
 
 This compatibility boundary is classified as **MODERNIZE** for source-identity
 evidence, bounded public-entry Git validation and supervisor handoff,
@@ -336,10 +346,11 @@ rebuilds them from scratch, and verifies exact preferred Python in both formula
 and venv plus exact Node and Poetry. Every active or recursively retained
 predecessor remains read-only. The supported fixed-commit activate launcher
 holds one cooperative operation lock through controller cleanup; direct
-rollback acquires the same canonical manager lock for its own operation. This
-does not survive a crash or replace
-the required activation journal. The preparation record is consumed before
-the first selector mutation and cannot authorize preparation again. Ignored
-worktree files are never copied into a marker-attested release. This fixes
-preliminary HTR-05 source compatibility only and does not remove the
-HTR-08/HTR-09 blockers above.
+rollback acquires the same canonical manager lock. The separate activation
+journal survives controller death and retains recovery authority until the
+exact predecessor is restored or the transaction commits. The preparation
+record is consumed before the first selector mutation and cannot authorize
+preparation again. Ignored worktree files are never copied into a
+marker-attested release. These mechanics make the activation path executable
+only after a valid owner-created HTR-08 artifact is supplied; they do not
+execute or authorize HTR-08, HTR-09, or deployment.

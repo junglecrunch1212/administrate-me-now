@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
 import json
@@ -19,7 +20,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from bootstrap.activation_transaction import (
+    ActivationJournal,
+    ActivationJournalError,
+    sha256_json,
+)
 from bootstrap.backup_restore import BackupManager
+from bootstrap.candidate_readiness import (
+    CandidateReadinessError,
+    build_active_attestation_from_pending,
+    load_pending_attestation_for_activation,
+)
 from bootstrap.contracts import (
     DeploymentPaths,
     atomic_write,
@@ -212,13 +223,16 @@ class UpgradeManager:
         test_mode: bool = False,
         approve_runtime_migration: bool = False,
         approve_source_assessment_repair: bool = False,
+        pending_attestation_id: str | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
         self.test_mode = test_mode
         self.approve_runtime_migration = approve_runtime_migration
         self.approve_source_assessment_repair = approve_source_assessment_repair
+        self.pending_attestation_id = pending_attestation_id
         self.services = ServiceManager(paths, test_mode=test_mode)
+        self.activation_journal = ActivationJournal(paths)
         self._active_preparation_activity_descriptor: int | None = None
         self._active_preparation_activity_path: Path | None = None
         self._active_preparation_activity_coordinate: tuple[int, int] | None = None
@@ -344,6 +358,170 @@ class UpgradeManager:
                 raise UpgradeError(
                     "upgrade operation lock cleanup failed"
                 ) from cleanup_error
+
+    def _read_private_json_payload(
+        self,
+        path: Path,
+        *,
+        missing_ok: bool = False,
+        maximum_size: int = 4 * 1024 * 1024,
+    ) -> tuple[bytes | None, dict[str, Any] | None]:
+        """Read one mutable control file without following or racing its name."""
+
+        if not os.path.lexists(path):
+            if missing_ok:
+                return None, None
+            raise UpgradeError(f"required control file is missing: {path.name}")
+        descriptor: int | None = None
+        try:
+            public_before = path.lstat()
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.getuid()
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_size <= 0
+                or before.st_size > maximum_size
+                or (before.st_dev, before.st_ino)
+                != (public_before.st_dev, public_before.st_ino)
+            ):
+                raise UpgradeError(f"control file is unsafe: {path.name}")
+            payload = bytearray()
+            while len(payload) < before.st_size:
+                chunk = os.read(
+                    descriptor,
+                    min(64 * 1024, before.st_size - len(payload)),
+                )
+                if not chunk:
+                    break
+                payload.extend(chunk)
+            after = os.fstat(descriptor)
+            public_after = path.lstat()
+            if (
+                len(payload) != before.st_size
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                )
+                or (after.st_dev, after.st_ino)
+                != (public_after.st_dev, public_after.st_ino)
+            ):
+                raise UpgradeError(f"control file changed while read: {path.name}")
+
+            def reject_duplicate_keys(
+                pairs: list[tuple[str, Any]],
+            ) -> dict[str, Any]:
+                value: dict[str, Any] = {}
+                for key, child in pairs:
+                    if key in value:
+                        raise UpgradeError(
+                            f"control file has duplicate keys: {path.name}"
+                        )
+                    value[key] = child
+                return value
+
+            value = json.loads(
+                bytes(payload).decode("utf-8"),
+                object_pairs_hook=reject_duplicate_keys,
+            )
+            if not isinstance(value, dict):
+                raise UpgradeError(f"control file is invalid: {path.name}")
+            return bytes(payload), value
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise UpgradeError(f"control file is invalid: {path.name}") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def _hash_private_file(
+        self,
+        path: Path,
+        *,
+        maximum_size: int = 8 * 1024 * 1024 * 1024,
+    ) -> str:
+        """Hash one private regular artifact while binding its public coordinate."""
+
+        descriptor: int | None = None
+        try:
+            public_before = path.lstat()
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.getuid()
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_size <= 0
+                or before.st_size > maximum_size
+                or (before.st_dev, before.st_ino)
+                != (public_before.st_dev, public_before.st_ino)
+            ):
+                raise UpgradeError(f"private artifact is unsafe: {path.name}")
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > maximum_size:
+                    raise UpgradeError("private artifact exceeds its size boundary")
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+            public_after = path.lstat()
+            if (
+                total != before.st_size
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                )
+                or (after.st_dev, after.st_ino)
+                != (public_after.st_dev, public_after.st_ino)
+            ):
+                raise UpgradeError("private artifact changed while hashed")
+            return digest.hexdigest()
+        except OSError as exc:
+            raise UpgradeError(f"private artifact is unavailable: {path.name}") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def _test_crash_after_journal_phase(self, phase: str) -> None:
+        """Deterministic process-death seam available only to explicit test mode."""
+
+        if (
+            self.test_mode
+            and os.environ.get("ADMINME_TEST_ACTIVATION_CRASH_AFTER") == phase
+        ):
+            os.kill(os.getpid(), signal.SIGKILL)
 
     def _read_release_pointer(self) -> dict[str, Any] | None:
         pointer = self.paths.app_dir / "current-release.json"
@@ -1078,9 +1256,728 @@ class UpgradeManager:
                     "its original items were not changed."
                 )
 
+    def _capture_activation_baseline(
+        self,
+    ) -> tuple[bytes, dict[str, Any], bytes | None, dict[str, Any] | None]:
+        pointer_path = self.paths.app_dir / "current-release.json"
+        pointer_payload, pointer = self._read_private_json_payload(pointer_path)
+        assert pointer_payload is not None and pointer is not None
+        validated = self._read_release_pointer()
+        if validated != pointer:
+            raise UpgradeError("active-release pointer changed during journal capture")
+        readiness_path = (
+            self.paths.instance_dir / "config" / "deployment-readiness.json"
+        )
+        readiness_payload, readiness = self._read_private_json_payload(
+            readiness_path,
+            missing_ok=True,
+        )
+        if readiness is not None and readiness.get("contract") != (
+            "deployment-readiness-v1"
+        ):
+            raise UpgradeError("active deployment readiness is invalid")
+        return pointer_payload, pointer, readiness_payload, readiness
+
+    def _restore_journal_control_files(self, journal: dict[str, Any]) -> None:
+        try:
+            pointer_payload = base64.b64decode(
+                journal["initial_pointer_bytes"], validate=True
+            )
+        except (TypeError, ValueError) as exc:
+            raise UpgradeError("activation journal pointer bytes are invalid") from exc
+        if (
+            hashlib.sha256(pointer_payload).hexdigest()
+            != journal["initial_pointer_sha256"]
+        ):
+            raise UpgradeError("activation journal pointer bytes changed")
+        atomic_write(
+            self.paths.app_dir / "current-release.json",
+            pointer_payload,
+            mode=0o600,
+        )
+        self._fsync_directory(self.paths.app_dir)
+
+        readiness_path = (
+            self.paths.instance_dir / "config" / "deployment-readiness.json"
+        )
+        encoded = journal["initial_readiness_bytes"]
+        if encoded is None:
+            if os.path.lexists(readiness_path):
+                self._read_private_json_payload(readiness_path)
+                readiness_path.unlink()
+                self._fsync_directory(readiness_path.parent)
+            return
+        try:
+            readiness_payload = base64.b64decode(encoded, validate=True)
+        except (TypeError, ValueError) as exc:
+            raise UpgradeError(
+                "activation journal readiness bytes are invalid"
+            ) from exc
+        if (
+            hashlib.sha256(readiness_payload).hexdigest()
+            != journal["initial_readiness_sha256"]
+        ):
+            raise UpgradeError("activation journal readiness bytes changed")
+        atomic_write(readiness_path, readiness_payload, mode=0o600)
+        self._fsync_directory(readiness_path.parent)
+
+    def _recover_interrupted_transaction(self) -> dict[str, Any] | None:
+        """Converge an interrupted transaction to its exact captured predecessor."""
+
+        try:
+            journal = self.activation_journal.load()
+        except ActivationJournalError as exc:
+            raise UpgradeError("activation transaction journal is invalid") from exc
+        if journal is None:
+            return None
+        if journal["phase"] in {"committed", "recovered"}:
+            try:
+                history = self.activation_journal.finish(journal)
+            except ActivationJournalError as exc:
+                raise UpgradeError(
+                    "terminal activation journal cannot be archived"
+                ) from exc
+            return {
+                "status": journal["phase"],
+                "transaction_id": journal["transaction_id"],
+                "history": str(history),
+                "content_exposed": False,
+            }
+
+        predecessor_commit = journal["predecessor_commit"]
+        predecessor = Path(journal["predecessor_path"])
+        expected = self.paths.app_dir / "releases" / predecessor_commit
+        if predecessor != expected:
+            raise UpgradeError("activation journal predecessor coordinate is invalid")
+        ensure_within(predecessor, self.paths.app_dir / "releases")
+        try:
+            metadata = predecessor.lstat()
+        except OSError as exc:
+            raise UpgradeError("activation predecessor is unavailable") from exc
+        if (
+            predecessor.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o022
+        ):
+            raise UpgradeError("activation predecessor coordinate is unsafe")
+        if not self.test_mode:
+            try:
+                verify_release_source_identity(
+                    predecessor,
+                    repository=self.root,
+                    commit=predecessor_commit,
+                    allow_legacy_tree=True,
+                    require_tracked_tree=True,
+                    retained_by_commit=journal["candidate_commit"],
+                )
+            except SourceIdentityError as exc:
+                raise UpgradeError("activation predecessor source is invalid") from exc
+            self._validate_prepared_runtime(predecessor)
+
+        try:
+            recovery_journal = self.activation_journal.transition(
+                journal,
+                "recovering",
+            )
+            journal = recovery_journal
+            recovery_errors: list[Exception] = []
+            try:
+                self.services.stop()
+            except Exception as exc:
+                recovery_errors.append(exc)
+            for operation in (
+                lambda: self._install_reviewed_openclaw(predecessor),
+                lambda: reconcile_administrateme_plugin(
+                    self.paths,
+                    predecessor,
+                    test_mode=self.test_mode,
+                ),
+                lambda: self._restore_journal_control_files(recovery_journal),
+                lambda: install_launch_agents(
+                    self.paths,
+                    predecessor,
+                    test_mode=self.test_mode,
+                ),
+            ):
+                try:
+                    operation()
+                except Exception as exc:
+                    recovery_errors.append(exc)
+            if journal["was_running"] and not recovery_errors:
+                try:
+                    restored = self.services.start()
+                    if restored.status != "healthy":
+                        raise UpgradeError(
+                            "recovered predecessor did not become healthy: "
+                            f"status={restored.status}, runtime={restored.runtime}, "
+                            f"openclaw={restored.openclaw}"
+                        )
+                except Exception as exc:
+                    recovery_errors.append(exc)
+            else:
+                try:
+                    self.services.stop()
+                except Exception as exc:
+                    recovery_errors.append(exc)
+            if recovery_errors:
+                detail = "; ".join(
+                    f"{type(error).__name__}: {error}" for error in recovery_errors
+                )
+                raise UpgradeError(
+                    "interrupted activation recovery did not converge: " + detail
+                )
+            journal = self.activation_journal.transition(journal, "recovered")
+            history = self.activation_journal.finish(journal)
+        except ActivationJournalError as exc:
+            raise UpgradeError(
+                "activation transaction recovery journal failed"
+            ) from exc
+        return {
+            "status": "recovered",
+            "transaction_id": journal["transaction_id"],
+            "history": str(history),
+            "content_exposed": False,
+        }
+
+    def _prove_predecessor_rollback_eligibility(
+        self,
+        *,
+        candidate: Path,
+        candidate_commit: str,
+        candidate_release: Path,
+        predecessor_commit: str,
+        predecessor_release: Path,
+        pointer_chain_sha256: str,
+    ) -> dict[str, Any]:
+        expected = self.paths.app_dir / "releases" / predecessor_commit
+        if predecessor_release != expected:
+            raise UpgradeError("retained predecessor coordinate is invalid")
+        try:
+            source = verify_release_source_identity(
+                predecessor_release,
+                repository=candidate,
+                commit=predecessor_commit,
+                allow_legacy_tree=True,
+                require_tracked_tree=True,
+                retained_by_commit=candidate_commit,
+            )
+        except SourceIdentityError as exc:
+            raise UpgradeError("retained predecessor source is invalid") from exc
+        compatibility = validate_candidate(
+            predecessor_release,
+            active_root=candidate_release,
+            approve_runtime_migration=True,
+            allow_openclaw_rollback=True,
+        )
+        self._validate_prepared_runtime(predecessor_release)
+        for relative in (
+            Path("bootstrap") / "install-openclaw-source.sh",
+            Path("bootstrap") / "versions.json",
+        ):
+            if not (predecessor_release / relative).is_file():
+                raise UpgradeError(
+                    "retained predecessor recovery coordinate is missing"
+                )
+        return {
+            "contract": "administrateme-predecessor-rollback-eligibility-v1",
+            "predecessor_commit": predecessor_commit,
+            "pointer_chain_sha256": pointer_chain_sha256,
+            "source_identity_method": source["source_identity_method"],
+            "tracked_source_tree_matches": source.get(
+                "tracked_source_tree_matches", True
+            ),
+            "candidate_rollback_compatible": compatibility["compatible"] is True,
+            "prepared_runtime_valid": True,
+            "launchagent_restore_available": True,
+            "openclaw_restore_available": True,
+            "content_exposed": False,
+        }
+
     def activate(self, candidate: Path) -> dict[str, Any]:
         with self._operation_lock():
-            return self._activate_locked(candidate)
+            recovered = self._recover_interrupted_transaction()
+            if recovered is not None:
+                return recovered
+            if self.pending_attestation_id is None:
+                if not self.test_mode:
+                    raise UpgradeError(
+                        "activation requires an explicit candidate-pending attestation"
+                    )
+                return self._activate_locked(candidate)
+            return self._activate_transactional_locked(candidate)
+
+    def _activate_transactional_locked(self, candidate: Path) -> dict[str, Any]:
+        """Run one evidence-bound, crash-recoverable candidate activation."""
+
+        candidate = candidate.resolve()
+        commit = self._candidate_commit(candidate)
+        self._attest_controller_provenance(candidate, commit)
+        active_root, protected_roots, pointer_digest, pointer_rows = (
+            self._release_pointer_snapshot()
+        )
+        if not pointer_rows:
+            raise UpgradeError("activation requires an exact predecessor pointer")
+        if len(pointer_rows) >= _MAX_RELEASE_POINTER_DEPTH:
+            raise UpgradeError(
+                "active-release pointer chain is at its safe retention limit"
+            )
+        target_release = self.paths.app_dir / "releases" / commit
+        if target_release.resolve() in protected_roots:
+            raise UpgradeError(
+                "candidate is already selected or retained; installed releases "
+                "cannot be prepared or selected again"
+            )
+        assert self.pending_attestation_id is not None
+        try:
+            pending, pending_sha256, pending_snapshot = (
+                load_pending_attestation_for_activation(
+                    self.paths,
+                    attestation_id=self.pending_attestation_id,
+                    candidate=candidate,
+                    candidate_commit=commit,
+                )
+            )
+        except CandidateReadinessError as exc:
+            raise UpgradeError("candidate-pending readiness is not eligible") from exc
+
+        repair_policy = (
+            load_repair_policy(candidate)
+            if self.approve_source_assessment_repair
+            else None
+        )
+        repair_diagnostics = (
+            self._validate_source_repair_online(repair_policy)
+            if repair_policy is not None
+            else None
+        )
+        compatibility = validate_candidate(
+            candidate,
+            active_root=active_root,
+            approve_runtime_migration=self.approve_runtime_migration,
+        )
+        self._preflight_keychain_access(candidate)
+        release = self._publish_release(candidate, commit)
+        pointer_payload, pointer, readiness_payload, readiness = (
+            self._capture_activation_baseline()
+        )
+        (
+            current_pointer,
+            current_active,
+            _current_protected,
+            current_digest,
+            _current_rows,
+        ) = self._release_pointer_state()
+        if (
+            current_pointer != pointer
+            or current_active.resolve() != active_root.resolve()
+            or current_digest != pointer_digest
+        ):
+            raise UpgradeError("active-release pointer changed before journaling")
+        predecessor_commit = pointer_rows[0]["commit"]
+        predecessor_release = Path(pointer_rows[0]["path"])
+        was_running = self.services.status().status != "stopped"
+        if repair_policy is not None and not was_running:
+            raise UpgradeError(
+                "declared source-assessment repair requires running services "
+                "at the quiescence boundary"
+            )
+
+        transaction_id = uuid.uuid4().hex
+        try:
+            journal = self.activation_journal.create(
+                {
+                    "transaction_id": transaction_id,
+                    "operation": "activate",
+                    "phase": "created",
+                    "candidate_commit": commit,
+                    "candidate_path": str(candidate),
+                    "target_commit": commit,
+                    "target_path": str(release),
+                    "predecessor_commit": predecessor_commit,
+                    "predecessor_path": str(predecessor_release),
+                    "initial_pointer": pointer,
+                    "initial_pointer_bytes": base64.b64encode(pointer_payload).decode(
+                        "ascii"
+                    ),
+                    "initial_pointer_sha256": hashlib.sha256(
+                        pointer_payload
+                    ).hexdigest(),
+                    "initial_readiness": readiness,
+                    "initial_readiness_bytes": (
+                        base64.b64encode(readiness_payload).decode("ascii")
+                        if readiness_payload is not None
+                        else None
+                    ),
+                    "initial_readiness_sha256": (
+                        hashlib.sha256(readiness_payload).hexdigest()
+                        if readiness_payload is not None
+                        else None
+                    ),
+                    "was_running": was_running,
+                    "pending_attestation_id": self.pending_attestation_id,
+                    "pending_attestation_sha256": pending_sha256,
+                    "fresh_backup": None,
+                    "rollback_eligibility": None,
+                    "active_readiness": None,
+                }
+            )
+        except ActivationJournalError as exc:
+            raise UpgradeError("activation transaction cannot be journaled") from exc
+
+        backup_result: dict[str, Any] | None = None
+        rehearsal: dict[str, Any] | None = None
+        eligibility: dict[str, Any] | None = None
+        source_repair_evidence: dict[str, Any] | None = None
+        history: Path | None = None
+        try:
+            backup_path = self.paths.backup_dir / (
+                f"activation-{transaction_id}.ambackup"
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "backup_creating",
+            )
+            backup_manager = BackupManager(
+                self.paths,
+                root=candidate,
+                test_mode=self.test_mode,
+            )
+            backup_result = backup_manager.create(backup_path)
+            backup_sha256 = self._hash_private_file(backup_path)
+            fresh_backup = {
+                "path": str(backup_path),
+                "artifact_sha256": backup_sha256,
+                "manifest_sha256": backup_result["manifest_sha256"],
+                "encrypted": backup_result["encrypted"] is True,
+                "rehearsal_receipt_path": None,
+                "rehearsal_receipt_sha256": None,
+                "content_exposed": False,
+            }
+            journal = self.activation_journal.transition(
+                journal,
+                "backup_created",
+                fresh_backup=fresh_backup,
+            )
+            receipt_path = self.paths.backup_dir / (
+                f"activation-rehearsal-{transaction_id}.json"
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "backup_rehearsing",
+            )
+            rehearsal = backup_manager.rehearse(
+                backup_path,
+                candidate=candidate,
+                receipt=receipt_path,
+            )
+            receipt_sha256 = self._hash_private_file(
+                receipt_path,
+                maximum_size=16 * 1024 * 1024,
+            )
+            if (
+                rehearsal.get("status") != "healthy"
+                or rehearsal.get("candidate", {}).get("commit") != commit
+                or rehearsal.get("artifact", {}).get("sha256") != backup_sha256
+                or rehearsal.get("deployment_binding") != pending_snapshot.public()
+            ):
+                raise UpgradeError("fresh backup rehearsal binding is invalid")
+            fresh_backup = {
+                **fresh_backup,
+                "rehearsal_receipt_path": str(receipt_path),
+                "rehearsal_receipt_sha256": receipt_sha256,
+                "rehearsal_self_sha256": rehearsal["receipt_sha256"],
+            }
+            journal = self.activation_journal.transition(
+                journal,
+                "backup_rehearsed",
+                fresh_backup=fresh_backup,
+            )
+
+            eligibility = self._prove_predecessor_rollback_eligibility(
+                candidate=candidate,
+                candidate_commit=commit,
+                candidate_release=release,
+                predecessor_commit=predecessor_commit,
+                predecessor_release=predecessor_release,
+                pointer_chain_sha256=pointer_digest,
+            )
+            eligibility_sha256 = sha256_json(eligibility)
+            journal = self.activation_journal.transition(
+                journal,
+                "rollback_eligible",
+                rollback_eligibility={
+                    **eligibility,
+                    "sha256": eligibility_sha256,
+                },
+            )
+
+            try:
+                pending_again, pending_hash_again, snapshot_again = (
+                    load_pending_attestation_for_activation(
+                        self.paths,
+                        attestation_id=self.pending_attestation_id,
+                        candidate=candidate,
+                        candidate_commit=commit,
+                    )
+                )
+            except CandidateReadinessError as exc:
+                raise UpgradeError(
+                    "candidate-pending readiness drifted before selector mutation"
+                ) from exc
+            if (
+                pending_again != pending
+                or pending_hash_again != pending_sha256
+                or snapshot_again != pending_snapshot
+            ):
+                raise UpgradeError(
+                    "candidate-pending readiness changed before selector mutation"
+                )
+            active_readiness = build_active_attestation_from_pending(
+                pending,
+                pending_sha256=pending_sha256,
+                fresh_backup_sha256=backup_sha256,
+                fresh_rehearsal_receipt_sha256=receipt_sha256,
+                rollback_eligibility_sha256=eligibility_sha256,
+                tested_at=str(rehearsal["tested_at"]),
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "selector_mutation_authorized",
+                active_readiness=active_readiness,
+            )
+
+            if repair_policy is not None:
+                repair_diagnostics = self._validate_source_repair_online(repair_policy)
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiescing_for_repair",
+                )
+                self.services.stop(require_openclaw_live_before_stop=True)
+                assert repair_diagnostics is not None
+                source_repair_evidence = offline_validate_repair_baseline(
+                    self.paths,
+                    repository_root=active_root,
+                    candidate_commit=commit,
+                    policy=repair_policy,
+                    diagnostics=repair_diagnostics,
+                    gateway_live_at_quiescence=True,
+                    append_requests=True,
+                    test_mode=self.test_mode,
+                )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiesced_for_repair",
+                )
+
+            journal = self.activation_journal.transition(
+                journal,
+                "preparation_consuming",
+            )
+            activity_descriptor = self._consume_preparation_state(
+                candidate,
+                commit,
+                release,
+            )
+            try:
+                journal = self.activation_journal.transition(
+                    journal,
+                    "preparation_consumed",
+                )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "openclaw_selecting",
+                )
+                self._install_reviewed_openclaw(release)
+                journal = self.activation_journal.transition(
+                    journal,
+                    "openclaw_selected",
+                )
+            finally:
+                cleanup_error: BaseException | None = None
+                try:
+                    fcntl.flock(activity_descriptor, fcntl.LOCK_UN)
+                except BaseException as exc:
+                    cleanup_error = exc
+                close_error = self._close_descriptors(activity_descriptor)
+                cleanup_error = cleanup_error or close_error
+                if cleanup_error is not None:
+                    raise UpgradeError(
+                        "consumed preparation activity cleanup failed"
+                    ) from cleanup_error
+
+            if was_running and repair_policy is None:
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiescing",
+                )
+                self.services.stop()
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiesced",
+                )
+            journal = self.activation_journal.transition(
+                journal,
+                "plugin_selecting",
+            )
+            reconcile_administrateme_plugin(
+                self.paths,
+                release,
+                test_mode=self.test_mode,
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "plugin_selected",
+            )
+
+            pointer_path = self.paths.app_dir / "current-release.json"
+            candidate_pointer = {
+                "path": str(release),
+                "commit": commit,
+                "previous": pointer,
+            }
+            journal = self.activation_journal.transition(
+                journal,
+                "pointer_selecting",
+            )
+            atomic_write(
+                pointer_path,
+                json.dumps(candidate_pointer, indent=2).encode("utf-8"),
+                mode=0o600,
+            )
+            self._fsync_directory(pointer_path.parent)
+            journal = self.activation_journal.transition(
+                journal,
+                "pointer_selected",
+            )
+            self._test_crash_after_journal_phase("pointer_selected")
+
+            readiness_path = (
+                self.paths.instance_dir / "config" / "deployment-readiness.json"
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "readiness_promoting",
+            )
+            atomic_write(
+                readiness_path,
+                json.dumps(active_readiness, indent=2, sort_keys=True).encode("utf-8"),
+                mode=0o600,
+            )
+            self._fsync_directory(readiness_path.parent)
+            journal = self.activation_journal.transition(
+                journal,
+                "readiness_promoted",
+            )
+
+            journal = self.activation_journal.transition(
+                journal,
+                "llm_tool_selecting",
+            )
+            configure_required_llm_tool(self.paths, test_mode=self.test_mode)
+            journal = self.activation_journal.transition(
+                journal,
+                "llm_tool_selected",
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "launchagents_selecting",
+            )
+            install_launch_agents(self.paths, release, test_mode=self.test_mode)
+            journal = self.activation_journal.transition(
+                journal,
+                "launchagents_selected",
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "services_starting",
+            )
+            started = self.services.start()
+            if started.status not in {"healthy", "degraded"}:
+                raise UpgradeError(
+                    "candidate services did not start: "
+                    f"status={started.status}, runtime={started.runtime}, "
+                    f"openclaw={started.openclaw}"
+                )
+            journal = self.activation_journal.transition(
+                journal,
+                "services_started",
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "doctor_running",
+            )
+            result = self._post_switch_doctor(release)
+            if result["status"] != "healthy":
+                failed = ", ".join(sorted(self._failed_check_names(result)))
+                raise UpgradeError(
+                    f"candidate failed post-switch Doctor: {failed or 'unknown check'}"
+                )
+            final_readiness = json.loads(json.dumps(active_readiness))
+            final_readiness["activation_evidence"]["candidate_live_doctor"] = True
+            atomic_write(
+                readiness_path,
+                json.dumps(final_readiness, indent=2, sort_keys=True).encode("utf-8"),
+                mode=0o600,
+            )
+            self._fsync_directory(readiness_path.parent)
+            journal = self.activation_journal.transition(
+                journal,
+                "doctor_healthy",
+                active_readiness=final_readiness,
+            )
+            if not was_running:
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_restopping",
+                )
+                self.services.stop()
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_restopped",
+                )
+            journal = self.activation_journal.transition(journal, "committed")
+            history = self.activation_journal.finish(journal)
+        except Exception as candidate_error:
+            try:
+                recovery = self._recover_interrupted_transaction()
+            except Exception as recovery_error:
+                raise UpgradeError(
+                    f"candidate failed ({candidate_error}); durable predecessor "
+                    f"recovery also failed ({recovery_error})"
+                ) from candidate_error
+            raise UpgradeError(
+                f"candidate failed and the predecessor was recovered "
+                f"({recovery['transaction_id'] if recovery else transaction_id}): "
+                f"{candidate_error}"
+            ) from candidate_error
+
+        assert backup_result is not None
+        assert rehearsal is not None
+        assert eligibility is not None
+        assert history is not None
+        return {
+            "status": "upgraded",
+            "commit": commit,
+            "backup": backup_result["path"],
+            "fresh_backup_sha256": journal["fresh_backup"]["artifact_sha256"],
+            "fresh_rehearsal_receipt_sha256": journal["fresh_backup"][
+                "rehearsal_receipt_sha256"
+            ],
+            "pending_attestation_id": self.pending_attestation_id,
+            "pending_attestation_sha256": pending_sha256,
+            "activation_transaction_id": transaction_id,
+            "activation_history": str(history),
+            "compatibility": compatibility,
+            "upgrade_controller_attested": True,
+            "rollback_available": True,
+            "rollback_eligibility": {
+                "eligible": True,
+                "sha256": journal["rollback_eligibility"]["sha256"],
+            },
+            "source_assessment_repair": source_repair_evidence,
+            "content_exposed": False,
+        }
 
     def _activate_locked(self, candidate: Path) -> dict[str, Any]:
         candidate = candidate.resolve()
@@ -1290,7 +2187,262 @@ class UpgradeManager:
 
     def rollback(self) -> dict[str, Any]:
         with self._operation_lock():
-            return self._rollback_locked()
+            recovered = self._recover_interrupted_transaction()
+            if recovered is not None:
+                return recovered
+            history_exists = any(self.activation_journal.history.iterdir())
+            if self.test_mode and not history_exists:
+                return self._rollback_locked()
+            return self._rollback_transactional_locked()
+
+    def _rollback_transactional_locked(self) -> dict[str, Any]:
+        pointer_path = self.paths.app_dir / "current-release.json"
+        current, current_release, _protected, _digest, _rows = (
+            self._release_pointer_state()
+        )
+        if current is None:
+            raise UpgradeError("no active release pointer exists")
+        previous = current.get("previous")
+        if not isinstance(previous, dict):
+            raise UpgradeError("no prior release is recorded")
+        current_commit = current.get("commit")
+        target_commit = previous.get("commit")
+        target_path = previous.get("path")
+        if (
+            not isinstance(current_commit, str)
+            or not isinstance(target_commit, str)
+            or not _is_lower_hex(current_commit, 40)
+            or not _is_lower_hex(target_commit, 40)
+            or not isinstance(target_path, str)
+        ):
+            raise UpgradeError("rollback pointer is invalid")
+        release = Path(target_path)
+        if release != self.paths.app_dir / "releases" / target_commit:
+            raise UpgradeError("rollback release coordinate is invalid")
+        ensure_within(release, self.paths.app_dir / "releases")
+        validate_candidate(
+            release,
+            active_root=current_release,
+            approve_runtime_migration=True,
+            allow_openclaw_rollback=True,
+        )
+        self._validate_prepared_runtime(release)
+        try:
+            activation_history = self.activation_journal.committed_activation(
+                target_commit=current_commit,
+                predecessor_commit=target_commit,
+            )
+        except ActivationJournalError as exc:
+            raise UpgradeError(
+                "rollback requires the exact committed activation history"
+            ) from exc
+        target_readiness = activation_history["initial_readiness"]
+        target_readiness_encoded = activation_history["initial_readiness_bytes"]
+        try:
+            target_pointer_payload = base64.b64decode(
+                activation_history["initial_pointer_bytes"],
+                validate=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise UpgradeError("rollback pointer history is invalid") from exc
+        if (
+            hashlib.sha256(target_pointer_payload).hexdigest()
+            != activation_history["initial_pointer_sha256"]
+            or json.loads(target_pointer_payload.decode("utf-8")) != previous
+        ):
+            raise UpgradeError("rollback pointer history does not match predecessor")
+        target_readiness_payload: bytes | None
+        if target_readiness_encoded is None:
+            target_readiness_payload = None
+        else:
+            try:
+                target_readiness_payload = base64.b64decode(
+                    target_readiness_encoded,
+                    validate=True,
+                )
+            except (TypeError, ValueError) as exc:
+                raise UpgradeError("rollback readiness history is invalid") from exc
+
+        pointer_payload, pointer, readiness_payload, readiness = (
+            self._capture_activation_baseline()
+        )
+        if pointer != current:
+            raise UpgradeError("active-release pointer changed before rollback")
+        was_running = self.services.status().status != "stopped"
+        transaction_id = uuid.uuid4().hex
+        try:
+            journal = self.activation_journal.create(
+                {
+                    "transaction_id": transaction_id,
+                    "operation": "rollback",
+                    "phase": "created",
+                    "candidate_commit": current_commit,
+                    "candidate_path": str(current_release),
+                    "target_commit": target_commit,
+                    "target_path": str(release),
+                    "predecessor_commit": current_commit,
+                    "predecessor_path": str(current_release),
+                    "initial_pointer": pointer,
+                    "initial_pointer_bytes": base64.b64encode(pointer_payload).decode(
+                        "ascii"
+                    ),
+                    "initial_pointer_sha256": hashlib.sha256(
+                        pointer_payload
+                    ).hexdigest(),
+                    "initial_readiness": readiness,
+                    "initial_readiness_bytes": (
+                        base64.b64encode(readiness_payload).decode("ascii")
+                        if readiness_payload is not None
+                        else None
+                    ),
+                    "initial_readiness_sha256": (
+                        hashlib.sha256(readiness_payload).hexdigest()
+                        if readiness_payload is not None
+                        else None
+                    ),
+                    "was_running": was_running,
+                    "pending_attestation_id": None,
+                    "pending_attestation_sha256": None,
+                    "fresh_backup": None,
+                    "rollback_eligibility": {
+                        "activation_transaction_id": activation_history[
+                            "transaction_id"
+                        ],
+                        "target_commit": target_commit,
+                        "content_exposed": False,
+                    },
+                    "active_readiness": target_readiness,
+                }
+            )
+        except ActivationJournalError as exc:
+            raise UpgradeError("rollback transaction cannot be journaled") from exc
+
+        history: Path | None = None
+        try:
+            journal = self.activation_journal.transition(
+                journal,
+                "openclaw_selecting",
+            )
+            self._install_reviewed_openclaw(release)
+            journal = self.activation_journal.transition(
+                journal,
+                "openclaw_selected",
+            )
+            if was_running:
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiescing",
+                )
+                self.services.stop()
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiesced",
+                )
+            journal = self.activation_journal.transition(
+                journal,
+                "plugin_selecting",
+            )
+            reconcile_administrateme_plugin(
+                self.paths,
+                release,
+                test_mode=self.test_mode,
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "plugin_selected",
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "pointer_selecting",
+            )
+            atomic_write(
+                pointer_path,
+                target_pointer_payload,
+                mode=0o600,
+            )
+            self._fsync_directory(pointer_path.parent)
+            journal = self.activation_journal.transition(
+                journal,
+                "pointer_selected",
+            )
+            self._test_crash_after_journal_phase("pointer_selected")
+            readiness_path = (
+                self.paths.instance_dir / "config" / "deployment-readiness.json"
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "readiness_selecting",
+            )
+            if target_readiness_payload is None:
+                if os.path.lexists(readiness_path):
+                    self._read_private_json_payload(readiness_path)
+                    readiness_path.unlink()
+                    self._fsync_directory(readiness_path.parent)
+            else:
+                atomic_write(readiness_path, target_readiness_payload, mode=0o600)
+                self._fsync_directory(readiness_path.parent)
+            journal = self.activation_journal.transition(
+                journal,
+                "readiness_selected",
+            )
+            configure_required_llm_tool(self.paths, test_mode=self.test_mode)
+            journal = self.activation_journal.transition(
+                journal,
+                "launchagents_selecting",
+            )
+            install_launch_agents(self.paths, release, test_mode=self.test_mode)
+            journal = self.activation_journal.transition(
+                journal,
+                "launchagents_selected",
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "services_starting",
+            )
+            self.services.start()
+            journal = self.activation_journal.transition(
+                journal,
+                "doctor_running",
+            )
+            result = self._post_switch_doctor(release)
+            if result["status"] != "healthy":
+                failed = ", ".join(sorted(self._failed_check_names(result)))
+                raise UpgradeError(
+                    f"rolled-back release failed Doctor: {failed or 'unknown check'}"
+                )
+            journal = self.activation_journal.transition(
+                journal,
+                "doctor_healthy",
+            )
+            if not was_running:
+                self.services.stop()
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_restopped",
+                )
+            journal = self.activation_journal.transition(journal, "committed")
+            history = self.activation_journal.finish(journal)
+        except Exception as rollback_error:
+            try:
+                recovery = self._recover_interrupted_transaction()
+            except Exception as recovery_error:
+                raise UpgradeError(
+                    f"rollback failed ({rollback_error}); durable current-release "
+                    f"recovery also failed ({recovery_error})"
+                ) from rollback_error
+            raise UpgradeError(
+                f"rollback failed and the current release was recovered "
+                f"({recovery['transaction_id'] if recovery else transaction_id}): "
+                f"{rollback_error}"
+            ) from rollback_error
+        assert history is not None
+        return {
+            "status": "rolled_back",
+            "commit": target_commit,
+            "activation_transaction_id": transaction_id,
+            "activation_history": str(history),
+            "content_exposed": False,
+        }
 
     def _rollback_locked(self) -> dict[str, Any]:
         pointer = self.paths.app_dir / "current-release.json"

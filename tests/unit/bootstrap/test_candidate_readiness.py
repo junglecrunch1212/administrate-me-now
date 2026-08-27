@@ -18,9 +18,11 @@ import yaml
 from bootstrap import candidate_readiness
 from bootstrap.candidate_readiness import (
     CandidateReadinessError,
+    build_active_attestation_from_pending,
     build_htr10_review,
     build_pending_attestation,
     capture_deployment_snapshot,
+    load_pending_attestation_for_activation,
     record_htr10_review,
     record_pending_attestation,
     validate_pending_attestation,
@@ -303,6 +305,64 @@ def test_pending_attestation_is_immutable_and_active_readiness_is_unchanged(
             now=NOW,
             attestation_id="5" * 32,
         )
+
+
+def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    attestation_id = "8" * 32
+    result = record_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=htr10,
+        confirmations=confirmations,
+        observed_at=observed,
+        now=NOW,
+        attestation_id=attestation_id,
+    )
+
+    pending, pending_sha256, snapshot = load_pending_attestation_for_activation(
+        paths,
+        attestation_id=attestation_id,
+        candidate=candidate,
+        candidate_commit=commit,
+        now=NOW,
+    )
+    active = build_active_attestation_from_pending(
+        pending,
+        pending_sha256=pending_sha256,
+        fresh_backup_sha256="9" * 64,
+        fresh_rehearsal_receipt_sha256="a" * 64,
+        rollback_eligibility_sha256="b" * 64,
+        tested_at=(NOW - timedelta(minutes=5)).isoformat(),
+    )
+
+    assert pending_sha256 == result["artifact_sha256"]
+    assert all(
+        pending["deployment_binding"][name] == value
+        for name, value in snapshot.public().items()
+    )
+    assert active["contract"] == "deployment-readiness-v1"
+    assert active["deployment_binding"]["release_commit"] == commit
+    assert active["backup_rollback"]["automatic_rollback_eligible"] is True
+    assert active["activation_evidence"] == {
+        "contract": "deployment-activation-evidence-v1",
+        "candidate_pending_attestation_id": attestation_id,
+        "candidate_pending_attestation_sha256": pending_sha256,
+        "fresh_backup_artifact_sha256": "9" * 64,
+        "fresh_rehearsal_receipt_sha256": "a" * 64,
+        "predecessor_rollback_eligibility_sha256": "b" * 64,
+        "crash_recoverable_replacement": True,
+        "candidate_live_doctor": "pending_post_switch",
+        "post_switch_acceptance": "pending_post_switch",
+        "content_exposed": False,
+    }
 
 
 def test_pending_attestation_refuses_receipt_drift_and_expired_human_evidence(
