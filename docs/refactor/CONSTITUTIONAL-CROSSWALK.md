@@ -407,6 +407,18 @@ This **PRESERVES** secret-free configuration, least-privilege Gmail read scope,
 event-log truth, per-member ownership, observation-mode write suppression, and
 the allowlist/governance/privacy ordering for eventual provider writes.
 
+Personal Google read-only amendment (2026-08-28): C035/C046/C050 are
+**HARDENED** so one member-scoped installed-user grant is accepted only when
+Google returns exactly the Gmail, Calendar, and Tasks read-only scopes.
+The granted Gmail profile must match the locally reviewed account, and the new
+credential document binds the account plus a one-way member digest that the
+three adapters enforce.
+Calendar and Tasks `read_only` instances expose no provider-write capability,
+while their separately authorized bidirectional class contracts remain
+available. This preserves provider-specific revocation, per-member ownership,
+secret-free browser Settings, observation mode, and the independent live
+consent/configuration/deployment gates.
+
 Live activation amendment (2026-08-05): C046/C080/C082 are **HARDENED** by an
 authenticated probe of the AdministrateMe-owned Gateway, truthful launchd race
 handling, and backup treatment of generated OpenClaw discovery links as cache.

@@ -344,6 +344,38 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     assert len(GoogleCalendarAdapter.write_capabilities) == 5
 
 
+async def test_read_only_instance_uses_exact_scope_and_denies_declared_writes() -> None:
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://fixture/google",
+            "calendar_id": "primary",
+            "provider_account_id": "calendar-account-fixture",
+            "permission_scope": ["https://www.googleapis.com/auth/calendar.readonly"],
+            "read_only": True,
+        }
+    )
+
+    assert adapter._scopes == ["https://www.googleapis.com/auth/calendar.readonly"]
+    assert adapter.write_capabilities == []
+    assert GoogleCalendarAdapter.write_capabilities != []
+    with pytest.raises(WriteCapabilityError):
+        await adapter.apply_write(
+            WriteOperation(kind="create_event", target_external_id=None, payload={})
+        )
+
+
+def test_read_only_instance_rejects_a_broader_configured_scope() -> None:
+    with pytest.raises(ValueError, match="must exactly match"):
+        GoogleCalendarAdapter(
+            config={
+                "oauth_credentials_ref": "keychain://fixture/google",
+                "calendar_id": "primary",
+                "permission_scope": ["https://www.googleapis.com/auth/calendar"],
+                "read_only": True,
+            }
+        )
+
+
 # ===========================================================================
 # 2) apply_write gate — [UT-27]
 # ===========================================================================

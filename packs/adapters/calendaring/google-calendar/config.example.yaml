@@ -5,6 +5,13 @@
 # writing real values at install time; until then operators edit by hand.
 
 service_account_key_ref: op://AdministrateMe/google-calendar-sandbox/service-account-json
+member_id: member-sandbox
+provider_account_id: google-calendar-member-sandbox
+workspace: personal
+permission_scope: [https://www.googleapis.com/auth/calendar.readonly]
+binding_provenance: service-account-delegation
+ownership_attested: true
+read_only: true
 calendar_id: primary
 discover_calendars: true
 # Optional quarantine for test/probe calendars:

@@ -9,6 +9,11 @@ tasklist_id: "@default"
 user_email: sandbox@example.test
 member_id: member-sandbox
 provider_account_id: google-member-sandbox
+workspace: personal
+permission_scope: [https://www.googleapis.com/auth/tasks.readonly]
+binding_provenance: service-account-delegation
+ownership_attested: true
+read_only: true
 account_label: Personal Google Tasks
 list_name: Tasks
 include_all_tasklists: true

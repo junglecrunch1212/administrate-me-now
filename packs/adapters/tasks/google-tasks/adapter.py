@@ -20,7 +20,10 @@ from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
 from adminme.adapters.emission import write_adapter_event
-from adminme.adapters.credentials import resolve_json_credentials
+from adminme.adapters.credentials import (
+    assert_installed_user_binding,
+    resolve_json_credentials,
+)
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -32,6 +35,9 @@ from adminme.lib.observation import outbound as observation_outbound
 
 _log = logging.getLogger(__name__)
 
+GOOGLE_TASKS_READONLY_SCOPES: list[str] = [
+    "https://www.googleapis.com/auth/tasks.readonly"
+]
 GOOGLE_TASKS_SCOPES: list[str] = ["https://www.googleapis.com/auth/tasks"]
 
 # [§6 invariant 10] privileged > normal; config may raise but not lower.
@@ -122,7 +128,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
 
     name: ClassVar[str] = "tasks-google-tasks"
     family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = "tasks"
-    version: ClassVar[str] = "2.0.0"
+    version: ClassVar[str] = "2.1.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
@@ -170,6 +176,20 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
+        read_only = self._config.get("read_only", False)
+        if not isinstance(read_only, bool):
+            raise ValueError("read_only must be a boolean")
+        self._scopes = list(GOOGLE_TASKS_READONLY_SCOPES if read_only else self.SCOPES)
+        if read_only and self._config.get("permission_scope") != self._scopes:
+            raise ValueError(
+                "read-only Google Tasks permission_scope must exactly match "
+                "the tasks.readonly OAuth scope"
+            )
+        object.__setattr__(
+            self,
+            "write_capabilities",
+            [] if read_only else list(type(self).write_capabilities),
+        )
         self._credentials_resolver = (
             credentials_resolver or _default_credentials_resolver
         )
@@ -230,7 +250,18 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         if not isinstance(member_id, str) or not member_id:
             raise ValueError("member_id must be a non-empty string")
         creds_json = self._credentials_resolver(op_ref)
-        self._service = self._service_factory(creds_json, self.SCOPES, user_email)
+        if op_ref.startswith("keychain://"):
+            provider_account_id = self._config.get("provider_account_id")
+            if not isinstance(provider_account_id, str):
+                raise ValueError(
+                    "installed-user OAuth requires a provider account binding"
+                )
+            assert_installed_user_binding(
+                creds_json,
+                member_id=member_id,
+                provider_account_id=provider_account_id,
+            )
+        self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
@@ -941,7 +972,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 "adapter_family": self.family,
                 "token_storage_ref": op_ref,
                 "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "scopes": list(self.SCOPES),
+                "scopes": list(self._scopes),
             },
         )
 
@@ -1037,6 +1068,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
 
 __all__ = [
     "CredentialsResolver",
+    "GOOGLE_TASKS_READONLY_SCOPES",
     "GOOGLE_TASKS_SCOPES",
     "GoogleTasksAdapter",
     "ServiceFactory",

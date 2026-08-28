@@ -55,7 +55,10 @@ from adminme.adapters.base import (
 )
 from adminme.adapters.gmail_backfill import GmailInitialBackfillPolicy
 from adminme.adapters.emission import write_adapter_event
-from adminme.adapters.credentials import resolve_json_credentials
+from adminme.adapters.credentials import (
+    assert_installed_user_binding,
+    resolve_json_credentials,
+)
 from adminme.events.registry import EventValidationError
 from adminme.lib.adapters import (
     CommunicationAdapter,
@@ -155,7 +158,7 @@ class GmailAdapter(CommunicationAdapter):
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
     name: ClassVar[str] = "messaging-gmail-api"
     family: ClassVar[Literal["messaging"]] = "messaging"
-    version: ClassVar[str] = "1.3.0"
+    version: ClassVar[str] = "1.4.0"
 
     capabilities: ClassVar[list[Any]] = [
         {
@@ -286,6 +289,20 @@ class GmailAdapter(CommunicationAdapter):
             raise ValueError("user_email must be a valid email address")
 
         creds_json = self._credentials_resolver(op_ref)
+        if op_ref.startswith("keychain://"):
+            member_id = self._config.get("member_id")
+            provider_account_id = self._config.get("provider_account_id")
+            if not isinstance(member_id, str) or not isinstance(
+                provider_account_id, str
+            ):
+                raise ValueError(
+                    "installed-user OAuth requires member and provider account bindings"
+                )
+            assert_installed_user_binding(
+                creds_json,
+                member_id=member_id,
+                provider_account_id=provider_account_id,
+            )
         self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
         self._cursor_id = str(

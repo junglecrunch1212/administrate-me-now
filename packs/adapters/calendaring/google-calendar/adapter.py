@@ -24,7 +24,10 @@ from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
 from adminme.adapters.emission import write_adapter_event
-from adminme.adapters.credentials import resolve_json_credentials
+from adminme.adapters.credentials import (
+    assert_installed_user_binding,
+    resolve_json_credentials,
+)
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -36,6 +39,9 @@ from adminme.lib.observation import outbound as observation_outbound
 
 _log = logging.getLogger(__name__)
 
+GOOGLE_CALENDAR_READONLY_SCOPES: list[str] = [
+    "https://www.googleapis.com/auth/calendar.readonly"
+]
 GOOGLE_CALENDAR_SCOPES: list[str] = ["https://www.googleapis.com/auth/calendar"]
 
 # [§6 invariant 10] privileged > normal; config may raise but not lower.
@@ -284,7 +290,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
         "calendaring"
     )
-    version: ClassVar[str] = "2.0.0"
+    version: ClassVar[str] = "2.1.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
@@ -334,6 +340,22 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
+        read_only = self._config.get("read_only", False)
+        if not isinstance(read_only, bool):
+            raise ValueError("read_only must be a boolean")
+        self._scopes = list(
+            GOOGLE_CALENDAR_READONLY_SCOPES if read_only else self.SCOPES
+        )
+        if read_only and self._config.get("permission_scope") != self._scopes:
+            raise ValueError(
+                "read-only Google Calendar permission_scope must exactly match "
+                "the calendar.readonly OAuth scope"
+            )
+        object.__setattr__(
+            self,
+            "write_capabilities",
+            [] if read_only else list(type(self).write_capabilities),
+        )
         self._credentials_resolver = (
             credentials_resolver or _default_credentials_resolver
         )
@@ -408,7 +430,21 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         if not isinstance(user_email, str):
             user_email = str(self._config.get("provider_account_id") or "")
         creds_json = self._credentials_resolver(op_ref)
-        self._service = self._service_factory(creds_json, self.SCOPES, user_email)
+        if op_ref.startswith("keychain://"):
+            member_id = self._config.get("member_id")
+            provider_account_id = self._config.get("provider_account_id")
+            if not isinstance(member_id, str) or not isinstance(
+                provider_account_id, str
+            ):
+                raise ValueError(
+                    "installed-user OAuth requires member and provider account bindings"
+                )
+            assert_installed_user_binding(
+                creds_json,
+                member_id=member_id,
+                provider_account_id=provider_account_id,
+            )
+        self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
@@ -1314,7 +1350,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "adapter_family": self.family,
                 "token_storage_ref": op_ref,
                 "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "scopes": list(self.SCOPES),
+                "scopes": list(self._scopes),
             },
         )
 
@@ -1409,6 +1445,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
 
 __all__ = [
     "CredentialsResolver",
+    "GOOGLE_CALENDAR_READONLY_SCOPES",
     "GOOGLE_CALENDAR_SCOPES",
     "GoogleCalendarAdapter",
     "ServiceFactory",
