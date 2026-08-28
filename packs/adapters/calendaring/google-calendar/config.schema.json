@@ -17,6 +17,19 @@
           "properties": { "discover_calendars": { "const": true } }
         }
       ]
+    },
+    {
+      "if": {
+        "required": ["read_only"],
+        "properties": { "read_only": { "const": true } }
+      },
+      "then": {
+        "properties": {
+          "permission_scope": {
+            "const": ["https://www.googleapis.com/auth/calendar.readonly"]
+          }
+        }
+      }
     }
   ],
   "properties": {
@@ -50,11 +63,21 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },
+    "read_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, request only calendar.readonly and expose no provider write capabilities."
+    },
     "binding_provenance": {
       "type": "string",
       "enum": ["oauth-subject", "service-account-delegation"]
     },
     "ownership_attested": { "const": true },
+    "account_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Member-facing label for this account."
+    },
     "calendar_name": { "type": "string" },
     "calendar_id": {
       "type": "string",

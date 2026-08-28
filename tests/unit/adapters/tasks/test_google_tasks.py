@@ -342,6 +342,41 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     ]
 
 
+async def test_read_only_instance_uses_exact_scope_and_denies_declared_writes() -> None:
+    adapter = GoogleTasksAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://fixture/google",
+            "tasklist_id": "@default",
+            "user_email": "member@example.invalid",
+            "member_id": "member-fixture-b",
+            "permission_scope": ["https://www.googleapis.com/auth/tasks.readonly"],
+            "read_only": True,
+        }
+    )
+
+    assert adapter._scopes == ["https://www.googleapis.com/auth/tasks.readonly"]
+    assert adapter.write_capabilities == []
+    assert GoogleTasksAdapter.write_capabilities != []
+    with pytest.raises(WriteCapabilityError):
+        await adapter.apply_write(
+            WriteOperation(kind="create_task", target_external_id=None, payload={})
+        )
+
+
+def test_read_only_instance_rejects_a_broader_configured_scope() -> None:
+    with pytest.raises(ValueError, match="must exactly match"):
+        GoogleTasksAdapter(
+            config={
+                "oauth_credentials_ref": "keychain://fixture/google",
+                "tasklist_id": "@default",
+                "user_email": "member@example.invalid",
+                "member_id": "member-fixture-b",
+                "permission_scope": ["https://www.googleapis.com/auth/tasks"],
+                "read_only": True,
+            }
+        )
+
+
 # ===========================================================================
 # 2) apply_write gate — [UT-27]
 # ===========================================================================

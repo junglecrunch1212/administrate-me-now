@@ -139,6 +139,69 @@ def _settings_control_fixture(instance_dir: Path) -> RuntimeSettings:
     )
 
 
+def _readonly_google_oauth_fixture(instance_dir: Path) -> RuntimeSettings:
+    base = _settings_control_fixture(instance_dir)
+    credential_ref = "keychain://fixture/google-member-readonly"
+    account_id = "member@example.invalid"
+    common = {
+        "member_id": ADULT,
+        "provider_account_id": account_id,
+        "workspace": "personal",
+        "binding_provenance": "oauth-subject",
+        "ownership_attested": True,
+        "oauth_credentials_ref": credential_ref,
+    }
+    return replace(
+        base,
+        adapter_config={
+            "adapter_supervisor_port": 0,
+            "adapters": [
+                {
+                    "id": "google-gmail-readonly-fixture",
+                    "kind": "messaging-gmail-api",
+                    "config": {
+                        **common,
+                        "user_email": account_id,
+                        "account_label": "Personal Gmail",
+                        "permission_scope": [
+                            "https://www.googleapis.com/auth/gmail.readonly"
+                        ],
+                        "enable_writes": False,
+                    },
+                },
+                {
+                    "id": "google-calendar-readonly-fixture",
+                    "kind": "calendaring-google-calendar",
+                    "config": {
+                        **common,
+                        "account_label": "Personal Google Calendar",
+                        "permission_scope": [
+                            "https://www.googleapis.com/auth/calendar.readonly"
+                        ],
+                        "read_only": True,
+                        "calendar_id": "primary",
+                        "discover_calendars": True,
+                    },
+                },
+                {
+                    "id": "google-tasks-readonly-fixture",
+                    "kind": "tasks-google-tasks",
+                    "config": {
+                        **common,
+                        "user_email": account_id,
+                        "account_label": "Personal Google Tasks",
+                        "permission_scope": [
+                            "https://www.googleapis.com/auth/tasks.readonly"
+                        ],
+                        "read_only": True,
+                        "tasklist_id": "@default",
+                    },
+                },
+            ],
+        },
+    )
+
+
 async def _events(runtime: Any, *types: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since(types=list(types) or None):
@@ -2827,3 +2890,51 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
             "settings.connection_lifecycle_changed",
             "settings.candidate_policy_changed",
         }
+
+
+def test_ac31_readonly_google_oauth_has_no_composed_write_surface(
+    tmp_path: Path,
+) -> None:
+    """Production composition keeps the three-account grant read-only."""
+
+    instance = tmp_path / "readonly-google-oauth"
+    instance.mkdir()
+    app = create_application(_readonly_google_oauth_fixture(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        assert runtime.adapters is not None
+        managed = runtime.adapters._managed
+        calendar = managed["google-calendar-readonly-fixture"].adapter
+        tasks = managed["google-tasks-readonly-fixture"].adapter
+        assert calendar._scopes == [
+            "https://www.googleapis.com/auth/calendar.readonly"
+        ]
+        assert tasks._scopes == ["https://www.googleapis.com/auth/tasks.readonly"]
+        inventory = runtime.adapters.inventory()
+        assert {
+            instance_id: row["write_capabilities"]
+            for instance_id, row in inventory.items()
+        } == {
+            "google-gmail-readonly-fixture": [],
+            "google-calendar-readonly-fixture": [],
+            "google-tasks-readonly-fixture": [],
+        }
+
+        response = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[ADULT]
+        )
+        assert response.status_code == 200, response.text
+        control = response.json()["control"]
+        assert {row["id"] for row in control["connections"]} == {
+            "google-gmail-readonly-fixture",
+            "google-calendar-readonly-fixture",
+            "google-tasks-readonly-fixture",
+        }
+        assert all(
+            row["permissions"]["write"] == []
+            and row["safety"]["observation_only"] is True
+            for row in control["connections"]
+        )
+        rendered = json.dumps(control)
+        assert "keychain://" not in rendered
+        assert "oauth_credentials_ref" not in rendered

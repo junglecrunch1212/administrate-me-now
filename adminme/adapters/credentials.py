@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import shutil
 import subprocess
@@ -13,6 +14,39 @@ from adminme.lib.macos_keychain import (
     get_runtime_password,
     resolve_runtime_alias,
 )
+
+
+def credential_member_digest(member_id: str) -> str:
+    """Return the non-identifying owner coordinate stored with OAuth grants."""
+    normalized = member_id.strip()
+    if not normalized:
+        raise ValueError("member_id must be a non-empty string")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+
+
+def assert_installed_user_binding(
+    document: dict[str, Any], *, member_id: str, provider_account_id: str
+) -> None:
+    """Fail closed when a bound installed-user grant is assigned elsewhere.
+
+    Pre-binding Keychain documents remain readable for migration. New OAuth
+    enrollment documents contain both binding fields, so either field being
+    present makes the complete binding mandatory.
+    """
+    owner_digest = document.get("owner_member_digest")
+    account_id = document.get("provider_account_id")
+    if owner_digest is None and account_id is None:
+        return
+    expected_account = provider_account_id.strip().casefold()
+    if (
+        not expected_account
+        or owner_digest != credential_member_digest(member_id)
+        or not isinstance(account_id, str)
+        or account_id.strip().casefold() != expected_account
+    ):
+        raise RuntimeError(
+            "installed-user credential binding does not match the adapter owner"
+        )
 
 
 def resolve_json_credentials(reference: str) -> dict[str, Any]:

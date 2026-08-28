@@ -153,6 +153,20 @@ transport state never substitutes for them. OAuth grants and scope expansion
 remain provider-specific secure activation steps. No password, token, provider
 account, or secure-reference path is returned to browser Settings.
 
+Personal Google read-only enrollment uses one independently consented,
+member-scoped installed-user grant for exactly Gmail read-only, Calendar
+read-only, and Tasks read-only. The local consent helper derives a stable
+non-identifying Keychain item name from the opaque member id, rejects a grant
+whose returned scope set is missing or broader than those three scopes, and
+uses the granted Gmail read scope to verify the reviewed Google account before
+storage. New credential documents bind that account and a one-way member
+digest; the adapters reject reassignment to another configured owner. Calendar
+and Tasks instances configured
+`read_only: true` must declare the corresponding exact read-only URI and expose
+no runtime write capability; Gmail must retain `enable_writes: false`. This
+helper is a secure activation operation, not a browser Settings action, and it
+does not edit active provider configuration or authorize deployment.
+
 ## Observation trust period
 
 Observation begins before any connector/action becomes live and remains active for at least five full days and normally seven. Disable requires a principal, healthy backup, reviewed suppression history, zero unresolved privacy/governance/identity failures, reconciled connector watermarks, passing Doctor, explicit confirmation, and an audit event. Time alone never flips it. Inbound facts, internal reasoning, projections, workbooks, and local UI continue. The final external seam stores the complete redacted-for-view but audit-complete would-have-happened record and performs no side effect.

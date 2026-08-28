@@ -8,6 +8,21 @@
     { "required": ["oauth_credentials_ref"] },
     { "required": ["service_account_key_ref"] }
   ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["read_only"],
+        "properties": { "read_only": { "const": true } }
+      },
+      "then": {
+        "properties": {
+          "permission_scope": {
+            "const": ["https://www.googleapis.com/auth/tasks.readonly"]
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "service_account_key_ref": {
       "type": "string",
@@ -39,6 +54,11 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
+    },
+    "read_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, request only tasks.readonly and expose no provider write capabilities."
     },
     "binding_provenance": {
       "type": "string",

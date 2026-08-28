@@ -614,6 +614,20 @@ accounts. Existing `op://` service-account deployments remain supported;
 in config, arguments, or environment variables. Gmail accepts OAuth while
 remaining read-only, and Calendar/Tasks retain governed observation seams.
 
+Personal Google read-only amendment (2026-08-28): the installed-user helper
+and account configuration are **HARDEN COMPLETE IN CODE** for one member-scoped
+grant containing exactly Gmail read-only, Calendar read-only, and Tasks
+read-only. Broader or incomplete returned grants fail before Keychain storage.
+The helper also resolves the consented Gmail profile and fails if it is not the
+locally reviewed account; new documents bind that account and a one-way member
+digest so the three adapters reject later owner reassignment.
+Calendar and Tasks retain their bidirectional class ceilings for separately
+authorized accounts, while a `read_only: true` instance uses only its provider
+read scope and publishes no runtime write capability. Production composition
+proves all three Settings connections remain observation-only and secret-free.
+Real consent, configuration activation, deployment, and provider access remain
+separate live gates.
+
 Live activation hardening update (2026-08-05): the OpenClaw activation,
 launchd, and backup rows are **HARDEN COMPLETE** for authenticated managed-RPC
 probing, the macOS RunAtLoad/kickstart race, and generated OpenClaw plugin-skill
