@@ -351,8 +351,10 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "read-only Google Calendar permission_scope must exactly match "
                 "the calendar.readonly OAuth scope"
             )
-        self.__dict__["write_capabilities"] = (
-            [] if read_only else list(type(self).write_capabilities)
+        object.__setattr__(
+            self,
+            "write_capabilities",
+            [] if read_only else list(type(self).write_capabilities),
         )
         self._credentials_resolver = (
             credentials_resolver or _default_credentials_resolver
