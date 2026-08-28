@@ -103,7 +103,9 @@ def enroll(
         raise RuntimeError("Google did not return the authorized account identity")
     actual_account = resolved_account.strip().casefold()
     if actual_account != expected_account:
-        raise RuntimeError("authorized Google account does not match the reviewed account")
+        raise RuntimeError(
+            "authorized Google account does not match the reviewed account"
+        )
     document = {
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,

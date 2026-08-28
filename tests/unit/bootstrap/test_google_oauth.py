@@ -104,9 +104,7 @@ def test_enroll_requests_only_three_readonly_scopes_and_uses_member_key(
     assert "member-fixture-b" not in secret_name
     assert reference == f"keychain://fixture/{secret_name}"
     document = json.loads(raw_document)
-    assert document["scopes"] == sorted(
-        google_oauth.GOOGLE_READONLY_ADAPTER_SCOPES
-    )
+    assert document["scopes"] == sorted(google_oauth.GOOGLE_READONLY_ADAPTER_SCOPES)
     assert document["provider_account_id"] == "member@example.invalid"
     assert document["owner_member_digest"] == google_oauth.credential_member_digest(
         "member-fixture-b"

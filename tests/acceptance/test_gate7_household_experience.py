@@ -2906,9 +2906,7 @@ def test_ac31_readonly_google_oauth_has_no_composed_write_surface(
         managed = runtime.adapters._managed
         calendar = managed["google-calendar-readonly-fixture"].adapter
         tasks = managed["google-tasks-readonly-fixture"].adapter
-        assert calendar._scopes == [
-            "https://www.googleapis.com/auth/calendar.readonly"
-        ]
+        assert calendar._scopes == ["https://www.googleapis.com/auth/calendar.readonly"]
         assert tasks._scopes == ["https://www.googleapis.com/auth/tasks.readonly"]
         inventory = runtime.adapters.inventory()
         assert {

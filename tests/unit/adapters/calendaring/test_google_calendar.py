@@ -350,16 +350,12 @@ async def test_read_only_instance_uses_exact_scope_and_denies_declared_writes() 
             "oauth_credentials_ref": "keychain://fixture/google",
             "calendar_id": "primary",
             "provider_account_id": "calendar-account-fixture",
-            "permission_scope": [
-                "https://www.googleapis.com/auth/calendar.readonly"
-            ],
+            "permission_scope": ["https://www.googleapis.com/auth/calendar.readonly"],
             "read_only": True,
         }
     )
 
-    assert adapter._scopes == [
-        "https://www.googleapis.com/auth/calendar.readonly"
-    ]
+    assert adapter._scopes == ["https://www.googleapis.com/auth/calendar.readonly"]
     assert adapter.write_capabilities == []
     assert GoogleCalendarAdapter.write_capabilities != []
     with pytest.raises(WriteCapabilityError):
