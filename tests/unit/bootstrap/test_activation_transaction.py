@@ -736,9 +736,7 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     assert events.index("phase:openclaw_selecting") < events.index("action:openclaw")
     assert events.index("phase:plugin_selecting") < events.index("action:plugin")
     assert events.index("phase:llm_tool_selecting") < events.index("action:llm")
-    assert events.index("action:llm") < events.index(
-        "phase:runtime_binding_refreshed"
-    )
+    assert events.index("action:llm") < events.index("phase:runtime_binding_refreshed")
     assert events.index("phase:runtime_binding_refreshed") < events.index(
         "action:launchagents"
     )
