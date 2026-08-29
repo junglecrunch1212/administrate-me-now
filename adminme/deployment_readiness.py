@@ -424,10 +424,24 @@ def evaluate_deployment_readiness(
     window = effects.get("observation_window") or {}
     window_counts = window.get("counts") or {}
     window_evidence = deployment_evidence.get("provider_effect_window") or {}
+    source_freshness = (source_assurance or {}).get("freshness") or {}
+    source_proof_current = all(
+        (
+            (source_assurance or {}).get("state") == "healthy",
+            source_freshness.get("state") == "fresh",
+            source_freshness.get("revision_current") is True,
+            source_freshness.get("refresh_error_type") is None,
+        )
+    )
     integrity_ok = effects.get("state") == "healthy"
     window_recent = _recent_iso(window_evidence.get("started_at"))
-    effects_ok = integrity_ok and (
-        not observation_active or (window.get("state") == "healthy" and window_recent)
+    effects_ok = (
+        source_proof_current
+        and integrity_ok
+        and (
+            not observation_active
+            or (window.get("state") == "healthy" and window_recent)
+        )
     )
     dimensions["observation_effects"] = _dimension(
         "healthy" if effects_ok else "blocked",
@@ -441,6 +455,19 @@ def evaluate_deployment_readiness(
         else "provider-effect accounting is missing, ambiguous, or violates the active observation window",
         evidence={
             "observation_active": observation_active,
+            "source_assurance_state": (source_assurance or {}).get("state", "missing"),
+            "source_assurance_freshness": source_freshness.get("state", "missing"),
+            "source_assurance_revision_current": source_freshness.get(
+                "revision_current"
+            )
+            is True,
+            "source_assurance_refresh_in_progress": source_freshness.get(
+                "refresh_in_progress"
+            )
+            is True,
+            "source_assurance_refresh_error": source_freshness.get(
+                "refresh_error_type"
+            ),
             "integrity_state": effects.get("state", "missing"),
             "window_state": window.get("state", "missing"),
             "window_recent": window_recent,

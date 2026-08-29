@@ -272,6 +272,47 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
         assert "openclaw" in drift.json()["deployment_readiness"]["blocking_dimensions"]
 
 
+def test_strict_readiness_identifies_stale_source_refresh_as_settlement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_strict_settings(tmp_path))
+    with TestClient(app) as client:
+        _report_strict_openclaw(client)
+        runtime: AdministrateMeRuntime = app.state.runtime
+        runtime._source_assurance_revision = ("ev_outdated", ())
+        runtime._source_assurance_refreshed_monotonic = (
+            time.monotonic() - runtime.SOURCE_ASSURANCE_MAX_STALE_SECONDS - 1
+        )
+
+        async def hung_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+            await asyncio.sleep(60)
+            return {}
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", hung_refresh
+        )
+
+        response = client.get("/api/system/ready")
+        assert response.status_code == 503
+        diagnostics = response.json()
+        assert diagnostics["ready"] is False
+        assert diagnostics["service_ready"] is True
+        assert diagnostics["safe_reads"] is True
+        assert diagnostics["event_ingest_ready"] is True
+        assert diagnostics["deployment_readiness"]["blocking_dimensions"] == [
+            "observation_effects"
+        ]
+        effects = diagnostics["deployment_readiness"]["dimensions"][
+            "observation_effects"
+        ]
+        assert effects["state"] == "blocked"
+        assert effects["evidence"]["source_assurance_state"] == "degraded"
+        assert effects["evidence"]["source_assurance_freshness"] == "stale"
+        assert effects["evidence"]["source_assurance_revision_current"] is False
+        assert effects["evidence"]["source_assurance_refresh_in_progress"] is True
+        assert effects["evidence"]["source_assurance_refresh_error"] is None
+
+
 @pytest.mark.parametrize(
     "kind",
     [
