@@ -219,8 +219,11 @@ The command briefly quiesces the two user services, hashes the allowlisted
 state tree, encrypts the archive with the Keychain backup key, then restores
 the prior service state. It includes the event log/checkpoints, projections,
 configuration metadata and secret references, OpenClaw workspace metadata,
-member/bridge mappings, pack manifests, and workbook/sidecar state. It never
-includes the Keychain values themselves.
+member/bridge mappings, pack manifests, and workbook/sidecar state. Generated
+OpenClaw plugin-discovery links and agent-local `codex-home/tmp` launcher cache
+are recreated by their owning runtimes and are not durable backup state; every
+other state-tree link remains a hard failure. The archive never includes the
+Keychain values themselves.
 
 Before a candidate switch, run the non-replacing rehearsal from that exact
 clean candidate's Python 3.14 environment. The candidate path must be the same

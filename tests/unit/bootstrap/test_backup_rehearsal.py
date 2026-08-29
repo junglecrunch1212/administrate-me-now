@@ -90,6 +90,52 @@ def _archive(
     return buffer.getvalue()
 
 
+def test_backup_omits_only_agent_codex_tmp_cache_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    paths.create()
+    events = paths.instance_dir / "events"
+    events.mkdir()
+    (events / "events.db").write_bytes(b"encrypted-event-log")
+
+    generated = (
+        paths.instance_dir
+        / "openclaw"
+        / "runtime"
+        / "agents"
+        / "main"
+        / "agent"
+        / "codex-home"
+        / "tmp"
+        / "arg0"
+        / "codex-generated"
+    )
+    generated.mkdir(parents=True)
+    target = tmp_path / "launcher-target"
+    target.write_text("reviewed launcher", encoding="utf-8")
+    (generated / "apply_patch").symlink_to(target)
+    (generated / "transient.txt").write_text("disposable", encoding="utf-8")
+
+    manager = BackupManager(
+        paths,
+        root=Path(__file__).resolve().parents[3],
+        test_mode=True,
+    )
+    _payload, manifest = manager._build_archive()
+    archived = {str(item["path"]) for item in manifest["files"]}
+    assert "state/events/events.db" in archived
+    assert not any("/codex-home/tmp/" in name for name in archived)
+
+    unsafe = paths.instance_dir / "config" / "unsafe-link"
+    unsafe.parent.mkdir()
+    unsafe.symlink_to(target)
+    with pytest.raises(BackupError, match="backup refuses symlink: unsafe-link"):
+        manager._build_archive()
+
+
 def _pid_exists(pid: int) -> bool:
     try:
         os.kill(pid, 0)
