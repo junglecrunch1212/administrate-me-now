@@ -283,11 +283,14 @@ any active candidate or OpenClaw selector, plugin registration, or
 release-pointer mutation; full live Doctor is post-switch. Do not mark all of
 HTR-05 or deployment readiness complete from the preliminary receipt alone.
 During that post-switch proof, source-assurance replay may temporarily block
-only the derived `observation_effects` readiness dimension and make service
-health report degraded while safe reads and event ingestion remain live. The
-updater may wait within its bounded settlement window only for that exact
-combination. Any other blocked readiness dimension, unsafe read/event state,
-or non-source capability degradation still triggers immediate recovery.
+the derived `observation_effects` readiness dimension, and the pinned OpenClaw
+Gateway may briefly leave the `openclaw` dimension blocked until its first
+topology heartbeat reaches the already-live candidate. The updater may wait
+within its bounded settlement window only when the blocking dimensions are a
+non-empty subset of those two known startup states while safe reads and event
+ingestion remain live. Any other blocked readiness dimension, unsafe
+read/event state, or non-source capability degradation still triggers
+immediate recovery.
 The selected runtime derives its current release, instance, host, and
 configuration binding through the same strict deployment snapshot as pending
 and promoted readiness, including the prepared adapter bytes. A legacy
