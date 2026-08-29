@@ -300,8 +300,13 @@ The mode-0600 journal captures the exact predecessor pointer/readiness bytes
 and running state before backup quiescence, records intent before each
 OpenClaw/plugin/pointer/readiness/tool/LaunchAgent/service transition, and
 restores the predecessor on ordinary failure or the next guarded invocation
-after process death. Explicit rollback uses the committed activation history
-and the same journaling rule. This **MODERNIZES** HTR-09's mechanical boundary
+after process death. Recovery proves a markerless predecessor from the clean
+Git object database supplied to the guarded invocation, never from the non-Git
+materialized controller tree. The isolated controller restores the
+passwd-resolved login home only for the signed Apple Keychain CLI, so fresh
+backup and Doctor can read existing runtime aliases without weakening the
+controller home or changing Keychain ACLs. Explicit rollback uses the committed
+activation history and the same journaling rule. This **MODERNIZES** HTR-09's mechanical boundary
 while **PRESERVING** human authority, observation mode, post-switch Doctor and
 acceptance, and the rule that fixture evidence is not HTR completion. HTR-09
 and deployment are therefore owner-gated and not executed, not authorized by
