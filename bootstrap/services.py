@@ -445,6 +445,21 @@ class ServiceManager:
                 timeout=RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
             ) as response:
                 data = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            # The readiness route intentionally returns HTTP 503 with its
+            # content-free diagnostics contract while activation is blocked.
+            # Preserve that body so the updater can distinguish a reviewed
+            # source-settlement gap from a structural degradation. Other HTTP
+            # failures remain unavailable and fail closed.
+            if exc.code != 503:
+                exc.close()
+                return None
+            try:
+                data = json.loads(exc.read())
+            except (OSError, json.JSONDecodeError):
+                return None
+            finally:
+                exc.close()
         except (OSError, urllib.error.URLError, json.JSONDecodeError):
             return None
         return data if isinstance(data, dict) else None
