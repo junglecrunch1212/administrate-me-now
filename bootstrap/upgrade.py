@@ -1329,9 +1329,8 @@ class UpgradeManager:
                 raise UpgradeError(
                     "activation journal adapter bytes are invalid"
                 ) from exc
-            if (
-                hashlib.sha256(adapter_payload).hexdigest()
-                != journal.get("initial_adapter_config_sha256")
+            if hashlib.sha256(adapter_payload).hexdigest() != journal.get(
+                "initial_adapter_config_sha256"
             ):
                 raise UpgradeError("activation journal adapter bytes changed")
             adapter_path = self.paths.instance_dir / "config" / "adapters.json"
@@ -1369,9 +1368,7 @@ class UpgradeManager:
         source_payload: bytes,
         source_config: dict[str, Any],
     ) -> tuple[bytes, dict[str, Any], dict[str, Any] | None]:
-        declared = pending["deployment_binding"].get(
-            "provider_binding_transition"
-        )
+        declared = pending["deployment_binding"].get("provider_binding_transition")
         if declared is None:
             return source_payload, source_config, None
         if self.approve_provider_binding_migration is not True:
@@ -1942,9 +1939,7 @@ class UpgradeManager:
                     journal,
                     "provider_config_selecting",
                 )
-                adapter_path = (
-                    self.paths.instance_dir / "config" / "adapters.json"
-                )
+                adapter_path = self.paths.instance_dir / "config" / "adapters.json"
                 atomic_write(adapter_path, selected_adapter_payload, mode=0o600)
                 self._fsync_directory(adapter_path.parent)
                 journal = self.activation_journal.transition(
@@ -2407,9 +2402,7 @@ class UpgradeManager:
             adapter_config,
         ) = self._capture_activation_baseline()
         binding_transition = activation_history.get("provider_binding_transition")
-        target_adapter_encoded = activation_history.get(
-            "initial_adapter_config_bytes"
-        )
+        target_adapter_encoded = activation_history.get("initial_adapter_config_bytes")
         if target_adapter_encoded is None:
             target_adapter_payload = adapter_payload
             target_adapter_config = adapter_config
@@ -2423,17 +2416,11 @@ class UpgradeManager:
                 raise UpgradeError(
                     "rollback adapter configuration history is invalid"
                 ) from exc
-            historical_adapter_config = activation_history.get(
-                "initial_adapter_config"
-            )
-            if (
-                not isinstance(historical_adapter_config, dict)
-                or hashlib.sha256(target_adapter_payload).hexdigest()
-                != activation_history.get("initial_adapter_config_sha256")
-            ):
-                raise UpgradeError(
-                    "rollback adapter configuration history is invalid"
-                )
+            historical_adapter_config = activation_history.get("initial_adapter_config")
+            if not isinstance(historical_adapter_config, dict) or hashlib.sha256(
+                target_adapter_payload
+            ).hexdigest() != activation_history.get("initial_adapter_config_sha256"):
+                raise UpgradeError("rollback adapter configuration history is invalid")
             target_adapter_config = historical_adapter_config
         if pointer != current:
             raise UpgradeError("active-release pointer changed before rollback")
@@ -2539,9 +2526,7 @@ class UpgradeManager:
                     journal,
                     "provider_config_selecting",
                 )
-                adapter_path = (
-                    self.paths.instance_dir / "config" / "adapters.json"
-                )
+                adapter_path = self.paths.instance_dir / "config" / "adapters.json"
                 atomic_write(adapter_path, target_adapter_payload, mode=0o600)
                 self._fsync_directory(adapter_path.parent)
                 journal = self.activation_journal.transition(

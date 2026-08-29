@@ -207,8 +207,7 @@ def _verified_legacy_reconciliation(
             )
         )
         or payload.get("legacy_approval_state") != "pre_governance_absent"
-        or payload.get("reconciliation_basis")
-        != "v1_completed_terminal_evidence"
+        or payload.get("reconciliation_basis") != "v1_completed_terminal_evidence"
         or payload.get("request_event_id") != request.get("event_id")
         or payload.get("terminal_event_id") != terminal.get("event_id")
         or payload.get("command_id") != request_payload.get("command_id")
@@ -339,9 +338,12 @@ def _provider_effect_counts(
             continue
         terminals = terminal_events.get(command_id, [])
         if len(rows) == 1 and len(terminals) == 1:
-            if _verified_legacy_reconciliation(
-                requests[command_id][0], terminals[0], rows
-            ) is None:
+            if (
+                _verified_legacy_reconciliation(
+                    requests[command_id][0], terminals[0], rows
+                )
+                is None
+            ):
                 counts["invalid_legacy_reconciliation"] += 1
     return counts
 

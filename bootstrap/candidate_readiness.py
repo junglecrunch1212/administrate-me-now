@@ -857,9 +857,7 @@ def build_pending_attestation(
     if candidate_commit != expected_candidate_commit:
         raise CandidateReadinessError("candidate does not match the approved commit")
     snapshot = capture_deployment_snapshot(paths)
-    transition = _binding_transition(
-        paths, approved=approve_provider_binding_migration
-    )
+    transition = _binding_transition(paths, approved=approve_provider_binding_migration)
     transition_public = transition.public() if transition is not None else None
     transition_sha256 = (
         hashlib.sha256(_canonical(transition_public)).hexdigest()
@@ -1237,9 +1235,7 @@ def load_pending_attestation_for_activation(
             or prepared_snapshot.configuration_fingerprint
             != binding["prepared_configuration_fingerprint"]
         ):
-            raise CandidateReadinessError(
-                "pending provider-binding transition drifted"
-            )
+            raise CandidateReadinessError("pending provider-binding transition drifted")
     elif approve_provider_binding_migration:
         raise CandidateReadinessError(
             "pending evidence does not authorize provider-binding migration"
@@ -1291,9 +1287,7 @@ def build_active_attestation_from_pending(
             "release_commit": binding["candidate_commit"],
             "instance_fingerprint": binding["instance_fingerprint"],
             "host_fingerprint": binding["host_fingerprint"],
-            "configuration_fingerprint": binding[
-                "prepared_configuration_fingerprint"
-            ],
+            "configuration_fingerprint": binding["prepared_configuration_fingerprint"],
         },
         "identity_acceptance": {
             "member_ids": list(human["htr_03"]["member_ids"]),
@@ -1652,9 +1646,7 @@ def record_pending_attestation(
                 htr10_review=htr10_review,
                 confirmations=confirmations,
                 observed_at=observed_at,
-                approve_provider_binding_migration=(
-                    approve_provider_binding_migration
-                ),
+                approve_provider_binding_migration=(approve_provider_binding_migration),
                 now=fixed_now,
                 attestation_id=fixed_attestation_id,
             )

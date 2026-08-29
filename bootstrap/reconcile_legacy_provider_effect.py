@@ -47,9 +47,7 @@ async def reconcile_legacy_provider_effect(
         raise LegacyEffectReconciliationError("active runtime readiness is unavailable")
     if diagnostics.get("observation_active") is not True and not test_mode:
         raise LegacyEffectReconciliationError("observation mode is not active")
-    adapter_payload, adapters = _json(
-        paths.instance_dir / "config" / "adapters.json"
-    )
+    adapter_payload, adapters = _json(paths.instance_dir / "config" / "adapters.json")
     _mapping_payload, mapping = _json(
         paths.instance_dir / "config" / "member-mapping.json"
     )
@@ -128,8 +126,7 @@ async def reconcile_legacy_provider_effect(
                 and terminal_payload.get("command_id") == command
                 and terminal_payload.get("member_id")
                 == request_payload.get("member_id")
-                and terminal_payload.get("provider")
-                == request_payload.get("provider")
+                and terminal_payload.get("provider") == request_payload.get("provider")
                 and terminal_payload.get("operation")
                 == request_payload.get("operation")
             )
@@ -175,7 +172,9 @@ async def reconcile_legacy_provider_effect(
                 "legacy provider effect has no exact reviewed provider binding"
             )
         now = datetime.now(timezone.utc)
-        pair_digest = hashlib.sha256(f"{request_id}\0{terminal_id}".encode()).hexdigest()
+        pair_digest = hashlib.sha256(
+            f"{request_id}\0{terminal_id}".encode()
+        ).hexdigest()
         event_id = await event_log.append(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),

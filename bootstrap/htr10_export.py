@@ -150,9 +150,7 @@ async def export_htr10_audits(
     finally:
         await event_log.close()
     transition_sha256 = hashlib.sha256(
-        json.dumps(
-            transition.public(), sort_keys=True, separators=(",", ":")
-        ).encode()
+        json.dumps(transition.public(), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     historical["provider_binding_transition_sha256"] = transition_sha256
     assurance["provider_binding_transition_sha256"] = transition_sha256

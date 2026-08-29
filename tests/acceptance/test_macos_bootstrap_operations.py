@@ -622,9 +622,9 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
             },
         },
     ]
-    legacy_adapter_bytes = json.dumps(
-        legacy_adapters, indent=2, sort_keys=True
-    ).encode("utf-8")
+    legacy_adapter_bytes = json.dumps(legacy_adapters, indent=2, sort_keys=True).encode(
+        "utf-8"
+    )
     adapter_path.write_bytes(legacy_adapter_bytes)
     adapter_path.chmod(0o600)
     transition = prepare_provider_binding_transition(
@@ -634,9 +634,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
         source_payload=legacy_adapter_bytes,
     )
     transition_sha256 = hashlib.sha256(
-        json.dumps(
-            transition.public(), sort_keys=True, separators=(",", ":")
-        ).encode()
+        json.dumps(transition.public(), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
 
     candidate = tmp_path / "pending-candidate"

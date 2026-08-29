@@ -82,9 +82,7 @@ def _permission_scope(kind: str, config: Mapping[str, Any]) -> list[str]:
         )
     if kind == "calendaring-google-calendar":
         return [
-            _CALENDAR_READONLY
-            if config.get("read_only") is True
-            else _CALENDAR_FULL
+            _CALENDAR_READONLY if config.get("read_only") is True else _CALENDAR_FULL
         ]
     if kind == "tasks-google-tasks":
         return [_TASKS_READONLY if config.get("read_only") is True else _TASKS_FULL]
@@ -107,7 +105,9 @@ def _provenance(config: Mapping[str, Any]) -> str:
     )
 
 
-def _workspace_by_owner_account(adapters: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+def _workspace_by_owner_account(
+    adapters: list[dict[str, Any]],
+) -> dict[tuple[str, str], str]:
     candidates: dict[tuple[str, str], set[str]] = {}
     for item in adapters:
         if item.get("enabled") is False:
@@ -120,7 +120,9 @@ def _workspace_by_owner_account(adapters: list[dict[str, Any]]) -> dict[tuple[st
             raise ProviderBindingTransitionError("legacy adapter config is malformed")
         member = config.get("member_id")
         if not isinstance(member, str) or not member.strip():
-            raise ProviderBindingTransitionError("legacy Google adapter has no member owner")
+            raise ProviderBindingTransitionError(
+                "legacy Google adapter has no member owner"
+            )
         account = _account_coordinate(config).casefold()
         workspace = config.get("workspace")
         if workspace in {"personal", "work"}:

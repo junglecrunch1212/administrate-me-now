@@ -75,9 +75,7 @@ async def audit_historical_attribution(
             # deterministic when the private owner scope agrees and exactly one
             # reviewed Calendar binding now exists for that member.
             legacy_member = (
-                account
-                if account and owner_scope == f"private:{account}"
-                else ""
+                account if account and owner_scope == f"private:{account}" else ""
             )
             legacy_calendar = [
                 binding
@@ -94,8 +92,7 @@ async def audit_historical_attribution(
                 and event_type == "external_sync.write_requested"
                 and legacy_member
                 and any(
-                    binding.member_id == legacy_member
-                    for binding in provider_bindings
+                    binding.member_id == legacy_member for binding in provider_bindings
                 )
             ):
                 # This is an internal command source, not a provider adapter.

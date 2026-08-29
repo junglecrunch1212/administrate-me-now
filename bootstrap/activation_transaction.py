@@ -506,8 +506,7 @@ def validate_journal(value: object) -> dict[str, Any]:
                 )
         elif (
             not isinstance(transition, dict)
-            or transition.get("contract")
-            != "provider-binding-config-transition-v1"
+            or transition.get("contract") != "provider-binding-config-transition-v1"
             or _HEX_64.fullmatch(str(transition.get("source_sha256"))) is None
             or _HEX_64.fullmatch(str(transition.get("prepared_sha256"))) is None
             or transition.get("credentials_changed") is not False

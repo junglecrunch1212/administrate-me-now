@@ -353,9 +353,7 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
             "initial_adapter_config_bytes": base64.b64encode(source).decode("ascii"),
             "initial_adapter_config_sha256": hashlib.sha256(source).hexdigest(),
             "selected_adapter_config": json.loads(prepared),
-            "selected_adapter_config_bytes": base64.b64encode(prepared).decode(
-                "ascii"
-            ),
+            "selected_adapter_config_bytes": base64.b64encode(prepared).decode("ascii"),
             "selected_adapter_config_sha256": hashlib.sha256(prepared).hexdigest(),
             "provider_binding_transition": {
                 "contract": "provider-binding-config-transition-v1",
