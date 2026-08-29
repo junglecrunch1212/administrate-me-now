@@ -501,6 +501,11 @@ for journaled explicit rollback, including restoration of the predecessor's
 exact readiness bytes. These mechanics do not execute HTR-08 or HTR-09 and do
 not substitute for post-switch browser/privacy/isolation/effect acceptance.
 
+OpenClaw reconciliation resolves the instance-owned `bin/openclaw` selector
+directly and revalidates it against the reviewed source receipt. It does not
+depend on the disposable controller's ambient `PATH` after installation or
+during journal recovery.
+
 For central services and post-switch Doctor, the candidate manifest's
 formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older
 side-by-side global Node installation out of the candidate runtime.
