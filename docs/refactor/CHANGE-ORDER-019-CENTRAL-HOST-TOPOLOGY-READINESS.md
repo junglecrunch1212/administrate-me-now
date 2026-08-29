@@ -322,6 +322,9 @@ same committed history in reverse. This **MODERNIZES** schema transition while
 Historical Calendar facts that used the owning member coordinate before
 provider-account binding are attributed only when their private owner scope
 agrees and exactly one reviewed Calendar binding exists for that member. A
+legacy Gmail fact with household-shared visibility is attributed only when its
+provider account and source adapter resolve to one exact reviewed member-owned
+Gmail binding; shared visibility never becomes provider ownership authority. A
 legacy internal member-reminders command is classified as an internal member
 source, never as a provider account. A pre-governance v1 provider result may be
 made current only by one additive encrypted reconciliation event bound to the
