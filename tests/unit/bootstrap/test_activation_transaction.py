@@ -329,6 +329,63 @@ def test_activation_recovery_failure_keeps_journal_and_services_stopped(
     assert events == ["stop", "stop"]
 
 
+def test_activation_recovery_waits_for_bounded_source_settlement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    _documents(paths)
+    owner = ActivationJournal(paths)
+    owner.create(_journal_value(paths))
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    events: list[str] = []
+    manager.services = SimpleNamespace(
+        stop=lambda *args, **kwargs: events.append("stop"),
+        start=lambda: (
+            events.append("start")
+            or SimpleNamespace(
+                status="degraded",
+                runtime="degraded",
+                openclaw="running",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda release: (
+            events.append(f"doctor:{release.name}")
+            or {"status": "healthy", "checks": []}
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_install_reviewed_openclaw",
+        lambda _release: events.append("openclaw"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: events.append("plugin"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *_args, **_kwargs: events.append("launchagents"),
+    )
+
+    result = manager._recover_interrupted_transaction()  # noqa: SLF001
+
+    assert result is not None and result["status"] == "recovered"
+    assert events == [
+        "stop",
+        "openclaw",
+        "plugin",
+        "launchagents",
+        "start",
+        f"doctor:{('1' * 40)}",
+    ]
+    assert not owner.path.exists()
+
+
 def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

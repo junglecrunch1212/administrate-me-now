@@ -38,6 +38,14 @@ SOURCE_ASSURANCE_COUNT_NAMES = (
     "quarantined",
     "failed",
 )
+_SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
+    {
+        "policy:source-assurance",
+        "product:member",
+        "surface:triage-processing",
+    }
+)
+_SOURCE_SETTLEMENT_READINESS_DIMENSIONS = frozenset({"observation_effects"})
 
 
 def _diagnostic_count(value: Any) -> int:
@@ -97,6 +105,42 @@ def source_assurance_terminal_evidence(
         and freshness.get("refresh_error_type") is None
     )
     return ok, evidence
+
+
+def _source_settlement_only_blocked_readiness(
+    diagnostics: dict[str, Any],
+) -> bool:
+    """Recognize the one blocked startup state that has a bounded repair path."""
+
+    deployment = diagnostics.get("deployment_readiness") or {}
+    capabilities = diagnostics.get("capabilities") or {}
+    source = capabilities.get("policy:source-assurance") or {}
+    details = source.get("details") or {}
+    freshness = details.get("freshness") or {}
+    if not (
+        diagnostics.get("status") == "blocked"
+        and diagnostics.get("ready") is False
+        and diagnostics.get("safe_reads") is True
+        and diagnostics.get("event_ingest_ready") is True
+        and diagnostics.get("observation_active") is True
+        and deployment.get("contract") == "deployment-readiness-v1"
+        and deployment.get("state") == "blocked"
+        and deployment.get("ready") is False
+        and frozenset(deployment.get("blocking_dimensions") or ())
+        == _SOURCE_SETTLEMENT_READINESS_DIMENSIONS
+        and source.get("state") == "degraded"
+        and details.get("contract") == "source-assurance-v1"
+        and details.get("state") == "degraded"
+        and details.get("content_exposed") is False
+        and freshness.get("refresh_error_type") is None
+    ):
+        return False
+    return not any(
+        capability_id not in _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS
+        and isinstance(capability, dict)
+        and capability.get("state") in {"degraded", "blocked"}
+        for capability_id, capability in capabilities.items()
+    )
 
 
 @dataclass(frozen=True)
@@ -387,6 +431,13 @@ class ServiceManager:
         if not data:
             return "degraded"
         if not data.get("ready"):
+            # A reviewed historical replay can temporarily block deployment
+            # readiness even though safe reads, event ingest, and observation
+            # containment are intact. Keep that exact state distinguishable
+            # from a structural startup failure so the upgrade controller can
+            # enter its bounded source-settlement loop.
+            if _source_settlement_only_blocked_readiness(data):
+                return "degraded"
             return "failed" if data.get("status") == "blocked" else "degraded"
         if data.get("status") == "healthy":
             return "healthy"

@@ -1629,7 +1629,13 @@ class UpgradeManager:
             if journal["was_running"] and not recovery_errors:
                 try:
                     restored = self.services.start()
-                    if restored.status != "healthy":
+                    recovery_healthy = restored.status == "healthy"
+                    if restored.status == "degraded":
+                        recovery_healthy = (
+                            self._post_switch_doctor(predecessor).get("status")
+                            == "healthy"
+                        )
+                    if not recovery_healthy:
                         raise UpgradeError(
                             "recovered predecessor did not become healthy: "
                             f"status={restored.status}, runtime={restored.runtime}, "
