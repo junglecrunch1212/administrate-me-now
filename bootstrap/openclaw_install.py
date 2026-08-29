@@ -56,7 +56,10 @@ def reviewed_source_status(
         package = json.loads(package_path.read_text("utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"ok": False, "detail": "reviewed OpenClaw package metadata is invalid"}
-    observed_executable = executable or shutil.which("openclaw")
+    selected = paths.root / "bin" / "openclaw"
+    observed_executable = executable or (
+        str(selected) if selected.exists() else shutil.which("openclaw")
+    )
     executable_ok = bool(observed_executable) and Path(
         str(observed_executable)
     ).resolve() == (entry_path.resolve())
@@ -102,7 +105,8 @@ def resolve_reviewed_openclaw(
     *,
     test_mode: bool = False,
 ) -> str:
-    executable = shutil.which("openclaw")
+    selected = paths.root / "bin" / "openclaw"
+    executable = str(selected) if selected.exists() else shutil.which("openclaw")
     if not executable:
         raise OpenClawInstallError("the pinned OpenClaw executable is unavailable")
     status = reviewed_source_status(

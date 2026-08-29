@@ -312,6 +312,10 @@ acceptance, and the rule that fixture evidence is not HTR completion. HTR-09
 and deployment are therefore owner-gated and not executed, not authorized by
 this change.
 
+The same recovery boundary resolves the instance-owned OpenClaw selector
+directly and revalidates its reviewed source receipt, so plugin restoration is
+independent of the disposable controller's ambient `PATH`.
+
 Legacy central Google bindings that predate the explicit owner/account/
 workspace/scope/provenance contract now have one bounded transition path. The
 candidate derives the complete configuration in memory, preserves every

@@ -48,7 +48,11 @@ from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailur
 import bootstrap.openclaw_service as openclaw_service
 import bootstrap.runtime_service as runtime_service
 from bootstrap.openclaw_activation import activate, model_provider_configured
-from bootstrap.openclaw_install import reviewed_source_status, source_receipt_path
+from bootstrap.openclaw_install import (
+    resolve_reviewed_openclaw,
+    reviewed_source_status,
+    source_receipt_path,
+)
 from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
     probe_required_llm_tool,
@@ -622,6 +626,47 @@ def test_reviewed_openclaw_source_receipt_binds_exact_executable(
         )["ok"]
         is False
     )
+
+
+def test_reviewed_openclaw_resolution_prefers_the_instance_selector(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )["openclaw"]
+    source_root = test_paths.app_dir / "openclaw" / versions["commit"]
+    source_root.mkdir(parents=True)
+    entry = source_root / "openclaw.mjs"
+    entry.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    (source_root / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "openclaw",
+                "version": versions["version"],
+                "packageManager": versions["package_manager"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt = {
+        "schema_version": 1,
+        "install_kind": "verified-github-source-archive",
+        "source_root": str(source_root),
+        "version": versions["version"],
+        "commit": versions["commit"],
+        "source_archive_url": versions["source_archive_url"],
+        "source_archive_sha256": versions["source_archive_sha256"],
+        "package_manager": versions["package_manager"],
+    }
+    source_receipt_path(test_paths).parent.mkdir(parents=True)
+    source_receipt_path(test_paths).write_text(json.dumps(receipt), encoding="utf-8")
+    selected = test_paths.root / "bin" / "openclaw"
+    selected.parent.mkdir(parents=True)
+    selected.symlink_to(entry)
+    monkeypatch.setattr("bootstrap.openclaw_install.shutil.which", lambda _name: None)
+
+    assert resolve_reviewed_openclaw(test_paths) == str(selected)
 
 
 def test_preflight_wrong_platform_and_arch_leave_no_partial_instance(
