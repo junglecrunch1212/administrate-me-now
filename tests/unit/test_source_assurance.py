@@ -10,7 +10,11 @@ import sqlcipher3
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
-from adminme.source_assurance import audit_source_assurance, load_source_obligations
+from adminme.source_assurance import (
+    audit_source_assurance,
+    legacy_effect_event_fingerprint,
+    load_source_obligations,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -443,6 +447,9 @@ async def test_provider_effect_accounting_proves_v2_observation_suppression(
                 "duplicate_request": 0,
                 "malformed_request": 0,
                 "orphan_terminal": 0,
+                "legacy_reconciled_terminal": 0,
+                "invalid_legacy_reconciliation": 0,
+                "duplicate_legacy_reconciliation": 0,
             },
             "zero_effect_state": "healthy",
             "observation_window": {
@@ -462,6 +469,9 @@ async def test_provider_effect_accounting_proves_v2_observation_suppression(
                     "duplicate_request": 0,
                     "malformed_request": 0,
                     "orphan_terminal": 0,
+                    "legacy_reconciled_terminal": 0,
+                    "invalid_legacy_reconciliation": 0,
+                    "duplicate_legacy_reconciliation": 0,
                 },
                 "content_exposed": False,
             },
@@ -539,3 +549,68 @@ async def test_legacy_or_mismatched_effect_evidence_blocks_zero_effect_claim(
         )
     finally:
         await mismatch.close()
+
+
+@pytest.mark.asyncio
+async def test_additive_legacy_effect_reconciliation_restores_integrity(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "legacy-reconciled.db", b"r" * 32)
+    try:
+        request_id, terminal_id = await _append_write_pair(
+            log,
+            suffix="legacy-reconciled",
+            version=1,
+            suppressed=False,
+        )
+        request = await log.get(request_id)
+        terminal = await log.get(terminal_id)
+        assert request is not None and terminal is not None
+        await log.append(
+            EventEnvelope(
+                event_at_ms=1_786_100_000_002,
+                tenant_id="tenant-effect-accounting",
+                type="external_sync.legacy_effect_reconciled",
+                schema_version=1,
+                occurred_at="2026-08-07T12:00:02Z",
+                source_adapter="migration:legacy-provider-effect",
+                source_account_id="account-fixture",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="privileged",
+                correlation_id="command-legacy-reconciled",
+                causation_id=terminal_id,
+                idempotency_key="legacy-effect-reconciliation-fixture",
+                payload={
+                    "request_event_id": request_id,
+                    "terminal_event_id": terminal_id,
+                    "command_id": "command-legacy-reconciled",
+                    "provider_account_id": "account-fixture",
+                    "provider_called": True,
+                    "suppressed": False,
+                    "legacy_approval_state": "pre_governance_absent",
+                    "reconciliation_basis": "v1_completed_terminal_evidence",
+                    "request_fingerprint": legacy_effect_event_fingerprint(request),
+                    "terminal_fingerprint": legacy_effect_event_fingerprint(terminal),
+                    "reconciled_at": "2026-08-07T12:00:02Z",
+                },
+            )
+        )
+        audit = await audit_source_assurance(
+            log,
+            repository_root=REPO_ROOT,
+            capabilities={},
+            provider_effect_window_started_at=(
+                datetime.now(timezone.utc) + timedelta(seconds=1)
+            ).isoformat(),
+        )
+        effects = audit["provider_effects"]
+        assert audit["state"] == "healthy"
+        assert effects["state"] == "healthy"
+        assert effects["counts"]["provider_called_true"] == 1
+        assert effects["counts"]["provider_called_unknown"] == 0
+        assert effects["counts"]["approval_correlation_missing"] == 0
+        assert effects["counts"]["legacy_reconciled_terminal"] == 1
+        assert effects["observation_window"]["state"] == "healthy"
+    finally:
+        await log.close()

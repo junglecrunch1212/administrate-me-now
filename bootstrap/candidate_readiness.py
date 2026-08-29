@@ -27,6 +27,11 @@ from typing import Any, Iterator, Mapping
 import yaml
 
 from bootstrap.contracts import DeploymentPaths, ensure_within
+from bootstrap.provider_binding_transition import (
+    PreparedProviderBindingTransition,
+    ProviderBindingTransitionError,
+    prepare_provider_binding_transition,
+)
 from bootstrap.source_identity import SourceIdentityError, reviewed_candidate_commit
 
 
@@ -305,14 +310,31 @@ def _pointer_snapshot(paths: DeploymentPaths) -> tuple[str, str, str]:
     )
 
 
-def capture_deployment_snapshot(paths: DeploymentPaths) -> DeploymentSnapshot:
+def capture_deployment_snapshot(
+    paths: DeploymentPaths,
+    *,
+    adapters_payload_override: bytes | None = None,
+) -> DeploymentSnapshot:
     """Capture content-free binding material for rehearsal and pending evidence."""
 
     predecessor, pointer_sha256, pointer_chain_sha256 = _pointer_snapshot(paths)
-    config_rows = [
-        _read_config_coordinate(paths, relative, required)
-        for relative, required in _CONFIG_COORDINATES
-    ]
+    config_rows = []
+    for relative, required in _CONFIG_COORDINATES:
+        if (
+            relative == "state/config/adapters.json"
+            and adapters_payload_override is not None
+        ):
+            config_rows.append(
+                {
+                    "path": relative,
+                    "present": True,
+                    "sha256": hashlib.sha256(adapters_payload_override).hexdigest(),
+                    "size": len(adapters_payload_override),
+                    "mode": 0o600,
+                }
+            )
+        else:
+            config_rows.append(_read_config_coordinate(paths, relative, required))
     instance_path = paths.instance_dir / "config" / "instance.yaml"
     instance_payload, _metadata = _read_private_file(instance_path)
     try:
@@ -375,6 +397,34 @@ def capture_deployment_snapshot(paths: DeploymentPaths) -> DeploymentSnapshot:
             "administrateme-deployment-configuration-v1", config_rows
         ),
     )
+
+
+def _binding_transition(
+    paths: DeploymentPaths,
+    *,
+    approved: bool,
+) -> PreparedProviderBindingTransition | None:
+    if not approved:
+        return None
+    adapter_payload, _metadata = _read_private_file(
+        paths.instance_dir / "config" / "adapters.json"
+    )
+    mapping_payload, _metadata = _read_private_file(
+        paths.instance_dir / "config" / "member-mapping.json"
+    )
+    adapters = _json_no_duplicates(adapter_payload, label="adapter configuration")
+    mapping = _json_no_duplicates(mapping_payload, label="member mapping")
+    try:
+        return prepare_provider_binding_transition(
+            adapters,
+            household_mapping=mapping,
+            ownership_reviewed=True,
+            source_payload=adapter_payload,
+        )
+    except ProviderBindingTransitionError as exc:
+        raise CandidateReadinessError(
+            "provider-binding migration is not deterministic"
+        ) from exc
 
 
 def _parse_time(value: object, *, label: str, now: datetime) -> datetime:
@@ -451,6 +501,8 @@ def build_htr10_review(
         observation.get("counts") if isinstance(observation, dict) else None
     )
     historical_count = historical.get("source_event_count")
+    historical_transition = historical.get("provider_binding_transition_sha256")
+    source_transition = assurance.get("provider_binding_transition_sha256")
     integrity_fields = (
         "provider_called_unknown",
         "missing_terminal",
@@ -459,6 +511,8 @@ def build_htr10_review(
         "duplicate_request",
         "malformed_request",
         "orphan_terminal",
+        "invalid_legacy_reconciliation",
+        "duplicate_legacy_reconciliation",
     )
     if (
         active.get("contract") != ACTIVE_CONTRACT
@@ -489,6 +543,14 @@ def build_htr10_review(
         or any(observation_counts.get(name) != 0 for name in integrity_fields)
         or observation_counts.get("provider_called_true") != 0
         or observation_counts.get("suppressed_false_or_unknown") != 0
+        or historical_transition != source_transition
+        or (
+            historical_transition is not None
+            and (
+                not isinstance(historical_transition, str)
+                or _HEX_64.fullmatch(historical_transition) is None
+            )
+        )
     ):
         raise CandidateReadinessError(
             "HTR-10 metadata audits are incomplete, unhealthy, or inconsistent"
@@ -504,6 +566,7 @@ def build_htr10_review(
         ),
         "historical_attribution_sha256": hashlib.sha256(historical_payload).hexdigest(),
         "source_assurance_sha256": hashlib.sha256(source_payload).hexdigest(),
+        "provider_binding_transition_sha256": historical_transition,
         "source_event_count": historical_count,
         "unattributed_event_count": 0,
         "provider_effect_integrity": "healthy",
@@ -529,6 +592,7 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
         "event_watermark_sha256",
         "historical_attribution_sha256",
         "source_assurance_sha256",
+        "provider_binding_transition_sha256",
         "source_event_count",
         "unattributed_event_count",
         "provider_effect_integrity",
@@ -561,6 +625,14 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
                 "historical_attribution_sha256",
                 "source_assurance_sha256",
                 "receipt_sha256",
+            )
+        )
+        or (
+            value.get("provider_binding_transition_sha256") is not None
+            and (
+                not isinstance(value["provider_binding_transition_sha256"], str)
+                or _HEX_64.fullmatch(value["provider_binding_transition_sha256"])
+                is None
             )
         )
         or supplied != hashlib.sha256(_canonical(unsigned)).hexdigest()
@@ -764,6 +836,7 @@ def build_pending_attestation(
     htr10_review: Path,
     confirmations: Mapping[str, bool],
     observed_at: Mapping[str, str],
+    approve_provider_binding_migration: bool = False,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> tuple[dict[str, Any], DeploymentSnapshot]:
@@ -784,6 +857,23 @@ def build_pending_attestation(
     if candidate_commit != expected_candidate_commit:
         raise CandidateReadinessError("candidate does not match the approved commit")
     snapshot = capture_deployment_snapshot(paths)
+    transition = _binding_transition(
+        paths, approved=approve_provider_binding_migration
+    )
+    transition_public = transition.public() if transition is not None else None
+    transition_sha256 = (
+        hashlib.sha256(_canonical(transition_public)).hexdigest()
+        if transition_public is not None
+        else None
+    )
+    prepared_snapshot = (
+        capture_deployment_snapshot(
+            paths,
+            adapters_payload_override=transition.prepared_bytes,
+        )
+        if transition is not None
+        else snapshot
+    )
     for required_after_htr07 in (
         paths.instance_dir / "config" / "openclaw-activation.json",
         paths.instance_dir / "openclaw" / "runtime" / "openclaw.json",
@@ -814,6 +904,10 @@ def build_pending_attestation(
     htr10, htr10_sha256, htr10_observed = _validate_htr10(
         paths, htr10_review, now=current_time
     )
+    if htr10.get("provider_binding_transition_sha256") != transition_sha256:
+        raise CandidateReadinessError(
+            "HTR-10 review does not bind the prepared provider configuration"
+        )
     expiries.append(htr10_observed + MAX_EVIDENCE_AGE)
     human["htr_10"] = {
         "confirmed": True,
@@ -850,6 +944,10 @@ def build_pending_attestation(
         "deployment_binding": {
             "candidate_commit": candidate_commit,
             **snapshot.public(),
+            "prepared_configuration_fingerprint": (
+                prepared_snapshot.configuration_fingerprint
+            ),
+            "provider_binding_transition": transition_public,
             "preliminary_rehearsal_receipt_sha256": receipt_sha256,
             "preliminary_backup_artifact_sha256": artifact_sha256,
             "preliminary_rehearsal_watermark_sha256": watermark_sha256,
@@ -946,6 +1044,8 @@ def validate_pending_attestation(
         "host_fingerprint",
         "service_account_fingerprint",
         "configuration_fingerprint",
+        "prepared_configuration_fingerprint",
+        "provider_binding_transition",
         "preliminary_rehearsal_receipt_sha256",
         "preliminary_backup_artifact_sha256",
         "preliminary_rehearsal_watermark_sha256",
@@ -959,9 +1059,49 @@ def validate_pending_attestation(
         raise CandidateReadinessError("pending release binding is invalid")
     if not all(
         isinstance(binding.get(name), str) and _HEX_64.fullmatch(binding[name])
-        for name in expected_binding - {"candidate_commit", "predecessor_commit"}
+        for name in expected_binding
+        - {
+            "candidate_commit",
+            "predecessor_commit",
+            "provider_binding_transition",
+        }
     ):
         raise CandidateReadinessError("pending fingerprint binding is invalid")
+    transition = binding.get("provider_binding_transition")
+    if transition is None:
+        if (
+            binding["prepared_configuration_fingerprint"]
+            != binding["configuration_fingerprint"]
+        ):
+            raise CandidateReadinessError(
+                "pending prepared configuration binding is invalid"
+            )
+    elif (
+        not isinstance(transition, dict)
+        or set(transition)
+        != {
+            "contract",
+            "source_sha256",
+            "prepared_sha256",
+            "migrated_adapter_count",
+            "credentials_changed",
+            "capabilities_changed",
+            "content_exposed",
+        }
+        or transition.get("contract") != "provider-binding-config-transition-v1"
+        or not all(
+            isinstance(transition.get(name), str)
+            and _HEX_64.fullmatch(transition[name])
+            for name in ("source_sha256", "prepared_sha256")
+        )
+        or transition.get("source_sha256") == transition.get("prepared_sha256")
+        or not isinstance(transition.get("migrated_adapter_count"), int)
+        or transition["migrated_adapter_count"] <= 0
+        or transition.get("credentials_changed") is not False
+        or transition.get("capabilities_changed") is not False
+        or transition.get("content_exposed") is not False
+    ):
+        raise CandidateReadinessError("pending provider-binding transition is invalid")
     human = value.get("human_evidence")
     if not isinstance(human, dict) or set(human) != {*_HTR_IDS, "htr_10"}:
         raise CandidateReadinessError("pending human evidence is invalid")
@@ -1037,6 +1177,7 @@ def load_pending_attestation_for_activation(
     attestation_id: str,
     candidate: Path,
     candidate_commit: str,
+    approve_provider_binding_migration: bool = False,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], str, DeploymentSnapshot]:
     """Load one explicit pending artifact and rebind it to current coordinates.
@@ -1079,6 +1220,30 @@ def load_pending_attestation_for_activation(
             raise CandidateReadinessError(
                 f"pending attestation deployment binding drifted: {field}"
             )
+    declared_transition = binding.get("provider_binding_transition")
+    if declared_transition is not None:
+        if approve_provider_binding_migration is not True:
+            raise CandidateReadinessError(
+                "provider-binding migration requires explicit activation approval"
+            )
+        transition = _binding_transition(paths, approved=True)
+        assert transition is not None
+        prepared_snapshot = capture_deployment_snapshot(
+            paths,
+            adapters_payload_override=transition.prepared_bytes,
+        )
+        if (
+            transition.public() != declared_transition
+            or prepared_snapshot.configuration_fingerprint
+            != binding["prepared_configuration_fingerprint"]
+        ):
+            raise CandidateReadinessError(
+                "pending provider-binding transition drifted"
+            )
+    elif approve_provider_binding_migration:
+        raise CandidateReadinessError(
+            "pending evidence does not authorize provider-binding migration"
+        )
     if candidate_commit in _pointer_commits(paths):
         raise CandidateReadinessError("pending candidate is already active or retained")
     if value["human_evidence"]["htr_03"]["member_ids"] != _member_ids(paths):
@@ -1126,7 +1291,9 @@ def build_active_attestation_from_pending(
             "release_commit": binding["candidate_commit"],
             "instance_fingerprint": binding["instance_fingerprint"],
             "host_fingerprint": binding["host_fingerprint"],
-            "configuration_fingerprint": binding["configuration_fingerprint"],
+            "configuration_fingerprint": binding[
+                "prepared_configuration_fingerprint"
+            ],
         },
         "identity_acceptance": {
             "member_ids": list(human["htr_03"]["member_ids"]),
@@ -1452,6 +1619,7 @@ def record_pending_attestation(
     htr10_review: Path,
     confirmations: Mapping[str, bool],
     observed_at: Mapping[str, str],
+    approve_provider_binding_migration: bool = False,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1467,6 +1635,7 @@ def record_pending_attestation(
             htr10_review=htr10_review,
             confirmations=confirmations,
             observed_at=observed_at,
+            approve_provider_binding_migration=approve_provider_binding_migration,
             now=fixed_now,
             attestation_id=fixed_attestation_id,
         )
@@ -1483,6 +1652,9 @@ def record_pending_attestation(
                 htr10_review=htr10_review,
                 confirmations=confirmations,
                 observed_at=observed_at,
+                approve_provider_binding_migration=(
+                    approve_provider_binding_migration
+                ),
                 now=fixed_now,
                 attestation_id=fixed_attestation_id,
             )
@@ -1514,6 +1686,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preliminary-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--preliminary-backup-artifact", type=Path, required=True)
     parser.add_argument("--htr-10-review", type=Path, required=True)
+    parser.add_argument(
+        "--approve-provider-binding-migration",
+        action="store_true",
+        help="bind the exact additive legacy adapter metadata transition",
+    )
     for htr in ("01", "02", "03", "04", "06", "07", "10"):
         parser.add_argument(f"--confirm-htr-{htr}", action="store_true")
         if htr != "10":
@@ -1550,6 +1727,9 @@ def main(argv: list[str] | None = None) -> int:
             htr10_review=args.htr_10_review,
             confirmations=confirmations,
             observed_at=observed,
+            approve_provider_binding_migration=(
+                args.approve_provider_binding_migration
+            ),
         )
     except Exception as exc:
         print(

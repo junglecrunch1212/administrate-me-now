@@ -21,6 +21,7 @@ async def audit_historical_attribution(
     repository_root: Any,
     provider_bindings: tuple[ProviderBinding, ...],
     hash_key: bytes,
+    through_event_id: str | None = None,
 ) -> dict[str, Any]:
     event_types = sorted(
         {
@@ -28,7 +29,9 @@ async def audit_historical_attribution(
             for obligation in load_source_obligations(repository_root)
         }
     )
-    watermark = await event_log.latest_event_id()
+    watermark = through_event_id
+    if watermark is None:
+        watermark = await event_log.latest_event_id()
     bindings_by_account: dict[str, list[ProviderBinding]] = {}
     for binding in provider_bindings:
         bindings_by_account.setdefault(
@@ -65,6 +68,42 @@ async def audit_historical_attribution(
             attributed += 1
         elif bindings:
             binding_state = "ambiguous_or_owner_mismatch"
+        else:
+            # Pre-binding Google Calendar adapters used the owning member id as
+            # ``source_account_id``.  That coordinate is not a provider account
+            # and must not be silently treated as one.  It is nevertheless
+            # deterministic when the private owner scope agrees and exactly one
+            # reviewed Calendar binding now exists for that member.
+            legacy_member = (
+                account
+                if account and owner_scope == f"private:{account}"
+                else ""
+            )
+            legacy_calendar = [
+                binding
+                for binding in provider_bindings
+                if binding.member_id == legacy_member
+                and binding.kind == "calendaring-google-calendar"
+            ]
+            if adapter == "calendaring-google-calendar" and len(legacy_calendar) == 1:
+                binding_state = "legacy_member_coordinate_reconciled"
+                workspace = legacy_calendar[0].workspace
+                attributed += 1
+            elif (
+                adapter == "member-reminders"
+                and event_type == "external_sync.write_requested"
+                and legacy_member
+                and any(
+                    binding.member_id == legacy_member
+                    for binding in provider_bindings
+                )
+            ):
+                # This is an internal command source, not a provider adapter.
+                # The member/private coordinate itself is its complete historic
+                # attribution and does not invent a provider-account binding.
+                binding_state = "legacy_internal_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
         key = (
             _digest(hash_key, owner_scope),
             _digest(hash_key, account.casefold()),

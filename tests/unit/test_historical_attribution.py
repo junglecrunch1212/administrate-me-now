@@ -93,3 +93,63 @@ async def test_historical_attribution_is_content_free_and_binding_aware(
     assert "account-a@example.invalid" not in rendered
     assert "member-a" not in rendered
     assert proof["groups"][0]["workspace"] == "personal"
+
+
+@pytest.mark.asyncio
+async def test_historical_attribution_reconciles_exact_legacy_member_coordinates(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "legacy-events.db", b"l" * 32)
+    try:
+        calendar_id = await log.append(
+            EventEnvelope(
+                event_at_ms=1,
+                tenant_id="tenant-fixture",
+                type="calendar.event_added",
+                schema_version=1,
+                occurred_at="2026-08-26T12:00:00Z",
+                source_adapter="calendaring-google-calendar",
+                source_account_id="member-a",
+                owner_scope="private:member-a",
+                visibility_scope="private:member-a",
+                payload={
+                    "source": "calendar:google",
+                    "external_event_id": "fixture-event",
+                    "calendar_id": "fixture-calendar",
+                    "summary": "Fixture",
+                    "start": "2026-08-26T12:00:00Z",
+                    "end": "2026-08-26T13:00:00Z",
+                    "location": None,
+                    "attendees": [],
+                    "body": None,
+                },
+            )
+        )
+        proof = await audit_historical_attribution(
+            log,
+            repository_root=REPO_ROOT,
+            provider_bindings=(
+                ProviderBinding(
+                    adapter_id="calendar-a",
+                    kind="calendaring-google-calendar",
+                    provider_family="google",
+                    owner_kind="member",
+                    owner_id="member-a",
+                    member_id="member-a",
+                    service_principal_id=None,
+                    provider_account_id="account-a@example.invalid",
+                    workspace="personal",
+                    permission_scope=("calendar.read",),
+                    binding_provenance="oauth-subject",
+                ),
+            ),
+            hash_key=b"legacy-audit-key" * 2,
+            through_event_id=calendar_id,
+        )
+    finally:
+        await log.close()
+    assert proof["state"] == "healthy"
+    assert proof["attributed_event_count"] == 1
+    assert proof["groups"][0]["binding_state"] == (
+        "legacy_member_coordinate_reconciled"
+    )
