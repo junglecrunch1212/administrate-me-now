@@ -268,6 +268,14 @@ fresh backup and prove predecessor compatibility after backup quiescence and
 before any active candidate or OpenClaw selector, plugin-registration, or
 release-pointer mutation, with full Doctor still post-switch.
 
+That post-switch Doctor **MODERNIZES** cold replay settlement without weakening
+the structural gate. While source assurance advances, the updater may treat
+`deployment_topology_and_recovery_readiness` as transient only when its sole
+blocking dimension is the source-derived `observation_effects` dimension and
+the runtime still proves safe reads plus event ingestion. It continues to fail
+closed on every other readiness dimension and every non-source capability
+degradation.
+
 The separate `candidate-deployment-readiness-v1` writer now records an
 append-only, mode-0600 artifact at
 `app/readiness/candidate-pending/<attestation-id>.json` under the same

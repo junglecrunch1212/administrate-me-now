@@ -89,6 +89,7 @@ _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
         "surface:triage-processing",
     }
 )
+_SOURCE_SETTLEMENT_READINESS_DIMENSIONS = frozenset({"observation_effects"})
 # A full reviewed language-bound replay can traverse more than one thousand
 # immutable message facts on a household instance.  Keep this bounded, but do
 # not make a healthy, advancing replay race an unrealistically short rollback
@@ -1066,10 +1067,70 @@ class UpgradeManager:
         }
 
     @staticmethod
+    def _doctor_has_only_source_settlement_readiness_gap(
+        result: dict[str, Any],
+    ) -> bool:
+        """Recognize only the readiness dimension derived from source settlement."""
+
+        for check in result.get("checks", []):
+            if not isinstance(check, dict) or check.get("name") != (
+                "deployment_topology_and_recovery_readiness"
+            ):
+                continue
+            evidence = check.get("evidence")
+            if not isinstance(evidence, dict):
+                return False
+            blocking = evidence.get("blocking_dimensions")
+            return (
+                evidence.get("contract") == "deployment-readiness-v1"
+                and evidence.get("state") == "blocked"
+                and isinstance(blocking, list)
+                and bool(blocking)
+                and all(isinstance(value, str) for value in blocking)
+                and set(blocking).issubset(_SOURCE_SETTLEMENT_READINESS_DIMENSIONS)
+            )
+        return False
+
+    @classmethod
+    def _failed_checks_are_known_transients(cls, result: dict[str, Any]) -> bool:
+        failed = cls._failed_check_names(result)
+        if not failed:
+            return False
+        allowed = set(_TRANSIENT_POST_SWITCH_CHECKS)
+        if cls._doctor_has_only_source_settlement_readiness_gap(result):
+            allowed.add("deployment_topology_and_recovery_readiness")
+        return failed.issubset(allowed)
+
+    @staticmethod
+    def _runtime_has_only_source_settlement_readiness_gap(
+        diagnostics: dict[str, Any],
+    ) -> bool:
+        readiness = diagnostics.get("deployment_readiness")
+        if not isinstance(readiness, dict):
+            return False
+        blocking = readiness.get("blocking_dimensions")
+        return (
+            diagnostics.get("service_ready") is True
+            and diagnostics.get("safe_reads") is True
+            and diagnostics.get("event_ingest_ready") is True
+            and readiness.get("contract") == "deployment-readiness-v1"
+            and readiness.get("state") == "blocked"
+            and isinstance(blocking, list)
+            and bool(blocking)
+            and all(isinstance(value, str) for value in blocking)
+            and set(blocking).issubset(_SOURCE_SETTLEMENT_READINESS_DIMENSIONS)
+        )
+
+    @staticmethod
     def _has_new_structural_degradation(diagnostics: dict[str, Any]) -> bool:
         """Reject a runtime capability failure that emerges during replay."""
 
-        if diagnostics.get("ready") is not True:
+        if (
+            diagnostics.get("ready") is not True
+            and not UpgradeManager._runtime_has_only_source_settlement_readiness_gap(
+                diagnostics
+            )
+        ):
             return True
         capabilities = diagnostics.get("capabilities")
         if not isinstance(capabilities, dict):
@@ -1103,7 +1164,7 @@ class UpgradeManager:
                 if last.get("status") == "healthy":
                     return last
             failed = self._failed_check_names(last)
-            if not failed or not failed.issubset(_TRANSIENT_POST_SWITCH_CHECKS):
+            if not self._failed_checks_are_known_transients(last):
                 return last
             if self.test_mode:
                 return last
