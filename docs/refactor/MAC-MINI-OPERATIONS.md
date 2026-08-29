@@ -280,6 +280,12 @@ backup and bind predecessor compatibility after backup quiescence and before
 any active candidate or OpenClaw selector, plugin registration, or
 release-pointer mutation; full live Doctor is post-switch. Do not mark all of
 HTR-05 or deployment readiness complete from the preliminary receipt alone.
+During that post-switch proof, source-assurance replay may temporarily block
+only the derived `observation_effects` readiness dimension and make service
+health report degraded while safe reads and event ingestion remain live. The
+updater may wait within its bounded settlement window only for that exact
+combination. Any other blocked readiness dimension, unsafe read/event state,
+or non-source capability degradation still triggers immediate recovery.
 The candidate-pending contract and journaled consumer are implemented, but no
 household HTR-08 evidence is authorized or recorded and HTR-09 has not been
 requested. Repository fixtures prove mechanics only; they do not authorize an
