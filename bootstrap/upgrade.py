@@ -90,7 +90,14 @@ _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
         "surface:triage-processing",
     }
 )
-_SOURCE_SETTLEMENT_READINESS_DIMENSIONS = frozenset({"observation_effects"})
+_TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS = frozenset(
+    {
+        # The source-assurance projection settles after the candidate starts.
+        "observation_effects",
+        # The pinned gateway reports its topology only after the runtime is live.
+        "openclaw",
+    }
+)
 # A full reviewed language-bound replay can traverse more than one thousand
 # immutable message facts on a household instance.  Keep this bounded, but do
 # not make a healthy, advancing replay race an unrealistically short rollback
@@ -1074,10 +1081,10 @@ class UpgradeManager:
         }
 
     @staticmethod
-    def _doctor_has_only_source_settlement_readiness_gap(
+    def _doctor_has_only_transient_deployment_readiness_gap(
         result: dict[str, Any],
     ) -> bool:
-        """Recognize only the readiness dimension derived from source settlement."""
+        """Recognize only bounded readiness dimensions that settle after startup."""
 
         for check in result.get("checks", []):
             if not isinstance(check, dict) or check.get("name") != (
@@ -1094,7 +1101,7 @@ class UpgradeManager:
                 and isinstance(blocking, list)
                 and bool(blocking)
                 and all(isinstance(value, str) for value in blocking)
-                and set(blocking).issubset(_SOURCE_SETTLEMENT_READINESS_DIMENSIONS)
+                and set(blocking).issubset(_TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS)
             )
         return False
 
@@ -1104,12 +1111,12 @@ class UpgradeManager:
         if not failed:
             return False
         allowed = set(_TRANSIENT_POST_SWITCH_CHECKS)
-        if cls._doctor_has_only_source_settlement_readiness_gap(result):
+        if cls._doctor_has_only_transient_deployment_readiness_gap(result):
             allowed.add("deployment_topology_and_recovery_readiness")
         return failed.issubset(allowed)
 
     @staticmethod
-    def _runtime_has_only_source_settlement_readiness_gap(
+    def _runtime_has_only_transient_deployment_readiness_gap(
         diagnostics: dict[str, Any],
     ) -> bool:
         readiness = diagnostics.get("deployment_readiness")
@@ -1125,7 +1132,7 @@ class UpgradeManager:
             and isinstance(blocking, list)
             and bool(blocking)
             and all(isinstance(value, str) for value in blocking)
-            and set(blocking).issubset(_SOURCE_SETTLEMENT_READINESS_DIMENSIONS)
+            and set(blocking).issubset(_TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS)
         )
 
     @staticmethod
@@ -1134,7 +1141,7 @@ class UpgradeManager:
 
         if (
             diagnostics.get("ready") is not True
-            and not UpgradeManager._runtime_has_only_source_settlement_readiness_gap(
+            and not UpgradeManager._runtime_has_only_transient_deployment_readiness_gap(
                 diagnostics
             )
         ):
@@ -1194,7 +1201,9 @@ class UpgradeManager:
                     "source_assurance_terminal_dispositions" in failed
                     and (
                         not deployment_check_failed
-                        or self._doctor_has_only_source_settlement_readiness_gap(last)
+                        or self._doctor_has_only_transient_deployment_readiness_gap(
+                            last
+                        )
                     )
                 )
                 if (

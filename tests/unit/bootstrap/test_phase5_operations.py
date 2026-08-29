@@ -2267,7 +2267,71 @@ def test_upgrade_waits_when_deployment_readiness_is_blocked_only_by_source_settl
     assert include_synthetic == [False, False, True]
 
 
-def test_upgrade_rejects_non_source_deployment_readiness_gap_without_waiting(
+def test_upgrade_waits_for_first_openclaw_topology_heartbeat(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [
+            {"name": "openclaw_compatibility_and_plugin_discovery", "ok": False},
+            {"name": "launchd_and_process_state", "ok": False},
+            {
+                "name": "deployment_topology_and_recovery_readiness",
+                "ok": False,
+                "evidence": {
+                    "contract": "deployment-readiness-v1",
+                    "state": "blocked",
+                    "blocking_dimensions": ["openclaw"],
+                },
+            },
+        ],
+    }
+    healthy = {"status": "healthy", "checks": []}
+    reports = [transient, healthy, healthy]
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return reports.pop(0)
+
+    heartbeat_pending = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert heartbeat_pending is not None
+    heartbeat_pending = copy.deepcopy(heartbeat_pending)
+    heartbeat_pending.update(
+        {
+            "ready": False,
+            "release_ready": False,
+            "service_ready": True,
+            "safe_reads": True,
+            "event_ingest_ready": True,
+            "deployment_readiness": {
+                "contract": "deployment-readiness-v1",
+                "state": "blocked",
+                "ready": False,
+                "blocking_dimensions": ["openclaw"],
+            },
+        }
+    )
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(
+        manager.services, "runtime_diagnostics", lambda: heartbeat_pending
+    )
+
+    result = manager._post_switch_doctor(REPO_ROOT)
+
+    assert result["status"] == "healthy"
+    assert include_synthetic == [False, False, True]
+
+
+def test_upgrade_rejects_structural_deployment_readiness_gap_without_waiting(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2283,7 +2347,7 @@ def test_upgrade_rejects_non_source_deployment_readiness_gap_without_waiting(
                     "contract": "deployment-readiness-v1",
                     "state": "blocked",
                     "blocking_dimensions": [
-                        "observation_effects",
+                        "openclaw",
                         "attestation_binding",
                     ],
                 },
