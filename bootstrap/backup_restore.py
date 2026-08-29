@@ -75,6 +75,20 @@ _HEX_40 = re.compile(r"[0-9a-f]{40}")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 
 
+def _is_generated_openclaw_codex_tmp(path: Path, *, state_root: Path) -> bool:
+    """Return whether ``path`` is agent-local disposable Codex launcher state."""
+
+    try:
+        parts = path.relative_to(state_root).parts
+    except ValueError:
+        return False
+    return (
+        len(parts) >= 7
+        and parts[:3] == ("openclaw", "runtime", "agents")
+        and parts[4:7] == ("agent", "codex-home", "tmp")
+    )
+
+
 def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -1699,6 +1713,13 @@ class BackupManager:
         files: list[dict[str, Any]] = []
         payloads: dict[str, bytes] = {}
         for path in sorted(self.paths.instance_dir.rglob("*")):
+            # OpenClaw's Codex launcher writes process-scoped wrappers and links
+            # below each agent's codex-home/tmp. They are runtime cache, can
+            # disappear while quiescing, and are recreated on the next run.
+            if _is_generated_openclaw_codex_tmp(
+                path, state_root=self.paths.instance_dir
+            ):
+                continue
             if path.is_symlink():
                 # OpenClaw materializes plugin skill discovery as generated
                 # links into reviewed release content.  They are runtime cache,
