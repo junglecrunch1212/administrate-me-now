@@ -21,7 +21,9 @@ from adminme.historical_attribution import audit_historical_attribution
 from adminme.provider_bindings import validate_provider_bindings
 from adminme.source_assurance import audit_source_assurance
 from bootstrap.contracts import DeploymentPaths, ensure_within
-from bootstrap.provider_binding_transition import prepare_provider_binding_transition
+from bootstrap.provider_binding_transition import (
+    prepare_live_provider_binding_transition,
+)
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
 
@@ -72,7 +74,7 @@ async def export_htr10_audits(
     test_mode: bool = False,
 ) -> dict[str, Any]:
     if ownership_reviewed is not True:
-        raise HTR10ExportError("provider-binding migration approval is required")
+        raise HTR10ExportError("provider-binding transition approval is required")
     historical_output = ensure_within(historical_output, paths.backup_dir)
     source_output = ensure_within(source_output, paths.backup_dir)
     if historical_output == source_output:
@@ -83,11 +85,13 @@ async def export_htr10_audits(
     _mapping_payload, mapping = _private_json(
         paths.instance_dir / "config" / "member-mapping.json"
     )
-    transition = prepare_provider_binding_transition(
+    transition = prepare_live_provider_binding_transition(
+        paths,
         adapter_config,
         household_mapping=mapping,
         ownership_reviewed=True,
         source_payload=adapter_payload,
+        test_mode=test_mode,
     )
     roles = {
         str(row["member_id"]): str(row["role"])
@@ -176,7 +180,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--instance-root", type=Path, required=True)
     parser.add_argument("--historical-output", type=Path, required=True)
     parser.add_argument("--source-output", type=Path, required=True)
-    parser.add_argument("--approve-provider-binding-migration", action="store_true")
+    parser.add_argument(
+        "--approve-provider-binding-migration",
+        action="store_true",
+        help=(
+            "approve exact legacy attribution plus any uniquely discovered "
+            "principal-bound read-only Google enrollment"
+        ),
+    )
     return parser
 
 

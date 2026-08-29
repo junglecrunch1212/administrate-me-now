@@ -46,7 +46,7 @@ from bootstrap.openclaw_tools import (
 )
 from bootstrap.provider_binding_transition import (
     ProviderBindingTransitionError,
-    prepare_provider_binding_transition,
+    prepare_live_provider_binding_transition,
 )
 from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
 from bootstrap.source_assessment_repair import (
@@ -1512,25 +1512,27 @@ class UpgradeManager:
             return source_payload, source_config, None
         if self.approve_provider_binding_migration is not True:
             raise UpgradeError(
-                "provider-binding migration lacks explicit activation approval"
+                "provider-binding transition lacks explicit activation approval"
             )
         mapping_payload, mapping = self._read_private_json_payload(
             self.paths.instance_dir / "config" / "member-mapping.json"
         )
         assert mapping_payload is not None and mapping is not None
         try:
-            transition = prepare_provider_binding_transition(
+            transition = prepare_live_provider_binding_transition(
+                self.paths,
                 source_config,
                 household_mapping=mapping,
                 ownership_reviewed=True,
                 source_payload=source_payload,
+                test_mode=self.test_mode,
             )
         except ProviderBindingTransitionError as exc:
             raise UpgradeError(
-                "provider-binding migration cannot be prepared exactly"
+                "provider-binding transition cannot be prepared exactly"
             ) from exc
         if transition.public() != declared:
-            raise UpgradeError("provider-binding migration changed after readiness")
+            raise UpgradeError("provider-binding transition changed after readiness")
         return transition.prepared_bytes, transition.prepared, declared
 
     def _recover_interrupted_transaction(

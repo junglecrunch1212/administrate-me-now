@@ -309,8 +309,13 @@ two unique running launchd jobs and their live PIDs, rather than matching
 mutable process command-line text.
 The selected runtime derives its current release, instance, host, and
 configuration binding through the same strict deployment snapshot as pending
-and promoted readiness, including the prepared adapter bytes. A legacy
-configuration digest is not comparable evidence and must fail closed.
+and promoted readiness, including the prepared adapter bytes. The exact
+provider-binding transition may combine additive legacy attribution with one
+uniquely discovered principal-bound personal Google grant. Enrollment adds only
+Gmail read-only with writes disabled, Calendar read-only, and the default Google
+Tasks list read-only; it preserves the Keychain credential, requires observation
+mode, and is journaled for byte-exact recovery. A legacy configuration digest
+is not comparable evidence and must fail closed.
 Legacy-plugin recovery accepts OpenClaw's validated post-install entry with no
 optional plugin `config` object; malformed entries or non-object configuration
 still fail closed.
@@ -392,7 +397,8 @@ python -m bootstrap.candidate_readiness \
   --confirm-htr-04 --htr-04-observed-at 2026-01-01T00:00:00+00:00 \
   --confirm-htr-06 --htr-06-observed-at 2026-01-01T00:00:00+00:00 \
   --confirm-htr-07 --htr-07-observed-at 2026-01-01T00:00:00+00:00 \
-  --confirm-htr-10
+  --confirm-htr-10 \
+  --approve-provider-binding-migration
 ```
 
 The timestamps above are placeholders, not evidence. Use the actual aware UTC
@@ -414,7 +420,10 @@ is deliberately no mutable "current pending" pointer: a future journaled
 updater must receive one explicit attestation ID, revalidate every binding and
 freshness predicate, and derive active readiness only inside its recoverable
 selection/start transaction. A command result is not HTR completion when its
-inputs are fixtures.
+inputs are fixtures. The compatibility-named
+`--approve-provider-binding-migration` flag approves the exact reviewed
+transition recorded in HTR-10; it does not authorize broader provider scopes,
+credential changes, or writes.
 
 Never run a floating OpenClaw upgrade. The commands in this section are
 reference-only until this implementation is merged, an owner has separately
@@ -425,6 +434,7 @@ candidate checkout, then run with the exact append-only HTR-08 artifact ID:
 ```bash
 ./bootstrap/update.sh \
   --pending-attestation-id=0123456789abcdef0123456789abcdef \
+  --approve-provider-binding-migration \
   /absolute/path/to/reviewed-candidate
 ```
 

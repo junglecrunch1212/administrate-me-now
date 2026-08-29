@@ -39,7 +39,14 @@ from bootstrap.bridge_enrollment import (
 from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.candidate_readiness import validate_pending_attestation
 from bootstrap.doctor import Doctor
-from bootstrap.provider_binding_transition import prepare_provider_binding_transition
+from bootstrap.google_oauth_contract import (
+    GOOGLE_READONLY_ADAPTER_SCOPES,
+    credential_member_digest,
+    member_google_secret_name,
+)
+from bootstrap.provider_binding_transition import (
+    prepare_live_provider_binding_transition,
+)
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.source_identity import verify_release_source_identity
@@ -614,11 +621,13 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     mapping = json.loads(
         (paths.instance_dir / "config" / "member-mapping.json").read_text("utf-8")
     )
-    principal_id = next(
+    principal_ids = [
         str(row["member_id"])
         for row in mapping["members"]
         if row.get("role") == "principal"
-    )
+    ]
+    assert len(principal_ids) == 2
+    principal_id, enrollment_principal_id = principal_ids
     adapter_path = paths.instance_dir / "config" / "adapters.json"
     legacy_adapters = json.loads(adapter_path.read_text("utf-8"))
     reference = "keychain://fixture/provider-binding-transition"
@@ -659,12 +668,33 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     )
     adapter_path.write_bytes(legacy_adapter_bytes)
     adapter_path.chmod(0o600)
-    transition = prepare_provider_binding_transition(
+    enrollment_account = "principal-b@invalid.example"
+    secret_store(paths, test_mode=True).put(
+        member_google_secret_name(enrollment_principal_id),
+        json.dumps(
+            {
+                "client_id": "fixture-client",
+                "client_secret": "fixture-secret",
+                "owner_member_digest": credential_member_digest(
+                    enrollment_principal_id
+                ),
+                "provider_account_id": enrollment_account,
+                "refresh_token": "fixture-refresh",
+                "token_uri": "https://oauth2.invalid/token",
+                "scopes": sorted(GOOGLE_READONLY_ADAPTER_SCOPES),
+            },
+            sort_keys=True,
+        ).encode("utf-8"),
+    )
+    transition = prepare_live_provider_binding_transition(
+        paths,
         legacy_adapters,
         household_mapping=mapping,
         ownership_reviewed=True,
         source_payload=legacy_adapter_bytes,
+        test_mode=True,
     )
+    assert transition.public()["contract"] == "provider-binding-config-transition-v2"
     transition_sha256 = hashlib.sha256(
         json.dumps(transition.public(), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -804,6 +834,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
         for key, value in os.environ.items()
         if not key.startswith("ADMINME_") and key != "PYTHONPATH"
     }
+    environment["ADMINME_TEST_MODE"] = "1"
     completed = subprocess.run(
         command,
         cwd=candidate,

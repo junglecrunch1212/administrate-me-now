@@ -469,9 +469,17 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     assert json.loads(history.read_text("utf-8"))["phase"] == "recovered"
 
 
+@pytest.mark.parametrize(
+    "transition_contract",
+    [
+        "provider-binding-config-transition-v1",
+        "provider-binding-config-transition-v2",
+    ],
+)
 def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    transition_contract: str,
 ) -> None:
     paths = _paths(tmp_path)
     pointer_payload, _pointer, readiness_payload = _documents(paths)
@@ -486,6 +494,24 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
     source = b'{"adapters":[{"config":{"legacy":true}}]}'
     prepared = b'{"adapters":[{"config":{"binding":"prepared","legacy":true}}]}'
     atomic_write(adapter_path, source, mode=0o600)
+    transition: dict[str, Any] = {
+        "contract": transition_contract,
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "prepared_sha256": hashlib.sha256(prepared).hexdigest(),
+        "migrated_adapter_count": 1,
+        "credentials_changed": False,
+        "capabilities_changed": False,
+        "content_exposed": False,
+    }
+    if transition_contract.endswith("v2"):
+        transition.update(
+            {
+                "enrolled_adapter_count": 3,
+                "enrollment_profile": "personal-google-readonly",
+                "observation_required": True,
+                "capabilities_changed": True,
+            }
+        )
     value = _journal_value(paths)
     value.update(
         {
@@ -495,15 +521,7 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
             "selected_adapter_config": json.loads(prepared),
             "selected_adapter_config_bytes": base64.b64encode(prepared).decode("ascii"),
             "selected_adapter_config_sha256": hashlib.sha256(prepared).hexdigest(),
-            "provider_binding_transition": {
-                "contract": "provider-binding-config-transition-v1",
-                "source_sha256": hashlib.sha256(source).hexdigest(),
-                "prepared_sha256": hashlib.sha256(prepared).hexdigest(),
-                "migrated_adapter_count": 1,
-                "credentials_changed": False,
-                "capabilities_changed": False,
-                "content_exposed": False,
-            },
+            "provider_binding_transition": transition,
         }
     )
     owner = ActivationJournal(paths)

@@ -30,7 +30,8 @@ from bootstrap.contracts import DeploymentPaths, ensure_within
 from bootstrap.provider_binding_transition import (
     PreparedProviderBindingTransition,
     ProviderBindingTransitionError,
-    prepare_provider_binding_transition,
+    prepare_live_provider_binding_transition,
+    valid_provider_binding_transition,
 )
 from bootstrap.source_identity import SourceIdentityError, reviewed_candidate_commit
 
@@ -415,15 +416,17 @@ def _binding_transition(
     adapters = _json_no_duplicates(adapter_payload, label="adapter configuration")
     mapping = _json_no_duplicates(mapping_payload, label="member mapping")
     try:
-        return prepare_provider_binding_transition(
+        return prepare_live_provider_binding_transition(
+            paths,
             adapters,
             household_mapping=mapping,
             ownership_reviewed=True,
             source_payload=adapter_payload,
+            test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",
         )
     except ProviderBindingTransitionError as exc:
         raise CandidateReadinessError(
-            "provider-binding migration is not deterministic"
+            "provider-binding transition is not deterministic"
         ) from exc
 
 
@@ -1078,31 +1081,7 @@ def validate_pending_attestation(
             raise CandidateReadinessError(
                 "pending prepared configuration binding is invalid"
             )
-    elif (
-        not isinstance(transition, dict)
-        or set(transition)
-        != {
-            "contract",
-            "source_sha256",
-            "prepared_sha256",
-            "migrated_adapter_count",
-            "credentials_changed",
-            "capabilities_changed",
-            "content_exposed",
-        }
-        or transition.get("contract") != "provider-binding-config-transition-v1"
-        or not all(
-            isinstance(transition.get(name), str)
-            and _HEX_64.fullmatch(transition[name])
-            for name in ("source_sha256", "prepared_sha256")
-        )
-        or transition.get("source_sha256") == transition.get("prepared_sha256")
-        or not isinstance(transition.get("migrated_adapter_count"), int)
-        or transition["migrated_adapter_count"] <= 0
-        or transition.get("credentials_changed") is not False
-        or transition.get("capabilities_changed") is not False
-        or transition.get("content_exposed") is not False
-    ):
+    elif not valid_provider_binding_transition(transition):
         raise CandidateReadinessError("pending provider-binding transition is invalid")
     human = value.get("human_evidence")
     if not isinstance(human, dict) or set(human) != {*_HTR_IDS, "htr_10"}:
@@ -1226,7 +1205,7 @@ def load_pending_attestation_for_activation(
     if declared_transition is not None:
         if approve_provider_binding_migration is not True:
             raise CandidateReadinessError(
-                "provider-binding migration requires explicit activation approval"
+                "provider-binding transition requires explicit activation approval"
             )
         transition = _binding_transition(paths, approved=True)
         assert transition is not None
@@ -1242,7 +1221,7 @@ def load_pending_attestation_for_activation(
             raise CandidateReadinessError("pending provider-binding transition drifted")
     elif approve_provider_binding_migration:
         raise CandidateReadinessError(
-            "pending evidence does not authorize provider-binding migration"
+            "pending evidence does not authorize a provider-binding transition"
         )
     if candidate_commit in _pointer_commits(paths):
         raise CandidateReadinessError("pending candidate is already active or retained")
@@ -1685,7 +1664,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--approve-provider-binding-migration",
         action="store_true",
-        help="bind the exact additive legacy adapter metadata transition",
+        help=(
+            "bind the exact additive legacy-attribution and reviewed read-only "
+            "provider-enrollment transition"
+        ),
     )
     for htr in ("01", "02", "03", "04", "06", "07", "10"):
         parser.add_argument(f"--confirm-htr-{htr}", action="store_true")
