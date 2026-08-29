@@ -70,22 +70,32 @@ _REHEARSAL_EXTRACTION_COMPLETE = ".extraction-complete"
 _REHEARSAL_GUARDIAN_PID = ".guardian.pid"
 _MAX_BACKUP_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_UNPACKED_BYTES = 16 * 1024 * 1024 * 1024
+_MAX_AESGCM_PLAINTEXT_BYTES = (1 << 31) - 1
 _MAX_ARCHIVE_FILES = 100_000
 _HEX_40 = re.compile(r"[0-9a-f]{40}")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 
 
-def _is_generated_openclaw_codex_tmp(path: Path, *, state_root: Path) -> bool:
-    """Return whether ``path`` is agent-local disposable Codex launcher state."""
+def _is_generated_openclaw_codex_cache(path: Path, *, state_root: Path) -> bool:
+    """Return whether ``path`` is agent-local disposable Codex cache/telemetry."""
 
     try:
         parts = path.relative_to(state_root).parts
     except ValueError:
         return False
+    if (
+        len(parts) < 7
+        or parts[:3] != ("openclaw", "runtime", "agents")
+        or parts[4:6] != ("agent", "codex-home")
+    ):
+        return False
+    relative = parts[6:]
+    if relative[0] in {"tmp", ".tmp"}:
+        return True
     return (
-        len(parts) >= 7
-        and parts[:3] == ("openclaw", "runtime", "agents")
-        and parts[4:7] == ("agent", "codex-home", "tmp")
+        len(relative) == 1
+        and re.fullmatch(r"logs_[0-9]+\.sqlite(?:-(?:wal|shm))?", relative[0])
+        is not None
     )
 
 
@@ -1339,6 +1349,10 @@ class BackupManager:
             self.services.stop()
         try:
             payload, manifest = self._build_archive()
+            if len(payload) > _MAX_AESGCM_PLAINTEXT_BYTES:
+                raise BackupError(
+                    "backup payload exceeds the authenticated-encryption boundary"
+                )
             nonce = os.urandom(12)
             ciphertext = AESGCM(backup_key).encrypt(
                 nonce,
@@ -1713,10 +1727,11 @@ class BackupManager:
         files: list[dict[str, Any]] = []
         payloads: dict[str, bytes] = {}
         for path in sorted(self.paths.instance_dir.rglob("*")):
-            # OpenClaw's Codex launcher writes process-scoped wrappers and links
-            # below each agent's codex-home/tmp. They are runtime cache, can
-            # disappear while quiescing, and are recreated on the next run.
-            if _is_generated_openclaw_codex_tmp(
+            # OpenClaw's Codex launcher writes process-scoped wrappers, cache,
+            # and local telemetry below each agent's codex-home. They can
+            # disappear while quiescing and are recreated on the next run;
+            # durable sessions and state databases remain included.
+            if _is_generated_openclaw_codex_cache(
                 path, state_root=self.paths.instance_dir
             ):
                 continue
