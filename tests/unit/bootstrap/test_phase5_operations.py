@@ -1784,9 +1784,7 @@ def test_runtime_health_treats_only_bounded_source_settlement_as_degraded(
     source["details"]["content_exposed"] = False
     source["details"]["freshness"]["refresh_error_type"] = None
     diagnostics["capabilities"]["product:member"] = {"state": "blocked"}
-    diagnostics["capabilities"]["surface:triage-processing"] = {
-        "state": "degraded"
-    }
+    diagnostics["capabilities"]["surface:triage-processing"] = {"state": "degraded"}
     monkeypatch.setattr(manager, "runtime_diagnostics", lambda: diagnostics)
 
     assert manager._runtime_health() == "degraded"
