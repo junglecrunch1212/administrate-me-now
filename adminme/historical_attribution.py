@@ -66,6 +66,25 @@ async def audit_historical_attribution(
             binding_state = "matched"
             workspace = next(iter(matching_coordinates))[2]
             attributed += 1
+        elif owner_scope == "shared:household" and event_type == "messaging.received":
+            # Early central Gmail facts used household-shared visibility even
+            # though the provider account remained member-owned. Attribute
+            # that legacy visibility only through one exact reviewed Gmail
+            # account/adapter binding; visibility itself never grants owner
+            # authority and no content inference is permitted.
+            legacy_shared_bindings = [
+                binding
+                for binding in bindings
+                if binding.owner_kind == "member"
+                and binding.kind == "messaging-gmail-api"
+                and adapter == binding.kind
+            ]
+            if len(legacy_shared_bindings) == 1:
+                binding_state = "legacy_shared_visibility_reconciled"
+                workspace = legacy_shared_bindings[0].workspace
+                attributed += 1
+            elif bindings:
+                binding_state = "ambiguous_or_owner_mismatch"
         elif bindings:
             binding_state = "ambiguous_or_owner_mismatch"
         else:
