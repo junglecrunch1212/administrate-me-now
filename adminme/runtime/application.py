@@ -2037,6 +2037,12 @@ class AdministrateMeRuntime:
                         "runtime_config_reason": current_topology.get("reason"),
                     }
                 )
+        source_assurance_capability = self.capabilities.get("policy:source-assurance")
+        current_source_assurance = (
+            source_assurance_capability.details
+            if source_assurance_capability is not None
+            else self._source_assurance_cache
+        )
         return evaluate_deployment_readiness(
             required=self.settings.deployment_evidence_required,
             host_topology=self.settings.host_topology,
@@ -2052,7 +2058,7 @@ class AdministrateMeRuntime:
             | set(self.settings.openclaw_actor_identities.values()),
             openclaw_topology=reported_topology,
             observation_active=observation_active,
-            source_assurance=self._source_assurance_cache,
+            source_assurance=current_source_assurance,
         )
 
     async def diagnostics(self) -> dict[str, Any]:
