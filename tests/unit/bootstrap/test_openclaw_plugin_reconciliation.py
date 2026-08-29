@@ -10,6 +10,7 @@ import pytest
 
 from adminme.openclaw_topology import member_agent_id
 from bootstrap.contracts import DeploymentPaths
+from bootstrap.openclaw_activation import remove_unsupported_member_topology
 from bootstrap.openclaw_tools import (
     administrateme_plugin_status,
     reconcile_administrateme_plugin,
@@ -257,6 +258,8 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
             assert preinstall["plugins"]["entries"]["administrateme"]["config"] == {
                 "baseUrl": "http://127.0.0.1:3330"
             }
+            preinstall["plugins"]["entries"]["administrateme"] = {"enabled": True}
+            target.write_text(json.dumps(preinstall), encoding="utf-8")
         if command[1:4] == ["plugins", "inspect", "administrateme"]:
             inspect_count += 1
             if "--runtime" in command:
@@ -279,11 +282,32 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
     stored = json.loads(target.read_text("utf-8"))
     assert stored["agents"]["list"] == [{"default": True, "id": "operator"}]
     assert stored["bindings"] == [{"agentId": "operator", "match": {"channel": "cli"}}]
-    assert stored["plugins"]["entries"]["administrateme"]["config"] == {
-        "baseUrl": "http://127.0.0.1:3330"
-    }
+    assert stored["plugins"]["entries"]["administrateme"] == {"enabled": True}
     assert stored["session"]["dmScope"] == "per-account-channel-peer"
     assert ["/reviewed/openclaw", "config", "validate"] in commands
+
+
+def test_legacy_cleanup_rejects_an_explicitly_invalid_plugin_config(
+    tmp_path: Path,
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    runtime_dir = paths.instance_dir / "openclaw" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "openclaw.json").write_text(
+        json.dumps(
+            {
+                "agents": {"list": []},
+                "bindings": [],
+                "plugins": {
+                    "entries": {"administrateme": {"enabled": True, "config": None}}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="plugin configuration is invalid"):
+        remove_unsupported_member_topology(paths)
 
 
 def test_reconcile_rejects_a_plugin_path_outside_the_release(tmp_path: Path) -> None:

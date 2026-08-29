@@ -202,11 +202,14 @@ def remove_unsupported_member_topology(paths: DeploymentPaths) -> dict[str, Any]
     plugins = config.get("plugins") or {}
     entries = plugins.get("entries") if isinstance(plugins, dict) else None
     plugin = entries.get("administrateme") if isinstance(entries, dict) else None
-    plugin_config = plugin.get("config") if isinstance(plugin, dict) else None
-    if not isinstance(plugin_config, dict):
+    if not isinstance(plugin, dict):
         raise RuntimeError("AdministrateMe plugin configuration is invalid")
-    for key in ("bindingFingerprints", "dmScope", "memberAgentIds"):
-        plugin_config.pop(key, None)
+    if "config" in plugin:
+        plugin_config = plugin["config"]
+        if not isinstance(plugin_config, dict):
+            raise RuntimeError("AdministrateMe plugin configuration is invalid")
+        for key in ("bindingFingerprints", "dmScope", "memberAgentIds"):
+            plugin_config.pop(key, None)
 
     atomic_write(
         config_path,

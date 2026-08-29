@@ -311,6 +311,9 @@ The selected runtime derives its current release, instance, host, and
 configuration binding through the same strict deployment snapshot as pending
 and promoted readiness, including the prepared adapter bytes. A legacy
 configuration digest is not comparable evidence and must fail closed.
+Legacy-plugin recovery accepts OpenClaw's validated post-install entry with no
+optional plugin `config` object; malformed entries or non-object configuration
+still fail closed.
 The candidate-pending contract and journaled consumer are implemented, but no
 household HTR-08 evidence is authorized or recorded and HTR-09 has not been
 requested. Repository fixtures prove mechanics only; they do not authorize an
