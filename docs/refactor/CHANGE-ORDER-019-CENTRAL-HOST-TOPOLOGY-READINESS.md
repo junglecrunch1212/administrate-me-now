@@ -276,6 +276,12 @@ the runtime still proves safe reads plus event ingestion. It continues to fail
 closed on every other readiness dimension and every non-source capability
 degradation.
 
+The live runtime now derives the current attestation binding from that same
+strict deployment snapshot, including the selected adapter configuration,
+rather than the legacy topology-attestation digest. This **MODERNIZES** the
+comparison algorithm while **PRESERVING** exact release/instance/host/config
+equality and fail-closed behavior.
+
 The separate `candidate-deployment-readiness-v1` writer now records an
 append-only, mode-0600 artifact at
 `app/readiness/candidate-pending/<attestation-id>.json` under the same

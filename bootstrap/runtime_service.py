@@ -9,9 +9,9 @@ from pathlib import Path
 import uvicorn
 
 from adminme.runtime.application import RuntimeSettings, create_application
-from bootstrap.attest_deployment_readiness import (
-    ReadinessAttestationError,
-    build_deployment_binding,
+from bootstrap.candidate_readiness import (
+    CandidateReadinessError,
+    capture_deployment_snapshot,
 )
 from bootstrap.contracts import DeploymentPaths, repository_root
 from bootstrap.openclaw_activation import model_provider_configured
@@ -73,8 +73,16 @@ def main() -> None:
         member_identities=member_identities,
     )
     try:
-        host_topology["deployment_binding"] = build_deployment_binding(paths)
-    except ReadinessAttestationError:
+        deployment_snapshot = capture_deployment_snapshot(paths)
+        host_topology["deployment_binding"] = {
+            "release_commit": deployment_snapshot.predecessor_commit,
+            "instance_fingerprint": deployment_snapshot.instance_fingerprint,
+            "host_fingerprint": deployment_snapshot.host_fingerprint,
+            "configuration_fingerprint": (
+                deployment_snapshot.configuration_fingerprint
+            ),
+        }
+    except CandidateReadinessError:
         # Missing/invalid immutable-release evidence blocks activation through
         # the shared readiness dimension; it does not suppress safe reads.
         host_topology["deployment_binding"] = {}
