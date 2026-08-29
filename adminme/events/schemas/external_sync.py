@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -148,6 +148,14 @@ class LegacyProviderEffectReconciledV1(BaseModel):
     request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     terminal_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     reconciled_at: datetime
+
+    @model_validator(mode="after")
+    def provider_call_agrees_with_suppression(
+        self,
+    ) -> "LegacyProviderEffectReconciledV1":
+        if self.provider_called is self.suppressed:
+            raise ValueError("legacy provider_called must be the inverse of suppressed")
+        return self
 
 
 registry.register("external_sync.write_requested", 1, ExternalWriteRequestedV1)

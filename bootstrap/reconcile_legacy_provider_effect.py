@@ -26,6 +26,34 @@ class LegacyEffectReconciliationError(RuntimeError):
     pass
 
 
+def _legacy_terminal_outcome(
+    request: dict[str, Any],
+    terminal: dict[str, Any],
+    *,
+    command_id: str,
+) -> tuple[bool, bool] | None:
+    """Return the provider-call and suppression facts proven by a v1 pair."""
+
+    request_payload = request.get("payload") or {}
+    terminal_payload = terminal.get("payload") or {}
+    suppressed = terminal_payload.get("suppressed")
+    if not isinstance(suppressed, bool):
+        return None
+    if not (
+        terminal.get("type") == "external_sync.write_completed"
+        and "domain_approval_event_id" not in request_payload
+        and "openclaw_approval_event_id" not in request_payload
+        and "request_fingerprint" not in request_payload
+        and "provider_called" not in terminal_payload
+        and terminal_payload.get("command_id") == command_id
+        and terminal_payload.get("member_id") == request_payload.get("member_id")
+        and terminal_payload.get("provider") == request_payload.get("provider")
+        and terminal_payload.get("operation") == request_payload.get("operation")
+    ):
+        return None
+    return not suppressed, suppressed
+
+
 def _json(path: Path) -> tuple[bytes, dict[str, Any]]:
     payload = path.read_bytes()
     value = json.loads(payload)
@@ -106,48 +134,40 @@ async def reconcile_legacy_provider_effect(
                 terminals.setdefault(command, []).append(event)
             else:
                 reconciliations.setdefault(command, []).append(event)
-        eligible: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        already = 0
+        eligible: list[tuple[dict[str, Any], dict[str, Any], bool, bool]] = []
+        already: list[tuple[bool, bool]] = []
         for command, request_rows in requests.items():
             terminal_rows = terminals.get(command, [])
             if len(request_rows) != 1 or len(terminal_rows) != 1:
                 continue
             request = request_rows[0]
             terminal = terminal_rows[0]
-            request_payload = request.get("payload") or {}
-            terminal_payload = terminal.get("payload") or {}
-            legacy = (
-                terminal.get("type") == "external_sync.write_completed"
-                and "domain_approval_event_id" not in request_payload
-                and "openclaw_approval_event_id" not in request_payload
-                and "request_fingerprint" not in request_payload
-                and "provider_called" not in terminal_payload
-                and terminal_payload.get("suppressed") is False
-                and terminal_payload.get("command_id") == command
-                and terminal_payload.get("member_id")
-                == request_payload.get("member_id")
-                and terminal_payload.get("provider") == request_payload.get("provider")
-                and terminal_payload.get("operation")
-                == request_payload.get("operation")
+            outcome = _legacy_terminal_outcome(
+                request,
+                terminal,
+                command_id=command,
             )
-            if not legacy:
+            if outcome is None:
                 continue
+            provider_called, suppressed = outcome
             if reconciliations.get(command):
-                already += 1
+                already.append((provider_called, suppressed))
             else:
-                eligible.append((request, terminal))
-        if not eligible and already == 1:
+                eligible.append((request, terminal, provider_called, suppressed))
+        if not eligible and len(already) == 1:
+            provider_called, suppressed = already[0]
             return {
                 "status": "already_reconciled",
                 "reconciled_count": 1,
-                "provider_called": True,
+                "provider_called": provider_called,
+                "suppressed": suppressed,
                 "content_exposed": False,
             }
         if len(eligible) != 1 or already:
             raise LegacyEffectReconciliationError(
                 "legacy provider-effect candidate is missing or ambiguous"
             )
-        request_metadata, terminal_metadata = eligible[0]
+        request_metadata, terminal_metadata, provider_called, suppressed = eligible[0]
         request_id = str(request_metadata["event_id"])
         terminal_id = str(terminal_metadata["event_id"])
         full_request = await event_log.get(request_id)
@@ -196,8 +216,8 @@ async def reconcile_legacy_provider_effect(
                     "terminal_event_id": terminal_id,
                     "command_id": str(payload["command_id"]),
                     "provider_account_id": str(payload["provider_account_id"]),
-                    "provider_called": True,
-                    "suppressed": False,
+                    "provider_called": provider_called,
+                    "suppressed": suppressed,
                     "legacy_approval_state": "pre_governance_absent",
                     "reconciliation_basis": "v1_completed_terminal_evidence",
                     "request_fingerprint": legacy_effect_event_fingerprint(
@@ -217,7 +237,8 @@ async def reconcile_legacy_provider_effect(
     return {
         "status": "legacy_provider_effect_reconciled",
         "reconciled_count": 1,
-        "provider_called": True,
+        "provider_called": provider_called,
+        "suppressed": suppressed,
         "event_recorded": bool(event_id),
         "content_exposed": False,
     }
