@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from typing import Any
 
 from adminme.deployment_readiness import CENTRAL_HOST_TAG
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import OPENCLAW_LABEL, RUNTIME_LABEL, DeploymentPaths
 
 
 def _run(
@@ -99,21 +100,23 @@ def _service_account_standard() -> bool:
     return "admin" not in result.stdout.split()
 
 
-def _process_counts(paths: DeploymentPaths) -> tuple[int, int]:
-    result = _run(["ps", "-axo", "command="])
+def _launchd_job_running(label: str) -> bool:
+    result = _run(["launchctl", "print", f"gui/{os.getuid()}/{label}"])
     if result is None or result.returncode != 0:
-        return (0, 0)
-    instance_marker = str(paths.root)
-    commands = [line for line in result.stdout.splitlines() if instance_marker in line]
-    python_count = sum(
-        "bootstrap/runtime_service.py" in line or "bootstrap.runtime_service" in line
-        for line in commands
+        return False
+    return bool(
+        re.search(r"^\s*state\s*=\s*running\s*$", result.stdout, re.MULTILINE)
+        and re.search(r"^\s*pid\s*=\s*[1-9][0-9]*\s*$", result.stdout, re.MULTILINE)
     )
-    gateway_count = sum(
-        "openclaw" in line.casefold() and "gateway" in line.casefold()
-        for line in commands
+
+
+def _process_counts() -> tuple[int, int]:
+    """Count the two unique launchd jobs, not mutable command-line text."""
+
+    return (
+        int(_launchd_job_running(RUNTIME_LABEL)),
+        int(_launchd_job_running(OPENCLAW_LABEL)),
     )
-    return python_count, gateway_count
 
 
 def sample_host_topology(
@@ -142,7 +145,7 @@ def sample_host_topology(
         login = user["LoginName"].strip()
     normalized_members = {identity.casefold() for identity in member_identities}
     member_collision = bool(login and login.casefold() in normalized_members)
-    python_count, gateway_count = _process_counts(paths)
+    python_count, gateway_count = _process_counts()
     return {
         "contract": "central-host-topology-v1",
         "tailscale_node_online": self_node.get("Online") is True,

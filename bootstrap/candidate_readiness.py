@@ -820,9 +820,13 @@ def _member_ids(paths: DeploymentPaths) -> list[str]:
         if isinstance(member, dict)
         and isinstance(member.get("member_id"), str)
         and member["member_id"]
+        and isinstance(member.get("tailscale_identity"), str)
+        and member["tailscale_identity"].strip()
     )
     if not result or len(result) != len(set(result)):
-        raise CandidateReadinessError("member mapping has no unique member identities")
+        raise CandidateReadinessError(
+            "member mapping has no unique trusted-ingress member identities"
+        )
     return result
 
 
