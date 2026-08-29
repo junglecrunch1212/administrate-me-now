@@ -20,6 +20,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,6 +28,7 @@ from fastapi.testclient import TestClient
 from adminme.events.bus import EventBus
 from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap import backup_restore as backup_restore_module
+from bootstrap import contracts as contracts_module
 from bootstrap.backup_restore import BackupError, BackupManager
 from bootstrap.bridge_enrollment import (
     BridgeEnrollmentError,
@@ -42,7 +44,7 @@ from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.source_identity import verify_release_source_identity
 from bootstrap.upgrade import UpgradeError, UpgradeManager
-from bootstrap.wizard import BootstrapWizard
+from bootstrap.wizard import BootstrapWizard, install_launch_agents
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -247,6 +249,36 @@ def _write_htr10_fixture(
     )
     result = json.loads(completed.stdout)
     return paths.backup_dir / f"htr-10-review-{result['receipt_id']}.json"
+
+
+def test_isolated_controller_keeps_production_service_paths_in_login_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_home = tmp_path / "account-home"
+    private_home = tmp_path / "controller-home"
+    account_home.mkdir()
+    private_home.mkdir()
+    monkeypatch.setenv("HOME", str(private_home))
+    monkeypatch.setattr(
+        contracts_module.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(pw_dir=str(account_home)),
+    )
+
+    with pytest.raises(ValueError, match="broad deployment root"):
+        DeploymentPaths.from_root(account_home, production=True)
+
+    paths = DeploymentPaths.from_root(tmp_path / "instance", production=True)
+    assert paths.launch_agent_dir == account_home / "Library" / "LaunchAgents"
+    assert paths.log_dir == account_home / "Library" / "Logs" / "AdministrateMe"
+    assert not paths.launch_agent_dir.is_relative_to(private_home)
+    paths.create()
+    install_launch_agents(paths, REPO_ROOT, test_mode=True)
+
+    assert (paths.launch_agent_dir / "com.administrateme.openclaw.plist").is_file()
+    assert (paths.launch_agent_dir / "com.administrateme.runtime.plist").is_file()
+    assert not (private_home / "Library" / "LaunchAgents").exists()
 
 
 def test_member_bridge_helpers_execute_from_the_archived_release() -> None:
