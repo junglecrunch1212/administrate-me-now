@@ -58,6 +58,8 @@ _ACTIVATE_PHASES = frozenset(
         "readiness_promoted",
         "llm_tool_selecting",
         "llm_tool_selected",
+        "runtime_binding_refreshing",
+        "runtime_binding_refreshed",
         "launchagents_selecting",
         "launchagents_selected",
         "services_starting",

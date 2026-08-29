@@ -192,7 +192,11 @@ one explicit pending artifact ID. It revalidates that artifact before backup
 and again before selection, creates and rehearses its own exact fresh artifact,
 proves the retained predecessor, and derives active evidence only inside its
 selection/start transaction after the candidate pointer is durable and before
-candidate service start.
+candidate service start. Because reviewed plugin and required-tool selection
+transactionally change an attested OpenClaw configuration coordinate, the
+updater recaptures and journals the final post-selector configuration binding
+before launch. Runtime, readiness, and Doctor must then agree on that exact
+binding; the pre-selector fingerprint cannot be reused as active evidence.
 
 ## Gate 5 implementation status
 
