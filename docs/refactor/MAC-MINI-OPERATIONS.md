@@ -469,12 +469,13 @@ from the first active-deployment read through disposable controller cleanup;
 direct rollback acquires the same canonical manager lock. A loser fails before
 tooling, backup, or selector effects.
 
-The disposable controller keeps its own private `HOME`, but the signed Apple
-`security` subprocess receives the login-home coordinate resolved from the
-runtime account database. That narrow environment restoration lets the
-controller find already-bound runtime Keychain aliases while keeping secret
-values out of arguments, environment variables, files, and logs; it does not
-change any Keychain item or broaden its ACL.
+The disposable controller keeps its own private `HOME`, while production
+LaunchAgent and log coordinates come from the login home resolved through the
+runtime account database. The signed Apple `security` subprocess receives that
+same login-home coordinate. This lets backup quiescence and activation manage
+the durable user services and find already-bound runtime Keychain aliases while
+controller caches remain isolated. Secret values stay out of arguments,
+environment variables, files, and logs; no Keychain item or ACL is changed.
 
 Inside that lock the updater revalidates the explicit pending artifact, then
 creates a mode-0600 activation journal before backup quiescence. It creates and

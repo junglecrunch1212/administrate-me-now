@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pwd
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,21 @@ RUNTIME_LABEL = "com.administrateme.runtime"
 OPENCLAW_LABEL = "com.administrateme.openclaw"
 
 
+def service_account_home() -> Path:
+    """Resolve the durable login home independently of a controller's HOME."""
+
+    try:
+        declared = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if not declared.is_absolute():
+            raise ValueError("service-account home must be absolute")
+        resolved = declared.resolve(strict=True)
+    except (KeyError, OSError) as exc:
+        raise ValueError("service-account home is unavailable") from exc
+    if resolved == Path(resolved.anchor) or not resolved.is_dir():
+        raise ValueError("service-account home is unsafe")
+    return resolved
+
+
 def repository_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -83,10 +99,15 @@ class DeploymentPaths:
         if not expanded.is_absolute():
             raise ValueError("deployment root must be absolute")
         resolved = expanded.resolve()
-        if resolved == Path(resolved.anchor) or resolved == Path.home().resolve():
+        account_home = service_account_home() if production else None
+        broad_homes = {Path.home().resolve()}
+        if account_home is not None:
+            broad_homes.add(account_home)
+        if resolved == Path(resolved.anchor) or resolved in broad_homes:
             raise ValueError("refusing a broad deployment root")
         if production:
-            home = Path.home().resolve()
+            assert account_home is not None
+            home = account_home
             launch_agents = home / "Library" / "LaunchAgents"
             logs = home / "Library" / "Logs" / "AdministrateMe"
         else:
@@ -105,7 +126,12 @@ class DeploymentPaths:
 
     @classmethod
     def default(cls) -> "DeploymentPaths":
-        root = Path.home() / "Library" / "Application Support" / "AdministrateMe"
+        root = (
+            service_account_home()
+            / "Library"
+            / "Application Support"
+            / "AdministrateMe"
+        )
         return cls.from_root(root, production=True)
 
     def create(self) -> None:
