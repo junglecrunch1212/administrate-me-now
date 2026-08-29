@@ -29,6 +29,12 @@ def _paths(tmp_path: Path) -> DeploymentPaths:
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
     paths.create()
     (paths.app_dir / "releases").mkdir(mode=0o700)
+    (paths.instance_dir / "config").mkdir(mode=0o700, exist_ok=True)
+    atomic_write(
+        paths.instance_dir / "config" / "adapters.json",
+        b'{"adapters":[]}',
+        mode=0o600,
+    )
     return paths
 
 
@@ -323,6 +329,71 @@ def test_activation_recovery_failure_keeps_journal_and_services_stopped(
     assert events == ["stop", "stop"]
 
 
+def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    pointer_payload, _pointer, readiness_payload = _documents(paths)
+    atomic_write(
+        paths.app_dir / "current-release.json",
+        pointer_payload,
+        mode=0o600,
+    )
+    readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    atomic_write(readiness_path, readiness_payload, mode=0o600)
+    adapter_path = paths.instance_dir / "config" / "adapters.json"
+    source = b'{"adapters":[{"config":{"legacy":true}}]}'
+    prepared = b'{"adapters":[{"config":{"binding":"prepared","legacy":true}}]}'
+    atomic_write(adapter_path, source, mode=0o600)
+    value = _journal_value(paths)
+    value.update(
+        {
+            "initial_adapter_config": json.loads(source),
+            "initial_adapter_config_bytes": base64.b64encode(source).decode("ascii"),
+            "initial_adapter_config_sha256": hashlib.sha256(source).hexdigest(),
+            "selected_adapter_config": json.loads(prepared),
+            "selected_adapter_config_bytes": base64.b64encode(prepared).decode("ascii"),
+            "selected_adapter_config_sha256": hashlib.sha256(prepared).hexdigest(),
+            "provider_binding_transition": {
+                "contract": "provider-binding-config-transition-v1",
+                "source_sha256": hashlib.sha256(source).hexdigest(),
+                "prepared_sha256": hashlib.sha256(prepared).hexdigest(),
+                "migrated_adapter_count": 1,
+                "credentials_changed": False,
+                "capabilities_changed": False,
+                "content_exposed": False,
+            },
+        }
+    )
+    owner = ActivationJournal(paths)
+    journal = owner.create(value)
+    atomic_write(adapter_path, prepared, mode=0o600)
+    owner.transition(journal, "provider_config_selected")
+
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    manager.services = SimpleNamespace(
+        stop=lambda *args, **kwargs: None,
+        start=lambda: SimpleNamespace(
+            status="healthy", runtime="running", openclaw="running"
+        ),
+    )
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = manager._recover_interrupted_transaction()  # noqa: SLF001
+
+    assert result is not None and result["status"] == "recovered"
+    assert adapter_path.read_bytes() == source
+
+
 def test_rollback_journal_cannot_bind_pending_evidence(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     value = _journal_value(paths, operation="rollback")
@@ -459,7 +530,10 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     monkeypatch.setattr(manager, "_preflight_keychain_access", lambda _candidate: None)
     monkeypatch.setattr(manager, "_publish_release", lambda *_args: release)
     snapshot = SimpleNamespace(public=lambda: {"binding": "fixture"})
-    pending = {"attestation_id": PENDING_ID}
+    pending = {
+        "attestation_id": PENDING_ID,
+        "deployment_binding": {"provider_binding_transition": None},
+    }
     monkeypatch.setattr(
         "bootstrap.upgrade.load_pending_attestation_for_activation",
         lambda *_args, **_kwargs: (pending, PENDING_SHA, snapshot),

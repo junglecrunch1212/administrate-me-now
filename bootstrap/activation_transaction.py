@@ -48,6 +48,8 @@ _ACTIVATE_PHASES = frozenset(
         "openclaw_selected",
         "services_quiescing",
         "services_quiesced",
+        "provider_config_selecting",
+        "provider_config_selected",
         "plugin_selecting",
         "plugin_selected",
         "pointer_selecting",
@@ -76,6 +78,8 @@ _ROLLBACK_PHASES = frozenset(
         "openclaw_selected",
         "services_quiescing",
         "services_quiesced",
+        "provider_config_selecting",
+        "provider_config_selected",
         "plugin_selecting",
         "plugin_selected",
         "pointer_selecting",
@@ -378,7 +382,17 @@ def validate_journal(value: object) -> dict[str, Any]:
         "active_readiness",
         "content_exposed",
     }
-    if set(value) != required:
+    transition_fields = {
+        "initial_adapter_config",
+        "initial_adapter_config_bytes",
+        "initial_adapter_config_sha256",
+        "selected_adapter_config",
+        "selected_adapter_config_bytes",
+        "selected_adapter_config_sha256",
+        "provider_binding_transition",
+    }
+    has_config_transition = set(value) == required | transition_fields
+    if set(value) not in (required, required | transition_fields):
         raise ActivationJournalError("activation journal schema is invalid")
     if (
         value.get("contract") != JOURNAL_CONTRACT
@@ -457,6 +471,69 @@ def validate_journal(value: object) -> dict[str, Any]:
     if readiness is None:
         if readiness_hash is not None or readiness_encoded is not None:
             raise ActivationJournalError("activation predecessor readiness is invalid")
+    if has_config_transition:
+        decoded_configs: dict[str, bytes] = {}
+        for prefix in ("initial", "selected"):
+            document = value.get(f"{prefix}_adapter_config")
+            encoded = value.get(f"{prefix}_adapter_config_bytes")
+            digest = value.get(f"{prefix}_adapter_config_sha256")
+            if not isinstance(document, dict) or not isinstance(encoded, str):
+                raise ActivationJournalError(
+                    "activation adapter configuration evidence is invalid"
+                )
+            try:
+                payload = base64.b64decode(encoded, validate=True)
+                decoded = _json_no_duplicates(payload)
+            except (TypeError, ValueError, ActivationJournalError) as exc:
+                raise ActivationJournalError(
+                    "activation adapter configuration evidence is invalid"
+                ) from exc
+            if (
+                decoded != document
+                or not isinstance(digest, str)
+                or _HEX_64.fullmatch(digest) is None
+                or hashlib.sha256(payload).hexdigest() != digest
+            ):
+                raise ActivationJournalError(
+                    "activation adapter configuration evidence is invalid"
+                )
+            decoded_configs[prefix] = payload
+        transition = value.get("provider_binding_transition")
+        if transition is None:
+            if decoded_configs["initial"] != decoded_configs["selected"]:
+                raise ActivationJournalError(
+                    "activation adapter configuration changed without a transition"
+                )
+        elif (
+            not isinstance(transition, dict)
+            or transition.get("contract") != "provider-binding-config-transition-v1"
+            or _HEX_64.fullmatch(str(transition.get("source_sha256"))) is None
+            or _HEX_64.fullmatch(str(transition.get("prepared_sha256"))) is None
+            or transition.get("credentials_changed") is not False
+            or transition.get("capabilities_changed") is not False
+            or transition.get("content_exposed") is not False
+        ):
+            raise ActivationJournalError(
+                "activation provider-binding transition is invalid"
+            )
+        elif operation == "activate" and (
+            transition["source_sha256"]
+            != hashlib.sha256(decoded_configs["initial"]).hexdigest()
+            or transition["prepared_sha256"]
+            != hashlib.sha256(decoded_configs["selected"]).hexdigest()
+        ):
+            raise ActivationJournalError(
+                "activation provider-binding transition bytes do not match"
+            )
+        elif operation == "rollback" and (
+            transition["prepared_sha256"]
+            != hashlib.sha256(decoded_configs["initial"]).hexdigest()
+            or transition["source_sha256"]
+            != hashlib.sha256(decoded_configs["selected"]).hexdigest()
+        ):
+            raise ActivationJournalError(
+                "rollback provider-binding transition bytes do not match"
+            )
     else:
         if not isinstance(readiness_encoded, str):
             raise ActivationJournalError("activation predecessor readiness is invalid")

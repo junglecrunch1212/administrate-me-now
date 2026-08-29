@@ -9,6 +9,8 @@ terminal fact. Missing and still-pending are never conflated with "empty".
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,10 +158,79 @@ def _event_at_or_after(event: dict[str, Any], boundary: datetime) -> bool:
     return occurred is not None and occurred >= boundary
 
 
+def legacy_effect_event_fingerprint(event: dict[str, Any]) -> str:
+    """Bind a reconciliation to the exact immutable event metadata and payload."""
+
+    value = {
+        key: event.get(key)
+        for key in (
+            "event_id",
+            "type",
+            "occurred_at",
+            "recorded_at",
+            "causation_id",
+            "payload",
+        )
+    }
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verified_legacy_reconciliation(
+    request: dict[str, Any],
+    terminal: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if len(rows) != 1:
+        return None
+    payload = rows[0].get("payload") or {}
+    request_payload = request.get("payload") or {}
+    terminal_payload = terminal.get("payload") or {}
+    if (
+        terminal.get("type") != "external_sync.write_completed"
+        or any(
+            key in request_payload
+            for key in (
+                "domain_approval_event_id",
+                "openclaw_approval_event_id",
+                "request_fingerprint",
+            )
+        )
+        or any(
+            key in terminal_payload
+            for key in (
+                "provider_called",
+                "command_event_id",
+                "domain_approval_event_id",
+                "openclaw_approval_event_id",
+                "request_fingerprint",
+            )
+        )
+        or payload.get("legacy_approval_state") != "pre_governance_absent"
+        or payload.get("reconciliation_basis") != "v1_completed_terminal_evidence"
+        or payload.get("request_event_id") != request.get("event_id")
+        or payload.get("terminal_event_id") != terminal.get("event_id")
+        or payload.get("command_id") != request_payload.get("command_id")
+        or payload.get("command_id") != terminal_payload.get("command_id")
+        or payload.get("provider_account_id")
+        != request_payload.get("provider_account_id")
+        or payload.get("provider_called") is not True
+        or payload.get("suppressed") is not terminal_payload.get("suppressed")
+        or payload.get("request_fingerprint")
+        != legacy_effect_event_fingerprint(request)
+        or payload.get("terminal_fingerprint")
+        != legacy_effect_event_fingerprint(terminal)
+    ):
+        return None
+    return payload
+
+
 def _provider_effect_counts(
     source_events: list[dict[str, Any]],
     terminal_events: dict[str, list[dict[str, Any]]],
+    reconciliations: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, int]:
+    reconciliations = reconciliations or {}
     requests: dict[str, list[dict[str, Any]]] = {}
     malformed_request_count = 0
     for event in source_events:
@@ -186,6 +257,11 @@ def _provider_effect_counts(
         "duplicate_request": sum(max(0, len(rows) - 1) for rows in requests.values()),
         "malformed_request": malformed_request_count,
         "orphan_terminal": 0,
+        "legacy_reconciled_terminal": 0,
+        "invalid_legacy_reconciliation": 0,
+        "duplicate_legacy_reconciliation": sum(
+            max(0, len(rows) - 1) for rows in reconciliations.values()
+        ),
     }
     for command_id in request_ids:
         request = requests[command_id][0]
@@ -198,17 +274,34 @@ def _provider_effect_counts(
             counts["duplicate_terminal"] += len(rows) - 1
         for event in rows:
             payload = event.get("payload") or {}
-            provider_called = payload.get("provider_called")
+            reconciliation = _verified_legacy_reconciliation(
+                request,
+                event,
+                reconciliations.get(command_id, []),
+            )
+            provider_called = (
+                reconciliation.get("provider_called")
+                if reconciliation is not None
+                else payload.get("provider_called")
+            )
             if provider_called is True:
                 counts["provider_called_true"] += 1
             elif provider_called is False:
                 counts["provider_called_false"] += 1
             else:
                 counts["provider_called_unknown"] += 1
-            if payload.get("suppressed") is True:
+            suppressed = (
+                reconciliation.get("suppressed")
+                if reconciliation is not None
+                else payload.get("suppressed")
+            )
+            if suppressed is True:
                 counts["suppressed_true"] += 1
             elif provider_called is not False:
                 counts["suppressed_false_or_unknown"] += 1
+            if reconciliation is not None:
+                counts["legacy_reconciled_terminal"] += 1
+                continue
             correlation_pairs = (
                 (payload.get("command_event_id"), request.get("event_id")),
                 (
@@ -239,6 +332,19 @@ def _provider_effect_counts(
         for command_id, rows in terminal_events.items()
         if command_id not in request_ids
     )
+    for command_id, rows in reconciliations.items():
+        if command_id not in request_ids:
+            counts["invalid_legacy_reconciliation"] += len(rows)
+            continue
+        terminals = terminal_events.get(command_id, [])
+        if len(rows) == 1 and len(terminals) == 1:
+            if (
+                _verified_legacy_reconciliation(
+                    requests[command_id][0], terminals[0], rows
+                )
+                is None
+            ):
+                counts["invalid_legacy_reconciliation"] += 1
     return counts
 
 
@@ -253,6 +359,8 @@ def _provider_effect_integrity_healthy(counts: dict[str, int]) -> bool:
             "duplicate_request",
             "malformed_request",
             "orphan_terminal",
+            "invalid_legacy_reconciliation",
+            "duplicate_legacy_reconciliation",
         )
     )
 
@@ -288,6 +396,7 @@ async def audit_source_assurance(
         {
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
+            "external_sync.legacy_effect_reconciled",
         }
     )
     payload_types = {
@@ -303,6 +412,7 @@ async def audit_source_assurance(
         {
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
+            "external_sync.legacy_effect_reconciled",
         }
     )
     watermark_event_id = through_event_id
@@ -313,6 +423,7 @@ async def audit_source_assurance(
     assessments: dict[str, dict[str, Any]] = {}
     action_terminals: set[str] = set()
     action_terminal_events: dict[str, list[dict[str, Any]]] = {}
+    effect_reconciliations: dict[str, list[dict[str, Any]]] = {}
     recovery_requests: dict[str, dict[str, Any]] = {}
     recovery_assessments: dict[str, dict[str, Any]] = {}
     recovery_refusals: set[str] = set()
@@ -343,6 +454,9 @@ async def audit_source_assurance(
             command_id = str(payload.get("command_id") or "")
             action_terminals.add(command_id)
             action_terminal_events.setdefault(command_id, []).append(event)
+        elif event.get("type") == "external_sync.legacy_effect_reconciled":
+            command_id = str(payload.get("command_id") or "")
+            effect_reconciliations.setdefault(command_id, []).append(event)
         if event.get("type") in by_type:
             source_events.append(event)
 
@@ -504,7 +618,9 @@ async def audit_source_assurance(
             recovery_counts["refused"] += 1
         else:
             recovery_counts["pending"] += 1
-    effect_counts = _provider_effect_counts(source_events, action_terminal_events)
+    effect_counts = _provider_effect_counts(
+        source_events, action_terminal_events, effect_reconciliations
+    )
     effects_healthy = _provider_effect_integrity_healthy(effect_counts)
     zero_effects = _zero_provider_effects(effect_counts)
     window_start = _aware_datetime(provider_effect_window_started_at)

@@ -47,7 +47,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   pending_attestation=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
-      --approve-runtime-migration | --approve-declared-source-assessment-repair) ;;
+      --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
       --pending-attestation-id=*)
         [[ -z "$pending_attestation" ]] \
           || die "pending-attestation identifier was repeated"
@@ -117,6 +117,7 @@ PY
 
 approve_flag=""
 source_repair_flag=""
+provider_binding_flag=""
 pending_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
@@ -127,6 +128,11 @@ while [[ "${1:-}" == --* ]]; do
     --approve-declared-source-assessment-repair)
       [[ -z "$source_repair_flag" ]] || fail "source-repair approval was repeated"
       source_repair_flag="$1"
+      ;;
+    --approve-provider-binding-migration)
+      [[ -z "$provider_binding_flag" ]] \
+        || fail "provider-binding migration approval was repeated"
+      provider_binding_flag="$1"
       ;;
     --pending-attestation-id=*)
       [[ -z "$pending_flag" ]] || fail "pending-attestation identifier was repeated"
@@ -148,7 +154,7 @@ fi
 
 candidate="${1:-}"
 [[ -n "$candidate" ]] \
-  || fail "usage: update.sh [--approve-runtime-migration] [--approve-declared-source-assessment-repair] /absolute/path/to/reviewed-candidate"
+  || fail "usage: update.sh [--approve-runtime-migration] [--approve-declared-source-assessment-repair] [--approve-provider-binding-migration] /absolute/path/to/reviewed-candidate"
 [[ "$candidate" == /* ]] || fail "candidate path must be absolute"
 [[ -d "$candidate" ]] || fail "candidate checkout does not exist"
 candidate="$(cd "$candidate" && pwd -P)"
@@ -331,6 +337,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 if [[ -n "$source_repair_flag" ]]; then
   upgrade_args+=("$source_repair_flag")
+fi
+if [[ -n "$provider_binding_flag" ]]; then
+  upgrade_args+=("$provider_binding_flag")
 fi
 (
   cd "$fixed_controller_root"

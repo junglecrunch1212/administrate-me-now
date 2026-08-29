@@ -134,6 +134,7 @@ def _htr10(paths: DeploymentPaths) -> Path:
         "event_watermark_sha256": "1" * 64,
         "historical_attribution_sha256": "2" * 64,
         "source_assurance_sha256": "3" * 64,
+        "provider_binding_transition_sha256": None,
         "source_event_count": 7,
         "unattributed_event_count": 0,
         "provider_effect_integrity": "healthy",
@@ -492,6 +493,7 @@ def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
                 "groups": [],
                 "content_exposed": False,
                 "raw_identifiers_exposed": False,
+                "provider_binding_transition_sha256": None,
             }
         ).encode(),
     )
@@ -507,6 +509,8 @@ def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
         "duplicate_request": 0,
         "malformed_request": 0,
         "orphan_terminal": 0,
+        "invalid_legacy_reconciliation": 0,
+        "duplicate_legacy_reconciliation": 0,
     }
     source_value: dict[str, Any] = {
         "contract": "source-assurance-v1",
@@ -525,6 +529,7 @@ def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
             "content_exposed": False,
         },
         "content_exposed": False,
+        "provider_binding_transition_sha256": None,
     }
     _private_write(source, json.dumps(source_value).encode())
 

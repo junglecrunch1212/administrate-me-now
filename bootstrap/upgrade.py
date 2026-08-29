@@ -43,6 +43,10 @@ from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
     reconcile_administrateme_plugin,
 )
+from bootstrap.provider_binding_transition import (
+    ProviderBindingTransitionError,
+    prepare_provider_binding_transition,
+)
 from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
 from bootstrap.source_assessment_repair import (
     SourceAssessmentRepairPolicy,
@@ -223,6 +227,7 @@ class UpgradeManager:
         test_mode: bool = False,
         approve_runtime_migration: bool = False,
         approve_source_assessment_repair: bool = False,
+        approve_provider_binding_migration: bool = False,
         pending_attestation_id: str | None = None,
     ) -> None:
         self.paths = paths
@@ -230,6 +235,7 @@ class UpgradeManager:
         self.test_mode = test_mode
         self.approve_runtime_migration = approve_runtime_migration
         self.approve_source_assessment_repair = approve_source_assessment_repair
+        self.approve_provider_binding_migration = approve_provider_binding_migration
         self.pending_attestation_id = pending_attestation_id
         self.services = ServiceManager(paths, test_mode=test_mode)
         self.activation_journal = ActivationJournal(paths)
@@ -1258,7 +1264,14 @@ class UpgradeManager:
 
     def _capture_activation_baseline(
         self,
-    ) -> tuple[bytes, dict[str, Any], bytes | None, dict[str, Any] | None]:
+    ) -> tuple[
+        bytes,
+        dict[str, Any],
+        bytes | None,
+        dict[str, Any] | None,
+        bytes,
+        dict[str, Any],
+    ]:
         pointer_path = self.paths.app_dir / "current-release.json"
         pointer_payload, pointer = self._read_private_json_payload(pointer_path)
         assert pointer_payload is not None and pointer is not None
@@ -1276,7 +1289,18 @@ class UpgradeManager:
             "deployment-readiness-v1"
         ):
             raise UpgradeError("active deployment readiness is invalid")
-        return pointer_payload, pointer, readiness_payload, readiness
+        adapter_payload, adapter_config = self._read_private_json_payload(
+            self.paths.instance_dir / "config" / "adapters.json"
+        )
+        assert adapter_payload is not None and adapter_config is not None
+        return (
+            pointer_payload,
+            pointer,
+            readiness_payload,
+            readiness,
+            adapter_payload,
+            adapter_config,
+        )
 
     def _restore_journal_control_files(self, journal: dict[str, Any]) -> None:
         try:
@@ -1296,6 +1320,22 @@ class UpgradeManager:
             mode=0o600,
         )
         self._fsync_directory(self.paths.app_dir)
+
+        adapter_encoded = journal.get("initial_adapter_config_bytes")
+        if adapter_encoded is not None:
+            try:
+                adapter_payload = base64.b64decode(adapter_encoded, validate=True)
+            except (TypeError, ValueError) as exc:
+                raise UpgradeError(
+                    "activation journal adapter bytes are invalid"
+                ) from exc
+            if hashlib.sha256(adapter_payload).hexdigest() != journal.get(
+                "initial_adapter_config_sha256"
+            ):
+                raise UpgradeError("activation journal adapter bytes changed")
+            adapter_path = self.paths.instance_dir / "config" / "adapters.json"
+            atomic_write(adapter_path, adapter_payload, mode=0o600)
+            self._fsync_directory(adapter_path.parent)
 
         readiness_path = (
             self.paths.instance_dir / "config" / "deployment-readiness.json"
@@ -1320,6 +1360,39 @@ class UpgradeManager:
             raise UpgradeError("activation journal readiness bytes changed")
         atomic_write(readiness_path, readiness_payload, mode=0o600)
         self._fsync_directory(readiness_path.parent)
+
+    def _prepared_adapter_config(
+        self,
+        pending: dict[str, Any],
+        *,
+        source_payload: bytes,
+        source_config: dict[str, Any],
+    ) -> tuple[bytes, dict[str, Any], dict[str, Any] | None]:
+        declared = pending["deployment_binding"].get("provider_binding_transition")
+        if declared is None:
+            return source_payload, source_config, None
+        if self.approve_provider_binding_migration is not True:
+            raise UpgradeError(
+                "provider-binding migration lacks explicit activation approval"
+            )
+        mapping_payload, mapping = self._read_private_json_payload(
+            self.paths.instance_dir / "config" / "member-mapping.json"
+        )
+        assert mapping_payload is not None and mapping is not None
+        try:
+            transition = prepare_provider_binding_transition(
+                source_config,
+                household_mapping=mapping,
+                ownership_reviewed=True,
+                source_payload=source_payload,
+            )
+        except ProviderBindingTransitionError as exc:
+            raise UpgradeError(
+                "provider-binding migration cannot be prepared exactly"
+            ) from exc
+        if transition.public() != declared:
+            raise UpgradeError("provider-binding migration changed after readiness")
+        return transition.prepared_bytes, transition.prepared, declared
 
     def _recover_interrupted_transaction(self) -> dict[str, Any] | None:
         """Converge an interrupted transaction to its exact captured predecessor."""
@@ -1536,6 +1609,9 @@ class UpgradeManager:
                     attestation_id=self.pending_attestation_id,
                     candidate=candidate,
                     candidate_commit=commit,
+                    approve_provider_binding_migration=(
+                        self.approve_provider_binding_migration
+                    ),
                 )
             )
         except CandidateReadinessError as exc:
@@ -1558,8 +1634,20 @@ class UpgradeManager:
         )
         self._preflight_keychain_access(candidate)
         release = self._publish_release(candidate, commit)
-        pointer_payload, pointer, readiness_payload, readiness = (
-            self._capture_activation_baseline()
+        (
+            pointer_payload,
+            pointer,
+            readiness_payload,
+            readiness,
+            adapter_payload,
+            adapter_config,
+        ) = self._capture_activation_baseline()
+        selected_adapter_payload, selected_adapter_config, binding_transition = (
+            self._prepared_adapter_config(
+                pending,
+                source_payload=adapter_payload,
+                source_config=adapter_config,
+            )
         )
         (
             current_pointer,
@@ -1614,6 +1702,21 @@ class UpgradeManager:
                         if readiness_payload is not None
                         else None
                     ),
+                    "initial_adapter_config": adapter_config,
+                    "initial_adapter_config_bytes": base64.b64encode(
+                        adapter_payload
+                    ).decode("ascii"),
+                    "initial_adapter_config_sha256": hashlib.sha256(
+                        adapter_payload
+                    ).hexdigest(),
+                    "selected_adapter_config": selected_adapter_config,
+                    "selected_adapter_config_bytes": base64.b64encode(
+                        selected_adapter_payload
+                    ).decode("ascii"),
+                    "selected_adapter_config_sha256": hashlib.sha256(
+                        selected_adapter_payload
+                    ).hexdigest(),
+                    "provider_binding_transition": binding_transition,
                     "was_running": was_running,
                     "pending_attestation_id": self.pending_attestation_id,
                     "pending_attestation_sha256": pending_sha256,
@@ -1719,6 +1822,9 @@ class UpgradeManager:
                         attestation_id=self.pending_attestation_id,
                         candidate=candidate,
                         candidate_commit=commit,
+                        approve_provider_binding_migration=(
+                            self.approve_provider_binding_migration
+                        ),
                     )
                 )
             except CandidateReadinessError as exc:
@@ -1815,6 +1921,30 @@ class UpgradeManager:
                 journal = self.activation_journal.transition(
                     journal,
                     "services_quiesced",
+                )
+            if binding_transition is not None:
+                current_adapter_payload, current_adapter_config = (
+                    self._read_private_json_payload(
+                        self.paths.instance_dir / "config" / "adapters.json"
+                    )
+                )
+                if (
+                    current_adapter_payload != adapter_payload
+                    or current_adapter_config != adapter_config
+                ):
+                    raise UpgradeError(
+                        "adapter configuration changed before journaled migration"
+                    )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "provider_config_selecting",
+                )
+                adapter_path = self.paths.instance_dir / "config" / "adapters.json"
+                atomic_write(adapter_path, selected_adapter_payload, mode=0o600)
+                self._fsync_directory(adapter_path.parent)
+                journal = self.activation_journal.transition(
+                    journal,
+                    "provider_config_selected",
                 )
             journal = self.activation_journal.transition(
                 journal,
@@ -2263,9 +2393,35 @@ class UpgradeManager:
             except (TypeError, ValueError) as exc:
                 raise UpgradeError("rollback readiness history is invalid") from exc
 
-        pointer_payload, pointer, readiness_payload, readiness = (
-            self._capture_activation_baseline()
-        )
+        (
+            pointer_payload,
+            pointer,
+            readiness_payload,
+            readiness,
+            adapter_payload,
+            adapter_config,
+        ) = self._capture_activation_baseline()
+        binding_transition = activation_history.get("provider_binding_transition")
+        target_adapter_encoded = activation_history.get("initial_adapter_config_bytes")
+        if target_adapter_encoded is None:
+            target_adapter_payload = adapter_payload
+            target_adapter_config = adapter_config
+        else:
+            try:
+                target_adapter_payload = base64.b64decode(
+                    target_adapter_encoded,
+                    validate=True,
+                )
+            except (TypeError, ValueError) as exc:
+                raise UpgradeError(
+                    "rollback adapter configuration history is invalid"
+                ) from exc
+            historical_adapter_config = activation_history.get("initial_adapter_config")
+            if not isinstance(historical_adapter_config, dict) or hashlib.sha256(
+                target_adapter_payload
+            ).hexdigest() != activation_history.get("initial_adapter_config_sha256"):
+                raise UpgradeError("rollback adapter configuration history is invalid")
+            target_adapter_config = historical_adapter_config
         if pointer != current:
             raise UpgradeError("active-release pointer changed before rollback")
         was_running = self.services.status().status != "stopped"
@@ -2300,6 +2456,21 @@ class UpgradeManager:
                         if readiness_payload is not None
                         else None
                     ),
+                    "initial_adapter_config": adapter_config,
+                    "initial_adapter_config_bytes": base64.b64encode(
+                        adapter_payload
+                    ).decode("ascii"),
+                    "initial_adapter_config_sha256": hashlib.sha256(
+                        adapter_payload
+                    ).hexdigest(),
+                    "selected_adapter_config": target_adapter_config,
+                    "selected_adapter_config_bytes": base64.b64encode(
+                        target_adapter_payload
+                    ).decode("ascii"),
+                    "selected_adapter_config_sha256": hashlib.sha256(
+                        target_adapter_payload
+                    ).hexdigest(),
+                    "provider_binding_transition": binding_transition,
                     "was_running": was_running,
                     "pending_attestation_id": None,
                     "pending_attestation_sha256": None,
@@ -2337,6 +2508,30 @@ class UpgradeManager:
                 journal = self.activation_journal.transition(
                     journal,
                     "services_quiesced",
+                )
+            if binding_transition is not None:
+                current_adapter_payload, current_adapter_config = (
+                    self._read_private_json_payload(
+                        self.paths.instance_dir / "config" / "adapters.json"
+                    )
+                )
+                if (
+                    current_adapter_payload != adapter_payload
+                    or current_adapter_config != adapter_config
+                ):
+                    raise UpgradeError(
+                        "adapter configuration changed before journaled rollback"
+                    )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "provider_config_selecting",
+                )
+                adapter_path = self.paths.instance_dir / "config" / "adapters.json"
+                atomic_write(adapter_path, target_adapter_payload, mode=0o600)
+                self._fsync_directory(adapter_path.parent)
+                journal = self.activation_journal.transition(
+                    journal,
+                    "provider_config_selected",
                 )
             journal = self.activation_journal.transition(
                 journal,

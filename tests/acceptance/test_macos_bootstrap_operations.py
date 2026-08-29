@@ -37,6 +37,7 @@ from bootstrap.bridge_enrollment import (
 from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.candidate_readiness import validate_pending_attestation
 from bootstrap.doctor import Doctor
+from bootstrap.provider_binding_transition import prepare_provider_binding_transition
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.source_identity import verify_release_source_identity
@@ -146,7 +147,11 @@ def _committed_candidate_from_worktree(source: Path, destination: Path) -> str:
 
 
 def _write_htr10_fixture(
-    paths: DeploymentPaths, *, candidate: Path, now: datetime
+    paths: DeploymentPaths,
+    *,
+    candidate: Path,
+    now: datetime,
+    provider_binding_transition_sha256: str | None = None,
 ) -> Path:
     """Run the production reducer on content-free fixtures, not human evidence."""
 
@@ -164,6 +169,9 @@ def _write_htr10_fixture(
                 "groups": [],
                 "content_exposed": False,
                 "raw_identifiers_exposed": False,
+                "provider_binding_transition_sha256": (
+                    provider_binding_transition_sha256
+                ),
             }
         ),
         encoding="utf-8",
@@ -180,6 +188,8 @@ def _write_htr10_fixture(
         "duplicate_request": 0,
         "malformed_request": 0,
         "orphan_terminal": 0,
+        "invalid_legacy_reconciliation": 0,
+        "duplicate_legacy_reconciliation": 0,
     }
     source.write_text(
         json.dumps(
@@ -200,6 +210,9 @@ def _write_htr10_fixture(
                     "content_exposed": False,
                 },
                 "content_exposed": False,
+                "provider_binding_transition_sha256": (
+                    provider_binding_transition_sha256
+                ),
             }
         ),
         encoding="utf-8",
@@ -566,6 +579,63 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
         json.dumps({"agents": {}, "bindings": []}), encoding="utf-8"
     )
     openclaw_runtime.chmod(0o600)
+    mapping = json.loads(
+        (paths.instance_dir / "config" / "member-mapping.json").read_text("utf-8")
+    )
+    principal_id = next(
+        str(row["member_id"])
+        for row in mapping["members"]
+        if row.get("role") == "principal"
+    )
+    adapter_path = paths.instance_dir / "config" / "adapters.json"
+    legacy_adapters = json.loads(adapter_path.read_text("utf-8"))
+    reference = "keychain://fixture/provider-binding-transition"
+    account = "principal-a@invalid.example"
+    legacy_adapters["adapters"] = [
+        {
+            "kind": "messaging-gmail-api",
+            "config": {
+                "member_id": principal_id,
+                "user_email": account,
+                "workspace": "personal",
+                "oauth_credentials_ref": reference,
+                "enable_writes": False,
+            },
+        },
+        {
+            "kind": "calendaring-google-calendar",
+            "config": {
+                "member_id": principal_id,
+                "provider_account_id": account,
+                "oauth_credentials_ref": reference,
+                "calendar_id": "primary",
+                "discover_calendars": True,
+            },
+        },
+        {
+            "kind": "tasks-google-tasks",
+            "config": {
+                "member_id": principal_id,
+                "user_email": account,
+                "oauth_credentials_ref": reference,
+                "tasklist_id": "@default",
+            },
+        },
+    ]
+    legacy_adapter_bytes = json.dumps(legacy_adapters, indent=2, sort_keys=True).encode(
+        "utf-8"
+    )
+    adapter_path.write_bytes(legacy_adapter_bytes)
+    adapter_path.chmod(0o600)
+    transition = prepare_provider_binding_transition(
+        legacy_adapters,
+        household_mapping=mapping,
+        ownership_reviewed=True,
+        source_payload=legacy_adapter_bytes,
+    )
+    transition_sha256 = hashlib.sha256(
+        json.dumps(transition.public(), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
     candidate = tmp_path / "pending-candidate"
     predecessor_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
@@ -655,7 +725,12 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
         encoding="utf-8",
     )
     active_readiness.chmod(0o600)
-    htr10 = _write_htr10_fixture(paths, candidate=candidate, now=now)
+    htr10 = _write_htr10_fixture(
+        paths,
+        candidate=candidate,
+        now=now,
+        provider_binding_transition_sha256=transition_sha256,
+    )
     active_before = (active_readiness.read_bytes(), active_readiness.stat().st_ino)
     pointer_before = pointer.read_bytes()
     services_before = (
@@ -685,6 +760,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
         str(backup["path"]),
         "--htr-10-review",
         str(htr10),
+        "--approve-provider-binding-migration",
     ]
     for htr in ("01", "02", "03", "04", "06", "07"):
         command.extend(
@@ -718,6 +794,10 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     stored = validate_pending_attestation(json.loads(pending.read_text("utf-8")))
     assert stored["deployment_binding"]["candidate_commit"] == candidate_commit
     assert stored["activation_boundary"]["candidate_active"] is False
+    assert stored["deployment_binding"]["provider_binding_transition"] == (
+        transition.public()
+    )
+    assert adapter_path.read_bytes() == legacy_adapter_bytes
     assert (
         active_readiness.read_bytes(),
         active_readiness.stat().st_ino,
@@ -749,6 +829,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
             str(candidate),
             "--pending-attestation-id",
             result["attestation_id"],
+            "--approve-provider-binding-migration",
         ],
         cwd=candidate,
         env={
@@ -778,6 +859,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     assert promoted["activation_evidence"]["post_switch_acceptance"] == (
         "pending_post_switch"
     )
+    assert adapter_path.read_bytes() == transition.prepared_bytes
     journal_root = paths.app_dir / "activation"
     assert not (journal_root / "active.json").exists()
     histories = list((journal_root / "history").glob("*.json"))
@@ -812,6 +894,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     assert (journal_root / "active.json").is_file()
     assert json.loads(pointer.read_text("utf-8"))["commit"] == predecessor_commit
     assert active_readiness.read_bytes() == promoted_bytes
+    assert adapter_path.read_bytes() == legacy_adapter_bytes
 
     recovery = subprocess.run(
         [
@@ -838,6 +921,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     assert recovered["status"] == "recovered"
     assert json.loads(pointer.read_text("utf-8"))["commit"] == candidate_commit
     assert active_readiness.read_bytes() == promoted_bytes
+    assert adapter_path.read_bytes() == transition.prepared_bytes
     assert not (journal_root / "active.json").exists()
 
     rollback = subprocess.run(
@@ -866,6 +950,7 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     assert rolled_back["commit"] == predecessor_commit
     assert pointer.read_bytes() == pointer_before
     assert active_readiness.read_bytes() == active_before[0]
+    assert adapter_path.read_bytes() == legacy_adapter_bytes
     histories = list((journal_root / "history").glob("*.json"))
     assert len(histories) == 3
     assert {json.loads(path.read_text("utf-8"))["operation"] for path in histories} == {

@@ -126,12 +126,39 @@ class ExternalWriteFailedV2(ExternalWriteFailedV1):
     origin_proposal_id: str | None = Field(default=None, min_length=1, max_length=240)
 
 
+class LegacyProviderEffectReconciledV1(BaseModel):
+    """Additive evidence for one pre-governance v1 request/result pair.
+
+    This event does not manufacture approvals that did not exist.  It binds a
+    reviewed classification to the exact immutable request and terminal facts
+    so current integrity accounting can distinguish legacy absence from an
+    unknown provider outcome.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    request_event_id: str = Field(min_length=1, max_length=240)
+    terminal_event_id: str = Field(min_length=1, max_length=240)
+    command_id: str = Field(min_length=1, max_length=240)
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    provider_called: bool
+    suppressed: bool
+    legacy_approval_state: Literal["pre_governance_absent"]
+    reconciliation_basis: Literal["v1_completed_terminal_evidence"]
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    terminal_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reconciled_at: datetime
+
+
 registry.register("external_sync.write_requested", 1, ExternalWriteRequestedV1)
 registry.register("external_sync.write_requested", 2, ExternalWriteRequestedV2)
 registry.register("external_sync.write_completed", 1, ExternalWriteCompletedV1)
 registry.register("external_sync.write_completed", 2, ExternalWriteCompletedV2)
 registry.register("external_sync.write_failed", 1, ExternalWriteFailedV1)
 registry.register("external_sync.write_failed", 2, ExternalWriteFailedV2)
+registry.register(
+    "external_sync.legacy_effect_reconciled", 1, LegacyProviderEffectReconciledV1
+)
 registry.register(
     "member.provider_action.confirmed", 1, MemberProviderActionConfirmedV1
 )
@@ -145,5 +172,6 @@ __all__ = [
     "ExternalWriteFailedV2",
     "ExternalWriteRequestedV1",
     "ExternalWriteRequestedV2",
+    "LegacyProviderEffectReconciledV1",
     "MemberProviderActionConfirmedV1",
 ]

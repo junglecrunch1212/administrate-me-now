@@ -183,6 +183,14 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help=("activate only the candidate-declared exact degraded baseline"),
             )
+            child.add_argument(
+                "--approve-provider-binding-migration",
+                action="store_true",
+                help=(
+                    "apply only the provider-binding transition bound by "
+                    "candidate-pending evidence"
+                ),
+            )
         elif name == "bridge-export":
             child.add_argument("member_id")
             child.add_argument("output", type=Path)
@@ -421,6 +429,11 @@ def main(argv: list[str] | None = None) -> int:
             ),
             approve_source_assessment_repair=(
                 bool(args.approve_declared_source_assessment_repair)
+                if args.command == "upgrade"
+                else False
+            ),
+            approve_provider_binding_migration=(
+                bool(args.approve_provider_binding_migration)
                 if args.command == "upgrade"
                 else False
             ),

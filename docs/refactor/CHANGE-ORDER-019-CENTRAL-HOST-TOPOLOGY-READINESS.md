@@ -307,6 +307,31 @@ acceptance, and the rule that fixture evidence is not HTR completion. HTR-09
 and deployment are therefore owner-gated and not executed, not authorized by
 this change.
 
+Legacy central Google bindings that predate the explicit owner/account/
+workspace/scope/provenance contract now have one bounded transition path. The
+candidate derives the complete configuration in memory, preserves every
+credential reference and capability, and binds both the current and prepared
+configuration fingerprints plus exact source/prepared byte hashes into HTR-10
+and candidate-pending evidence. The guarded updater records the predecessor and
+selected adapter documents byte-for-byte before quiescence, publishes the
+prepared document only after the predecessor is stopped, and restores the
+predecessor document before any recovery restart. Explicit rollback uses the
+same committed history in reverse. This **MODERNIZES** schema transition while
+**PRESERVING** provider authority, observation mode, and rollback compatibility.
+
+Historical Calendar facts that used the owning member coordinate before
+provider-account binding are attributed only when their private owner scope
+agrees and exactly one reviewed Calendar binding exists for that member. A
+legacy internal member-reminders command is classified as an internal member
+source, never as a provider account. A pre-governance v1 provider result may be
+made current only by one additive encrypted reconciliation event bound to the
+exact immutable request and terminal fingerprints; it records that approvals
+were absent rather than manufacturing them. Candidate-side HTR-10 reads the
+live log at one closed watermark and requires healthy all-history effect
+integrity plus zero effects in the active observation window. This
+**MODERNIZES** legacy evidence interpretation while **PRESERVING** append-only
+history and the prohibition on retrospective approval claims.
+
 This compatibility boundary is classified as **MODERNIZE** for source-identity
 evidence, bounded public-entry Git validation and supervisor handoff,
 fixed-commit controller supervision, bootstrap routing, forward publication,
