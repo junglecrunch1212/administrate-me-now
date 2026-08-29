@@ -344,11 +344,12 @@ def test_activation_recovery_waits_for_bounded_source_settlement(
         start=lambda: (
             events.append("start")
             or SimpleNamespace(
-                status="degraded",
-                runtime="degraded",
+                status="failed",
+                runtime="failed",
                 openclaw="running",
             )
         ),
+        runtime_is_live=lambda: events.append("liveness") or True,
     )
     monkeypatch.setattr(
         manager,
@@ -381,6 +382,7 @@ def test_activation_recovery_waits_for_bounded_source_settlement(
         "plugin",
         "launchagents",
         "start",
+        "liveness",
         f"doctor:{('1' * 40)}",
     ]
     assert not owner.path.exists()
@@ -647,11 +649,12 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         start=lambda: (
             events.append("action:start")
             or SimpleNamespace(
-                status="healthy",
-                runtime="running",
+                status="failed",
+                runtime="failed",
                 openclaw="running",
             )
         ),
+        runtime_is_live=lambda: events.append("action:liveness") or True,
     )
     monkeypatch.setattr(
         manager, "_candidate_commit", lambda _candidate: CANDIDATE_COMMIT
@@ -800,6 +803,8 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     assert events.index("phase:launchagents_selecting") < events.index(
         "action:launchagents"
     )
+    assert events.index("action:start") < events.index("action:liveness")
+    assert events.index("action:liveness") < events.index("action:doctor")
     active_pointer = json.loads(
         (paths.app_dir / "current-release.json").read_text("utf-8")
     )

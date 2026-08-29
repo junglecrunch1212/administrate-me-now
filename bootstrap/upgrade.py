@@ -1241,6 +1241,13 @@ class UpgradeManager:
             time.sleep(POST_SWITCH_POLL_SECONDS)
             last = self._run_release_doctor(release, include_synthetic_proof=False)
 
+    def _service_start_reached_doctor_boundary(self, status: Any) -> bool:
+        """Require a live runtime before Doctor adjudicates blocked readiness."""
+
+        if status.status in {"healthy", "degraded"}:
+            return True
+        return status.status == "failed" and self.services.runtime_is_live()
+
     def _run_release_doctor(
         self, release: Path, *, include_synthetic_proof: bool
     ) -> dict[str, Any]:
@@ -1630,7 +1637,10 @@ class UpgradeManager:
                 try:
                     restored = self.services.start()
                     recovery_healthy = restored.status == "healthy"
-                    if restored.status == "degraded":
+                    if (
+                        not recovery_healthy
+                        and self._service_start_reached_doctor_boundary(restored)
+                    ):
                         recovery_healthy = (
                             self._post_switch_doctor(predecessor).get("status")
                             == "healthy"
@@ -2197,7 +2207,7 @@ class UpgradeManager:
                 "services_starting",
             )
             started = self.services.start()
-            if started.status not in {"healthy", "degraded"}:
+            if not self._service_start_reached_doctor_boundary(started):
                 raise UpgradeError(
                     "candidate services did not start: "
                     f"status={started.status}, runtime={started.runtime}, "
