@@ -1626,12 +1626,12 @@ class UpgradeManager:
                 recovery_errors.append(exc)
             for operation in (
                 lambda: self._install_reviewed_openclaw(predecessor),
+                lambda: self._restore_journal_control_files(recovery_journal),
                 lambda: reconcile_administrateme_plugin(
                     self.paths,
                     predecessor,
                     test_mode=self.test_mode,
                 ),
-                lambda: self._restore_journal_control_files(recovery_journal),
                 lambda: install_launch_agents(
                     self.paths,
                     predecessor,

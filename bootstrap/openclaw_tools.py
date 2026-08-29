@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.contracts import DeploymentPaths, load_versions
+from bootstrap.openclaw_activation import reconcile_member_topology
 from bootstrap.openclaw_install import resolve_reviewed_openclaw
 
 
@@ -131,7 +132,7 @@ def reconcile_administrateme_plugin(
     *,
     test_mode: bool = False,
 ) -> dict[str, Any]:
-    """Replace stale local-plugin registration with the reviewed release path."""
+    """Select the reviewed plugin and its exact adapter-derived member topology."""
 
     if test_mode:
         return administrateme_plugin_status(paths, release, test_mode=True)
@@ -186,6 +187,7 @@ def reconcile_administrateme_plugin(
     installed = run(["plugins", "install", "--link", "--force", str(plugin)])
     if installed.returncode:
         raise RuntimeError("reviewed AdministrateMe plugin registration failed")
+    topology = reconcile_member_topology(paths)
     validated = run(["config", "validate"])
     if validated.returncode:
         raise RuntimeError("OpenClaw rejected the reviewed plugin configuration")
@@ -194,6 +196,7 @@ def reconcile_administrateme_plugin(
         raise RuntimeError(
             "OpenClaw did not load AdministrateMe from the selected release"
         )
+    status["member_topology"] = topology
     return status
 
 
