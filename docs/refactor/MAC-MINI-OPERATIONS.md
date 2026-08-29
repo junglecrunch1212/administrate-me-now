@@ -286,6 +286,10 @@ health report degraded while safe reads and event ingestion remain live. The
 updater may wait within its bounded settlement window only for that exact
 combination. Any other blocked readiness dimension, unsafe read/event state,
 or non-source capability degradation still triggers immediate recovery.
+The selected runtime derives its current release, instance, host, and
+configuration binding through the same strict deployment snapshot as pending
+and promoted readiness, including the prepared adapter bytes. A legacy
+configuration digest is not comparable evidence and must fail closed.
 The candidate-pending contract and journaled consumer are implemented, but no
 household HTR-08 evidence is authorized or recorded and HTR-09 has not been
 requested. Repository fixtures prove mechanics only; they do not authorize an

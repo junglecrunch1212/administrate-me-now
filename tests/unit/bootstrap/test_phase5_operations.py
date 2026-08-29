@@ -951,6 +951,17 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     shared = store.get(state["secret_references"]["openclaw_shared"]).decode("ascii")
     monkeypatch.setenv("ADMINME_INSTANCE_ROOT", str(test_paths.root))
     monkeypatch.setattr(runtime_service, "secret_store", lambda _paths: store)
+    deployment_snapshot = SimpleNamespace(
+        predecessor_commit="a" * 40,
+        instance_fingerprint="b" * 64,
+        host_fingerprint="c" * 64,
+        configuration_fingerprint="d" * 64,
+    )
+    monkeypatch.setattr(
+        runtime_service,
+        "capture_deployment_snapshot",
+        lambda _paths: deployment_snapshot,
+    )
 
     runtime_capture: dict[str, object] = {}
 
@@ -984,6 +995,12 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     assert runtime_capture["adapter_config"] == json.loads(
         (test_paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
     )
+    assert runtime_capture["host_topology"]["deployment_binding"] == {
+        "release_commit": "a" * 40,
+        "instance_fingerprint": "b" * 64,
+        "host_fingerprint": "c" * 64,
+        "configuration_fingerprint": "d" * 64,
+    }
 
     monkeypatch.setattr(openclaw_service, "secret_store", lambda _paths: store)
     monkeypatch.setattr(
