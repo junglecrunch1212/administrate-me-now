@@ -279,6 +279,18 @@ def test_strict_readiness_identifies_stale_source_refresh_as_settlement(
     with TestClient(app) as client:
         _report_strict_openclaw(client)
         runtime: AdministrateMeRuntime = app.state.runtime
+        for _ in range(100):
+            baseline = client.get("/api/system/ready").json()["capabilities"][
+                "policy:source-assurance"
+            ]["details"]["freshness"]
+            if (
+                baseline["revision_current"] is True
+                and baseline["refresh_in_progress"] is False
+            ):
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        assert baseline["revision_current"] is True
+        assert baseline["refresh_in_progress"] is False
         runtime._source_assurance_revision = ("ev_outdated", ())
         runtime._source_assurance_refreshed_monotonic = (
             time.monotonic() - runtime.SOURCE_ASSURANCE_MAX_STALE_SECONDS - 1
