@@ -1756,6 +1756,43 @@ def test_runtime_health_does_not_mislabel_degraded_readiness_as_observation_only
     assert manager._runtime_health() == "observation_only"
 
 
+def test_runtime_health_treats_only_bounded_source_settlement_as_degraded(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths, test_mode=False)
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics.update(
+        {
+            "status": "blocked",
+            "ready": False,
+            "safe_reads": True,
+            "event_ingest_ready": True,
+            "observation_active": True,
+            "deployment_readiness": {
+                "contract": "deployment-readiness-v1",
+                "state": "blocked",
+                "ready": False,
+                "blocking_dimensions": ["observation_effects"],
+            },
+        }
+    )
+    source = diagnostics["capabilities"]["policy:source-assurance"]
+    source["state"] = "degraded"
+    source["details"]["state"] = "degraded"
+    source["details"]["content_exposed"] = False
+    source["details"]["freshness"]["refresh_error_type"] = None
+    diagnostics["capabilities"]["product:member"] = {"state": "blocked"}
+    diagnostics["capabilities"]["surface:triage-processing"] = {"state": "degraded"}
+    monkeypatch.setattr(manager, "runtime_diagnostics", lambda: diagnostics)
+
+    assert manager._runtime_health() == "degraded"
+
+    diagnostics["capabilities"]["adapter:unexpected"] = {"state": "blocked"}
+    assert manager._runtime_health() == "failed"
+
+
 def test_doctor_export_is_machine_readable_and_contains_no_secret_values(
     test_paths: DeploymentPaths,
 ) -> None:
