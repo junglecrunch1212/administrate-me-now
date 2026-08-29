@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import builtins
 import copy
+import io
 import json
 import plistlib
 import os
@@ -13,6 +14,7 @@ import runpy
 import subprocess
 import sys
 from types import SimpleNamespace
+import urllib.error
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -1237,6 +1239,55 @@ def test_runtime_launch_probe_uses_lightweight_live_endpoint(
     assert manager._runtime_liveness() is True
     assert str(observed["url"]).endswith("/api/system/live")
     assert observed["timeout"] == 5
+
+
+def test_runtime_diagnostics_reads_blocked_503_contract(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostics = {
+        "status": "degraded",
+        "ready": False,
+        "service_ready": True,
+        "safe_reads": True,
+        "event_ingest_ready": True,
+        "deployment_readiness": {
+            "contract": "deployment-readiness-v1",
+            "state": "blocked",
+            "blocking_dimensions": ["observation_effects"],
+        },
+    }
+
+    def urlopen(url: str, *, timeout: int):
+        raise urllib.error.HTTPError(
+            url,
+            503,
+            "Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(json.dumps(diagnostics).encode()),
+        )
+
+    monkeypatch.setattr("bootstrap.services.urllib.request.urlopen", urlopen)
+
+    assert ServiceManager(test_paths).runtime_diagnostics() == diagnostics
+
+
+def test_runtime_diagnostics_rejects_non_readiness_http_error(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def urlopen(url: str, *, timeout: int):
+        raise urllib.error.HTTPError(
+            url,
+            500,
+            "Internal Server Error",
+            hdrs=None,
+            fp=io.BytesIO(b'{"ready":false}'),
+        )
+
+    monkeypatch.setattr("bootstrap.services.urllib.request.urlopen", urlopen)
+
+    assert ServiceManager(test_paths).runtime_diagnostics() is None
 
 
 def test_service_cold_start_window_is_bounded_and_retries_liveness(
