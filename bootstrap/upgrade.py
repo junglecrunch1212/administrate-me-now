@@ -97,6 +97,12 @@ _SOURCE_SETTLEMENT_READINESS_DIMENSIONS = frozenset({"observation_effects"})
 # clock.
 POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 60 * 60
 POST_SWITCH_POLL_SECONDS = 2
+# A live runtime can briefly make the full readiness document unavailable
+# while the source-settlement audit contends for the encrypted event log. Each
+# miss has already consumed the bounded diagnostics timeout. Retry only while
+# the cheap liveness proof succeeds and Doctor reports no non-settlement gap;
+# an unresolved blackout still fails closed after this small fixed allowance.
+POST_SWITCH_LIVE_READINESS_RETRIES = 3
 _PREPARATION_STATE_CONTRACT = "administrateme-release-preparation-v1"
 _PREPARATION_STATE_PHASES = frozenset(
     {"publishing", "publishing_unreaped", "preparing", "complete", "consumed"}
@@ -1158,6 +1164,7 @@ class UpgradeManager:
         deadline = time.monotonic() + (
             0 if self.test_mode else POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
         )
+        live_readiness_retries = 0
         last = self._run_release_doctor(release, include_synthetic_proof=False)
         while True:
             if last.get("status") == "healthy":
@@ -1180,6 +1187,16 @@ class UpgradeManager:
                 cold_start_only = failed.issubset(
                     {"launchd_and_process_state", "ports_and_loopback_binding"}
                 )
+                deployment_check_failed = (
+                    "deployment_topology_and_recovery_readiness" in failed
+                )
+                source_settlement_only = (
+                    "source_assurance_terminal_dispositions" in failed
+                    and (
+                        not deployment_check_failed
+                        or self._doctor_has_only_source_settlement_readiness_gap(last)
+                    )
+                )
                 if (
                     cold_start_only
                     and not self.services.runtime_is_live()
@@ -1190,7 +1207,20 @@ class UpgradeManager:
                         release, include_synthetic_proof=False
                     )
                     continue
+                if (
+                    source_settlement_only
+                    and live_readiness_retries < POST_SWITCH_LIVE_READINESS_RETRIES
+                    and self.services.runtime_is_live()
+                    and time.monotonic() < deadline
+                ):
+                    live_readiness_retries += 1
+                    time.sleep(POST_SWITCH_POLL_SECONDS)
+                    last = self._run_release_doctor(
+                        release, include_synthetic_proof=False
+                    )
+                    continue
                 return last
+            live_readiness_retries = 0
             if self._has_new_structural_degradation(diagnostics):
                 return self._run_release_doctor(release, include_synthetic_proof=False)
 
