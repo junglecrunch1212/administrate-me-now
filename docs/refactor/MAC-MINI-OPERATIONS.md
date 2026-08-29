@@ -194,8 +194,14 @@ checks; it then requires the complete Doctor, including the canonical
 synthetic round trip. Every other failed check causes immediate rollback.
 The same cutover removes only stale AdministrateMe plugin registrations, links
 the plugin from the selected immutable release, and proves both its install
-path and loaded runtime module resolve inside that release. Rollback restores
-the previous release's plugin link before restarting either service.
+path and loaded runtime module resolve inside that release. While both services
+are stopped, that selection also replaces only AdministrateMe-owned agents and
+bindings with the exact member topology derived from the already-selected
+adapter configuration, preserves unrelated OpenClaw rows, and validates the
+result before restart. Crash recovery restores the journaled predecessor
+adapter bytes before reconciling the predecessor plugin and derived topology;
+rollback does the same in its target direction. Neither path invents an
+account, member, agent, binding, or DM scope outside the reviewed configuration.
 
 For a bug report, create a secret-redacted machine report:
 
@@ -528,7 +534,9 @@ not substitute for post-switch browser/privacy/isolation/effect acceptance.
 OpenClaw reconciliation resolves the instance-owned `bin/openclaw` selector
 directly and revalidates it against the reviewed source receipt. It does not
 depend on the disposable controller's ambient `PATH` after installation or
-during journal recovery.
+during journal recovery. Plugin selection and adapter-derived member-topology
+selection are one stopped-service operation; recovery restores predecessor
+control bytes before running that operation.
 
 For central services and post-switch Doctor, the candidate manifest's
 formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older

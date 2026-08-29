@@ -519,9 +519,17 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
         ),
     )
     monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
+
+    topology_reconciled_after_restore = False
+
+    def reconcile_after_restore(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal topology_reconciled_after_restore
+        assert adapter_path.read_bytes() == source
+        topology_reconciled_after_restore = True
+
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
-        lambda *_args, **_kwargs: None,
+        reconcile_after_restore,
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.install_launch_agents",
@@ -532,6 +540,7 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
 
     assert result is not None and result["status"] == "recovered"
     assert adapter_path.read_bytes() == source
+    assert topology_reconciled_after_restore is True
 
 
 def test_rollback_journal_cannot_bind_pending_evidence(tmp_path: Path) -> None:

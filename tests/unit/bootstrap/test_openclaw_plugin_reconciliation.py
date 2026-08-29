@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from adminme.openclaw_topology import member_agent_id
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.openclaw_tools import (
     administrateme_plugin_status,
@@ -77,6 +78,44 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     (plugin / "dist").mkdir(parents=True)
     (plugin / "dist" / "index.js").write_text("export default {};", encoding="utf-8")
     (plugin / "openclaw.plugin.json").write_text("{}", encoding="utf-8")
+    config_dir = paths.instance_dir / "config"
+    runtime_dir = paths.instance_dir / "openclaw" / "runtime"
+    config_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    actors = {
+        "discord|account-a|actor-a": "member-a",
+        "discord|account-b|actor-b": "member-b",
+    }
+    (config_dir / "adapters.json").write_text(
+        json.dumps(
+            {
+                "openclaw_actor_identities": actors,
+                "member_chat_enabled_members": ["member-a", "member-b"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "openclaw.json").write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "list": [
+                        {"id": "operator", "default": True},
+                        {"id": "adminme-stale0000000000"},
+                    ]
+                },
+                "bindings": [
+                    {"agentId": "operator", "match": {"channel": "cli"}},
+                    {
+                        "agentId": "adminme-stale0000000000",
+                        "match": {"channel": "stale"},
+                    },
+                ],
+                "plugins": {"entries": {"administrateme": {"config": {}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
         lambda _paths: "/reviewed/openclaw",
@@ -101,6 +140,21 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     status = reconcile_administrateme_plugin(paths, release)
 
     assert status["ok"] is True
+    assert status["member_topology"] == {
+        "member_agent_count": 2,
+        "binding_count": 4,
+        "dm_scope": "per_account_channel_peer",
+        "content_exposed": False,
+    }
+    stored = json.loads((runtime_dir / "openclaw.json").read_text("utf-8"))
+    assert {row["id"] for row in stored["agents"]["list"]} == {
+        "operator",
+        member_agent_id("member-a"),
+        member_agent_id("member-b"),
+    }
+    assert all(
+        row["agentId"] != "adminme-stale0000000000" for row in stored["bindings"]
+    )
     assert any(command[1:3] == ["plugins", "uninstall"] for command in commands)
     assert [
         "/reviewed/openclaw",

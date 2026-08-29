@@ -11,7 +11,11 @@ from typing import Any
 
 import yaml
 
-from adminme.openclaw_topology import binding_fingerprints, member_agent_id
+from adminme.openclaw_topology import (
+    binding_fingerprints,
+    inspect_runtime_topology,
+    member_agent_id,
+)
 from adminme.deployment_readiness import REQUIRED_DM_SCOPE
 
 from bootstrap.contracts import (
@@ -138,6 +142,13 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
         json.dumps(config, indent=2, sort_keys=True).encode("utf-8"),
         mode=0o600,
     )
+    inspected = inspect_runtime_topology(
+        config_path,
+        actor_identities=actor_identities,
+        member_chat_enabled_members=chat_members,
+    )
+    if inspected.get("state") != "healthy":
+        raise RuntimeError("OpenClaw member topology did not reconcile exactly")
     return {
         "member_agent_count": len(member_agents),
         "binding_count": len(member_bindings) + len(chat_members),
