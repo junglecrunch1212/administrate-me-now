@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import subprocess
 
@@ -41,6 +42,22 @@ class RuntimeKeychainError(RuntimeError):
     """A runtime-bound Keychain operation failed without exposing its value."""
 
 
+def _security_environment() -> dict[str, str]:
+    """Give Apple's CLI the login-home coordinate hidden from controllers."""
+
+    try:
+        login_home = pwd.getpwuid(os.getuid()).pw_dir
+    except (KeyError, OSError) as exc:
+        raise RuntimeKeychainError(
+            "runtime-bound Keychain login coordinate is unavailable"
+        ) from exc
+    if not login_home or not Path(login_home).is_absolute():
+        raise RuntimeKeychainError("runtime-bound Keychain login coordinate is invalid")
+    environment = os.environ.copy()
+    environment["HOME"] = login_home
+    return environment
+
+
 def _validate_label(value: str) -> None:
     if not _LABEL_PATTERN.fullmatch(value):
         raise RuntimeKeychainError("runtime-bound Keychain label is invalid")
@@ -64,6 +81,7 @@ def _get_single(service: str, account: str) -> str:
             capture_output=True,
             check=False,
             timeout=SECURITY_TIMEOUT_SECONDS,
+            env=_security_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeKeychainError(
@@ -99,6 +117,7 @@ def _put_single(service: str, account: str, value: str) -> None:
             capture_output=True,
             check=False,
             timeout=SECURITY_TIMEOUT_SECONDS,
+            env=_security_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeKeychainError(
@@ -125,6 +144,7 @@ def _delete_single(service: str, account: str) -> None:
             capture_output=True,
             check=False,
             timeout=SECURITY_TIMEOUT_SECONDS,
+            env=_security_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeKeychainError(

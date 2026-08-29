@@ -329,6 +329,87 @@ def test_activation_recovery_failure_keeps_journal_and_services_stopped(
     assert events == ["stop", "stop"]
 
 
+def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    pointer_payload, _pointer, readiness_payload = _documents(paths)
+    pointer_path = paths.app_dir / "current-release.json"
+    readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    atomic_write(pointer_path, b'{"candidate":true}\n', mode=0o600)
+    atomic_write(readiness_path, b'{"candidate":true}\n', mode=0o600)
+    owner = ActivationJournal(paths)
+    value = owner.create(_journal_value(paths))
+    value = owner.transition(value, "backup_creating")
+    reviewed_candidate = tmp_path / "reviewed-candidate"
+    reviewed_candidate.mkdir()
+    fixed_controller = tmp_path / "materialized-controller"
+    fixed_controller.mkdir()
+    manager = UpgradeManager(paths, root=fixed_controller, test_mode=False)
+    events: list[str] = []
+    observed: dict[str, Path] = {}
+
+    def reviewed_commit(repository: Path) -> str:
+        assert repository == reviewed_candidate
+        return "9" * 40
+
+    def verify_source(
+        _release: Path,
+        *,
+        repository: Path,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        observed["repository"] = repository
+        return {"tracked_source_tree_matches": True}
+
+    monkeypatch.setattr("bootstrap.upgrade.reviewed_candidate_commit", reviewed_commit)
+    monkeypatch.setattr(
+        "bootstrap.upgrade.verify_release_source_identity",
+        verify_source,
+    )
+    monkeypatch.setattr(manager, "_validate_prepared_runtime", lambda _release: None)
+    manager.services = SimpleNamespace(
+        stop=lambda *args, **kwargs: events.append("stop"),
+        start=lambda: (
+            events.append("start")
+            or SimpleNamespace(
+                status="healthy",
+                runtime="running",
+                openclaw="running",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_install_reviewed_openclaw",
+        lambda _release: events.append("openclaw"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: events.append("plugin"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *_args, **_kwargs: events.append("launchagents"),
+    )
+
+    result = manager._recover_interrupted_transaction(  # noqa: SLF001
+        reviewed_candidate
+    )
+
+    assert result is not None and result["status"] == "recovered"
+    assert observed["repository"] == reviewed_candidate
+    assert pointer_path.read_bytes() == pointer_payload
+    assert readiness_path.read_bytes() == readiness_payload
+    assert events == ["stop", "openclaw", "plugin", "launchagents", "start"]
+    assert not owner.path.exists()
+    history = (
+        paths.app_dir / "activation" / "history" / f"{value['transaction_id']}.json"
+    )
+    assert json.loads(history.read_text("utf-8"))["phase"] == "recovered"
+
+
 def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

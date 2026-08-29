@@ -1394,7 +1394,10 @@ class UpgradeManager:
             raise UpgradeError("provider-binding migration changed after readiness")
         return transition.prepared_bytes, transition.prepared, declared
 
-    def _recover_interrupted_transaction(self) -> dict[str, Any] | None:
+    def _recover_interrupted_transaction(
+        self,
+        candidate_repository: Path | None = None,
+    ) -> dict[str, Any] | None:
         """Converge an interrupted transaction to its exact captured predecessor."""
 
         try:
@@ -1435,10 +1438,33 @@ class UpgradeManager:
         ):
             raise UpgradeError("activation predecessor coordinate is unsafe")
         if not self.test_mode:
+            recovery_repository: Path | None = None
+            repository_candidates = [
+                candidate_repository,
+                Path(journal["candidate_path"]),
+            ]
+            for repository in repository_candidates:
+                if repository is None:
+                    continue
+                try:
+                    resolved_repository = repository.resolve(strict=True)
+                    reviewed_candidate_commit(resolved_repository)
+                except (OSError, SourceIdentityError):
+                    continue
+                # Recovery may be running from a later protected-main commit.
+                # The legacy-tree verifier below independently requires the
+                # journal's captured candidate and predecessor commits to exist
+                # in this clean Git object database.
+                recovery_repository = resolved_repository
+                break
+            if recovery_repository is None:
+                raise UpgradeError(
+                    "activation recovery candidate source is unavailable"
+                )
             try:
                 verify_release_source_identity(
                     predecessor,
-                    repository=self.root,
+                    repository=recovery_repository,
                     commit=predecessor_commit,
                     allow_legacy_tree=True,
                     require_tracked_tree=True,
@@ -1569,7 +1595,7 @@ class UpgradeManager:
 
     def activate(self, candidate: Path) -> dict[str, Any]:
         with self._operation_lock():
-            recovered = self._recover_interrupted_transaction()
+            recovered = self._recover_interrupted_transaction(candidate)
             if recovered is not None:
                 return recovered
             if self.pending_attestation_id is None:
@@ -2070,7 +2096,7 @@ class UpgradeManager:
             history = self.activation_journal.finish(journal)
         except Exception as candidate_error:
             try:
-                recovery = self._recover_interrupted_transaction()
+                recovery = self._recover_interrupted_transaction(candidate)
             except Exception as recovery_error:
                 raise UpgradeError(
                     f"candidate failed ({candidate_error}); durable predecessor "

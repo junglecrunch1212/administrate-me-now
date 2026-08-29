@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -172,6 +173,34 @@ def test_runtime_password_fails_closed_without_returning_cli_diagnostics(
         put_runtime_password(
             "com.administrateme.instance.event-log", "instance", "encoded"
         )
+
+
+def test_runtime_password_restores_login_home_for_isolated_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    monkeypatch.setenv("HOME", "/private/controller-home")
+    monkeypatch.setattr(
+        macos_keychain.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(pw_dir="/Users/runtime-account"),
+    )
+
+    def run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        observed.update(command=command, **kwargs)
+        return SimpleNamespace(returncode=0, stdout="encoded\n", stderr="")
+
+    monkeypatch.setattr(macos_keychain.subprocess, "run", run)
+
+    assert (
+        get_runtime_password("com.administrateme.instance.event-log", "instance")
+        == "encoded"
+    )
+    environment = observed["env"]
+    assert isinstance(environment, dict)
+    assert environment["HOME"] == "/Users/runtime-account"
+    assert os.environ["HOME"] == "/private/controller-home"
 
 
 def test_runtime_alias_resolution_is_instance_scoped_and_cycle_safe(

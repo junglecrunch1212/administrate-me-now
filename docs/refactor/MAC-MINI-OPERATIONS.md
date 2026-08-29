@@ -466,6 +466,13 @@ from the first active-deployment read through disposable controller cleanup;
 direct rollback acquires the same canonical manager lock. A loser fails before
 tooling, backup, or selector effects.
 
+The disposable controller keeps its own private `HOME`, but the signed Apple
+`security` subprocess receives the login-home coordinate resolved from the
+runtime account database. That narrow environment restoration lets the
+controller find already-bound runtime Keychain aliases while keeping secret
+values out of arguments, environment variables, files, and logs; it does not
+change any Keychain item or broaden its ACL.
+
 Inside that lock the updater revalidates the explicit pending artifact, then
 creates a mode-0600 activation journal before backup quiescence. It creates and
 rehearses one exact fresh encrypted artifact, proves the retained predecessor's
@@ -483,8 +490,13 @@ An ordinary failure invokes the same recovery path immediately; SIGKILL or
 host death leaves the journal for the next guarded activate/rollback invocation,
 which performs recovery and returns without beginning new work. Recovery
 restores the predecessor selectors and exact control bytes, then restores its
-running/stopped state. Failure to converge leaves services stopped and the
-journal in place. A committed activation history is also the sole authority
+running/stopped state. A markerless retained predecessor is checked against the
+clean Git object database supplied to that guarded invocation (which may be a
+later protected-main commit), while the journal's captured predecessor and
+candidate commits remain the exact ancestry and byte-proof coordinates. The
+temporary materialized controller tree is never treated as a Git repository.
+Failure to converge leaves services stopped and the journal in place. A
+committed activation history is also the sole authority
 for journaled explicit rollback, including restoration of the predecessor's
 exact readiness bytes. These mechanics do not execute HTR-08 or HTR-09 and do
 not substitute for post-switch browser/privacy/isolation/effect acceptance.
