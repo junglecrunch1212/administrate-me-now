@@ -316,6 +316,24 @@ Gmail read-only with writes disabled, Calendar read-only, and the default Google
 Tasks list read-only; it preserves the Keychain credential, requires observation
 mode, and is journaled for byte-exact recovery. A legacy configuration digest
 is not comparable evidence and must fail closed.
+
+An installed-user OAuth item created by an enrollment interpreter is not yet a
+runtime-readable item. Before HTR-10, and only after separate exact authorization
+for this live Keychain/configuration preparation, copy exactly the uniquely
+discovered read-only grant into one signed-client envelope and add its one alias:
+
+```bash
+poetry run python -m bootstrap.provider_runtime_alias \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe" \
+  --authorize-live-runtime-alias
+```
+
+The command preserves the OAuth document, scopes, token, existing aliases, and
+observation mode; it makes no provider call and verifies signed-client reads
+before publishing the alias map. If activation did not select the prepared
+adapters, the same separately authorized command with `--rollback` removes only
+that unused alias and copied envelope. Rollback refuses while active adapter
+configuration still references the logical credential.
 Legacy-plugin recovery accepts OpenClaw's validated post-install entry with no
 optional plugin `config` object; malformed entries or non-object configuration
 still fail closed.
