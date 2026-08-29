@@ -176,6 +176,13 @@ def reconcile_administrateme_plugin(
     supports_member_topology = _supports_member_topology(manifest)
     executable = resolve_reviewed_openclaw(paths)
     environment = _environment(paths)
+    topology: dict[str, Any] | None = None
+
+    if not supports_member_topology:
+        # OpenClaw validates the existing entry against the incoming manifest
+        # before installation. Remove only candidate-owned fields/rows first so
+        # a retained predecessor can be installed and then checked again.
+        topology = remove_unsupported_member_topology(paths)
 
     def run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

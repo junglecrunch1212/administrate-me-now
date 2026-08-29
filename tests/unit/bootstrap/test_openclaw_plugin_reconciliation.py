@@ -248,6 +248,15 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
     def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         nonlocal inspect_count
         commands.append(command)
+        if command[1:3] == ["plugins", "install"]:
+            preinstall = json.loads(target.read_text("utf-8"))
+            assert preinstall["agents"]["list"] == [{"default": True, "id": "operator"}]
+            assert preinstall["bindings"] == [
+                {"agentId": "operator", "match": {"channel": "cli"}}
+            ]
+            assert preinstall["plugins"]["entries"]["administrateme"]["config"] == {
+                "baseUrl": "http://127.0.0.1:3330"
+            }
         if command[1:4] == ["plugins", "inspect", "administrateme"]:
             inspect_count += 1
             if "--runtime" in command:

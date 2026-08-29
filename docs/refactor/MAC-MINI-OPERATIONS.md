@@ -204,8 +204,9 @@ rollback does the same in its target direction. Neither path invents an
 account, member, agent, binding, or DM scope outside the reviewed configuration.
 When a retained predecessor manifest predates the managed-topology fields,
 recovery removes only candidate-owned AdministrateMe agent/binding rows and
-those unsupported plugin fields before validating the predecessor; unrelated
-OpenClaw configuration and the global session policy are preserved.
+those unsupported plugin fields before the predecessor installer performs its
+own schema validation, then verifies the same condition after installation;
+unrelated OpenClaw configuration and the global session policy are preserved.
 
 For a bug report, create a secret-redacted machine report:
 
