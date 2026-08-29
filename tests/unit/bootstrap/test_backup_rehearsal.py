@@ -90,7 +90,7 @@ def _archive(
     return buffer.getvalue()
 
 
-def test_backup_omits_only_agent_codex_tmp_cache_links(
+def test_backup_omits_only_agent_codex_cache_and_telemetry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -118,6 +118,17 @@ def test_backup_omits_only_agent_codex_tmp_cache_links(
     target.write_text("reviewed launcher", encoding="utf-8")
     (generated / "apply_patch").symlink_to(target)
     (generated / "transient.txt").write_text("disposable", encoding="utf-8")
+    codex_home = generated.parents[2]
+    generated_dot_tmp = codex_home / ".tmp" / "launcher-cache"
+    generated_dot_tmp.parent.mkdir()
+    generated_dot_tmp.write_text("disposable", encoding="utf-8")
+    for name in ("logs_2.sqlite", "logs_2.sqlite-wal", "logs_2.sqlite-shm"):
+        (codex_home / name).write_bytes(b"disposable telemetry")
+    durable_session = codex_home / "sessions" / "session.jsonl"
+    durable_session.parent.mkdir()
+    durable_session.write_text("durable session", encoding="utf-8")
+    durable_state = codex_home / "state_5.sqlite"
+    durable_state.write_bytes(b"durable state")
 
     manager = BackupManager(
         paths,
@@ -128,6 +139,10 @@ def test_backup_omits_only_agent_codex_tmp_cache_links(
     archived = {str(item["path"]) for item in manifest["files"]}
     assert "state/events/events.db" in archived
     assert not any("/codex-home/tmp/" in name for name in archived)
+    assert not any("/codex-home/.tmp/" in name for name in archived)
+    assert not any("/codex-home/logs_2.sqlite" in name for name in archived)
+    assert any("/codex-home/sessions/session.jsonl" in name for name in archived)
+    assert any("/codex-home/state_5.sqlite" in name for name in archived)
 
     unsafe = paths.instance_dir / "config" / "unsafe-link"
     unsafe.parent.mkdir()
