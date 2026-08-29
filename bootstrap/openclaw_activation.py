@@ -157,6 +157,70 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
     }
 
 
+def remove_unsupported_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
+    """Remove only topology rows unsupported by a retained legacy plugin."""
+
+    config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    if not config_path.is_file() or config_path.is_symlink():
+        raise RuntimeError("OpenClaw configuration is unavailable")
+    try:
+        config = json.loads(config_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("OpenClaw configuration is invalid") from exc
+    if not isinstance(config, dict):
+        raise RuntimeError("OpenClaw configuration root is invalid")
+
+    agents = config.get("agents") or {}
+    if not isinstance(agents, dict):
+        raise RuntimeError("OpenClaw agents configuration is invalid")
+    existing_agents = agents.get("list") or []
+    if not isinstance(existing_agents, list):
+        raise RuntimeError("OpenClaw agents.list is invalid")
+    retained_agents = [
+        row
+        for row in existing_agents
+        if not (
+            isinstance(row, dict) and str(row.get("id") or "").startswith("adminme-")
+        )
+    ]
+    agents["list"] = retained_agents
+    config["agents"] = agents
+
+    existing_bindings = config.get("bindings") or []
+    if not isinstance(existing_bindings, list):
+        raise RuntimeError("OpenClaw bindings are invalid")
+    retained_bindings = [
+        row
+        for row in existing_bindings
+        if not (
+            isinstance(row, dict)
+            and str(row.get("agentId") or "").startswith("adminme-")
+        )
+    ]
+    config["bindings"] = retained_bindings
+
+    plugins = config.get("plugins") or {}
+    entries = plugins.get("entries") if isinstance(plugins, dict) else None
+    plugin = entries.get("administrateme") if isinstance(entries, dict) else None
+    plugin_config = plugin.get("config") if isinstance(plugin, dict) else None
+    if not isinstance(plugin_config, dict):
+        raise RuntimeError("AdministrateMe plugin configuration is invalid")
+    for key in ("bindingFingerprints", "dmScope", "memberAgentIds"):
+        plugin_config.pop(key, None)
+
+    atomic_write(
+        config_path,
+        json.dumps(config, indent=2, sort_keys=True).encode("utf-8"),
+        mode=0o600,
+    )
+    return {
+        "member_agent_count": 0,
+        "binding_count": 0,
+        "dm_scope": "legacy_plugin_unmanaged",
+        "content_exposed": False,
+    }
+
+
 def activate(
     paths: DeploymentPaths,
     *,
@@ -269,4 +333,5 @@ __all__ = [
     "activation_path",
     "model_provider_configured",
     "reconcile_member_topology",
+    "remove_unsupported_member_topology",
 ]

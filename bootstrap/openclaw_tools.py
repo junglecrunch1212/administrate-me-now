@@ -12,13 +12,19 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.contracts import DeploymentPaths, load_versions
-from bootstrap.openclaw_activation import reconcile_member_topology
+from bootstrap.openclaw_activation import (
+    reconcile_member_topology,
+    remove_unsupported_member_topology,
+)
 from bootstrap.openclaw_install import resolve_reviewed_openclaw
 
 
 REQUIRED_LLM_TOOL = "llm-task"
 REQUIRED_LLM_AGENT = "main"
 ADMINISTRATEME_PLUGIN = "administrateme"
+_MEMBER_TOPOLOGY_CONFIG_KEYS = frozenset(
+    {"bindingFingerprints", "dmScope", "memberAgentIds"}
+)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -33,6 +39,24 @@ def _environment(paths: DeploymentPaths) -> dict[str, str]:
     environment["OPENCLAW_STATE_DIR"] = str(state_dir)
     environment["OPENCLAW_CONFIG_PATH"] = str(state_dir / "openclaw.json")
     return environment
+
+
+def _supports_member_topology(manifest: Path) -> bool:
+    """Require an all-or-none reviewed schema for managed member topology."""
+
+    try:
+        document = json.loads(manifest.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "reviewed AdministrateMe plugin manifest is invalid"
+        ) from exc
+    schema = document.get("configSchema") if isinstance(document, dict) else None
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    property_names = set(properties) if isinstance(properties, dict) else set()
+    declared = property_names & _MEMBER_TOPOLOGY_CONFIG_KEYS
+    if declared and declared != _MEMBER_TOPOLOGY_CONFIG_KEYS:
+        raise RuntimeError("reviewed plugin declares a partial member-topology schema")
+    return declared == _MEMBER_TOPOLOGY_CONFIG_KEYS
 
 
 def administrateme_plugin_status(
@@ -149,6 +173,7 @@ def reconcile_administrateme_plugin(
         or entrypoint.is_symlink()
     ):
         raise RuntimeError("reviewed AdministrateMe plugin build is incomplete")
+    supports_member_topology = _supports_member_topology(manifest)
     executable = resolve_reviewed_openclaw(paths)
     environment = _environment(paths)
 
@@ -187,7 +212,11 @@ def reconcile_administrateme_plugin(
     installed = run(["plugins", "install", "--link", "--force", str(plugin)])
     if installed.returncode:
         raise RuntimeError("reviewed AdministrateMe plugin registration failed")
-    topology = reconcile_member_topology(paths)
+    topology = (
+        reconcile_member_topology(paths)
+        if supports_member_topology
+        else remove_unsupported_member_topology(paths)
+    )
     validated = run(["config", "validate"])
     if validated.returncode:
         raise RuntimeError("OpenClaw rejected the reviewed plugin configuration")
