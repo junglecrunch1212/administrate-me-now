@@ -186,8 +186,10 @@ def _verified_legacy_reconciliation(
     payload = rows[0].get("payload") or {}
     request_payload = request.get("payload") or {}
     terminal_payload = terminal.get("payload") or {}
+    terminal_suppressed = terminal_payload.get("suppressed")
     if (
         terminal.get("type") != "external_sync.write_completed"
+        or not isinstance(terminal_suppressed, bool)
         or any(
             key in request_payload
             for key in (
@@ -214,8 +216,8 @@ def _verified_legacy_reconciliation(
         or payload.get("command_id") != terminal_payload.get("command_id")
         or payload.get("provider_account_id")
         != request_payload.get("provider_account_id")
-        or payload.get("provider_called") is not True
-        or payload.get("suppressed") is not terminal_payload.get("suppressed")
+        or payload.get("provider_called") is not (not terminal_suppressed)
+        or payload.get("suppressed") is not terminal_suppressed
         or payload.get("request_fingerprint")
         != legacy_effect_event_fingerprint(request)
         or payload.get("terminal_fingerprint")

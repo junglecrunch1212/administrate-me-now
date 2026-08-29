@@ -551,17 +551,24 @@ async def test_legacy_or_mismatched_effect_evidence_blocks_zero_effect_claim(
         await mismatch.close()
 
 
+@pytest.mark.parametrize(
+    ("suppressed", "provider_called"),
+    [(False, True), (True, False)],
+)
 @pytest.mark.asyncio
 async def test_additive_legacy_effect_reconciliation_restores_integrity(
     tmp_path: Path,
+    suppressed: bool,
+    provider_called: bool,
 ) -> None:
     log = EventLog(tmp_path / "legacy-reconciled.db", b"r" * 32)
     try:
+        suffix = f"legacy-reconciled-{'suppressed' if suppressed else 'called'}"
         request_id, terminal_id = await _append_write_pair(
             log,
-            suffix="legacy-reconciled",
+            suffix=suffix,
             version=1,
-            suppressed=False,
+            suppressed=suppressed,
         )
         request = await log.get(request_id)
         terminal = await log.get(terminal_id)
@@ -578,16 +585,16 @@ async def test_additive_legacy_effect_reconciliation_restores_integrity(
                 owner_scope="private:member-fixture",
                 visibility_scope="private:member-fixture",
                 sensitivity="privileged",
-                correlation_id="command-legacy-reconciled",
+                correlation_id=f"command-{suffix}",
                 causation_id=terminal_id,
                 idempotency_key="legacy-effect-reconciliation-fixture",
                 payload={
                     "request_event_id": request_id,
                     "terminal_event_id": terminal_id,
-                    "command_id": "command-legacy-reconciled",
+                    "command_id": f"command-{suffix}",
                     "provider_account_id": "account-fixture",
-                    "provider_called": True,
-                    "suppressed": False,
+                    "provider_called": provider_called,
+                    "suppressed": suppressed,
                     "legacy_approval_state": "pre_governance_absent",
                     "reconciliation_basis": "v1_completed_terminal_evidence",
                     "request_fingerprint": legacy_effect_event_fingerprint(request),
@@ -607,7 +614,9 @@ async def test_additive_legacy_effect_reconciliation_restores_integrity(
         effects = audit["provider_effects"]
         assert audit["state"] == "healthy"
         assert effects["state"] == "healthy"
-        assert effects["counts"]["provider_called_true"] == 1
+        assert effects["counts"]["provider_called_true"] == int(provider_called)
+        assert effects["counts"]["provider_called_false"] == int(not provider_called)
+        assert effects["counts"]["suppressed_true"] == int(suppressed)
         assert effects["counts"]["provider_called_unknown"] == 0
         assert effects["counts"]["approval_correlation_missing"] == 0
         assert effects["counts"]["legacy_reconciled_terminal"] == 1
