@@ -460,8 +460,11 @@ rehearses that artifact before selector authority, proves the retained
 predecessor, revalidates pending evidence, consumes preparation, and writes
 intent before OpenClaw, service, plugin, pointer, active-readiness, tool,
 LaunchAgent, restart, and Doctor transitions. Active readiness is derived from
-pending plus mechanical hashes only after pointer selection and before service
-start. Exact pointer and readiness bytes survive the journal; ordinary failure
+pending plus mechanical hashes only after pointer selection, then its
+configuration binding is transactionally refreshed and journaled after the
+reviewed plugin and required-tool selectors reach their final candidate state
+and before service start. Exact pointer and readiness bytes survive the journal;
+ordinary failure
 and a later guarded invocation after SIGKILL recover the predecessor before new
 work. A recovery failure leaves services stopped and the journal in place.
 Explicit rollback requires the exact committed activation history, is

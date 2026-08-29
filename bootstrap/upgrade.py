@@ -29,6 +29,7 @@ from bootstrap.backup_restore import BackupManager
 from bootstrap.candidate_readiness import (
     CandidateReadinessError,
     build_active_attestation_from_pending,
+    capture_deployment_snapshot,
     load_pending_attestation_for_activation,
 )
 from bootstrap.contracts import (
@@ -1274,6 +1275,37 @@ class UpgradeManager:
             raise UpgradeError("candidate Doctor returned an invalid diagnostic report")
         return result
 
+    def _refresh_active_runtime_binding(
+        self,
+        active_readiness: dict[str, Any],
+        *,
+        candidate_commit: str,
+    ) -> dict[str, Any]:
+        """Bind promoted readiness to the updater-selected final configuration."""
+
+        try:
+            snapshot = capture_deployment_snapshot(self.paths)
+        except CandidateReadinessError as exc:
+            raise UpgradeError(
+                "post-selector deployment binding could not be captured"
+            ) from exc
+        binding = active_readiness.get("deployment_binding")
+        if (
+            not isinstance(binding, dict)
+            or binding.get("release_commit") != candidate_commit
+            or binding.get("instance_fingerprint") != snapshot.instance_fingerprint
+            or binding.get("host_fingerprint") != snapshot.host_fingerprint
+            or snapshot.predecessor_commit != candidate_commit
+        ):
+            raise UpgradeError(
+                "post-selector deployment binding disagrees with the authorized candidate"
+            )
+        refreshed = json.loads(json.dumps(active_readiness))
+        refreshed["deployment_binding"]["configuration_fingerprint"] = (
+            snapshot.configuration_fingerprint
+        )
+        return refreshed
+
     def _preflight_keychain_access(self, candidate: Path) -> None:
         """Fail before preparation or service mutation when macOS ACLs would prompt."""
 
@@ -2095,6 +2127,25 @@ class UpgradeManager:
             journal = self.activation_journal.transition(
                 journal,
                 "llm_tool_selected",
+            )
+            journal = self.activation_journal.transition(
+                journal,
+                "runtime_binding_refreshing",
+            )
+            active_readiness = self._refresh_active_runtime_binding(
+                active_readiness,
+                candidate_commit=commit,
+            )
+            atomic_write(
+                readiness_path,
+                json.dumps(active_readiness, indent=2, sort_keys=True).encode("utf-8"),
+                mode=0o600,
+            )
+            self._fsync_directory(readiness_path.parent)
+            journal = self.activation_journal.transition(
+                journal,
+                "runtime_binding_refreshed",
+                active_readiness=active_readiness,
             )
             journal = self.activation_journal.transition(
                 journal,

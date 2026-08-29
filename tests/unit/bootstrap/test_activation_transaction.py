@@ -623,8 +623,23 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         "bootstrap.upgrade.build_active_attestation_from_pending",
         lambda *_args, **_kwargs: {
             "contract": "deployment-readiness-v1",
+            "deployment_binding": {
+                "release_commit": CANDIDATE_COMMIT,
+                "instance_fingerprint": "8" * 64,
+                "host_fingerprint": "9" * 64,
+                "configuration_fingerprint": "a" * 64,
+            },
             "activation_evidence": {"candidate_live_doctor": "pending_post_switch"},
         },
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.capture_deployment_snapshot",
+        lambda _paths: SimpleNamespace(
+            predecessor_commit=CANDIDATE_COMMIT,
+            instance_fingerprint="8" * 64,
+            host_fingerprint="9" * 64,
+            configuration_fingerprint="b" * 64,
+        ),
     )
     monkeypatch.setattr(
         manager,
@@ -721,6 +736,10 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     assert events.index("phase:openclaw_selecting") < events.index("action:openclaw")
     assert events.index("phase:plugin_selecting") < events.index("action:plugin")
     assert events.index("phase:llm_tool_selecting") < events.index("action:llm")
+    assert events.index("action:llm") < events.index("phase:runtime_binding_refreshed")
+    assert events.index("phase:runtime_binding_refreshed") < events.index(
+        "action:launchagents"
+    )
     assert events.index("phase:launchagents_selecting") < events.index(
         "action:launchagents"
     )
@@ -737,5 +756,11 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
             "candidate_live_doctor"
         ]
         is True
+    )
+    assert (
+        json.loads(readiness_path.read_text("utf-8"))["deployment_binding"][
+            "configuration_fingerprint"
+        ]
+        == "b" * 64
     )
     assert not manager.activation_journal.path.exists()
