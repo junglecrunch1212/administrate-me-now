@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.contracts import DeploymentPaths
+from bootstrap.provider_binding_transition import valid_provider_binding_transition
 
 
 JOURNAL_CONTRACT = "administrateme-activation-transaction-v1"
@@ -506,15 +507,7 @@ def validate_journal(value: object) -> dict[str, Any]:
                 raise ActivationJournalError(
                     "activation adapter configuration changed without a transition"
                 )
-        elif (
-            not isinstance(transition, dict)
-            or transition.get("contract") != "provider-binding-config-transition-v1"
-            or _HEX_64.fullmatch(str(transition.get("source_sha256"))) is None
-            or _HEX_64.fullmatch(str(transition.get("prepared_sha256"))) is None
-            or transition.get("credentials_changed") is not False
-            or transition.get("capabilities_changed") is not False
-            or transition.get("content_exposed") is not False
-        ):
+        elif not valid_provider_binding_transition(transition):
             raise ActivationJournalError(
                 "activation provider-binding transition is invalid"
             )

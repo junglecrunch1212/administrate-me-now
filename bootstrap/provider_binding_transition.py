@@ -1,10 +1,12 @@
-"""Deterministic, additive migration for legacy central Google bindings.
+"""Deterministic transition for legacy attribution and read-only enrollment.
 
 The predecessor may be unable to parse the strengthened provider-binding
 fields, so production never writes the prepared document while it is active.
 Candidate readiness hashes the pure result and the crash-journaled updater
 publishes it only after the predecessor is stopped.  Recovery restores the
-exact predecessor bytes before attempting to restart that release.
+exact predecessor bytes before attempting to restart that release. One exact,
+already stored principal-bound personal Google grant may add the three reviewed
+read-only adapters in the same transaction.
 """
 
 from __future__ import annotations
@@ -16,9 +18,17 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from adminme.provider_bindings import validate_provider_bindings
+from bootstrap.contracts import DeploymentPaths
+from bootstrap.google_oauth_contract import (
+    GOOGLE_READONLY_ADAPTER_SCOPES,
+    credential_member_digest,
+    member_google_secret_name,
+)
+from bootstrap.secrets import reference_for, secret_store
 
 
 TRANSITION_CONTRACT = "provider-binding-config-transition-v1"
+ENROLLMENT_TRANSITION_CONTRACT = "provider-binding-config-transition-v2"
 
 _GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 _GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
@@ -44,10 +54,175 @@ _BINDING_FIELDS = frozenset(
         "ownership_attested",
     }
 )
+_TRANSITION_COMMON_FIELDS = frozenset(
+    {
+        "contract",
+        "source_sha256",
+        "prepared_sha256",
+        "migrated_adapter_count",
+        "credentials_changed",
+        "capabilities_changed",
+        "content_exposed",
+    }
+)
 
 
 class ProviderBindingTransitionError(RuntimeError):
-    """The legacy adapter configuration cannot be migrated exactly."""
+    """The adapter configuration cannot be transitioned exactly."""
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def valid_provider_binding_transition(value: object) -> bool:
+    """Validate the exact content-free v1 or v2 public transition contract."""
+
+    if not isinstance(value, dict):
+        return False
+    if (
+        not _is_sha256(value.get("source_sha256"))
+        or not _is_sha256(value.get("prepared_sha256"))
+        or value.get("source_sha256") == value.get("prepared_sha256")
+        or type(value.get("migrated_adapter_count")) is not int
+        or value["migrated_adapter_count"] < 0
+        or value.get("credentials_changed") is not False
+        or value.get("content_exposed") is not False
+    ):
+        return False
+    if value.get("contract") == TRANSITION_CONTRACT:
+        return (
+            set(value) == _TRANSITION_COMMON_FIELDS
+            and value["migrated_adapter_count"] > 0
+            and value.get("capabilities_changed") is False
+        )
+    return (
+        value.get("contract") == ENROLLMENT_TRANSITION_CONTRACT
+        and set(value)
+        == _TRANSITION_COMMON_FIELDS
+        | {
+            "enrolled_adapter_count",
+            "enrollment_profile",
+            "observation_required",
+        }
+        and type(value.get("enrolled_adapter_count")) is int
+        and value["enrolled_adapter_count"] == 3
+        and value.get("enrollment_profile") == "personal-google-readonly"
+        and value.get("observation_required") is True
+        and value.get("capabilities_changed") is True
+    )
+
+
+def _google_rows_for_member(
+    adapters: list[dict[str, Any]], member_id: str
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in adapters
+        if str(item.get("kind") or "").removeprefix("adapter:") in _GOOGLE_KINDS
+        and isinstance(item.get("config"), dict)
+        and item["config"].get("member_id") == member_id
+    ]
+
+
+def discover_readonly_google_enrollment(
+    paths: DeploymentPaths,
+    source: Mapping[str, Any],
+    *,
+    household_mapping: Mapping[str, Any],
+    test_mode: bool = False,
+) -> dict[str, Any] | None:
+    """Find exactly one unattached principal-bound exact read-only Google grant."""
+
+    adapters = source.get("adapters")
+    members = household_mapping.get("members")
+    if not isinstance(adapters, list) or any(
+        not isinstance(item, dict) for item in adapters
+    ):
+        raise ProviderBindingTransitionError("adapter inventory is invalid")
+    if not isinstance(members, list):
+        raise ProviderBindingTransitionError("household member inventory is invalid")
+    store = secret_store(paths, test_mode=test_mode)
+    candidates: list[dict[str, Any]] = []
+    for member in members:
+        if (
+            not isinstance(member, dict)
+            or member.get("role") != "principal"
+            or not isinstance(member.get("member_id"), str)
+            or not member["member_id"].strip()
+        ):
+            continue
+        member_id = member["member_id"]
+        owned_rows = _google_rows_for_member(adapters, member_id)
+        if owned_rows:
+            kinds = {
+                str(item.get("kind") or "").removeprefix("adapter:")
+                for item in owned_rows
+            }
+            if kinds != _GOOGLE_KINDS or len(owned_rows) != len(_GOOGLE_KINDS):
+                raise ProviderBindingTransitionError(
+                    "existing member Google adapter inventory is incomplete or ambiguous"
+                )
+            continue
+        reference = reference_for(
+            paths,
+            member_google_secret_name(member_id),
+            test_mode=test_mode,
+        )
+        try:
+            credential_payload = store.get(reference)
+        except RuntimeError:
+            continue
+        try:
+            document = json.loads(credential_payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProviderBindingTransitionError(
+                "member Google credential document is invalid"
+            ) from exc
+        if not isinstance(document, dict):
+            raise ProviderBindingTransitionError(
+                "member Google credential document is invalid"
+            )
+        account = document.get("provider_account_id")
+        scopes = document.get("scopes")
+        if (
+            document.get("owner_member_digest") != credential_member_digest(member_id)
+            or not isinstance(account, str)
+            or not account.strip()
+            or not isinstance(scopes, list)
+            or any(not isinstance(scope, str) for scope in scopes)
+            or set(scopes) != set(GOOGLE_READONLY_ADAPTER_SCOPES)
+            or len(scopes) != len(GOOGLE_READONLY_ADAPTER_SCOPES)
+            or any(
+                not isinstance(document.get(key), str) or not str(document[key]).strip()
+                for key in (
+                    "client_id",
+                    "client_secret",
+                    "refresh_token",
+                    "token_uri",
+                )
+            )
+        ):
+            raise ProviderBindingTransitionError(
+                "member Google credential binding or grant is invalid"
+            )
+        candidates.append(
+            {
+                "member_id": member_id,
+                "provider_account_id": account.strip().casefold(),
+                "oauth_credentials_ref": reference,
+                "permission_scope": sorted(scopes),
+            }
+        )
+    if len(candidates) > 1:
+        raise ProviderBindingTransitionError(
+            "multiple unattached read-only Google grants require separate review"
+        )
+    return candidates[0] if candidates else None
 
 
 def _canonical(value: Any) -> bytes:
@@ -156,17 +331,106 @@ class PreparedProviderBindingTransition:
     source_bytes: bytes
     prepared_bytes: bytes
     migrated_adapter_count: int
+    enrolled_adapter_count: int = 0
 
     def public(self) -> dict[str, Any]:
-        return {
-            "contract": TRANSITION_CONTRACT,
+        result: dict[str, Any] = {
+            "contract": (
+                ENROLLMENT_TRANSITION_CONTRACT
+                if self.enrolled_adapter_count
+                else TRANSITION_CONTRACT
+            ),
             "source_sha256": hashlib.sha256(self.source_bytes).hexdigest(),
             "prepared_sha256": hashlib.sha256(self.prepared_bytes).hexdigest(),
             "migrated_adapter_count": self.migrated_adapter_count,
             "credentials_changed": False,
-            "capabilities_changed": False,
+            "capabilities_changed": bool(self.enrolled_adapter_count),
             "content_exposed": False,
         }
+        if self.enrolled_adapter_count:
+            result.update(
+                {
+                    "enrolled_adapter_count": self.enrolled_adapter_count,
+                    "enrollment_profile": "personal-google-readonly",
+                    "observation_required": True,
+                }
+            )
+        return result
+
+
+def _readonly_google_adapter_entries(
+    enrollment: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    member_id = enrollment.get("member_id")
+    account = enrollment.get("provider_account_id")
+    reference = enrollment.get("oauth_credentials_ref")
+    scopes = enrollment.get("permission_scope")
+    if (
+        not isinstance(member_id, str)
+        or not member_id.strip()
+        or not isinstance(account, str)
+        or not account.strip()
+        or not isinstance(reference, str)
+        or not reference.startswith(("keychain://", "test-secret://"))
+        or not isinstance(scopes, list)
+        or any(not isinstance(scope, str) for scope in scopes)
+        or set(scopes) != set(GOOGLE_READONLY_ADAPTER_SCOPES)
+        or len(scopes) != len(GOOGLE_READONLY_ADAPTER_SCOPES)
+    ):
+        raise ProviderBindingTransitionError(
+            "read-only Google enrollment request is invalid"
+        )
+    member_id = member_id.strip()
+    account = account.strip().casefold()
+    digest = credential_member_digest(member_id)
+    common = {
+        "member_id": member_id,
+        "provider_account_id": account,
+        "user_email": account,
+        "workspace": "personal",
+        "binding_provenance": "oauth-subject",
+        "ownership_attested": True,
+        "oauth_credentials_ref": reference,
+    }
+    return [
+        {
+            "id": f"google-gmail-{digest}",
+            "kind": "messaging-gmail-api",
+            "enabled": True,
+            "config": {
+                **common,
+                "permission_scope": [_GMAIL_READONLY],
+                "account_label": "Personal Gmail",
+                "enable_writes": False,
+            },
+        },
+        {
+            "id": f"google-calendar-{digest}",
+            "kind": "calendaring-google-calendar",
+            "enabled": True,
+            "config": {
+                **common,
+                "permission_scope": [_CALENDAR_READONLY],
+                "account_label": "Personal Google Calendar",
+                "read_only": True,
+                "calendar_id": "primary",
+                "discover_calendars": True,
+            },
+        },
+        {
+            "id": f"google-tasks-{digest}",
+            "kind": "tasks-google-tasks",
+            "enabled": True,
+            "config": {
+                **common,
+                "permission_scope": [_TASKS_READONLY],
+                "account_label": "Personal Google Tasks",
+                "read_only": True,
+                "tasklist_id": "@default",
+                "include_all_tasklists": False,
+            },
+        },
+    ]
 
 
 def prepare_provider_binding_transition(
@@ -175,6 +439,7 @@ def prepare_provider_binding_transition(
     household_mapping: Mapping[str, Any],
     ownership_reviewed: bool,
     source_payload: bytes | None = None,
+    readonly_google_enrollment: Mapping[str, Any] | None = None,
 ) -> PreparedProviderBindingTransition:
     """Return the exact candidate-readable document without touching live state."""
 
@@ -237,12 +502,50 @@ def prepare_provider_binding_transition(
         if changed:
             migrated += 1
 
-    if migrated == 0:
+    enrolled_entries: list[dict[str, Any]] = []
+    if readonly_google_enrollment is not None:
+        enrolled_entries = _readonly_google_adapter_entries(readonly_google_enrollment)
+        member_id = str(readonly_google_enrollment["member_id"])
+        roles = {
+            str(member["member_id"]): str(member["role"])
+            for member in household_mapping.get("members", [])
+            if isinstance(member, dict)
+            and isinstance(member.get("member_id"), str)
+            and isinstance(member.get("role"), str)
+        }
+        if roles.get(member_id) != "principal":
+            raise ProviderBindingTransitionError(
+                "read-only Google enrollment owner is not a principal"
+            )
+        if _google_rows_for_member(prepared_adapters, member_id):
+            raise ProviderBindingTransitionError(
+                "read-only Google enrollment would duplicate an existing binding"
+            )
+        existing_ids = {
+            str(item.get("id"))
+            for item in prepared_adapters
+            if isinstance(item.get("id"), str)
+        }
+        if existing_ids.intersection(str(item["id"]) for item in enrolled_entries):
+            raise ProviderBindingTransitionError(
+                "read-only Google enrollment adapter id already exists"
+            )
+        prepared_adapters.extend(enrolled_entries)
+
+    if migrated == 0 and not enrolled_entries:
         raise ProviderBindingTransitionError(
-            "provider-binding migration has no eligible legacy adapters"
+            "provider-binding transition has no eligible changes"
         )
     source_adapters = source_document["adapters"]
-    for before, after in zip(source_adapters, prepared_adapters, strict=True):
+    if len(prepared_adapters) != len(source_adapters) + len(enrolled_entries):
+        raise ProviderBindingTransitionError(
+            "provider-binding transition changed the adapter inventory unexpectedly"
+        )
+    for before, after in zip(
+        source_adapters,
+        prepared_adapters[: len(source_adapters)],
+        strict=True,
+    ):
         before_config = before.get("config") or {}
         after_config = after.get("config") or {}
         if any(after_config.get(key) != value for key, value in before_config.items()):
@@ -281,6 +584,33 @@ def prepare_provider_binding_transition(
         source_bytes=source_payload if source_payload is not None else canonical_source,
         prepared_bytes=_canonical(prepared),
         migrated_adapter_count=migrated,
+        enrolled_adapter_count=len(enrolled_entries),
+    )
+
+
+def prepare_live_provider_binding_transition(
+    paths: DeploymentPaths,
+    source: Mapping[str, Any],
+    *,
+    household_mapping: Mapping[str, Any],
+    ownership_reviewed: bool,
+    source_payload: bytes | None = None,
+    test_mode: bool = False,
+) -> PreparedProviderBindingTransition:
+    """Prepare legacy attribution plus one exact unattached read-only grant."""
+
+    enrollment = discover_readonly_google_enrollment(
+        paths,
+        source,
+        household_mapping=household_mapping,
+        test_mode=test_mode,
+    )
+    return prepare_provider_binding_transition(
+        source,
+        household_mapping=household_mapping,
+        ownership_reviewed=ownership_reviewed,
+        source_payload=source_payload,
+        readonly_google_enrollment=enrollment,
     )
 
 
@@ -288,5 +618,9 @@ __all__ = [
     "PreparedProviderBindingTransition",
     "ProviderBindingTransitionError",
     "TRANSITION_CONTRACT",
+    "ENROLLMENT_TRANSITION_CONTRACT",
+    "discover_readonly_google_enrollment",
+    "prepare_live_provider_binding_transition",
     "prepare_provider_binding_transition",
+    "valid_provider_binding_transition",
 ]

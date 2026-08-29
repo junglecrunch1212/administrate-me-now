@@ -9,20 +9,13 @@ from typing import Callable, Sequence
 
 from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
 
-from adminme.adapters.credentials import credential_member_digest
 from bootstrap.contracts import DeploymentPaths
-from bootstrap.secrets import secret_store
-
-GOOGLE_READONLY_ADAPTER_SCOPES = (
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/tasks.readonly",
+from bootstrap.google_oauth_contract import (
+    GOOGLE_READONLY_ADAPTER_SCOPES,
+    credential_member_digest,
+    member_google_secret_name,
 )
-
-
-def member_google_secret_name(member_id: str) -> str:
-    """Return a stable, non-identifying Keychain name for one member grant."""
-    return f"google-oauth-member-{credential_member_digest(member_id)}"
+from bootstrap.secrets import secret_store
 
 
 def _assert_exact_grant(credentials: object, requested_scopes: Sequence[str]) -> None:
