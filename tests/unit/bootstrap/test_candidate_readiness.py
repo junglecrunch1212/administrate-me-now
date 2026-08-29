@@ -90,8 +90,14 @@ def _deployment(root: Path) -> DeploymentPaths:
         "member-mapping.json": json.dumps(
             {
                 "members": [
-                    {"member_id": "member_fixture_a"},
-                    {"member_id": "member_fixture_b"},
+                    {
+                        "member_id": "member_fixture_a",
+                        "tailscale_identity": "member-a.ts.net",
+                    },
+                    {
+                        "member_id": "member_fixture_b",
+                        "tailscale_identity": "member-b.ts.net",
+                    },
                 ]
             }
         ).encode(),
@@ -306,6 +312,19 @@ def test_pending_attestation_is_immutable_and_active_readiness_is_unchanged(
             now=NOW,
             attestation_id="5" * 32,
         )
+
+
+def test_htr03_member_set_excludes_deferred_household_records(tmp_path: Path) -> None:
+    paths = _deployment(tmp_path)
+    mapping_path = paths.instance_dir / "config" / "member-mapping.json"
+    mapping = json.loads(mapping_path.read_text("utf-8"))
+    mapping["members"].append({"member_id": "member_fixture_deferred"})
+    _private_write(mapping_path, json.dumps(mapping).encode())
+
+    assert candidate_readiness._member_ids(paths) == [
+        "member_fixture_a",
+        "member_fixture_b",
+    ]
 
 
 def test_updater_loads_exact_pending_artifact_and_builds_active_v1(

@@ -291,6 +291,11 @@ non-empty subset of those two known startup states while safe reads and event
 ingestion remain live. Any other blocked readiness dimension, unsafe
 read/event state, or non-source capability degradation still triggers
 immediate recovery.
+HTR-03 acceptance covers exactly the members with configured trusted-ingress
+identities; household records whose identities are explicitly deferred do not
+become unknown acceptance rows. The live singleton topology proof counts the
+two unique running launchd jobs and their live PIDs, rather than matching
+mutable process command-line text.
 The selected runtime derives its current release, instance, host, and
 configuration binding through the same strict deployment snapshot as pending
 and promoted readiness, including the prepared adapter bytes. A legacy

@@ -42,9 +42,7 @@ def test_topology_sample_accepts_only_tagged_nonmember_singletons(
     monkeypatch.setattr(
         "bootstrap.topology_readiness._serve_is_sole_edge", lambda: True
     )
-    monkeypatch.setattr(
-        "bootstrap.topology_readiness._process_counts", lambda _paths: (1, 1)
-    )
+    monkeypatch.setattr("bootstrap.topology_readiness._process_counts", lambda: (1, 1))
     monkeypatch.setattr(
         "bootstrap.topology_readiness._service_account_standard", lambda: True
     )
@@ -82,9 +80,7 @@ def test_topology_sample_exposes_collision_only_as_a_boolean(
     monkeypatch.setattr(
         "bootstrap.topology_readiness._serve_is_sole_edge", lambda: False
     )
-    monkeypatch.setattr(
-        "bootstrap.topology_readiness._process_counts", lambda _paths: (2, 0)
-    )
+    monkeypatch.setattr("bootstrap.topology_readiness._process_counts", lambda: (2, 0))
     monkeypatch.setattr(
         "bootstrap.topology_readiness._service_account_standard", lambda: False
     )
@@ -112,9 +108,7 @@ def test_tagged_host_still_rejects_a_member_owned_node(
     monkeypatch.setattr(
         "bootstrap.topology_readiness._serve_is_sole_edge", lambda: True
     )
-    monkeypatch.setattr(
-        "bootstrap.topology_readiness._process_counts", lambda _paths: (1, 1)
-    )
+    monkeypatch.setattr("bootstrap.topology_readiness._process_counts", lambda: (1, 1))
     monkeypatch.setattr(
         "bootstrap.topology_readiness._service_account_standard", lambda: True
     )
@@ -125,6 +119,47 @@ def test_tagged_host_still_rejects_a_member_owned_node(
 
     assert value["central_identity_kind"] == "infrastructure_tag"
     assert value["central_identity_collides_with_member"] is True
+
+
+def test_process_counts_use_running_launchd_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def result(command: list[str]) -> object:
+        label = command[-1]
+        if label.endswith("com.administrateme.runtime"):
+            stdout = "state = running\npid = 123\n"
+            return type(
+                "Result", (), {"returncode": 0, "stdout": stdout, "stderr": ""}
+            )()
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "state = waiting\nlast exit code = 0\n",
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(topology_readiness, "_run", result)
+
+    assert topology_readiness._process_counts() == (1, 0)
+
+
+def test_launchd_job_without_a_live_pid_is_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        topology_readiness,
+        "_run",
+        lambda _command: type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "state = running\npid = 0\n", "stderr": ""},
+        )(),
+    )
+
+    assert topology_readiness._process_counts() == (0, 0)
 
 
 def test_serve_status_accepts_disabled_funnel_and_rejects_enabled_funnel(
