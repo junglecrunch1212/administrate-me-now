@@ -77,7 +77,21 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     plugin = release / "openclaw" / "administrateme"
     (plugin / "dist").mkdir(parents=True)
     (plugin / "dist" / "index.js").write_text("export default {};", encoding="utf-8")
-    (plugin / "openclaw.plugin.json").write_text("{}", encoding="utf-8")
+    (plugin / "openclaw.plugin.json").write_text(
+        json.dumps(
+            {
+                "configSchema": {
+                    "type": "object",
+                    "properties": {
+                        "bindingFingerprints": {},
+                        "dmScope": {},
+                        "memberAgentIds": {},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     config_dir = paths.instance_dir / "config"
     runtime_dir = paths.instance_dir / "openclaw" / "runtime"
     config_dir.mkdir(parents=True)
@@ -164,6 +178,102 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         "--force",
         str(plugin.resolve()),
     ] in commands
+    assert ["/reviewed/openclaw", "config", "validate"] in commands
+
+
+def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    release = tmp_path / "releases" / "predecessor"
+    plugin = release / "openclaw" / "administrateme"
+    (plugin / "dist").mkdir(parents=True)
+    (plugin / "dist" / "index.js").write_text("export default {};", encoding="utf-8")
+    (plugin / "openclaw.plugin.json").write_text(
+        json.dumps(
+            {
+                "configSchema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"baseUrl": {}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_dir = paths.instance_dir / "openclaw" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    target = runtime_dir / "openclaw.json"
+    target.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "list": [
+                        {"id": "operator", "default": True},
+                        {"id": member_agent_id("member-a")},
+                    ]
+                },
+                "bindings": [
+                    {"agentId": "operator", "match": {"channel": "cli"}},
+                    {
+                        "agentId": member_agent_id("member-a"),
+                        "match": {"channel": "discord"},
+                    },
+                ],
+                "session": {"dmScope": "per-account-channel-peer"},
+                "plugins": {
+                    "entries": {
+                        "administrateme": {
+                            "config": {
+                                "baseUrl": "http://127.0.0.1:3330",
+                                "bindingFingerprints": ["a" * 64],
+                                "dmScope": "per_account_channel_peer",
+                                "memberAgentIds": [member_agent_id("member-a")],
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
+        lambda _paths: "/reviewed/openclaw",
+    )
+    commands: list[list[str]] = []
+    inspect_count = 0
+
+    def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        nonlocal inspect_count
+        commands.append(command)
+        if command[1:4] == ["plugins", "inspect", "administrateme"]:
+            inspect_count += 1
+            if "--runtime" in command:
+                return subprocess.CompletedProcess(command, 0, _inspection(plugin), "")
+            if inspect_count == 1:
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            return subprocess.CompletedProcess(command, 1, "", "not installed")
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr("bootstrap.openclaw_tools.subprocess.run", run)
+
+    status = reconcile_administrateme_plugin(paths, release)
+
+    assert status["member_topology"] == {
+        "member_agent_count": 0,
+        "binding_count": 0,
+        "dm_scope": "legacy_plugin_unmanaged",
+        "content_exposed": False,
+    }
+    stored = json.loads(target.read_text("utf-8"))
+    assert stored["agents"]["list"] == [{"default": True, "id": "operator"}]
+    assert stored["bindings"] == [{"agentId": "operator", "match": {"channel": "cli"}}]
+    assert stored["plugins"]["entries"]["administrateme"]["config"] == {
+        "baseUrl": "http://127.0.0.1:3330"
+    }
+    assert stored["session"]["dmScope"] == "per-account-channel-peer"
     assert ["/reviewed/openclaw", "config", "validate"] in commands
 
 

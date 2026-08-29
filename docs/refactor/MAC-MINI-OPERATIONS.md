@@ -202,6 +202,10 @@ result before restart. Crash recovery restores the journaled predecessor
 adapter bytes before reconciling the predecessor plugin and derived topology;
 rollback does the same in its target direction. Neither path invents an
 account, member, agent, binding, or DM scope outside the reviewed configuration.
+When a retained predecessor manifest predates the managed-topology fields,
+recovery removes only candidate-owned AdministrateMe agent/binding rows and
+those unsupported plugin fields before validating the predecessor; unrelated
+OpenClaw configuration and the global session policy are preserved.
 
 For a bug report, create a secret-redacted machine report:
 
