@@ -9,6 +9,9 @@ const state = {
   carouselIndex: 0,
   carouselItems: [],
   triageView: "ready",
+  triageSort: "attention",
+  triageSource: "all",
+  triageKind: "all",
   triageSelected: null,
   triageMatter: null,
   triageFocusPending: false,
@@ -99,6 +102,7 @@ function renderNavigation(items) {
     if (item.id === active) link.setAttribute("aria-current", "page");
     nav.append(link);
   }
+  if (active === "triage") queueMicrotask(() => { nav.scrollLeft = 0; });
 }
 
 function combinedNavigation(value) {
@@ -157,8 +161,47 @@ function triageReviewView(item) {
   if (item?.decision_disposition && item.decision_disposition !== "decision") return "all_candidates";
   if (item?.review_state?.state === "needs_interpretation") return "needs_interpretation";
   if (item?.review_state?.state === "needs_details") return "needs_details";
-  if (item?.review_state?.state === "ready") return "ready";
+  if (item?.review_state?.state === "ready") return item.queue_lane === "standard" ? "low_signal" : "ready";
   return "all_candidates";
+}
+
+function triageLanePresentation(lane) {
+  return {
+    security: ["Account or security", "A reviewed security phrase appears in this already-eligible item."],
+    time_bound: ["Date or deadline", "This proposal contains an actual date or deadline."],
+    financial: ["Money", "This proposal contains a reviewed bill or payment signal."],
+    member_promise: ["Your promise", "This appears to describe something you agreed to do."],
+    member_priority: ["Your priority", "You or a typed source marked this as a priority."],
+    recurring_exception: ["Recurring issue", "A recurrence appears missed, overdue, failed, or exceptional."],
+    standard: ["Other review", "No explicit security, date, money, promise, priority, or recurring-exception fact was found."],
+  }[lane] || ["Review", "This proposal is waiting for a human decision."];
+}
+
+function triageCandidateDate(item) {
+  const candidate = item?.candidate || {};
+  return candidate.due || candidate.due_at || candidate.due_date || candidate.deadline || candidate.start || candidate.start_at || null;
+}
+
+function triageDateLabel(value) {
+  if (!value) return null;
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split("-").map(Number);
+    return new Date(year, month - 1, day).toLocaleDateString(undefined, { dateStyle: "medium" });
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.valueOf())) return String(value);
+  const hasTime = raw.includes("T");
+  return parsed.toLocaleString(undefined, hasTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
+}
+
+function triageRequestParams({ cursor = null } = {}) {
+  const params = new URLSearchParams({ triage_lens: "all_candidates", triage_sort: state.triageSort });
+  if (state.triageSource !== "all") params.set("triage_source", state.triageSource);
+  if (state.triageKind !== "all") params.set("triage_kind", state.triageKind);
+  if (cursor) params.set("triage_cursor", cursor);
+  params.set("triage_limit", "30");
+  return params;
 }
 
 async function reloadActiveSurface({ triageOperationToken = null, triageFocus = true, triageReconcileExact = false } = {}) {
@@ -171,7 +214,7 @@ async function reloadActiveSurface({ triageOperationToken = null, triageFocus = 
     path += `?${params}`;
   }
   if (active === "triage") {
-    const params = new URLSearchParams({ triage_lens: "all_candidates" });
+    const params = triageRequestParams();
     if (triageFocus && state.triageSelected) params.set("triage_item", state.triageSelected);
     path += `?${params}`;
   }
@@ -315,7 +358,7 @@ function invalidateTriageLoad() {
   const button = document.querySelector("[data-triage-more]");
   if (button?.dataset.triageLoading === "true") {
     button.disabled = false;
-    button.textContent = "Load next matters";
+    button.textContent = "Show more";
     delete button.dataset.triageLoading;
   }
 }
@@ -676,7 +719,7 @@ async function saveTriageForm(item, form, { reload = true, operationToken = null
 function triageSourceContext(item) {
   const context = item.source_context || {};
   const section = document.createElement("section"); section.className = "triage-source-context";
-  section.append(text("p", "SOURCE & MEANING", "eyebrow"));
+  section.append(text("p", "WHY THIS IS HERE", "eyebrow"));
   if (context.state !== "available") {
     section.append(text("p", context.state === "withheld" ? "Source context is outside this member view." : "The immutable source is unavailable. Do not confirm until its evidence can be reviewed.", "review-state"));
     return section;
@@ -684,8 +727,12 @@ function triageSourceContext(item) {
   const heading = document.createElement("div"); heading.className = "triage-source-heading";
   const channel = [context.channel && titleCase(context.channel), context.direction && titleCase(context.direction)].filter(Boolean).join(" · ");
   heading.append(text("strong", channel || titleCase(context.source_event_type || "Source")));
-  heading.append(text("span", context.adapter ? `${context.adapter}${context.account ? ` · ${context.account}` : ""}` : "Immutable source event", "meta"));
   section.append(heading);
+  if (context.provider_category) {
+    const category = document.createElement("div"); category.className = "triage-provider-category";
+    category.append(text("span", context.provider_category.label, "pill pill-lavender"), text("small", `${context.provider_category.provenance} marked this source as ${context.provider_category.label}. It is context only; it does not decide importance or hide the item.`));
+    section.append(category);
+  }
   const facts = document.createElement("dl"); facts.className = "triage-source-facts";
   for (const [label, value] of [[context.direction === "outbound" ? "Counterparty" : "Sender", context.sender], ["Subject / source title", context.subject], ["Message date", context.occurred_at ? new Date(context.occurred_at).toLocaleString() : null], ["Imported / recorded", context.recorded_at && context.recorded_at !== context.occurred_at ? new Date(context.recorded_at).toLocaleString() : null]]) {
     if (value) facts.append(text("dt", label), text("dd", value));
@@ -738,11 +785,19 @@ function triageSourceContext(item) {
   } else {
     section.append(text("p", "No exact text span applies to this structured provider rule. Review the source facts before confirming.", "state-note"));
   }
+  const technical = document.createElement("details"); technical.className = "triage-technical-source";
+  technical.append(text("summary", "Technical source details"));
+  const coordinates = document.createElement("dl"); coordinates.className = "triage-source-facts";
+  for (const [label, value] of [["Source", context.source_id], ["Adapter", context.adapter], ["Account", context.account], ["Event type", context.source_event_type]]) {
+    if (value) coordinates.append(text("dt", label), text("dd", value));
+  }
+  technical.append(coordinates);
   if (context.methods?.length) {
     const methods = document.createElement("div"); methods.className = "triage-methods";
     for (const method of context.methods) { const badge = text("span", method.label, "pill pill-lavender"); badge.title = method.detail; methods.append(badge); }
-    section.append(methods);
+    technical.append(methods);
   }
+  section.append(technical);
   return section;
 }
 
@@ -755,8 +810,13 @@ function triageDetail(item, data, readOnly = false) {
   section.dataset.triageItem = item.proposal_id;
   section.tabIndex = -1;
   const reviewHeading = item.interpretation?.compact_summary || item.title;
-  section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", reviewHeading));
-  if (!item.interpretation && item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
+  section.append(text("p", readOnly ? "RECENT DECISION" : "YOUR DECISION", "eyebrow"), text("h2", reviewHeading));
+  if (!readOnly) {
+    const [laneLabel, laneReason] = triageLanePresentation(item.queue_lane);
+    const reason = document.createElement("div"); reason.className = "triage-attention-reason";
+    reason.append(text("strong", laneLabel), text("span", laneReason));
+    section.append(reason);
+  }
   section.append(triageSourceContext(item));
   if (readOnly) {
     const eligibilityChanged = item.resolution_reason === "eligibility_rule_replaced";
@@ -776,6 +836,9 @@ function triageDetail(item, data, readOnly = false) {
   }
 
   const form = document.createElement("form"); form.className = "triage-review-form";
+  const effect = document.createElement("div"); effect.className = "triage-proposed-effect";
+  effect.append(text("p", "PROPOSED EFFECT", "eyebrow"), text("strong", `Create a ${titleCase(item.target_kind || "household item")} for ${state.bootstrap.member.label || "this household member"}.`), text("small", "Nothing becomes official until you confirm. Provider work still passes governance and observation controls."));
+  form.append(effect);
   const grid = document.createElement("div"); grid.className = "field-grid";
   const schema = data.enrichment_schema || {};
   const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
@@ -837,7 +900,10 @@ function triageDetail(item, data, readOnly = false) {
     refreshAccounts(item.route?.provider_account_id || "", item.route?.container_external_id || "");
     grid.append(field("Provider", provider), field("Account", account), field(item.target_kind === "calendar_event" ? "Calendar" : "List", container));
   }
-  form.append(grid);
+  const editDetails = document.createElement("details"); editDetails.className = "triage-edit-details";
+  editDetails.open = item.review_state?.state !== "ready";
+  editDetails.append(text("summary", item.review_state?.state === "ready" ? "Edit details or destination" : "Complete the missing details"), grid);
+  form.append(editDetails);
   let contextCorrection = null;
   const correctionCapabilities = item.source_context?.correction_capabilities || {};
   const correctableRelatedSourceIds = new Set(Array.isArray(correctionCapabilities.unrelated_source_event_ids) ? correctionCapabilities.unrelated_source_event_ids : []);
@@ -952,8 +1018,8 @@ function triageCandidateMatches(item, view) {
   if (view === "all_candidates") return true;
   if (view === "needs_interpretation") return item.review_state?.state === "needs_interpretation";
   if (view === "needs_details") return item.review_state?.state === "needs_details" && item.decision_disposition === "decision";
-  if (view === "ready") return item.review_state?.state === "ready" && item.decision_disposition === "decision";
-  if (view === "low_signal") return item.queue_lane === "standard" && item.ownership_state === "unknown" && item.lifecycle_state === "unknown";
+  if (view === "ready") return item.queue_lane !== "standard" && item.decision_disposition === "decision";
+  if (view === "low_signal") return item.queue_lane === "standard" && item.decision_disposition === "decision";
   if (view === "recurring_exceptions") return item.queue_lane === "recurring_exception";
   if (view === "learned_rules") return item.policy_disposition !== "none";
   return true;
@@ -994,7 +1060,7 @@ async function loadMoreTriage(data) {
   const generation = state.triageLoadGeneration;
   const button = document.querySelector("[data-triage-more]"); if (button) { button.dataset.triageLoading = "true"; button.disabled = true; button.textContent = "Loading…"; }
   try {
-    const params = new URLSearchParams({ triage_lens: "all_candidates", triage_cursor: cursor, triage_limit: "30" });
+    const params = triageRequestParams({ cursor });
     const next = await api(`/api/member/v1/surfaces/triage?${params}`);
     if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return;
     const known = new Set((data.triage.matters || []).map((matter) => matter.context_id));
@@ -1041,7 +1107,7 @@ async function loadMoreTriage(data) {
     const banner = $("#state-banner");
     banner.hidden = false;
     banner.textContent = error.message;
-    if (button) { delete button.dataset.triageLoading; button.disabled = false; button.textContent = "Load next matters"; }
+    if (button) { delete button.dataset.triageLoading; button.disabled = false; button.textContent = "Show more"; }
   }
 }
 
@@ -1097,54 +1163,83 @@ async function revokeTriageRule(rule, button) {
 
 function triageSurface(data, { preserveView = false } = {}) {
   const fragment = document.createDocumentFragment();
-  const intro = document.createElement("section"); intro.className = "hero-card";
-  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "One decision at a time.", "action-title"), text("p", "Derived candidates wait here until you verify their meaning and destination. Raw provider observations never enter this queue."));
-  const assurance = data.processing_health?.details?.source_assurance;
-  if (assurance?.counts) {
-    const counts = assurance.counts;
-    const status = text("p", `${counts.accounted} of ${counts.obligations} source obligations accounted for · ${counts.eligible_candidates} with candidates · ${counts.no_candidate} explicitly assessed with none · ${counts.quarantined} safely quarantined${counts.failed ? ` · ${counts.failed} failed` : ""}${counts.pending ? ` · ${counts.pending} processing` : ""}${counts.missing ? ` · ${counts.missing} missing` : ""}.`, counts.missing || counts.failed ? "review-state" : "state-note");
-    status.setAttribute("data-source-assurance", assurance.state || "unknown");
-    intro.append(status);
-  }
-  fragment.append(intro);
   const pending = data.items || [];
   const recent = data.recent_items || [];
   const inventory = data.triage?.inventory || {};
-  const inventoryCard = document.createElement("section"); inventoryCard.className = "card triage-inventory";
   const candidateCount = inventory.total_candidates || 0; const matterCount = inventory.total_matters || 0;
-  inventoryCard.append(text("p", "CANDIDATE INVENTORY", "eyebrow"), text("h2", `${candidateCount} candidate${candidateCount === 1 ? "" : "s"} across ${matterCount} matter${matterCount === 1 ? "" : "s"}`), text("p", `${inventory.decision_candidates || 0} still need decisions · ${inventory.duplicate_evidence || 0} exact duplicates retained as evidence · ${inventory.existing_object_evidence || 0} linked to existing work.`, "state-note"));
-  fragment.append(inventoryCard);
   const suggestions = data.triage?.feedback_suggestions || [];
   const policyRules = data.triage?.policy_rules || [];
   const activePolicyRules = policyRules.filter((rule) => rule.status === "active");
-  if (suggestions.length || activePolicyRules.length) {
-    const learning = document.createElement("section"); learning.className = "card"; learning.append(text("p", "REVERSIBLE LEARNING", "eyebrow"), text("h2", `${suggestions.length} suggested pattern${suggestions.length === 1 ? "" : "s"} · ${activePolicyRules.length} shadow rule${activePolicyRules.length === 1 ? "" : "s"}`), text("p", "Rules begin in shadow mode. They can be inspected and revoked, and they cannot silently confirm or suppress life truth.", "state-note"));
-    for (const suggestion of suggestions.slice(0, 5)) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${suggestion.occurrences} × ${titleCase(suggestion.reason)} in ${titleCase(suggestion.scope_kind)}`)); const approve = text("button", "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => approveTriageSuggestion(suggestion, approve)); row.append(approve); learning.append(row); }
-    for (const rule of activePolicyRules) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${titleCase(rule.disposition)} · ${titleCase(rule.scope_kind)} · shadow only`)); const revoke = text("button", "Revoke", "button button-quiet"); revoke.type = "button"; revoke.addEventListener("click", () => revokeTriageRule(rule, revoke)); row.append(revoke); learning.append(row); }
-    fragment.append(learning);
-  }
   const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"]);
   if (!views.has(state.triageView)) state.triageView = "ready";
   if (!preserveView && state.triageSelected && data.focus?.state === "pending") state.triageView = "all_candidates";
   if (!preserveView && state.triageSelected && data.focus?.state === "resolved") state.triageView = "recent";
-  const controls = document.createElement("section"); controls.className = "card comms-controls";
-  const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
-  for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring exceptions"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
-    const count = key === "recent" ? recent.length : pending.filter((item) => triageCandidateMatches(item, key)).length;
-    const countLabel = key === "recent" ? `${count}` : key === "all_candidates" ? `${count} / ${candidateCount}` : `${count} loaded`;
-    const button = text("button", `${label} ${countLabel}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
-    button.addEventListener("click", () => {
+  const viewCounts = inventory.views || {};
+  const attentionCount = viewCounts.ready?.candidates ?? pending.filter((item) => triageCandidateMatches(item, "ready")).length;
+  const overview = document.createElement("section"); overview.className = "card triage-overview";
+  overview.append(text("p", "TRIAGE", "eyebrow"));
+  if (attentionCount) {
+    overview.append(text("h2", `${attentionCount} decision${attentionCount === 1 ? "" : "s"} need${attentionCount === 1 ? "s" : ""} your attention.`), text("p", "Start with the clearest security, date, money, promise, priority, and recurring-issue signals. Other suggestions stay available without crowding this queue."));
+  } else {
+    overview.append(text("h2", "You’re caught up on decisions that need attention."), text("p", candidateCount ? "Other suggestions and complete system accounting are still available when you want them." : "New eligible proposals will appear here when they need a human decision."));
+  }
+  const assurance = data.processing_health?.details?.source_assurance;
+  if (assurance?.counts && (assurance.counts.missing || assurance.counts.failed)) {
+    const sourceWarning = text("p", `${assurance.counts.failed || 0} source assessments failed and ${assurance.counts.missing || 0} are missing. Review system accounting before relying on this queue as complete.`, "review-state");
+    sourceWarning.setAttribute("data-source-assurance", assurance.state || "unknown"); overview.append(sourceWarning);
+  }
+  const accounting = document.createElement("details"); accounting.className = "triage-system-accounting";
+  accounting.append(text("summary", `System accounting · ${candidateCount} unresolved candidate${candidateCount === 1 ? "" : "s"} in ${matterCount} decision group${matterCount === 1 ? "" : "s"}`));
+  accounting.append(text("p", `${inventory.decision_candidates || 0} are independent decisions · ${inventory.duplicate_evidence || 0} are exact duplicate evidence · ${inventory.existing_object_evidence || 0} link to existing work.`, "state-note"));
+  if (assurance?.counts) {
+    const counts = assurance.counts;
+    const status = text("p", `${counts.accounted} of ${counts.obligations} source obligations accounted for · ${counts.eligible_candidates} produced candidates · ${counts.no_candidate} were explicitly assessed with none · ${counts.quarantined} safely quarantined${counts.pending ? ` · ${counts.pending} processing` : ""}.`, "state-note");
+    status.setAttribute("data-source-assurance", assurance.state || "unknown"); accounting.append(status);
+  }
+  overview.append(accounting); fragment.append(overview);
+
+  const controls = document.createElement("section"); controls.className = "triage-view-controls";
+  const tabs = document.createElement("div"); tabs.className = "triage-lens-tabs"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
+  for (const [key, label] of [["ready", "Needs attention"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
+    const count = key === "recent" ? recent.length : key === "learned_rules" ? activePolicyRules.length : viewCounts[key]?.candidates ?? pending.filter((item) => triageCandidateMatches(item, key)).length;
+    const button = document.createElement("button"); button.className = "comms-filter"; button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key)); button.setAttribute("aria-label", `${label}, ${count}`);
+    button.append(text("span", label), text("span", count, "triage-tab-count"));
+    button.addEventListener("click", async () => {
       if (state.triageView === key || triageInteractionLocked()) return;
       if (state.triageBannerKind === "continuation") clearBanner();
       state.triageLoadGeneration += 1;
       state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false;
       data.focus = { requested_candidate_id: null, state: "not_requested", candidate_state: null, matter_id: null };
-      replaceQuery({ view: key, item: null, matter: null }); renderSurface(data);
+      const mustReload = key !== "all_candidates" && (state.triageSort !== "attention" || state.triageSource !== "all" || state.triageKind !== "all");
+      if (mustReload) { state.triageSort = "attention"; state.triageSource = "all"; state.triageKind = "all"; }
+      replaceQuery({ view: key, item: null, matter: null, sort: state.triageSort === "attention" ? null : state.triageSort, source: state.triageSource === "all" ? null : state.triageSource, kind: state.triageKind === "all" ? null : state.triageKind });
+      if (!mustReload) { renderSurface(data); return; }
+      try { await reloadActiveSurface({ triageFocus: false }); }
+      catch (error) { setBanner(`The complete queue could not be reloaded: ${error.message}`); }
     }); tabs.append(button);
   }
   controls.append(tabs);
-  if (data.triage?.has_more) controls.append(text("p", `${pending.length} of ${candidateCount} candidates are loaded. Filter counts marked “loaded” cover this cursor window; the complete inventory totals are above. Load more matters to continue toward zero.`, "state-note"));
-  else controls.append(text("p", `All ${candidateCount} unresolved candidates are loaded; filter counts are complete.`, "state-note"));
+  if (state.triageView === "all_candidates") {
+    const facets = inventory.facets || {};
+    const advanced = document.createElement("div"); advanced.className = "triage-inventory-filters";
+    const sort = selectControl([{ value: "attention", label: "Attention order" }, { value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }], state.triageSort, ""); sort.setAttribute("aria-label", "Sort complete inventory");
+    const source = selectControl([{ value: "all", label: "All sources" }, ...(facets.sources || []).map((value) => ({ value: value.id, label: `${value.label} (${value.candidates})` }))], state.triageSource, ""); source.setAttribute("aria-label", "Filter complete inventory by source");
+    const kind = selectControl([{ value: "all", label: "All types" }, ...(facets.types || []).map((value) => ({ value: value.id, label: `${value.label} (${value.candidates})` }))], state.triageKind, ""); kind.setAttribute("aria-label", "Filter complete inventory by type");
+    const refresh = async () => {
+      if (triageInteractionLocked()) return;
+      state.triageSort = sort.value; state.triageSource = source.value; state.triageKind = kind.value;
+      state.triageSelected = null; state.triageMatter = null; state.triageLoadGeneration += 1;
+      replaceQuery({ item: null, matter: null, sort: state.triageSort === "attention" ? null : state.triageSort, source: state.triageSource === "all" ? null : state.triageSource, kind: state.triageKind === "all" ? null : state.triageKind });
+      for (const control of [sort, source, kind]) control.disabled = true;
+      try { await reloadActiveSurface({ triageFocus: false }); }
+      catch (error) { setBanner(`The inventory filter could not be applied: ${error.message}`); for (const control of [sort, source, kind]) control.disabled = false; }
+    };
+    for (const control of [sort, source, kind]) control.addEventListener("change", refresh);
+    advanced.append(field("Sort", sort), field("Source", source), field("Type", kind));
+    const selectedCount = data.triage?.selection?.candidates ?? candidateCount;
+    advanced.append(text("p", `${selectedCount} matching candidate${selectedCount === 1 ? "" : "s"}. Filters change only this recovery view, never importance or candidate state.`, "state-note field-span"));
+    controls.append(advanced);
+  }
   fragment.append(controls);
   const visibleMatters = triageVisibleMatters(data, state.triageView);
   const missingRequestedCandidate = Boolean(state.triageSelected && data.focus?.state === "not_found");
@@ -1153,26 +1248,44 @@ function triageSurface(data, { preserveView = false } = {}) {
   else if (!state.triageMatter || !visibleMatters.some((matter) => matter.context_id === state.triageMatter)) state.triageMatter = visibleMatters[0]?.context_id || null;
   const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
-  const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Matters awaiting review"));
+  const workspaceLabels = { ready: "Decisions that need you", needs_details: "Decisions missing details", needs_interpretation: "Items to classify", low_signal: "Other suggestions", recurring_exceptions: "Recurring issues", learned_rules: "Items matching shadow rules", all_candidates: "Complete candidate inventory", recent: "Recent decisions" };
+  const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", workspaceLabels[state.triageView] || "Decisions to review"));
   if (state.triageView === "recent") master.append(text("p", "Read-only audit history. System-retired candidates are historical lifecycle receipts, not new sender rules.", "state-note"));
-  if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : state.triageView === "needs_interpretation" ? "No thoughts are waiting for a type." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing is in this lens on the loaded pages.", "empty"));
+  if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing needs your attention right now." : state.triageView === "needs_details" ? "No decisions are waiting for missing details." : state.triageView === "needs_interpretation" ? "No items are waiting for a type." : state.triageView === "low_signal" ? "No lower-signal suggestions are waiting." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing matches this view.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
+  let priorLane = null;
+  const groupByAttention = state.triageView === "ready" || (state.triageView === "all_candidates" && state.triageSort === "attention");
   for (const matter of visibleMatters) {
+    if (groupByAttention && matter.queue_lane !== priorLane) {
+      priorLane = matter.queue_lane;
+      const [laneLabel] = triageLanePresentation(matter.queue_lane);
+      const heading = document.createElement("li"); heading.className = "triage-lane-heading"; heading.append(text("span", laneLabel), text("small", "Explainable attention group")); list.append(heading);
+    }
     const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(matter.context_id === state.triageMatter));
     const first = matter.candidates[0]; const source = first?.source_context?.state === "available" ? [first.source_context.channel && titleCase(first.source_context.channel), first.source_context.sender].filter(Boolean).join(" · ") : null;
-    button.append(text("strong", matter.label || first?.title || "Review matter"), text("small", `${matter.candidates.length} candidate${matter.candidates.length === 1 ? "" : "s"} · ${matter.source_count || 1} source${matter.source_count === 1 ? "" : "s"} · ${titleCase(matter.queue_lane)}${source ? ` · ${source}` : ""}`));
+    const [laneLabel] = triageLanePresentation(matter.queue_lane); const due = triageDateLabel(triageCandidateDate(first)); const category = first?.source_context?.provider_category?.label;
+    const cues = [laneLabel, due ? `Date: ${due}` : null, source, category ? `Provider category: ${category}` : null, matter.candidates.length > 1 ? `${matter.candidates.length} related decisions` : null, matter.source_count > 1 ? `${matter.source_count} sources` : null].filter(Boolean).join(" · ");
+    button.append(text("strong", matter.label || first?.title || "Review decision"), text("small", cues));
     button.addEventListener("click", () => { if (triageInteractionLocked()) return; state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; state.triageFocusPending = true; replaceQuery({ view: state.triageView, item: state.triageSelected, matter: matter.context_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list);
-  if (data.triage?.has_more && state.triageView !== "recent") { const more = text("button", "Load next matters", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
+  const visibleCandidateCount = visibleMatters.reduce((count, matter) => count + matter.candidates.length, 0);
+  const completeViewCount = state.triageView === "all_candidates" ? data.triage?.selection?.candidates ?? candidateCount : viewCounts[state.triageView]?.candidates ?? visibleCandidateCount;
+  const viewCountIsComplete = state.triageView !== "learned_rules";
+  if (data.triage?.has_more && state.triageView !== "recent" && (!viewCountIsComplete || visibleCandidateCount < completeViewCount)) { const more = text("button", "Show more", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
   const detail = document.createElement("div"); detail.className = "triage-matter-detail";
   if (missingRequestedCandidate) {
     const unavailable = document.createElement("section"); unavailable.className = "card triage-detail"; unavailable.setAttribute("role", "status");
     unavailable.append(text("p", "EXACT REVIEW LINK", "eyebrow"), text("h2", "This candidate is not available in your member scope."), text("p", "It may have been removed by source correction, or the link may belong to a different private member. AdministrateMe did not substitute another decision.", "state-note"));
     detail.append(unavailable);
-  } else if (!selectedMatter) detail.append(triageDetail(null, data, state.triageView === "recent"));
-  else { detail.append(text("p", `${selectedMatter.candidates.length} independently reviewable candidate${selectedMatter.candidates.length === 1 ? "" : "s"}; confirming one never confirms the others.`, "state-note")); for (const item of selectedMatter.candidates) detail.append(triageDetail(item, data, state.triageView === "recent")); }
+  } else if (selectedMatter) { if (selectedMatter.candidates.length > 1) detail.append(text("p", `${selectedMatter.candidates.length} related decisions are shown together. Confirming one never confirms the others.`, "state-note")); for (const item of selectedMatter.candidates) detail.append(triageDetail(item, data, state.triageView === "recent")); }
   workspace.append(master, detail); fragment.append(workspace);
+  if (suggestions.length || activePolicyRules.length) {
+    const learning = document.createElement("section"); learning.className = "card triage-learning"; learning.append(text("p", "REVERSIBLE LEARNING", "eyebrow"), text("h2", `${suggestions.length} suggested pattern${suggestions.length === 1 ? "" : "s"} · ${activePolicyRules.length} shadow rule${activePolicyRules.length === 1 ? "" : "s"}`), text("p", "Rules begin in shadow mode. They stay visible and reversible, and cannot silently confirm or suppress household truth.", "state-note"));
+    for (const suggestion of suggestions.slice(0, 5)) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${suggestion.occurrences} × ${titleCase(suggestion.reason)} in ${titleCase(suggestion.scope_kind)}`)); const approve = text("button", "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => approveTriageSuggestion(suggestion, approve)); row.append(approve); learning.append(row); }
+    for (const rule of activePolicyRules) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${titleCase(rule.disposition)} · ${titleCase(rule.scope_kind)} · shadow only`)); const revoke = text("button", "Revoke", "button button-quiet"); revoke.type = "button"; revoke.addEventListener("click", () => revokeTriageRule(rule, revoke)); row.append(revoke); learning.append(row); }
+    fragment.append(learning);
+  }
   if (state.triageSelected && state.triageFocusPending && !missingRequestedCandidate) {
     queueMicrotask(() => {
       const target = [...document.querySelectorAll("[data-triage-item]")].find((node) => node.dataset.triageItem === state.triageSelected);
@@ -3979,6 +4092,12 @@ async function initialize() {
       const requestedSection = params.get("section");
       if (SETTINGS_SECTIONS.some(([value]) => value === requestedSection)) state.settingsSection = requestedSection;
     }
+    if (active === "triage") {
+      const requestedSort = params.get("sort");
+      if (["attention", "oldest", "newest"].includes(requestedSort)) state.triageSort = requestedSort;
+      state.triageSource = params.get("source") || "all";
+      state.triageKind = params.get("kind") || "all";
+    }
     let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
     if (active === "calendar") {
       const query = new URLSearchParams({ view: state.calendarView });
@@ -3986,7 +4105,7 @@ async function initialize() {
       path += `?${query}`;
     }
     if (active === "triage") {
-      const triageParams = new URLSearchParams({ triage_lens: "all_candidates" });
+      const triageParams = triageRequestParams();
       if (state.triageSelected) triageParams.set("triage_item", state.triageSelected);
       path += `?${triageParams}`;
     }

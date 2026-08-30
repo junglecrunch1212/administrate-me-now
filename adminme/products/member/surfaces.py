@@ -23,6 +23,7 @@ from adminme.reminders import (
     compose_reminders_cockpit,
 )
 from adminme.lib.session import Session
+from adminme.triage_review import triage_review_state as _triage_review_state
 from adminme.products.member.navigation import (
     ADULT_SURFACES,
     CHILD_SURFACES,
@@ -580,75 +581,6 @@ def _latest_time(rows: list[dict[str, Any]], *keys: str) -> datetime | None:
     return max(values) if values else None
 
 
-def _triage_review_state(item: dict[str, Any]) -> dict[str, Any]:
-    """Explain whether a candidate is ready; approval still goes through gates."""
-
-    candidate = item.get("candidate") or {}
-    route = item.get("route") or {}
-    target = str(item.get("target_kind") or "")
-    missing: list[str] = []
-    if item.get("state") == "pending_interpretation" or not target:
-        return {
-            "contract": "triage-review-state-v2",
-            "state": "needs_interpretation",
-            "missing": ["kind"],
-            "human_gate_required": True,
-            "approval_authorized": False,
-        }
-    if not str(item.get("title") or "").strip():
-        missing.append("title")
-    if not route.get("member_id"):
-        missing.append("member")
-    if target == "commitment" and not candidate.get("owed_to_party_id"):
-        missing.append("owed_to_party")
-    if target == "calendar_event":
-        if not candidate.get("start"):
-            missing.append("start")
-        if not candidate.get("end"):
-            missing.append("end")
-    if target == "recurrence":
-        if not candidate.get("rrule"):
-            missing.append("rrule")
-        if not candidate.get("next_occurrence"):
-            missing.append("next_occurrence")
-    if target == "party_identifier":
-        for field in (
-            "surviving_party_id",
-            "candidate_kind",
-            "candidate_value",
-            "candidate_value_normalized",
-        ):
-            if not candidate.get(field):
-                missing.append(field)
-    if target == "party_candidate":
-        if not candidate.get("display_name") and not item.get("title"):
-            missing.append("display_name")
-        if candidate.get("kind") not in {"person", "organization"}:
-            missing.append("person_or_organization")
-    if target == "party_relationship":
-        for field in ("party_a", "party_b", "label", "direction"):
-            if not candidate.get(field):
-                missing.append(field)
-    if target == "relationship_fact":
-        for field in ("party_id", "kind", "value"):
-            if not candidate.get(field):
-                missing.append(field)
-    if target in {"calendar_event", "reminder", "list", "list_item"}:
-        if not route.get("provider"):
-            missing.append("provider")
-        if not route.get("provider_account_id"):
-            missing.append("account")
-        if target != "list" and not route.get("container_external_id"):
-            missing.append("destination")
-    return {
-        "contract": "triage-review-state-v2",
-        "state": "ready" if not missing else "needs_details",
-        "missing": missing,
-        "human_gate_required": True,
-        "approval_authorized": False,
-    }
-
-
 def _add_triage_requirement(item: dict[str, Any], requirement: str) -> None:
     review = item["review_state"]
     missing = list(review.get("missing") or [])
@@ -666,6 +598,9 @@ def build_surface(
     calendar_anchor: date | None = None,
     calendar_view: str = "week",
     triage_lens: str = "all_candidates",
+    triage_sort: str = "attention",
+    triage_source: str | None = None,
+    triage_kind: str | None = None,
     triage_cursor: str | None = None,
     triage_limit: int = 30,
     triage_item: str | None = None,
@@ -815,6 +750,9 @@ def build_surface(
                 session,
                 member_id=member,
                 lens=triage_lens,
+                sort=triage_sort,
+                source_id=triage_source,
+                target_kind=triage_kind,
                 cursor=triage_cursor,
                 limit=triage_limit,
             )

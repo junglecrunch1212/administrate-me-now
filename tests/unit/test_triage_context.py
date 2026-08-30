@@ -38,6 +38,7 @@ def test_message_context_exposes_decision_cues_and_only_exact_quote() -> None:
             "from_identifier": "sender@example.invalid",
             "subject": "Water bill",
             "body_text": "Please pay the water bill Friday.",
+            "provider_labels": ["INBOX", "CATEGORY_UPDATES", "Private fixture label"],
         },
     }
     context = compose_triage_source_context(item, source)
@@ -45,6 +46,13 @@ def test_message_context_exposes_decision_cues_and_only_exact_quote() -> None:
     assert context["sender"] == "sender@example.invalid"
     assert context["subject"] == "Water bill"
     assert context["direction"] == "inbound"
+    assert context["provider_category"] == {
+        "id": "updates",
+        "label": "Updates",
+        "provenance": "Gmail category",
+        "authority": "provider_observation",
+    }
+    assert "Private fixture label" not in str(context)
     assert context["evidence"] == {
         "quote": "Please pay the water bill Friday.",
         "exactly_grounded": True,
@@ -82,6 +90,47 @@ def test_nonliteral_candidate_text_is_never_presented_as_source_evidence() -> No
         "unrelated_source_event_ids": [],
         "quoted_or_forwarded_history": False,
     }
+
+
+def test_gmail_category_is_observation_only_and_non_gmail_labels_are_hidden() -> None:
+    item = {
+        "title": "Review account access",
+        "target_kind": "task",
+        "eligibility_rule_ids": ["candidate_policy_v1:adapter:gmail:review"],
+    }
+    gmail = compose_triage_source_context(
+        item,
+        {
+            "event_id": "gmail-category",
+            "type": "messaging.received",
+            "source_adapter": "gmail-api",
+            "payload": {
+                "source_channel": "gmail",
+                "provider_labels": ["SPAM", "CATEGORY_PROMOTIONS", "Family"],
+            },
+        },
+    )
+    assert gmail["provider_category"] == {
+        "id": "spam",
+        "label": "Spam",
+        "provenance": "Gmail category",
+        "authority": "provider_observation",
+    }
+    assert "Family" not in str(gmail)
+
+    generic = compose_triage_source_context(
+        item,
+        {
+            "event_id": "generic-category",
+            "type": "messaging.received",
+            "source_adapter": "generic-message",
+            "payload": {
+                "source_channel": "message",
+                "provider_labels": ["CATEGORY_UPDATES"],
+            },
+        },
+    )
+    assert generic["provider_category"] is None
 
 
 def test_context_corrections_are_exposed_only_when_server_can_apply_them() -> None:

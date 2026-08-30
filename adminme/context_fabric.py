@@ -157,23 +157,34 @@ def queue_lane(payload: Mapping[str, Any]) -> str:
             ),
         )
     )
+    words = set(exact.split())
     if any(
-        token in exact.split() for token in ("security", "fraud", "breach", "password")
+        token in words for token in ("security", "fraud", "breach", "password")
+    ) or any(
+        phrase in exact
+        for phrase in (
+            "new sign in",
+            "sign in attempt",
+            "unrecognized login",
+            "verification code",
+            "new device",
+            "unauthorized access",
+        )
     ):
         return "security"
     if target in {"recurrence"} and any(
-        key in candidate for key in ("exception", "missed", "overdue", "failed")
+        candidate.get(key) for key in ("exception", "missed", "overdue", "failed")
     ):
         return "recurring_exception"
     if target in {"commitment"} or interpretation.get("action_owner") == "member":
         return "member_promise"
     if any(
-        key in candidate
+        candidate.get(key) not in (None, "", [])
         for key in ("due", "due_at", "due_date", "deadline", "start", "start_at")
     ):
         return "time_bound"
     if any(
-        token in exact.split()
+        token in words
         for token in ("bill", "invoice", "payment", "pay", "balance", "overdue")
     ):
         return "financial"

@@ -490,7 +490,10 @@ def build_app():
                     "owner_member_id": PRINCIPAL,
                     "title": "Renew the annual registration",
                     "candidate": {
-                        "due": (now + timedelta(days=10)).replace(hour=14).isoformat(),
+                        # Google Tasks exposes a date-only due capability. Keep
+                        # this literal independent of both the fixture clock and
+                        # the browser host timezone so Gate 7 tests that contract.
+                        "due": "2026-09-09",
                         "notes": "Provider-ceiling visual fixture.",
                     },
                     "route": {
@@ -581,6 +584,85 @@ def build_app():
         )
         await runtime.wait_for_projection("triage", superseded_id)
         return {"seeded": 9, "last_event_id": superseded_id}
+
+    @app.post("/__gate7/seed-triage-provider-category")
+    async def seed_triage_provider_category():
+        """Seed reviewed Gmail category context without granting it authority."""
+
+        runtime = app.state.runtime
+        now = fixture_now()
+        source_event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="messaging.received",
+                schema_version=3,
+                occurred_at=now.isoformat(),
+                source_adapter="gmail",
+                source_account_id="visual-gmail",
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                actor_identity=PRINCIPAL,
+                idempotency_key="gate7:visual:gmail-category-source",
+                payload={
+                    "provider": "gmail",
+                    "provider_account_id": "visual-gmail",
+                    "member_id": PRINCIPAL,
+                    "source_channel": "gmail",
+                    "native_message_id": "visual-gmail-category-message",
+                    "thread_id": "visual-gmail-category-thread",
+                    "from_identifier": "community-grants@example.invalid",
+                    "to_identifier": "member@example.invalid",
+                    "workspace": "personal",
+                    "subject": "Submit the grant application by September 2",
+                    "body_text": "Submit the grant application by September 2.",
+                    "received_at": now.isoformat(),
+                    "provider_labels": [
+                        "INBOX",
+                        "CATEGORY_PROMOTIONS",
+                        "Private fixture label",
+                    ],
+                    "attachments": [],
+                },
+            )
+        )
+        proposal_event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000) + 1,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=2,
+                occurred_at=now.isoformat(),
+                source_adapter="gate7-triage-fixture",
+                source_account_id=PRINCIPAL,
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                actor_identity=PRINCIPAL,
+                idempotency_key="gate7:visual:gmail-category-proposal",
+                causation_id=source_event_id,
+                payload={
+                    "proposal_id": "gate7-visual-gmail-category-task",
+                    "target_kind": "task",
+                    "owner_member_id": PRINCIPAL,
+                    "title": "Submit the grant application by September 2",
+                    "candidate": {
+                        "due": "2026-09-02T17:00:00-04:00",
+                        "notes": "Submit the grant application by September 2.",
+                    },
+                    "route": {"member_id": PRINCIPAL},
+                    "source_event_id": source_event_id,
+                    "confidence": 0.98,
+                    "reasons": ["reviewed explicit deadline"],
+                    "eligibility_rule_ids": [
+                        "candidate_policy_v1:adapter:gmail:review"
+                    ],
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", proposal_event_id)
+        return {"seeded": 2, "last_event_id": proposal_event_id}
 
     @app.post("/__gate7/seed-triage-pagination")
     async def seed_triage_pagination():

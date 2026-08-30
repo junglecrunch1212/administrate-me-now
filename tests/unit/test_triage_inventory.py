@@ -9,6 +9,7 @@ import pytest
 import sqlcipher3
 
 from adminme.lib.session import build_internal_session
+from adminme.context_fabric import queue_lane
 from adminme.projections.triage import TriageProjection
 from adminme.projections.triage.queries import (
     matter_for_proposal,
@@ -96,6 +97,110 @@ def test_every_candidate_is_reachable_once_across_stable_pages() -> None:
             break
     assert len(seen_matters) == len(set(seen_matters)) == 520
     assert len(seen_candidates) == len(set(seen_candidates)) == 520
+
+
+def test_attention_lane_requires_real_fact_and_ignores_provider_category() -> None:
+    assert (
+        queue_lane(
+            {
+                "target_kind": "task",
+                "title": "Ordinary fixture task",
+                "candidate": {"due": None, "provider_labels": ["IMPORTANT"]},
+            }
+        )
+        == "standard"
+    )
+    assert (
+        queue_lane(
+            {
+                "target_kind": "task",
+                "title": "New sign-in from an unfamiliar device",
+                "candidate": {"due": None, "provider_labels": ["SPAM"]},
+            }
+        )
+        == "security"
+    )
+    assert (
+        queue_lane(
+            {
+                "target_kind": "task",
+                "title": "Ordinary fixture task",
+                "candidate": {"due": "2030-01-04", "provider_labels": ["PROMOTIONS"]},
+            }
+        )
+        == "time_bound"
+    )
+
+
+def test_complete_lens_counts_and_inventory_filters_are_cursor_bound() -> None:
+    projection, conn = _projection()
+    for index in range(8):
+        event = _event(index)
+        event["payload"]["eligibility_rule_ids"] = [
+            (
+                "candidate_policy_v1:adapter:gmail:review"
+                if index < 5
+                else "candidate_policy_v1:surface:triage:review"
+            )
+        ]
+        if index in {1, 6}:
+            event["payload"]["candidate"] = {"due": f"2030-02-{index + 1:02d}"}
+        if index == 2:
+            event["payload"]["target_kind"] = "commitment"
+            event["payload"]["candidate"] = {"owed_to_party_id": "fixture-party"}
+        projection.apply(event, conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+
+    page = triage_page_for_member(
+        conn,
+        session,
+        member_id=MEMBER,
+        lens="all_candidates",
+        source_id="adapter:gmail",
+        sort="newest",
+        limit=2,
+    )
+    assert page["selection"] == {
+        "sort": "newest",
+        "source_id": "adapter:gmail",
+        "target_kind": None,
+        "candidates": 5,
+        "matters": 5,
+    }
+    assert page["inventory"]["views"]["ready"]["candidates"] == 3
+    assert page["inventory"]["views"]["low_signal"]["candidates"] == 5
+    assert page["inventory"]["views"]["all_candidates"]["candidates"] == 8
+    assert page["inventory"]["facets"]["sources"][0]["label"] == "Gmail"
+    assert [
+        candidate["proposal_id"]
+        for matter in page["matters"]
+        for candidate in matter["candidates"]
+    ] == ["proposal-0004", "proposal-0003"]
+    assert page["next_cursor"] is not None
+
+    with pytest.raises(ValueError, match="stale triage cursor"):
+        triage_page_for_member(
+            conn,
+            session,
+            member_id=MEMBER,
+            lens="all_candidates",
+            source_id="adapter:gmail",
+            sort="oldest",
+            cursor=page["next_cursor"],
+            limit=2,
+        )
+
+    only_commitments = triage_page_for_member(
+        conn,
+        session,
+        member_id=MEMBER,
+        lens="all_candidates",
+        target_kind="commitment",
+    )
+    assert only_commitments["selection"]["candidates"] == 1
+    assert only_commitments["matters"][0]["candidates"][0]["source_id"] == (
+        "adapter:gmail"
+    )
 
 
 def test_cursor_refuses_root_promotion_after_concurrent_resolution() -> None:

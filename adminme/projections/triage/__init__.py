@@ -18,11 +18,12 @@ from adminme.context_fabric import (
 
 from adminme.projections.base import Projection
 from adminme.projections.triage import handlers
+from adminme.triage_review import proposal_source_id, triage_review_state
 
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 8
+    version = 9
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "triage.item.proposed",
@@ -153,6 +154,8 @@ class TriageProjection(Projection):
             "evidence_state": "TEXT NOT NULL DEFAULT 'source_link_only'",
             "ownership_state": "TEXT NOT NULL DEFAULT 'unknown'",
             "lifecycle_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            "review_state": "TEXT NOT NULL DEFAULT 'needs_details'",
+            "source_id": "TEXT NOT NULL DEFAULT 'origin:unknown'",
             "decision_disposition": "TEXT NOT NULL DEFAULT 'decision'",
             "duplicate_of_proposal_id": "TEXT",
             "existing_object_kind": "TEXT",
@@ -329,6 +332,48 @@ class TriageProjection(Projection):
                     for source_event_id in sorted(session["sources"])
                 ],
             )
+
+        # Recompute every presentation-only classifier during a version
+        # migration. Retained proposals therefore receive the corrected
+        # nullable-date lane and the same source/readiness facets as new rows.
+        presentation_rows = conn.execute(
+            """SELECT proposal_id, source_kind, target_kind, title,
+                      candidate_json, route_json, eligibility_rule_ids_json,
+                      reasons_json, interpretation_json, state, tenant_id
+                 FROM triage_items"""
+        ).fetchall()
+        for row in presentation_rows:
+            candidate = json.loads(row[4] or "{}")
+            route = json.loads(row[5]) if row[5] else None
+            eligibility = json.loads(row[6] or "[]")
+            payload = {
+                "target_kind": row[2],
+                "title": row[3],
+                "candidate": candidate,
+                "reasons": json.loads(row[7] or "[]"),
+                "interpretation": json.loads(row[8]) if row[8] else None,
+            }
+            review = triage_review_state(
+                {"title": row[3], "target_kind": row[2], "state": row[9]},
+                candidate=candidate,
+                route=route,
+            )
+            conn.execute(
+                """UPDATE triage_items
+                      SET queue_lane=?, source_id=?, review_state=?
+                    WHERE tenant_id=? AND proposal_id=?""",
+                (
+                    queue_lane(payload),
+                    proposal_source_id(
+                        source_kind=str(row[1]),
+                        candidate=candidate,
+                        eligibility_rule_ids=eligibility,
+                    ),
+                    review["state"],
+                    row[10],
+                    row[0],
+                ),
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent "
             "ON triage_items(tenant_id, parent_intent_id)"
@@ -341,6 +386,8 @@ class TriageProjection(Projection):
                 ON triage_items(tenant_id, owner_member_id, state, proposed_at, proposal_id);
             CREATE INDEX IF NOT EXISTS idx_triage_exact_match
                 ON triage_items(tenant_id, owner_member_id, target_kind, title_fingerprint, state);
+            CREATE INDEX IF NOT EXISTS idx_triage_inventory_facets
+                ON triage_items(tenant_id, owner_member_id, state, source_id, target_kind);
             CREATE TABLE IF NOT EXISTS canonical_object_fingerprints (
                 tenant_id TEXT NOT NULL, owner_member_id TEXT, target_kind TEXT NOT NULL,
                 object_id TEXT NOT NULL, title_fingerprint TEXT NOT NULL,
