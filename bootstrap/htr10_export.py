@@ -175,7 +175,9 @@ async def export_htr10_audits(
         household_mapping=mapping,
     )
     diagnostics = ServiceManager(paths, test_mode=test_mode).runtime_diagnostics()
-    if not _runtime_supports_read_only_repair_audit(diagnostics):
+    if not isinstance(diagnostics, dict) or not (
+        _runtime_supports_read_only_repair_audit(diagnostics)
+    ):
         raise HTR10ExportError("active runtime readiness is unavailable")
     if diagnostics.get("observation_active") is not True and not test_mode:
         raise HTR10ExportError("observation mode is not active")
