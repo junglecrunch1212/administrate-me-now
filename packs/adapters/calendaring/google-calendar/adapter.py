@@ -655,18 +655,15 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             "write_events": role in {"writer", "owner"},
             "observed_at": ctx.now_factory().isoformat(),
         }
-        event_identity_fingerprint = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
         event_id = await self._append(
             ctx=ctx,
             event_type="calendar.source_observed",
             idempotency_key=(
                 "google-calendar:calendar-source:"
                 + hashlib.sha256(
-                    "\x1f".join(
-                        (cursor_id, source_external_id, event_identity_fingerprint)
-                    ).encode("utf-8")
+                    "\x1f".join((cursor_id, source_external_id, fingerprint)).encode(
+                        "utf-8"
+                    )
                 ).hexdigest()
             ),
             payload=payload,
@@ -1391,6 +1388,13 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         idempotency_key: str | None = None,
     ) -> str:
         """[§7.3, D17] append to the event log; never write projections."""
+        if idempotency_key is not None:
+            payload_identity = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            idempotency_key = f"{idempotency_key}:payload:{payload_identity}"
         return await write_adapter_event(
             ctx,
             adapter_name=self.name,
