@@ -2317,6 +2317,18 @@ def test_upgrade_waits_for_first_openclaw_topology_heartbeat(
             },
         }
     )
+    heartbeat_pending["capabilities"].update(
+        {
+            "standing_order:opaque-reviewed-program": {
+                "kind": "openclaw_standing_order",
+                "state": "degraded",
+            },
+            "openclaw:member-chat": {
+                "kind": "openclaw_chat_transport",
+                "state": "degraded",
+            },
+        }
+    )
 
     monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
     monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
@@ -2329,6 +2341,35 @@ def test_upgrade_waits_for_first_openclaw_topology_heartbeat(
 
     assert result["status"] == "healthy"
     assert include_synthetic == [False, False, True]
+
+
+def test_upgrade_rejects_blocked_openclaw_capability_during_heartbeat_wait(
+    test_paths: DeploymentPaths,
+) -> None:
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics.update(
+        {
+            "ready": False,
+            "release_ready": False,
+            "service_ready": True,
+            "safe_reads": True,
+            "event_ingest_ready": True,
+            "deployment_readiness": {
+                "contract": "deployment-readiness-v1",
+                "state": "blocked",
+                "ready": False,
+                "blocking_dimensions": ["openclaw"],
+            },
+        }
+    )
+    diagnostics["capabilities"]["standing_order:opaque-reviewed-program"] = {
+        "kind": "openclaw_standing_order",
+        "state": "blocked",
+    }
+
+    assert UpgradeManager._has_new_structural_degradation(diagnostics) is True
 
 
 def test_upgrade_rejects_structural_deployment_readiness_gap_without_waiting(
