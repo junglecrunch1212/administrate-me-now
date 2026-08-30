@@ -117,12 +117,13 @@ def _ctx(
     event_log: _FakeEventLog,
     *,
     cursor_store: AdapterCursorStore | None = None,
+    now: datetime = _FROZEN_NOW,
 ) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-gcal-test",
-        now_factory=lambda: _FROZEN_NOW,
+        now_factory=lambda: now,
         cursor_store=cursor_store,
     )
 
@@ -944,6 +945,45 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
         if call["type"] == "calendar.source_observed"
     ]
     cursor_store.close()
+
+
+async def test_calendar_source_idempotency_binds_observation_timestamp() -> None:
+    entry = {
+        "id": "calendar-a",
+        "summary": "Personal",
+        "accessRole": "owner",
+        "primary": True,
+        "selected": True,
+    }
+    config = {
+        "oauth_credentials_ref": "keychain://calendar/account-a",
+        "calendar_id": "calendar-a",
+        "discover_calendars": True,
+        "member_id": "member-a",
+        "provider_account_id": "account-a",
+    }
+    first = GoogleCalendarAdapter(config=config)
+    first.instance_name = "google-calendar-primary"
+    first_log = _FakeEventLog()
+    await first._emit_calendar_source(ctx=_ctx(first_log), entry=entry)
+
+    second = GoogleCalendarAdapter(config=config)
+    second.instance_name = "google-calendar-primary"
+    second_log = _FakeEventLog()
+    await second._emit_calendar_source(
+        ctx=_ctx(
+            second_log,
+            now=_FROZEN_NOW.replace(second=_FROZEN_NOW.second + 1),
+        ),
+        entry=entry,
+    )
+
+    first_event = first_log.calls[0]
+    second_event = second_log.calls[0]
+    assert (
+        first_event["payload"]["observed_at"] != second_event["payload"]["observed_at"]
+    )
+    assert first_event["idempotency_key"] != second_event["idempotency_key"]
 
 
 async def test_calendar_sync_token_does_not_advance_on_partial_page_failure(
