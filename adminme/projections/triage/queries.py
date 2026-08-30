@@ -349,7 +349,9 @@ def _source_label(source_id: str) -> str:
         "origin:commitment_proposal": "Commitment proposal",
         "origin:identity_suggestion": "Identity suggestion",
     }
-    return fallbacks.get(source_id, source_id.rsplit(":", 1)[-1].replace("_", " ").title())
+    return fallbacks.get(
+        source_id, source_id.rsplit(":", 1)[-1].replace("_", " ").title()
+    )
 
 
 def triage_page_for_member(
@@ -399,9 +401,7 @@ def triage_page_for_member(
     view_key = json.dumps(
         [lens, sort, source_id or "", target_kind or ""], separators=(",", ":")
     )
-    if decoded is not None and (
-        decoded[0] != queue_revision or decoded[1] != view_key
-    ):
+    if decoded is not None and (decoded[0] != queue_revision or decoded[1] != view_key):
         raise ValueError("stale triage cursor")
     lens_sql, lens_params = _lens_where(lens)
     filter_sql = ""
@@ -433,14 +433,10 @@ def triage_page_for_member(
             )
             cursor_params = [rank, rank, proposed_at, proposed_at, proposal_id]
         elif sort == "oldest":
-            cursor_sql = (
-                "AND (proposed_at > ? OR (proposed_at=? AND proposal_id>?))"
-            )
+            cursor_sql = "AND (proposed_at > ? OR (proposed_at=? AND proposal_id>?))"
             cursor_params = [proposed_at, proposed_at, proposal_id]
         else:
-            cursor_sql = (
-                "AND (proposed_at < ? OR (proposed_at=? AND proposal_id<?))"
-            )
+            cursor_sql = "AND (proposed_at < ? OR (proposed_at=? AND proposal_id<?))"
             cursor_params = [proposed_at, proposed_at, proposal_id]
     if sort == "oldest":
         context_order = "proposed_at, proposal_id"

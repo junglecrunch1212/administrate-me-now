@@ -100,27 +100,36 @@ def test_every_candidate_is_reachable_once_across_stable_pages() -> None:
 
 
 def test_attention_lane_requires_real_fact_and_ignores_provider_category() -> None:
-    assert queue_lane(
-        {
-            "target_kind": "task",
-            "title": "Ordinary fixture task",
-            "candidate": {"due": None, "provider_labels": ["IMPORTANT"]},
-        }
-    ) == "standard"
-    assert queue_lane(
-        {
-            "target_kind": "task",
-            "title": "New sign-in from an unfamiliar device",
-            "candidate": {"due": None, "provider_labels": ["SPAM"]},
-        }
-    ) == "security"
-    assert queue_lane(
-        {
-            "target_kind": "task",
-            "title": "Ordinary fixture task",
-            "candidate": {"due": "2030-01-04", "provider_labels": ["PROMOTIONS"]},
-        }
-    ) == "time_bound"
+    assert (
+        queue_lane(
+            {
+                "target_kind": "task",
+                "title": "Ordinary fixture task",
+                "candidate": {"due": None, "provider_labels": ["IMPORTANT"]},
+            }
+        )
+        == "standard"
+    )
+    assert (
+        queue_lane(
+            {
+                "target_kind": "task",
+                "title": "New sign-in from an unfamiliar device",
+                "candidate": {"due": None, "provider_labels": ["SPAM"]},
+            }
+        )
+        == "security"
+    )
+    assert (
+        queue_lane(
+            {
+                "target_kind": "task",
+                "title": "Ordinary fixture task",
+                "candidate": {"due": "2030-01-04", "provider_labels": ["PROMOTIONS"]},
+            }
+        )
+        == "time_bound"
+    )
 
 
 def test_complete_lens_counts_and_inventory_filters_are_cursor_bound() -> None:
@@ -138,9 +147,7 @@ def test_complete_lens_counts_and_inventory_filters_are_cursor_bound() -> None:
             event["payload"]["candidate"] = {"due": f"2030-02-{index + 1:02d}"}
         if index == 2:
             event["payload"]["target_kind"] = "commitment"
-            event["payload"]["candidate"] = {
-                "owed_to_party_id": "fixture-party"
-            }
+            event["payload"]["candidate"] = {"owed_to_party_id": "fixture-party"}
         projection.apply(event, conn)
     session = build_internal_session(MEMBER, "principal", TENANT)
 

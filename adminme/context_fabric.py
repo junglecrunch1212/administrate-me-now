@@ -158,7 +158,9 @@ def queue_lane(payload: Mapping[str, Any]) -> str:
         )
     )
     words = set(exact.split())
-    if any(token in words for token in ("security", "fraud", "breach", "password")) or any(
+    if any(
+        token in words for token in ("security", "fraud", "breach", "password")
+    ) or any(
         phrase in exact
         for phrase in (
             "new sign in",
