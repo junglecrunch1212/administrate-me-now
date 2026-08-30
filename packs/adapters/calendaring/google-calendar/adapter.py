@@ -641,31 +641,35 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             self._status.extra["durable_cursor"] = durable
             self._seen_calendar_sources[calendar_id] = fingerprint
             return
+        payload = {
+            "member_id": str(self._config["member_id"]),
+            "provider": "google_calendar",
+            "provider_account_id": str(
+                self._config.get("provider_account_id")
+                or self._config.get("user_email")
+            ),
+            "calendar_external_id": calendar_id,
+            **observed,
+            "read_details": role in {"reader", "writer", "owner"},
+            "read_free_busy": role != "none",
+            "write_events": role in {"writer", "owner"},
+            "observed_at": ctx.now_factory().isoformat(),
+        }
+        event_identity_fingerprint = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         event_id = await self._append(
             ctx=ctx,
             event_type="calendar.source_observed",
             idempotency_key=(
                 "google-calendar:calendar-source:"
                 + hashlib.sha256(
-                    "\x1f".join((cursor_id, source_external_id, fingerprint)).encode(
-                        "utf-8"
-                    )
+                    "\x1f".join(
+                        (cursor_id, source_external_id, event_identity_fingerprint)
+                    ).encode("utf-8")
                 ).hexdigest()
             ),
-            payload={
-                "member_id": str(self._config["member_id"]),
-                "provider": "google_calendar",
-                "provider_account_id": str(
-                    self._config.get("provider_account_id")
-                    or self._config.get("user_email")
-                ),
-                "calendar_external_id": calendar_id,
-                **observed,
-                "read_details": role in {"reader", "writer", "owner"},
-                "read_free_busy": role != "none",
-                "write_events": role in {"writer", "owner"},
-                "observed_at": ctx.now_factory().isoformat(),
-            },
+            payload=payload,
         )
         if cursor_store is not None:
             cursor_store.record_success(
