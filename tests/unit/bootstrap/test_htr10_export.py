@@ -98,3 +98,54 @@ def test_reviewed_binding_audit_view_rejects_other_transition_failures(
             mapping={"members": []},
             test_mode=True,
         )
+
+
+def _repair_diagnostics() -> dict[str, Any]:
+    return {
+        "status": "degraded",
+        "ready": False,
+        "safe_reads": True,
+        "event_ingest_ready": True,
+        "observation_active": True,
+        "write_admission": "observation_suppressed",
+        "capabilities": {
+            "adapter:provider": {"kind": "adapter", "state": "degraded"},
+            "projection:items": {"kind": "projection", "state": "healthy"},
+            "policy:source-assurance": {
+                "kind": "source_disposition_policy",
+                "state": "healthy",
+            },
+        },
+    }
+
+
+def test_runtime_supports_isolated_degraded_adapter_repair_audit() -> None:
+    assert htr10_export._runtime_supports_read_only_repair_audit(
+        _repair_diagnostics()
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate",),
+    [
+        (lambda value: value.update({"safe_reads": False}),),
+        (lambda value: value.update({"observation_active": False}),),
+        (
+            lambda value: value["capabilities"]["adapter:provider"].update(
+                {"state": "blocked"}
+            ),
+        ),
+        (
+            lambda value: value["capabilities"]["projection:items"].update(
+                {"state": "degraded"}
+            ),
+        ),
+    ],
+)
+def test_runtime_rejects_unsafe_or_non_adapter_repair_audit(
+    mutate: Any,
+) -> None:
+    diagnostics = _repair_diagnostics()
+    mutate(diagnostics)
+
+    assert not htr10_export._runtime_supports_read_only_repair_audit(diagnostics)

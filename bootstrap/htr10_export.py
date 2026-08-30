@@ -95,6 +95,45 @@ def _reviewed_binding_audit_view(
     return transition.prepared, transition.public()
 
 
+def _runtime_supports_read_only_repair_audit(diagnostics: object) -> bool:
+    """Accept healthy readiness or one isolated degraded adapter boundary.
+
+    A protected repair candidate must be able to attest HTR-10 when the active
+    adapter defect it repairs is the only reason overall readiness is false.
+    Safe reads, event ingest, observation containment, and every non-adapter
+    capability remain mandatory. The guarded updater still requires a fresh
+    backup and a healthy post-switch Doctor or rolls back automatically.
+    """
+
+    if not isinstance(diagnostics, dict):
+        return False
+    if diagnostics.get("ready") is True:
+        return True
+    if (
+        diagnostics.get("status") != "degraded"
+        or diagnostics.get("safe_reads") is not True
+        or diagnostics.get("event_ingest_ready") is not True
+        or diagnostics.get("observation_active") is not True
+        or diagnostics.get("write_admission")
+        not in {"blocked", "observation_suppressed"}
+    ):
+        return False
+    capabilities = diagnostics.get("capabilities")
+    if not isinstance(capabilities, dict) or not capabilities:
+        return False
+    degraded_adapter = False
+    for capability in capabilities.values():
+        if not isinstance(capability, dict):
+            return False
+        state = capability.get("state")
+        if state not in {"degraded", "blocked"}:
+            continue
+        if capability.get("kind") != "adapter" or state != "degraded":
+            return False
+        degraded_adapter = True
+    return degraded_adapter
+
+
 async def export_htr10_audits(
     paths: DeploymentPaths,
     *,
@@ -136,7 +175,7 @@ async def export_htr10_audits(
         household_mapping=mapping,
     )
     diagnostics = ServiceManager(paths, test_mode=test_mode).runtime_diagnostics()
-    if not isinstance(diagnostics, dict) or diagnostics.get("ready") is not True:
+    if not _runtime_supports_read_only_repair_audit(diagnostics):
         raise HTR10ExportError("active runtime readiness is unavailable")
     if diagnostics.get("observation_active") is not True and not test_mode:
         raise HTR10ExportError("observation mode is not active")
