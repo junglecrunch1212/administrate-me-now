@@ -74,6 +74,22 @@ credential-free message through the real communications route, produces a
 private proposal for independent approval, and exits. It opens no provider
 connection.
 
+For continuous human review of the complete member portal, use a dedicated
+fictional instance directory:
+
+```bash
+PYTHONPATH=bridge poetry run adminme demo synthetic-member \
+  --instance-dir /absolute/path/to/dedicated-synthetic-instance
+```
+
+Open `http://127.0.0.1:8321/member/triage`. This persistent sandbox contains
+only fictional members, accounts, source content, calendar/tasks, finance,
+Triage history, feedback, and rules. It uses the encrypted production event
+log and normal projections/pipelines, but never loads provider adapters. The
+default deterministic OpenClaw transport is repeatable and cost-free. An
+explicit `--model-transport gateway` uses only the pinned loopback Gateway and
+requires the normal OpenClaw token and shared-secret environment variables.
+
 ## Verification and architecture
 
 The release aggregate on supported macOS is:

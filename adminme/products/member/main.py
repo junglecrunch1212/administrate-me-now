@@ -4592,7 +4592,11 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
             "authenticated_id": session.auth_member_id,
             "authenticated_display_name": member_label(runtime, session.auth_member_id),
             "authenticated_role": session.auth_role,
-            "authentication_method": "Tailscale",
+            "authentication_method": (
+                "Synthetic loopback"
+                if runtime.settings.synthetic_member_mode
+                else "Tailscale"
+            ),
             "viewing_as": session.auth_member_id != session.view_member_id,
         },
         "navigation": navigation(session),
@@ -4617,6 +4621,22 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
             "actions_as": session.auth_member_id,
             "reads_as": session.view_member_id,
         },
+        "synthetic": (
+            {
+                "active": True,
+                "scenario_id": runtime.settings.synthetic_scenario_id,
+                "scenario_version": runtime.settings.synthetic_scenario_version,
+                "data_policy": "fictional_behavioral_fixture",
+                "provider_effects": "synthetic_only",
+                "model_transport": (
+                    "deterministic_openclaw_fixture"
+                    if runtime.settings.deterministic_openclaw_fixture
+                    else "pinned_openclaw_gateway"
+                ),
+            }
+            if runtime.settings.synthetic_member_mode
+            else None
+        ),
     }
 
 

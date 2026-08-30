@@ -41,6 +41,10 @@
           <div><strong>Observation mode is active.</strong><span>Approved actions are audited as “would happen” records; connected providers are not changed.</span></div>
           <a href="/api/core/v1/activity" target="_blank" rel="noopener">View activity evidence</a>
         </section>
+        <section id="synthetic-banner" class="synthetic-banner" aria-label="Synthetic member status" hidden>
+          <div><strong>Production-faithful synthetic member · fictional data only.</strong><details><summary>How this sandbox works</summary><span>Actions use an isolated encrypted event log, real projections and gates, synthetic providers, and the configured OpenClaw seam.</span></details></div>
+          <span id="synthetic-model" class="pill">Synthetic model</span>
+        </section>
         <section id="view-as-banner" class="observation-banner view-as-banner" aria-label="View-as status" hidden></section>
         <div id="state-banner" class="banner" role="status" hidden></div>
         <section id="surface" class="surface" aria-live="polite" aria-busy="true">

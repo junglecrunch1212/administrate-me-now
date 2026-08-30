@@ -130,6 +130,10 @@ class RuntimeSettings:
     deterministic_openclaw_fixture: bool = False
     member_roles: dict[str, str] = field(default_factory=dict)
     fixture_member_id: str | None = None
+    synthetic_member_mode: bool = False
+    synthetic_scenario_id: str | None = None
+    synthetic_member_identity: str | None = None
+    synthetic_scenario_version: int | None = None
     host_topology: dict[str, Any] = field(default_factory=dict)
     deployment_evidence: dict[str, Any] = field(default_factory=dict)
     deployment_evidence_required: bool = False
@@ -154,6 +158,7 @@ class RuntimeSettings:
             raise ValueError("adapter_config.adapters must be a list")
         self._validate_household_mapping()
         self._validate_identity_bindings()
+        self._validate_synthetic_member_mode()
         known_members = set(self.member_roles) | set(self.member_identities.values())
         known_members.update(
             str(member["member_id"])
@@ -405,6 +410,70 @@ class RuntimeSettings:
             if mapped_role is not None and mapped_role != role:
                 raise ValueError("member role map contradicts the household mapping")
 
+    def _validate_synthetic_member_mode(self) -> None:
+        values_present = any(
+            value is not None
+            for value in (
+                self.synthetic_scenario_id,
+                self.synthetic_member_identity,
+                self.synthetic_scenario_version,
+            )
+        )
+        if not self.synthetic_member_mode:
+            if values_present:
+                raise ValueError(
+                    "synthetic scenario metadata requires synthetic_member_mode"
+                )
+            return
+        if self.deployment_evidence_required:
+            raise ValueError("synthetic member mode cannot be a deployment runtime")
+        if not self.synthetic_scenario_id or not self.synthetic_member_identity:
+            raise ValueError("synthetic member mode requires a scenario and identity")
+        if not isinstance(self.synthetic_scenario_version, int) or (
+            self.synthetic_scenario_version < 1
+        ):
+            raise ValueError("synthetic member mode requires a positive scenario version")
+        deterministic_pair = (
+            self.deterministic_openclaw_fixture
+            and self.deterministic_member_chat_fixture
+        )
+        gateway_pair = (
+            not self.deterministic_openclaw_fixture
+            and not self.deterministic_member_chat_fixture
+            and bool(self.openclaw_gateway_token)
+        )
+        if not (deterministic_pair or gateway_pair):
+            raise ValueError(
+                "synthetic member mode requires either paired deterministic fixtures "
+                "or the pinned OpenClaw Gateway"
+            )
+        normalized_identity = self.synthetic_member_identity.strip().casefold()
+        matched_member = next(
+            (
+                member_id
+                for identity, member_id in self.member_identities.items()
+                if identity.strip().casefold() == normalized_identity
+            ),
+            None,
+        )
+        if matched_member is None or matched_member != self.fixture_member_id:
+            raise ValueError(
+                "synthetic identity must map exactly to the fixture member"
+            )
+        if self.member_roles.get(matched_member) != "principal":
+            raise ValueError("synthetic browser identity must be a principal")
+        if matched_member not in self.member_chat_enabled_members:
+            raise ValueError("synthetic member must have the OpenClaw chat seam enabled")
+        if any(
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("config"), dict)
+            or entry["config"].get("synthetic") is not True
+            for entry in self.adapter_config.get("adapters", [])
+        ):
+            raise ValueError(
+                "every synthetic connector must be explicitly marked synthetic"
+            )
+
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
         instance = load_instance_config(resolve_instance_dir())
@@ -502,6 +571,10 @@ class RuntimeSettings:
         host_topology: dict[str, Any] | None = None,
         deployment_evidence: dict[str, Any] | None = None,
         deployment_evidence_required: bool = False,
+        synthetic_member_mode: bool = False,
+        synthetic_scenario_id: str | None = None,
+        synthetic_member_identity: str | None = None,
+        synthetic_scenario_version: int | None = None,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -533,6 +606,10 @@ class RuntimeSettings:
             host_topology=dict(host_topology or {}),
             deployment_evidence=dict(deployment_evidence or {}),
             deployment_evidence_required=deployment_evidence_required,
+            synthetic_member_mode=synthetic_member_mode,
+            synthetic_scenario_id=synthetic_scenario_id,
+            synthetic_member_identity=synthetic_member_identity,
+            synthetic_scenario_version=synthetic_scenario_version,
         )
 
 
@@ -753,17 +830,21 @@ class AdministrateMeRuntime:
                 config_data=self.settings_control.effective_adapter_config(
                     self.settings.adapter_config
                 ),
-                adapter_loader=lambda config: load_builtin_adapters(
-                    config,
-                    repository_root=self.settings.repository_root,
-                    member_roles=self.settings.member_roles,
-                    household_mapping=self.settings.household_mapping,
-                    service_principal_ids={
-                        principal.service_principal_id
-                        for principal in self.settings.service_principals
-                    },
-                    service_principal_provider_authorizations={},
-                    validate_bindings=self.settings.deployment_evidence_required,
+                adapter_loader=(
+                    (lambda _config: [])
+                    if self.settings.synthetic_member_mode
+                    else lambda config: load_builtin_adapters(
+                        config,
+                        repository_root=self.settings.repository_root,
+                        member_roles=self.settings.member_roles,
+                        household_mapping=self.settings.household_mapping,
+                        service_principal_ids={
+                            principal.service_principal_id
+                            for principal in self.settings.service_principals
+                        },
+                        service_principal_provider_authorizations={},
+                        validate_bindings=self.settings.deployment_evidence_required,
+                    )
                 ),
                 ctx_factory=lambda: AdapterContext(
                     event_sink=self._require_events(),
@@ -806,6 +887,10 @@ class AdministrateMeRuntime:
             )
             await self.xlsx_reverse.start()
             await self._reconcile_household_enrollment()
+            if self.settings.synthetic_member_mode:
+                from adminme.synthetic_member import reconcile_synthetic_member
+
+                await reconcile_synthetic_member(self)
             await self._refresh_capability_registry()
             self.started = True
 

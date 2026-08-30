@@ -4047,6 +4047,12 @@ async function initialize() {
     memberButton.setAttribute("aria-label", `Open settings for ${state.bootstrap.member.authenticated_display_name}`);
     $("#observation-pill").textContent = state.bootstrap.observation_mode ? "Observation mode" : "Member-safe";
     $("#observation-banner").hidden = !state.bootstrap.observation_mode;
+    const syntheticBanner = $("#synthetic-banner");
+    syntheticBanner.hidden = !state.bootstrap.synthetic?.active;
+    if (state.bootstrap.synthetic?.active) {
+      $("#synthetic-model").textContent = state.bootstrap.synthetic.model_transport === "pinned_openclaw_gateway" ? "Pinned OpenClaw Gateway" : "Deterministic OpenClaw fixture";
+      document.body.classList.add("synthetic-member-mode");
+    }
     const viewAs = $("#view-as-banner"); viewAs.hidden = !state.bootstrap.member.viewing_as;
     if (state.bootstrap.member.viewing_as) viewAs.textContent = `Viewing ${state.bootstrap.member.display_name}. Reads follow that member’s scope; actions remain attributed to ${state.bootstrap.member.authenticated_display_name}, and Settings changes are disabled.`;
     $("#add-for-review").disabled = Boolean(state.bootstrap.member.viewing_as);

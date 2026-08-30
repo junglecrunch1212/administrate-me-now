@@ -494,7 +494,11 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         override = lifecycle.get(connection_id)
         override_state = override.get("state") if isinstance(override, dict) else None
         configured_enabled = entry.get("enabled") is not False
-        credentials_present = _credential_reference_present(config)
+        synthetic_connection = bool(
+            getattr(runtime.settings, "synthetic_member_mode", False)
+            and config.get("synthetic") is True
+        )
+        credentials_present = synthetic_connection or _credential_reference_present(config)
         runtime_row = inventory.get(connection_id)
         binding = next(
             (
@@ -509,6 +513,8 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         error = None
         if override_state == "paused" or not configured_enabled:
             runtime_state = "not_running"
+        elif synthetic_connection:
+            runtime_state = "running"
         elif isinstance(runtime_row, dict):
             runtime_state = str(runtime_row.get("state") or "unknown")
             last_sync = runtime_row.get("last_cursor_advance_at")
@@ -538,6 +544,9 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
             setup_state = "configured"
 
         code_write_capabilities = (
+            list(meta["write"])
+            if synthetic_connection
+            else
             list(runtime_row.get("write_capabilities") or [])
             if isinstance(runtime_row, dict)
             else []
@@ -559,9 +568,19 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                     else None
                 ),
                 "binding": {
-                    "state": "healthy" if binding is not None else "unverified",
+                    "state": (
+                        "synthetic"
+                        if synthetic_connection
+                        else "healthy"
+                        if binding is not None
+                        else "unverified"
+                    ),
                     "ownership_attested": config.get("ownership_attested") is True,
-                    "provenance": config.get("binding_provenance"),
+                    "provenance": (
+                        "synthetic-scenario"
+                        if synthetic_connection
+                        else config.get("binding_provenance")
+                    ),
                     "permission_count": len(config.get("permission_scope") or []),
                     "content_exposed": False,
                 },
@@ -580,7 +599,8 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                     "openclaw_approval_required": bool(write_permissions),
                     "writes_execute": bool(write_permissions)
                     and (
-                        binding is not None
+                        synthetic_connection
+                        or binding is not None
                         or not getattr(
                             runtime.settings, "deployment_evidence_required", False
                         )

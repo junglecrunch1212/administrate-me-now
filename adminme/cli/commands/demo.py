@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
 import typer
+import uvicorn
 from fastapi.testclient import TestClient
 
 from adminme.demo import FIXTURE_MEMBER_ID
 from adminme.runtime.application import RuntimeSettings, create_application
+from adminme.synthetic_member import build_synthetic_member_settings
 
 demo_app = typer.Typer(help="Run deterministic, credential-free product demos.")
 
@@ -51,6 +54,55 @@ def canonical_message(
             if response.status_code != 200:
                 raise typer.Exit(code=1)
             typer.echo(json.dumps(response.json(), indent=2, sort_keys=True))
+
+
+@demo_app.command("synthetic-member")
+def synthetic_member(
+    instance_dir: Path = typer.Option(
+        ...,
+        "--instance-dir",
+        help=(
+            "Dedicated persistent directory for fictional synthetic state. "
+            "An existing non-synthetic instance is rejected."
+        ),
+    ),
+    port: int = typer.Option(8321, min=1024, max=65535),
+    model_transport: str = typer.Option(
+        "deterministic",
+        "--model-transport",
+        help="Use 'deterministic' or the locally pinned 'gateway'.",
+    ),
+) -> None:
+    """Serve the production-composed synthetic member on loopback only."""
+
+    repository_root = Path(__file__).resolve().parents[3]
+    if model_transport not in {"deterministic", "gateway"}:
+        raise typer.BadParameter("must be 'deterministic' or 'gateway'")
+    gateway = model_transport == "gateway"
+    gateway_token = os.environ.get("ADMINME_OPENCLAW_GATEWAY_TOKEN")
+    shared_secret = os.environ.get("ADMINME_OPENCLAW_SHARED_SECRET")
+    if gateway and (not gateway_token or not shared_secret):
+        raise typer.BadParameter(
+            "gateway mode requires ADMINME_OPENCLAW_GATEWAY_TOKEN and "
+            "ADMINME_OPENCLAW_SHARED_SECRET"
+        )
+    settings = build_synthetic_member_settings(
+        instance_dir,
+        repository_root,
+        openclaw_gateway_token=gateway_token if gateway else None,
+        openclaw_shared_secret=shared_secret if gateway else None,
+    )
+    typer.echo(
+        f"Synthetic member ready at http://127.0.0.1:{port}/member/triage "
+        f"using {settings.instance.instance_dir}"
+    )
+    uvicorn.run(
+        create_application(settings),
+        host="127.0.0.1",
+        port=port,
+        proxy_headers=False,
+        server_header=False,
+    )
 
 
 __all__ = ["demo_app"]
