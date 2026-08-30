@@ -71,6 +71,10 @@ class ProviderBindingTransitionError(RuntimeError):
     """The adapter configuration cannot be transitioned exactly."""
 
 
+class NoEligibleProviderBindingTransitionError(ProviderBindingTransitionError):
+    """The reviewed provider-binding migration is already fully applied."""
+
+
 def _is_sha256(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -533,7 +537,7 @@ def prepare_provider_binding_transition(
         prepared_adapters.extend(enrolled_entries)
 
     if migrated == 0 and not enrolled_entries:
-        raise ProviderBindingTransitionError(
+        raise NoEligibleProviderBindingTransitionError(
             "provider-binding transition has no eligible changes"
         )
     source_adapters = source_document["adapters"]
@@ -615,6 +619,7 @@ def prepare_live_provider_binding_transition(
 
 
 __all__ = [
+    "NoEligibleProviderBindingTransitionError",
     "PreparedProviderBindingTransition",
     "ProviderBindingTransitionError",
     "TRANSITION_CONTRACT",
