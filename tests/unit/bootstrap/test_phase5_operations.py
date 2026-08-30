@@ -2499,6 +2499,53 @@ def test_upgrade_aborts_any_transient_wait_on_hidden_adapter_degradation(
     assert include_synthetic == [False, False]
 
 
+def test_upgrade_waits_for_preexisting_isolated_adapter_degradation(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+    }
+    healthy = {"status": "healthy", "checks": []}
+    reports = iter((transient, healthy, healthy))
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return next(reports)
+
+    diagnostics = {
+        "status": "degraded",
+        "ready": True,
+        "safe_reads": True,
+        "event_ingest_ready": True,
+        "observation_active": True,
+        "write_admission": "observation_suppressed",
+        "capabilities": {
+            "adapter:provider": {"kind": "adapter", "state": "degraded"},
+            "projection:items": {"kind": "projection", "state": "healthy"},
+        },
+    }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: diagnostics)
+
+    result = manager._post_switch_doctor(
+        REPO_ROOT,
+        allowed_degraded_adapter_ids=frozenset({"adapter:provider"}),
+    )
+
+    assert result == healthy
+    assert include_synthetic == [False, False, True]
+
+
 def test_upgrade_aborts_any_transient_wait_on_hidden_blocked_capability(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,

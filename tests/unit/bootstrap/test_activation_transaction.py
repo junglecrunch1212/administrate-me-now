@@ -388,6 +388,57 @@ def test_activation_recovery_waits_for_bounded_source_settlement(
     assert not owner.path.exists()
 
 
+def test_activation_recovery_accepts_only_isolated_degraded_adapter_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    _documents(paths)
+    owner = ActivationJournal(paths)
+    owner.create(_journal_value(paths))
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    diagnostics = {
+        "status": "degraded",
+        "ready": False,
+        "safe_reads": True,
+        "event_ingest_ready": True,
+        "observation_active": True,
+        "write_admission": "observation_suppressed",
+        "capabilities": {
+            "adapter:provider": {"kind": "adapter", "state": "degraded"},
+            "projection:items": {"kind": "projection", "state": "healthy"},
+        },
+    }
+    manager.services = SimpleNamespace(
+        stop=lambda *args, **kwargs: None,
+        start=lambda: SimpleNamespace(
+            status="degraded",
+            runtime="degraded",
+            openclaw="running",
+        ),
+        runtime_diagnostics=lambda: diagnostics,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: {"status": "failed", "checks": []},
+    )
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = manager._recover_interrupted_transaction()  # noqa: SLF001
+
+    assert result is not None and result["status"] == "recovered"
+    assert not owner.path.exists()
+
+
 def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -682,6 +733,10 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
             )
         ),
         runtime_is_live=lambda: events.append("action:liveness") or True,
+        runtime_diagnostics=lambda: {
+            "ready": True,
+            "capabilities": {"projection:items": {"state": "healthy"}},
+        },
     )
     monkeypatch.setattr(
         manager, "_candidate_commit", lambda _candidate: CANDIDATE_COMMIT
@@ -799,7 +854,9 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     monkeypatch.setattr(
         manager,
         "_post_switch_doctor",
-        lambda _release: events.append("action:doctor") or {"status": "healthy"},
+        lambda _release, **_kwargs: (
+            events.append("action:doctor") or {"status": "healthy"}
+        ),
     )
     original_transition = manager.activation_journal.transition
 
