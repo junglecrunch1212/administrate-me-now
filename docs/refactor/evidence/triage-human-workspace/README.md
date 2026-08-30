@@ -46,11 +46,11 @@ following retained SHA-256 values:
 
 | Artifact | SHA-256 |
 |---|---|
-| `after-decision-desktop.png` | `85328bea54d4408742d940f32de7af5b7e10e63158989f5df7a963efc0ba44f8` |
-| `after-narrow.png` | `2cdc5c6c2e37420e5bef52241d43876da185757add8294b33de069abbd09db79` |
+| `after-decision-desktop.png` | `d770e6e8ec0e5f38087dffbbed652840965c9aabc399e2216ad11f1a4b5f89a7` |
+| `after-narrow.png` | `cb42f5ea6c183cdda6e9f16b985e00266a614d520bde4e1fc01699e0ae8ee1ba` |
 | `after-gmail-category.png` | `738f9e36ed56b66299a85c75a8cd2e4f8cacfed6a304051ef2ddbb9ed374a25b` |
 | `after-caught-up-tablet.png` | `c290d17b1029fed9cf0044b6b99c1ec219c661744f1af89fc08e538bb31405bd` |
-| `gate7-results.json` | `da1f2e4fb4c2b0b9832df089a2d5a476fd455880fa99e2de86fb18e747df6178` |
+| `gate7-results.json` | `5349eb8c0461a832a65885805ae4886ee5a441b9bd130628bf070a46f0f710b8` |
 
 This is product and release-candidate evidence only. It grants no authority to
 merge, deploy, migrate a runtime, enroll a provider, enable writes, or alter a

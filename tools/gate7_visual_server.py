@@ -490,7 +490,10 @@ def build_app():
                     "owner_member_id": PRINCIPAL,
                     "title": "Renew the annual registration",
                     "candidate": {
-                        "due": (now + timedelta(days=10)).replace(hour=14).isoformat(),
+                        # Google Tasks exposes a date-only due capability. Keep
+                        # this literal independent of both the fixture clock and
+                        # the browser host timezone so Gate 7 tests that contract.
+                        "due": "2026-09-09",
                         "notes": "Provider-ceiling visual fixture.",
                     },
                     "route": {
