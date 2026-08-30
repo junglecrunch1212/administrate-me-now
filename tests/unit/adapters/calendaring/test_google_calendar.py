@@ -138,6 +138,35 @@ async def test_append_failure_propagates_before_sync_state_can_advance() -> None
         )
 
 
+async def test_explicit_idempotency_key_binds_complete_payload_identity() -> None:
+    adapter = _make_adapter(service=_FakeCalendarService())
+    event_log = _FakeEventLog()
+    ctx = _ctx(event_log)
+
+    await adapter._append(
+        ctx=ctx,
+        event_type="calendar.event_added",
+        payload={"revision": "one"},
+        idempotency_key="provider-revision",
+    )
+    await adapter._append(
+        ctx=ctx,
+        event_type="calendar.event_added",
+        payload={"revision": "two"},
+        idempotency_key="provider-revision",
+    )
+    await adapter._append(
+        ctx=ctx,
+        event_type="calendar.event_added",
+        payload={"revision": "one"},
+        idempotency_key="provider-revision",
+    )
+
+    first, second, exact_retry = event_log.calls
+    assert first["idempotency_key"] != second["idempotency_key"]
+    assert first["idempotency_key"] == exact_retry["idempotency_key"]
+
+
 class _FakeHttpResponse:
     """httplib2-style mapping with a ``status`` attribute, sufficient for
     :meth:`GoogleCalendarAdapter._classify_calendar_error`."""
