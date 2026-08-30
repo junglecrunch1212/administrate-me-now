@@ -828,6 +828,41 @@ async def test_history_sync_emits_messaging_received_per_added_message() -> None
     assert bob["body_html"] == "<p>Hello html world</p>"
 
 
+@pytest.mark.parametrize(
+    ("labels", "event_type"),
+    [([], "messaging.received"), (["SENT"], "messaging.sent")],
+)
+async def test_message_observation_bounds_rfc_references_to_schema_limit(
+    labels: list[str], event_type: str
+) -> None:
+    """Long-lived threads retain the newest 100 RFC reply references."""
+
+    message = _fixture("message_alice.json")
+    message["labelIds"] = labels
+    references = [f"<reply-{index}@example.test>" for index in range(105)]
+    message["payload"]["headers"].append(
+        {"name": "References", "value": " ".join(references)}
+    )
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+            "member_id": "member-test",
+        },
+    )
+    event_log = _FakeEventLog()
+
+    await adapter._emit_message_observation(
+        ctx=_ctx(event_log),
+        message=message,
+        fingerprint=adapter._message_fingerprint(message),
+    )
+
+    [observation] = [call for call in event_log.calls if call["type"] == event_type]
+    assert observation["schema_version"] == 4
+    assert observation["payload"]["references"] == references[-100:]
+
+
 async def test_history_sync_preserves_sent_direction() -> None:
     sent_message = _fixture("message_alice.json")
     sent_message["id"] = "msg-sent"

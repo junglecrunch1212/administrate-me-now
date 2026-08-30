@@ -78,6 +78,7 @@ class _GmailSourceTimestampError(ValueError):
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+_MAX_RFC_REFERENCES = 100
 
 
 # Ordering used by the sensitivity-floor downgrade check.
@@ -94,6 +95,18 @@ ServiceFactory = Callable[[dict[str, Any], list[str], str], Any]
 """Builds a Gmail API service object from credentials JSON + scopes +
 subject email. Tests inject a fake; production uses ``google-auth`` /
 ``google-api-python-client`` (lazily imported)."""
+
+
+def _bounded_rfc_references(value: str | None) -> list[str]:
+    """Keep the newest RFC reply-chain entries within the event contract.
+
+    Gmail may return a ``References`` header longer than the canonical
+    messaging schema's 100-entry ceiling. RFC references are ordered from
+    oldest to newest, so retaining the tail preserves the nearest reply
+    continuity while keeping the source observation valid.
+    """
+
+    return (value or "").split()[-_MAX_RFC_REFERENCES:]
 
 
 def _default_credentials_resolver(reference: str) -> dict[str, Any]:
@@ -1522,7 +1535,7 @@ class GmailAdapter(CommunicationAdapter):
             "bcc_identifiers": bcc_addresses,
             "reply_to_identifier": headers.get("reply-to") or headers.get("from"),
             "rfc_message_id": headers.get("message-id"),
-            "references": (headers.get("references") or "").split(),
+            "references": _bounded_rfc_references(headers.get("references")),
             "in_reply_to": headers.get("in-reply-to"),
             "provider_labels": labels,
             "unread": "UNREAD" in labels,
@@ -1586,7 +1599,7 @@ class GmailAdapter(CommunicationAdapter):
                 "native_message_id": native_message_id,
                 "in_reply_to_interaction_id": None,
                 "rfc_message_id": headers.get("message-id"),
-                "references": (headers.get("references") or "").split(),
+                "references": _bounded_rfc_references(headers.get("references")),
                 "in_reply_to": headers.get("in-reply-to"),
             },
             occurred_at_override=sent_iso,
