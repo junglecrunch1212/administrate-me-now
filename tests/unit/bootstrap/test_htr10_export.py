@@ -120,9 +120,7 @@ def _repair_diagnostics() -> dict[str, Any]:
 
 
 def test_runtime_supports_isolated_degraded_adapter_repair_audit() -> None:
-    assert htr10_export._runtime_supports_read_only_repair_audit(
-        _repair_diagnostics()
-    )
+    assert htr10_export._runtime_supports_read_only_repair_audit(_repair_diagnostics())
 
 
 @pytest.mark.parametrize(
