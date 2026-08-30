@@ -9,6 +9,7 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.candidate_policy import SOURCE_BY_ID
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
 
@@ -260,19 +261,38 @@ def _queue_revision(
     return digest.hexdigest()
 
 
-def _cursor_encode(revision: str, rank: int, proposed_at: str, proposal_id: str) -> str:
+def _cursor_encode(
+    revision: str,
+    view_key: str,
+    rank: int,
+    proposed_at: str,
+    proposal_id: str,
+) -> str:
     raw = json.dumps(
-        [1, revision, rank, proposed_at, proposal_id], separators=(",", ":")
+        [2, revision, view_key, rank, proposed_at, proposal_id],
+        separators=(",", ":"),
     ).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _cursor_decode(value: str | None) -> tuple[str | None, int, str, str] | None:
+def _cursor_decode(
+    value: str | None,
+) -> tuple[str | None, str | None, int, str, str] | None:
     if not value:
         return None
     try:
         padded = value + "=" * (-len(value) % 4)
         decoded = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if isinstance(decoded, list) and len(decoded) == 6 and decoded[0] == 2:
+            revision, view_key, rank, proposed_at, proposal_id = decoded[1:]
+            if (
+                isinstance(revision, str)
+                and isinstance(view_key, str)
+                and isinstance(rank, int)
+                and isinstance(proposed_at, str)
+                and isinstance(proposal_id, str)
+            ):
+                return revision, view_key, rank, proposed_at, proposal_id
         if isinstance(decoded, list) and len(decoded) == 5 and decoded[0] == 1:
             revision, rank, proposed_at, proposal_id = decoded[1:]
             if (
@@ -281,7 +301,7 @@ def _cursor_decode(value: str | None) -> tuple[str | None, int, str, str] | None
                 and isinstance(proposed_at, str)
                 and isinstance(proposal_id, str)
             ):
-                return revision, rank, proposed_at, proposal_id
+                return revision, None, rank, proposed_at, proposal_id
         # Pre-revision cursors cannot prove a stable continuation after an
         # upgrade. Decode them only far enough to return the explicit stale
         # contract instead of treating a once-valid cursor as malformed.
@@ -292,7 +312,7 @@ def _cursor_decode(value: str | None) -> tuple[str | None, int, str, str] | None
                 and isinstance(proposed_at, str)
                 and isinstance(proposal_id, str)
             ):
-                return None, rank, proposed_at, proposal_id
+                return None, None, rank, proposed_at, proposal_id
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
     raise ValueError("invalid triage cursor")
@@ -300,15 +320,11 @@ def _cursor_decode(value: str | None) -> tuple[str | None, int, str, str] | None
 
 def _lens_where(lens: str) -> tuple[str, list[Any]]:
     if lens == "needs_interpretation":
-        return "AND target_kind IS NULL", []
+        return "AND review_state='needs_interpretation'", []
     if lens == "needs_details":
-        return "AND (ownership_state='unknown' OR lifecycle_state='unknown')", []
+        return "AND review_state='needs_details'", []
     if lens == "low_signal":
-        return (
-            "AND queue_lane='standard' AND ownership_state='unknown' "
-            "AND lifecycle_state='unknown'",
-            [],
-        )
+        return "AND queue_lane='standard'", []
     if lens == "recurring_exceptions":
         return "AND queue_lane='recurring_exception'", []
     if lens == "learned_rules":
@@ -319,8 +335,21 @@ def _lens_where(lens: str) -> tuple[str, list[Any]]:
     if lens == "all_candidates":
         return "", []
     if lens == "ready":
-        return "AND target_kind IS NOT NULL", []
+        return "AND queue_lane!='standard'", []
     return "", []
+
+
+def _source_label(source_id: str) -> str:
+    catalog = SOURCE_BY_ID.get(source_id)
+    if catalog is not None:
+        return str(catalog["label"])
+    fallbacks = {
+        "origin:triage_item": "Derived source",
+        "origin:household_action": "Household proposal",
+        "origin:commitment_proposal": "Commitment proposal",
+        "origin:identity_suggestion": "Identity suggestion",
+    }
+    return fallbacks.get(source_id, source_id.rsplit(":", 1)[-1].replace("_", " ").title())
 
 
 def triage_page_for_member(
@@ -329,6 +358,9 @@ def triage_page_for_member(
     *,
     member_id: str,
     lens: str = "all_candidates",
+    sort: str = "attention",
+    source_id: str | None = None,
+    target_kind: str | None = None,
     cursor: str | None = None,
     limit: int = 30,
 ) -> dict[str, Any]:
@@ -350,13 +382,36 @@ def triage_page_for_member(
     }
     if lens not in allowed_lenses:
         raise ValueError("unsupported triage lens")
+    if sort not in {"attention", "oldest", "newest"}:
+        raise ValueError("unsupported triage sort")
+    if lens != "all_candidates" and (
+        sort != "attention" or source_id is not None or target_kind is not None
+    ):
+        raise ValueError("inventory sort and filters require the all-candidates lens")
+    if source_id is not None and (not source_id or len(source_id) > 240):
+        raise ValueError("invalid triage source filter")
+    if target_kind is not None and (not target_kind or len(target_kind) > 80):
+        raise ValueError("invalid triage type filter")
     limit = max(1, min(limit, 100))
     decoded = _cursor_decode(cursor)
     private_scope = f"private:{member_id}"
     queue_revision = _queue_revision(conn, session, member_id=member_id)
-    if decoded is not None and decoded[0] != queue_revision:
+    view_key = json.dumps(
+        [lens, sort, source_id or "", target_kind or ""], separators=(",", ":")
+    )
+    if decoded is not None and (
+        decoded[0] != queue_revision or decoded[1] != view_key
+    ):
         raise ValueError("stale triage cursor")
     lens_sql, lens_params = _lens_where(lens)
+    filter_sql = ""
+    filter_params: list[Any] = []
+    if source_id is not None:
+        filter_sql += " AND source_id=?"
+        filter_params.append(source_id)
+    if target_kind is not None:
+        filter_sql += " AND target_kind=?"
+        filter_params.append(target_kind)
     lane_case = (
         "CASE queue_lane "
         + " ".join(f"WHEN '{lane}' THEN {rank}" for lane, rank in _LANE_ORDER.items())
@@ -367,29 +422,48 @@ def triage_page_for_member(
     )
     cursor_sql = ""
     cursor_params: list[Any] = []
+    context_order = f"{lane_case}, proposed_at, proposal_id"
+    result_order = "lane_rank, proposed_at, proposal_id"
     if decoded is not None:
-        _, rank, proposed_at, proposal_id = decoded
-        cursor_sql = (
-            "AND (lane_rank > ? OR (lane_rank=? AND (proposed_at > ? OR "
-            "(proposed_at=? AND proposal_id>?))))"
-        )
-        cursor_params = [rank, rank, proposed_at, proposed_at, proposal_id]
+        _, _, rank, proposed_at, proposal_id = decoded
+        if sort == "attention":
+            cursor_sql = (
+                "AND (lane_rank > ? OR (lane_rank=? AND (proposed_at > ? OR "
+                "(proposed_at=? AND proposal_id>?))))"
+            )
+            cursor_params = [rank, rank, proposed_at, proposed_at, proposal_id]
+        elif sort == "oldest":
+            cursor_sql = (
+                "AND (proposed_at > ? OR (proposed_at=? AND proposal_id>?))"
+            )
+            cursor_params = [proposed_at, proposed_at, proposal_id]
+        else:
+            cursor_sql = (
+                "AND (proposed_at < ? OR (proposed_at=? AND proposal_id<?))"
+            )
+            cursor_params = [proposed_at, proposed_at, proposal_id]
+    if sort == "oldest":
+        context_order = "proposed_at, proposal_id"
+        result_order = "proposed_at, proposal_id"
+    elif sort == "newest":
+        context_order = "proposed_at DESC, proposal_id DESC"
+        result_order = "proposed_at DESC, proposal_id DESC"
     roots = conn.execute(
         f"""
         WITH ranked AS (
           SELECT *, {lane_case} AS lane_rank,
                  ROW_NUMBER() OVER (
                    PARTITION BY context_id
-                   ORDER BY {lane_case}, proposed_at, proposal_id
+                   ORDER BY {context_order}
                  ) AS context_row
             FROM triage_items
            WHERE tenant_id=? AND owner_member_id=?
              AND owner_scope=? AND visibility_scope=?
              AND state IN ('pending_interpretation','pending_review')
-             {disposition_sql} {lens_sql}
+             {disposition_sql} {lens_sql} {filter_sql}
         )
         SELECT * FROM ranked WHERE context_row=1 {cursor_sql}
-        ORDER BY lane_rank, proposed_at, proposal_id LIMIT ?
+        ORDER BY {result_order} LIMIT ?
         """,  # noqa: S608 - fragments are fixed allowlists above
         [
             session.tenant_id,
@@ -397,6 +471,7 @@ def triage_page_for_member(
             private_scope,
             private_scope,
             *lens_params,
+            *filter_params,
             *cursor_params,
             limit + 1,
         ],
@@ -415,6 +490,7 @@ def triage_page_for_member(
                    AND owner_scope=? AND visibility_scope=?
                    AND state IN ('pending_interpretation','pending_review')
                    AND context_id IN ({placeholders})
+                   {disposition_sql} {lens_sql} {filter_sql}
                  ORDER BY proposed_at, proposal_id""",  # noqa: S608 - placeholders only
             [
                 session.tenant_id,
@@ -422,6 +498,8 @@ def triage_page_for_member(
                 private_scope,
                 private_scope,
                 *context_ids,
+                *lens_params,
+                *filter_params,
             ],
         ).fetchall()
         visible = filter_rows(session, [dict(row) for row in children])
@@ -481,11 +559,83 @@ def triage_page_for_member(
             GROUP BY queue_lane ORDER BY queue_lane""",
         (session.tenant_id, member_id, private_scope, private_scope),
     ).fetchall()
+    source_rows = conn.execute(
+        """SELECT source_id, COUNT(*) AS candidates,
+                  COUNT(DISTINCT context_id) AS matters
+             FROM triage_items
+            WHERE tenant_id=? AND owner_member_id=?
+              AND owner_scope=? AND visibility_scope=?
+              AND state IN ('pending_interpretation','pending_review')
+            GROUP BY source_id ORDER BY candidates DESC, source_id""",
+        (session.tenant_id, member_id, private_scope, private_scope),
+    ).fetchall()
+    kind_rows = conn.execute(
+        """SELECT target_kind, COUNT(*) AS candidates,
+                  COUNT(DISTINCT context_id) AS matters
+             FROM triage_items
+            WHERE tenant_id=? AND owner_member_id=?
+              AND owner_scope=? AND visibility_scope=?
+              AND state IN ('pending_interpretation','pending_review')
+              AND target_kind IS NOT NULL
+            GROUP BY target_kind ORDER BY candidates DESC, target_kind""",
+        (session.tenant_id, member_id, private_scope, private_scope),
+    ).fetchall()
+    view_counts: dict[str, dict[str, int]] = {}
+    for view in (
+        "ready",
+        "needs_details",
+        "needs_interpretation",
+        "low_signal",
+        "recurring_exceptions",
+        "all_candidates",
+    ):
+        view_lens_sql, view_lens_params = _lens_where(view)
+        view_disposition_sql = (
+            "" if view == "all_candidates" else "AND decision_disposition='decision'"
+        )
+        count_row = conn.execute(
+            f"""SELECT COUNT(*) AS candidates,
+                       COUNT(DISTINCT context_id) AS matters
+                  FROM triage_items
+                 WHERE tenant_id=? AND owner_member_id=?
+                   AND owner_scope=? AND visibility_scope=?
+                   AND state IN ('pending_interpretation','pending_review')
+                   {view_disposition_sql} {view_lens_sql}""",  # noqa: S608
+            [
+                session.tenant_id,
+                member_id,
+                private_scope,
+                private_scope,
+                *view_lens_params,
+            ],
+        ).fetchone()
+        view_counts[view] = {
+            "candidates": int(count_row["candidates"] or 0),
+            "matters": int(count_row["matters"] or 0),
+        }
+    selection_row = conn.execute(
+        f"""SELECT COUNT(*) AS candidates,
+                   COUNT(DISTINCT context_id) AS matters
+              FROM triage_items
+             WHERE tenant_id=? AND owner_member_id=?
+               AND owner_scope=? AND visibility_scope=?
+               AND state IN ('pending_interpretation','pending_review')
+               {disposition_sql} {lens_sql} {filter_sql}""",  # noqa: S608
+        [
+            session.tenant_id,
+            member_id,
+            private_scope,
+            private_scope,
+            *lens_params,
+            *filter_params,
+        ],
+    ).fetchone()
     next_cursor = None
     if has_more and roots:
         last = roots[-1]
         next_cursor = _cursor_encode(
             queue_revision,
+            view_key,
             int(last["lane_rank"]),
             str(last["proposed_at"]),
             str(last["proposal_id"]),
@@ -501,6 +651,32 @@ def triage_page_for_member(
             "duplicate_evidence": int(inventory_row["duplicate_evidence"] or 0),
             "existing_object_evidence": int(inventory_row["existing_evidence"] or 0),
             "lanes": [dict(row) for row in lane_rows],
+            "views": view_counts,
+            "facets": {
+                "sources": [
+                    {
+                        **dict(row),
+                        "id": str(row["source_id"]),
+                        "label": _source_label(str(row["source_id"])),
+                    }
+                    for row in source_rows
+                ],
+                "types": [
+                    {
+                        **dict(row),
+                        "id": str(row["target_kind"]),
+                        "label": str(row["target_kind"]).replace("_", " ").title(),
+                    }
+                    for row in kind_rows
+                ],
+            },
+        },
+        "selection": {
+            "sort": sort,
+            "source_id": source_id,
+            "target_kind": target_kind,
+            "candidates": int(selection_row["candidates"] or 0),
+            "matters": int(selection_row["matters"] or 0),
         },
         "matters": matters,
         "next_cursor": next_cursor,

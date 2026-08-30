@@ -111,6 +111,9 @@ async def triage(
     session: SessionDep,
     cursor: str | None = None,
     limit: int = 30,
+    sort: str = "attention",
+    source_id: str | None = None,
+    target_kind: str | None = None,
 ) -> dict[str, Any]:
     """Return only derived candidates awaiting this member's adjudication."""
     runtime = request.app.state.runtime
@@ -124,6 +127,9 @@ async def triage(
             session,
             member_id=session.view_member_id,
             lens="all_candidates",
+            sort=sort,
+            source_id=source_id,
+            target_kind=target_kind,
             cursor=cursor,
             limit=limit,
         )
@@ -137,6 +143,7 @@ async def triage(
         "matters": page["matters"],
         "next_cursor": page["next_cursor"],
         "has_more": page["has_more"],
+        "selection": page["selection"],
     }
 
 

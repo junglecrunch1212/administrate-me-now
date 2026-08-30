@@ -158,7 +158,11 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
                     "subject": "Monthly utility payment due",
                     "body_text": body,
                     "received_at": "2026-08-07T12:00:00Z",
-                    "provider_labels": ["INBOX"],
+                    "provider_labels": [
+                        "INBOX",
+                        "CATEGORY_UPDATES",
+                        "Private fixture label",
+                    ],
                     "attachments": [],
                 },
             ),
@@ -184,9 +188,8 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
             runtime.wait_for_projection, "triage", recurrence_proposal["event_id"]
         )
 
-        items = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()[
-            "items"
-        ]
+        surface = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()
+        items = surface["items"]
         assert {item["target_kind"] for item in items} == {"task", "recurrence"}
         assert all(item["review_state"]["human_gate_required"] for item in items)
         grounded_source = f"Subject: Monthly utility payment due\n\n{body}"
@@ -199,11 +202,48 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
             assert context["direction"] == "inbound"
             assert context["sender"] == "billing@example.invalid"
             assert context["subject"] == "Monthly utility payment due"
+            assert context["provider_category"] == {
+                "id": "updates",
+                "label": "Updates",
+                "provenance": "Gmail category",
+                "authority": "provider_observation",
+            }
+            assert "Private fixture label" not in str(context)
             assert context["evidence"]["exactly_grounded"] is True
             assert context["evidence"]["quote"] in grounded_source
             assert context["policy_rule"] == (
                 "candidate_policy_v1:adapter:gmail:review"
             )
+        [source_facet] = surface["triage"]["inventory"]["facets"]["sources"]
+        assert source_facet["source_id"] == source_facet["id"] == "adapter:gmail"
+        assert source_facet["label"] == "Gmail"
+        assert source_facet["candidates"] == len(items)
+        task_count = sum(item["target_kind"] == "task" for item in items)
+        filtered = client.get(
+            "/api/member/v1/surfaces/triage",
+            headers=AUTH,
+            params={
+                "triage_sort": "newest",
+                "triage_source": "adapter:gmail",
+                "triage_kind": "task",
+            },
+        ).json()
+        assert filtered["triage"]["selection"] == {
+            "sort": "newest",
+            "source_id": "adapter:gmail",
+            "target_kind": "task",
+            "candidates": task_count,
+            "matters": len(filtered["triage"]["matters"]),
+        }
+        assert [item["target_kind"] for item in filtered["items"]] == [
+            "task"
+        ] * task_count
+        child = client.get(
+            "/api/member/v1/surfaces/triage",
+            headers=CHILD_AUTH,
+            params={"triage_source": "adapter:gmail"},
+        )
+        assert child.status_code == 404
         assert (
             runtime.projections.connection("tasks")
             .execute("SELECT COUNT(*) FROM tasks")

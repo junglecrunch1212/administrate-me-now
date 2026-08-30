@@ -17,6 +17,7 @@ from adminme.context_fabric import (
     stable_digest,
     triage_context_id,
 )
+from adminme.triage_review import proposal_source_id, triage_review_state
 
 
 def _json(value: Any) -> str:
@@ -199,6 +200,17 @@ def _insert(
         "reasons": reasons,
         "interpretation": interpretation,
     }
+    eligibility = eligibility_rule_ids or []
+    source_coordinate = proposal_source_id(
+        source_kind=source_kind,
+        candidate=candidate,
+        eligibility_rule_ids=eligibility,
+    )
+    review = triage_review_state(
+        {"title": title, "target_kind": target_kind, "state": state},
+        candidate=candidate,
+        route=route,
+    )
     context_id, context_kind = _proposal_context(envelope, conn, proposal_payload)
     title_fingerprint = exact_text_fingerprint(target_kind, title)
     object_match_fingerprint = exact_text_fingerprint(
@@ -254,17 +266,17 @@ def _insert(
         """
         INSERT INTO triage_items (
             proposal_id, tenant_id, source_kind, target_kind, owner_member_id,
-            title, candidate_json, route_json, source_event_id, confidence,
+            title, candidate_json, route_json, source_event_id, source_id, confidence,
             reasons_json, state, proposed_at, owner_scope, visibility_scope,
             parent_intent_id, candidate_key, extraction_event_id,
             eligibility_rule_ids_json,
             interpretation_json, context_id, context_kind, group_label,
             title_fingerprint, object_match_fingerprint, queue_lane,
             evidence_state, ownership_state,
-            lifecycle_state, decision_disposition, duplicate_of_proposal_id,
+            lifecycle_state, review_state, decision_disposition, duplicate_of_proposal_id,
             existing_object_kind, existing_object_id, policy_disposition,
             sensitivity, last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, proposal_id) DO NOTHING
         """,
         (
@@ -277,6 +289,7 @@ def _insert(
             _json(candidate),
             _json(route) if route is not None else None,
             source_event_id,
+            source_coordinate,
             confidence,
             _json(reasons),
             state,
@@ -286,7 +299,7 @@ def _insert(
             parent_intent_id,
             candidate_key,
             extraction_event_id,
-            _json(eligibility_rule_ids or []),
+            _json(eligibility),
             _json(interpretation) if interpretation is not None else None,
             context_id,
             context_kind,
@@ -297,6 +310,7 @@ def _insert(
             evidence_state(proposal_payload),
             ownership_state(proposal_payload),
             lifecycle_state(proposal_payload),
+            review["state"],
             decision_disposition,
             str(duplicate[0]) if duplicate is not None else None,
             str(existing[0]) if existing is not None else None,
@@ -507,6 +521,26 @@ def _apply_enriched(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> No
         "reasons": json.loads(current["reasons_json"] or "[]"),
         "interpretation": interpretation,
     }
+    final_route = (
+        payload["route"]
+        if payload.get("route") is not None
+        else json.loads(current["route_json"])
+        if current.get("route_json")
+        else None
+    )
+    review = triage_review_state(
+        {
+            "title": final_title,
+            "target_kind": final_target,
+            "state": (
+                "pending_review"
+                if payload.get("target_kind") is not None
+                else current["state"]
+            ),
+        },
+        candidate=candidate,
+        route=final_route,
+    )
     assignments = ["candidate_json=?"]
     values: list[Any] = [_json(candidate)]
     if payload.get("title") is not None:
@@ -537,6 +571,7 @@ def _apply_enriched(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> No
             "evidence_state=?",
             "ownership_state=?",
             "lifecycle_state=?",
+            "review_state=?",
         )
     )
     values.extend(
@@ -552,6 +587,7 @@ def _apply_enriched(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> No
             evidence_state(proposal_payload),
             ownership_state(proposal_payload),
             lifecycle_state(proposal_payload),
+            review["state"],
         )
     )
     existing = conn.execute(

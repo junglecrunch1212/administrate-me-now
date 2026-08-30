@@ -34,6 +34,15 @@ _FIELD_LABELS = {
     "display_name": "Name",
 }
 
+_GMAIL_SYSTEM_CATEGORIES = (
+    ("SPAM", "spam", "Spam"),
+    ("CATEGORY_PROMOTIONS", "promotions", "Promotions"),
+    ("CATEGORY_SOCIAL", "social", "Social"),
+    ("CATEGORY_UPDATES", "updates", "Updates"),
+    ("CATEGORY_FORUMS", "forums", "Forums"),
+    ("CATEGORY_PERSONAL", "primary", "Primary"),
+)
+
 
 def _first(payload: Mapping[str, Any], *names: str) -> str | None:
     for name in names:
@@ -108,6 +117,24 @@ def _methods(item: Mapping[str, Any]) -> list[dict[str, str]]:
             }
         )
     return values
+
+
+def _provider_category(
+    source_id: str | None, labels: set[str]
+) -> dict[str, str] | None:
+    """Expose only reviewed Gmail system labels, never arbitrary user labels."""
+
+    if source_id != "adapter:gmail":
+        return None
+    for provider_label, category_id, label in _GMAIL_SYSTEM_CATEGORIES:
+        if provider_label in labels:
+            return {
+                "id": category_id,
+                "label": label,
+                "provenance": "Gmail category",
+                "authority": "provider_observation",
+            }
+    return None
 
 
 def compose_triage_source_context(
@@ -246,11 +273,12 @@ def compose_triage_source_context(
         and source_evidence_quote
         and authored.text.count(source_evidence_quote) == 1
     )
+    source_id = source_id_for_event(source_event)
     return {
-        "contract": "triage-source-context-v2",
+        "contract": "triage-source-context-v3",
         "source_event_id": source_event.get("event_id"),
         "source_event_type": event_type,
-        "source_id": source_id_for_event(source_event),
+        "source_id": source_id,
         "adapter": source_event.get("source_adapter"),
         "account": source_event.get("source_account_id"),
         "channel": channel,
@@ -261,6 +289,7 @@ def compose_triage_source_context(
         "subject": subject,
         "occurred_at": _source_occurred_at(source_event, payload),
         "recorded_at": source_event.get("recorded_at"),
+        "provider_category": _provider_category(source_id, labels),
         "meaning": {
             "target_kind": item.get("target_kind"),
             "summary": (

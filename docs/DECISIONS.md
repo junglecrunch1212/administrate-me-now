@@ -406,6 +406,17 @@ but they do not appear in navigation or new documentation. This rename does
 not alter external-provider Inbox folders, email inbox terminology, or the
 legacy internal task workflow status named `inbox`.
 
+**CO-020 amendment (2026-08-30):** the member-facing queue is decision-first.
+Needs attention contains only candidates with a fixed non-standard attention
+lane; ordinary pending candidates remain in Low signal and the complete All
+candidates inventory. Complete inventory accounting is not an inbox-zero
+obligation. Advanced source/type filtering and oldest/newest sorting are
+read-only All candidates controls, while Needs attention retains fixed lane
+order and oldest-first anti-starvation. Exact matter children remain
+independently decidable. Reviewed Gmail system categories are displayed only
+as provider observations and confer no admission, ranking, suppression, or
+decision authority; arbitrary provider labels remain unpublished.
+
 ### D27 — Today is a deterministic Daily Brief; routines are ordered occurrences
 
 **Decided:** 2026-08-06. **Status:** CONFIRMED. **Supersedes:** the flat
