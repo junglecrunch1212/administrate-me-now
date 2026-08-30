@@ -90,6 +90,12 @@ _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
         "surface:triage-processing",
     }
 )
+_OPENCLAW_HEARTBEAT_TRANSIENT_CAPABILITY_KINDS = frozenset(
+    {
+        "openclaw_standing_order",
+        "openclaw_chat_transport",
+    }
+)
 _TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS = frozenset(
     {
         # The source-assurance projection settles after the candidate starts.
@@ -1149,14 +1155,29 @@ class UpgradeManager:
         capabilities = diagnostics.get("capabilities")
         if not isinstance(capabilities, dict):
             return True
+        readiness = diagnostics.get("deployment_readiness")
+        blocking = (
+            set(readiness.get("blocking_dimensions") or [])
+            if isinstance(readiness, dict)
+            else set()
+        )
+        openclaw_heartbeat_pending = "openclaw" in blocking
         for capability_id, capability in capabilities.items():
             if capability_id in _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS:
                 continue
-            if isinstance(capability, dict) and capability.get("state") in {
-                "degraded",
-                "blocked",
-            }:
-                return True
+            if not isinstance(capability, dict):
+                continue
+            state = capability.get("state")
+            if state not in {"degraded", "blocked"}:
+                continue
+            if (
+                openclaw_heartbeat_pending
+                and state == "degraded"
+                and capability.get("kind")
+                in _OPENCLAW_HEARTBEAT_TRANSIENT_CAPABILITY_KINDS
+            ):
+                continue
+            return True
         return False
 
     def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
