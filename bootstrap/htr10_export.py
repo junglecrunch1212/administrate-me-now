@@ -22,6 +22,7 @@ from adminme.provider_bindings import validate_provider_bindings
 from adminme.source_assurance import audit_source_assurance
 from bootstrap.contracts import DeploymentPaths, ensure_within
 from bootstrap.provider_binding_transition import (
+    NoEligibleProviderBindingTransitionError,
     prepare_live_provider_binding_transition,
 )
 from bootstrap.secrets import secret_store
@@ -64,6 +65,36 @@ def _write_new_private(path: Path, value: dict[str, Any]) -> None:
         os.close(descriptor)
 
 
+def _reviewed_binding_audit_view(
+    paths: DeploymentPaths,
+    *,
+    adapter_payload: bytes,
+    adapter_config: dict[str, Any],
+    mapping: dict[str, Any],
+    test_mode: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Return a pending transition or the already-active reviewed config.
+
+    HTR-10 is required for code-only successor releases after a provider-binding
+    transition has already been applied. Only the explicit no-eligible-change
+    result permits the current configuration; every other transition error
+    continues to fail closed.
+    """
+
+    try:
+        transition = prepare_live_provider_binding_transition(
+            paths,
+            adapter_config,
+            household_mapping=mapping,
+            ownership_reviewed=True,
+            source_payload=adapter_payload,
+            test_mode=test_mode,
+        )
+    except NoEligibleProviderBindingTransitionError:
+        return adapter_config, None
+    return transition.prepared, transition.public()
+
+
 async def export_htr10_audits(
     paths: DeploymentPaths,
     *,
@@ -85,12 +116,11 @@ async def export_htr10_audits(
     _mapping_payload, mapping = _private_json(
         paths.instance_dir / "config" / "member-mapping.json"
     )
-    transition = prepare_live_provider_binding_transition(
+    reviewed_config, transition_public = _reviewed_binding_audit_view(
         paths,
-        adapter_config,
-        household_mapping=mapping,
-        ownership_reviewed=True,
-        source_payload=adapter_payload,
+        adapter_payload=adapter_payload,
+        adapter_config=adapter_config,
+        mapping=mapping,
         test_mode=test_mode,
     )
     roles = {
@@ -101,7 +131,7 @@ async def export_htr10_audits(
         and isinstance(row.get("role"), str)
     }
     bindings = validate_provider_bindings(
-        transition.prepared,
+        reviewed_config,
         member_roles=roles,
         household_mapping=mapping,
     )
@@ -153,9 +183,15 @@ async def export_htr10_audits(
         )
     finally:
         await event_log.close()
-    transition_sha256 = hashlib.sha256(
-        json.dumps(transition.public(), sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    transition_sha256 = (
+        hashlib.sha256(
+            json.dumps(
+                transition_public, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        if transition_public is not None
+        else None
+    )
     historical["provider_binding_transition_sha256"] = transition_sha256
     assurance["provider_binding_transition_sha256"] = transition_sha256
     _write_new_private(historical_output, historical)
