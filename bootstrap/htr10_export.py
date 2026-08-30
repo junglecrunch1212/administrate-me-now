@@ -26,7 +26,7 @@ from bootstrap.provider_binding_transition import (
     prepare_live_provider_binding_transition,
 )
 from bootstrap.secrets import secret_store
-from bootstrap.services import ServiceManager
+from bootstrap.services import ServiceManager, isolated_degraded_adapter_ids
 
 
 class HTR10ExportError(RuntimeError):
@@ -105,33 +105,9 @@ def _runtime_supports_read_only_repair_audit(diagnostics: object) -> bool:
     backup and a healthy post-switch Doctor or rolls back automatically.
     """
 
-    if not isinstance(diagnostics, dict):
-        return False
-    if diagnostics.get("ready") is True:
+    if isinstance(diagnostics, dict) and diagnostics.get("ready") is True:
         return True
-    if (
-        diagnostics.get("status") != "degraded"
-        or diagnostics.get("safe_reads") is not True
-        or diagnostics.get("event_ingest_ready") is not True
-        or diagnostics.get("observation_active") is not True
-        or diagnostics.get("write_admission")
-        not in {"blocked", "observation_suppressed"}
-    ):
-        return False
-    capabilities = diagnostics.get("capabilities")
-    if not isinstance(capabilities, dict) or not capabilities:
-        return False
-    degraded_adapter = False
-    for capability in capabilities.values():
-        if not isinstance(capability, dict):
-            return False
-        state = capability.get("state")
-        if state not in {"degraded", "blocked"}:
-            continue
-        if capability.get("kind") != "adapter" or state != "degraded":
-            return False
-        degraded_adapter = True
-    return degraded_adapter
+    return bool(isolated_degraded_adapter_ids(diagnostics))
 
 
 async def export_htr10_audits(

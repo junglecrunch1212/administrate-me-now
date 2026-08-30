@@ -48,6 +48,47 @@ _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
 _SOURCE_SETTLEMENT_READINESS_DIMENSIONS = frozenset({"observation_effects"})
 
 
+def isolated_degraded_adapter_ids(
+    diagnostics: object,
+) -> frozenset[str] | None:
+    """Return the exact isolated degraded-adapter boundary, or fail closed.
+
+    A reviewed repair may begin while one or more adapters are degraded only
+    when reads, event ingest, observation containment, and write suppression
+    remain intact and every non-adapter capability is healthy.  ``frozenset()``
+    means the runtime is fully ready; ``None`` means the document is absent or
+    exposes any broader degradation.
+    """
+
+    if not isinstance(diagnostics, dict):
+        return None
+    capabilities = diagnostics.get("capabilities")
+    if not isinstance(capabilities, dict) or not capabilities:
+        return None
+    degraded: set[str] = set()
+    for capability_id, capability in capabilities.items():
+        if not isinstance(capability_id, str) or not isinstance(capability, dict):
+            return None
+        state = capability.get("state")
+        if state not in {"degraded", "blocked"}:
+            continue
+        if capability.get("kind") != "adapter" or state != "degraded":
+            return None
+        degraded.add(capability_id)
+    if not degraded:
+        return frozenset() if diagnostics.get("ready") is True else None
+    if (
+        diagnostics.get("status") != "degraded"
+        or diagnostics.get("safe_reads") is not True
+        or diagnostics.get("event_ingest_ready") is not True
+        or diagnostics.get("observation_active") is not True
+        or diagnostics.get("write_admission")
+        not in {"blocked", "observation_suppressed"}
+    ):
+        return None
+    return frozenset(degraded)
+
+
 def _diagnostic_count(value: Any) -> int:
     try:
         return int(value)

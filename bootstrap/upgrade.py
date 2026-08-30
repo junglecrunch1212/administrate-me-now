@@ -48,7 +48,11 @@ from bootstrap.provider_binding_transition import (
     ProviderBindingTransitionError,
     prepare_live_provider_binding_transition,
 )
-from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
+from bootstrap.services import (
+    ServiceManager,
+    isolated_degraded_adapter_ids,
+    source_assurance_terminal_evidence,
+)
 from bootstrap.source_assessment_repair import (
     SourceAssessmentRepairPolicy,
     hydrate_online_repair_diagnostics,
@@ -1142,8 +1146,16 @@ class UpgradeManager:
         )
 
     @staticmethod
-    def _has_new_structural_degradation(diagnostics: dict[str, Any]) -> bool:
+    def _has_new_structural_degradation(
+        diagnostics: dict[str, Any],
+        *,
+        allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
+    ) -> bool:
         """Reject a runtime capability failure that emerges during replay."""
+
+        adapter_boundary = isolated_degraded_adapter_ids(diagnostics)
+        if adapter_boundary and adapter_boundary.issubset(allowed_degraded_adapter_ids):
+            return False
 
         if (
             diagnostics.get("ready") is not True
@@ -1180,7 +1192,12 @@ class UpgradeManager:
             return True
         return False
 
-    def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
+    def _post_switch_doctor(
+        self,
+        release: Path,
+        *,
+        allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
+    ) -> dict[str, Any]:
         """Wait for only known launch transients, then run the full proof once."""
 
         # Historical source replay may walk tens of thousands of encrypted
@@ -1251,7 +1268,10 @@ class UpgradeManager:
                     continue
                 return last
             live_readiness_retries = 0
-            if self._has_new_structural_degradation(diagnostics):
+            if self._has_new_structural_degradation(
+                diagnostics,
+                allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
+            ):
                 return self._run_release_doctor(release, include_synthetic_proof=False)
 
             if "source_assurance_terminal_dispositions" in failed:
@@ -1678,6 +1698,11 @@ class UpgradeManager:
                             == "healthy"
                         )
                     if not recovery_healthy:
+                        recovered_boundary = isolated_degraded_adapter_ids(
+                            self.services.runtime_diagnostics()
+                        )
+                        recovery_healthy = bool(recovered_boundary)
+                    if not recovery_healthy:
                         raise UpgradeError(
                             "recovered predecessor did not become healthy: "
                             f"status={restored.status}, runtime={restored.runtime}, "
@@ -1830,6 +1855,11 @@ class UpgradeManager:
             approve_runtime_migration=self.approve_runtime_migration,
         )
         self._preflight_keychain_access(candidate)
+        repair_adapter_ids = isolated_degraded_adapter_ids(
+            self.services.runtime_diagnostics()
+        )
+        if repair_adapter_ids is None:
+            repair_adapter_ids = frozenset()
         release = self._publish_release(candidate, commit)
         (
             pointer_payload,
@@ -2253,7 +2283,10 @@ class UpgradeManager:
                 journal,
                 "doctor_running",
             )
-            result = self._post_switch_doctor(release)
+            result = self._post_switch_doctor(
+                release,
+                allowed_degraded_adapter_ids=repair_adapter_ids,
+            )
             if result["status"] != "healthy":
                 failed = ", ".join(sorted(self._failed_check_names(result)))
                 raise UpgradeError(
