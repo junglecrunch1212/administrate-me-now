@@ -47,10 +47,13 @@ def test_synthetic_member_runs_real_triage_learning_and_openclaw_composition(
         assert bootstrap.json()["member"]["authentication_method"] == (
             "Synthetic loopback"
         )
-        assert client.get(
-            "/api/member/v1/bootstrap",
-            headers={"Tailscale-User-Login": "unknown.local.invalid"},
-        ).status_code == 401
+        assert (
+            client.get(
+                "/api/member/v1/bootstrap",
+                headers={"Tailscale-User-Login": "unknown.local.invalid"},
+            ).status_code
+            == 401
+        )
 
         settings_surface = client.get("/api/member/v1/surfaces/settings").json()
         connections = settings_surface["control"]["connections"]
@@ -70,13 +73,16 @@ def test_synthetic_member_runs_real_triage_learning_and_openclaw_composition(
         triage = client.get("/api/member/v1/surfaces/triage").json()
         assert len(triage["items"]) == 6
         assert len(triage["triage"]["matters"]) == 5
-        assert len(
-            [
-                item
-                for item in triage["items"]
-                if item["title"].startswith("Review the new sign-in detected")
-            ]
-        ) == 1
+        assert (
+            len(
+                [
+                    item
+                    for item in triage["items"]
+                    if item["title"].startswith("Review the new sign-in detected")
+                ]
+            )
+            == 1
+        )
         recurrence = next(
             item for item in triage["items"] if item["target_kind"] == "recurrence"
         )
@@ -144,9 +150,9 @@ def test_synthetic_member_runs_real_triage_learning_and_openclaw_composition(
             and event["payload"]["provider"] == "fixture/deterministic-v1"
             for event in model_calls
         )
-        assert client.portal.call(
-            _events, runtime, "external_sync.write_requested"
-        ) == []
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
 
     restarted = create_application(
         build_synthetic_member_settings(instance_dir, REPOSITORY_ROOT)
@@ -154,15 +160,18 @@ def test_synthetic_member_runs_real_triage_learning_and_openclaw_composition(
     with TestClient(restarted) as client:
         runtime = restarted.state.runtime
         sources = client.portal.call(_events, runtime, "messaging.received")
-        assert len(
-            [
-                event
-                for event in sources
-                if str(event.get("idempotency_key") or "").startswith(
-                    "synthetic-member:v1:message:"
-                )
-            ]
-        ) == 9
+        assert (
+            len(
+                [
+                    event
+                    for event in sources
+                    if str(event.get("idempotency_key") or "").startswith(
+                        "synthetic-member:v1:message:"
+                    )
+                ]
+            )
+            == 9
+        )
         triage = client.get("/api/member/v1/surfaces/triage").json()
         assert len(triage["items"]) == 4
         recent = client.get(

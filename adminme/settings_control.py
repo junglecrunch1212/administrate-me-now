@@ -498,7 +498,9 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
             getattr(runtime.settings, "synthetic_member_mode", False)
             and config.get("synthetic") is True
         )
-        credentials_present = synthetic_connection or _credential_reference_present(config)
+        credentials_present = synthetic_connection or _credential_reference_present(
+            config
+        )
         runtime_row = inventory.get(connection_id)
         binding = next(
             (
@@ -546,8 +548,7 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         code_write_capabilities = (
             list(meta["write"])
             if synthetic_connection
-            else
-            list(runtime_row.get("write_capabilities") or [])
+            else list(runtime_row.get("write_capabilities") or [])
             if isinstance(runtime_row, dict)
             else []
         )

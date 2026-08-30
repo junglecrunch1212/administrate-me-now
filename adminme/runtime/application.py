@@ -432,7 +432,9 @@ class RuntimeSettings:
         if not isinstance(self.synthetic_scenario_version, int) or (
             self.synthetic_scenario_version < 1
         ):
-            raise ValueError("synthetic member mode requires a positive scenario version")
+            raise ValueError(
+                "synthetic member mode requires a positive scenario version"
+            )
         deterministic_pair = (
             self.deterministic_openclaw_fixture
             and self.deterministic_member_chat_fixture
@@ -463,7 +465,9 @@ class RuntimeSettings:
         if self.member_roles.get(matched_member) != "principal":
             raise ValueError("synthetic browser identity must be a principal")
         if matched_member not in self.member_chat_enabled_members:
-            raise ValueError("synthetic member must have the OpenClaw chat seam enabled")
+            raise ValueError(
+                "synthetic member must have the OpenClaw chat seam enabled"
+            )
         if any(
             not isinstance(entry, dict)
             or not isinstance(entry.get("config"), dict)

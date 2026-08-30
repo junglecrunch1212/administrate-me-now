@@ -719,9 +719,7 @@ async def reconcile_synthetic_member(runtime: Any) -> None:
 
     seeded_events: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since():
-        if str(event.get("idempotency_key") or "").startswith(
-            "synthetic-member:v1:"
-        ):
+        if str(event.get("idempotency_key") or "").startswith("synthetic-member:v1:"):
             seeded_events.append(event)
     latest_message_id = max(
         (
@@ -766,9 +764,7 @@ async def reconcile_synthetic_member(runtime: Any) -> None:
             checkpoint_event_id is not None
             and projection in runtime.projections.projection_names()
         ):
-            waits.append(
-                runtime.wait_for_projection(projection, checkpoint_event_id)
-            )
+            waits.append(runtime.wait_for_projection(projection, checkpoint_event_id))
     if waits:
         await asyncio.gather(*waits)
 
