@@ -56,6 +56,9 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "relationship_fact.revoked": on_relationship_fact_revoked,
         "party.access_granted": on_party_access_granted,
         "party.access_revoked": on_party_access_revoked,
+        "service.delegation.requested": on_service_delegation_requested,
+        "service.delegation.approved": on_service_delegation_approved,
+        "service.delegation.revoked": on_service_delegation_revoked,
     }
     handler = dispatch.get(event_type)
     if handler is None:
@@ -1044,3 +1047,138 @@ def on_party_access_revoked(
     )
     if row is not None:
         _refresh_fts(conn, envelope["tenant_id"], str(row["party_id"]))
+
+
+def on_service_delegation_requested(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if envelope.get("actor_identity") != payload["requested_by_member_id"]:
+        return
+    expected_owner_scope = (
+        f"private:{payload['context_member_id']}"
+        if payload["context_scope"] != "household_shared"
+        else "shared:household"
+    )
+    if (
+        envelope["owner_scope"] != expected_owner_scope
+        or envelope["visibility_scope"] != expected_owner_scope
+    ):
+        return
+    conn.execute(
+        """
+        INSERT INTO service_delegation_grants (
+            grant_id, tenant_id, service_principal_id, service_party_id,
+            context_scope, context_member_id, resource_owner_principal_id,
+            owner_party_id, requested_by_member_id, required_approvals_json,
+            approval_quorum, permissions_json, audience_json, visibility_json,
+            requested_at, expires_at, revoked_at, revoked_by_member_id,
+            revocation_reason, owner_scope, visibility_scope, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
+                  NULL, NULL, ?, ?, ?)
+        ON CONFLICT(tenant_id, grant_id) DO NOTHING
+        """,
+        (
+            payload["grant_id"],
+            envelope["tenant_id"],
+            payload["service_principal_id"],
+            payload["service_party_id"],
+            payload["context_scope"],
+            payload.get("context_member_id"),
+            payload.get("resource_owner_principal_id"),
+            payload.get("owner_party_id"),
+            payload["requested_by_member_id"],
+            json.dumps(payload["required_approving_member_ids"], separators=(",", ":")),
+            payload["approval_quorum"],
+            json.dumps(payload["permissions"], separators=(",", ":")),
+            json.dumps(payload.get("audience") or [], separators=(",", ":")),
+            json.dumps(payload.get("visibility") or [], separators=(",", ":")),
+            payload["requested_at"],
+            payload.get("expires_at"),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def on_service_delegation_approved(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if envelope.get("actor_identity") != payload["approved_by_member_id"]:
+        return
+    grant = conn.execute(
+        "SELECT required_approvals_json, revoked_at, owner_scope, visibility_scope "
+        "FROM service_delegation_grants "
+        "WHERE tenant_id=? AND grant_id=?",
+        (envelope["tenant_id"], payload["grant_id"]),
+    ).fetchone()
+    if (
+        grant is None
+        or grant["revoked_at"] is not None
+        or envelope["owner_scope"] != grant["owner_scope"]
+        or envelope["visibility_scope"] != grant["visibility_scope"]
+    ):
+        return
+    if payload["approved_by_member_id"] not in set(
+        json.loads(str(grant["required_approvals_json"]))
+    ):
+        return
+    conn.execute(
+        """
+        INSERT INTO service_delegation_approvals (
+            tenant_id, grant_id, approved_by_member_id, approved_at, last_event_id
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, grant_id, approved_by_member_id) DO NOTHING
+        """,
+        (
+            envelope["tenant_id"],
+            payload["grant_id"],
+            payload["approved_by_member_id"],
+            payload["approved_at"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def on_service_delegation_revoked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if envelope.get("actor_identity") != payload["revoked_by_member_id"]:
+        return
+    grant = conn.execute(
+        "SELECT requested_by_member_id, required_approvals_json, "
+        "owner_scope, visibility_scope "
+        "FROM service_delegation_grants WHERE tenant_id=? AND grant_id=?",
+        (envelope["tenant_id"], payload["grant_id"]),
+    ).fetchone()
+    if grant is None:
+        return
+    if (
+        envelope["owner_scope"] != grant["owner_scope"]
+        or envelope["visibility_scope"] != grant["visibility_scope"]
+    ):
+        return
+    revoker = payload["revoked_by_member_id"]
+    authorized = {
+        str(grant["requested_by_member_id"]),
+        *json.loads(str(grant["required_approvals_json"])),
+    }
+    if revoker not in authorized:
+        return
+    conn.execute(
+        """UPDATE service_delegation_grants
+              SET revoked_at=?, revoked_by_member_id=?, revocation_reason=?,
+                  last_event_id=?
+            WHERE tenant_id=? AND grant_id=? AND revoked_at IS NULL""",
+        (
+            payload["revoked_at"],
+            revoker,
+            payload.get("reason"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["grant_id"],
+        ),
+    )

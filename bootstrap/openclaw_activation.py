@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from adminme.openclaw_topology import (
     binding_fingerprints,
     inspect_runtime_topology,
     member_agent_id,
+    member_workspace_path,
 )
 from adminme.deployment_readiness import REQUIRED_DM_SCOPE
 
@@ -80,10 +82,25 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
             isinstance(row, dict) and str(row.get("id") or "").startswith("adminme-")
         )
     ]
-    workspace = str(paths.instance_dir / "openclaw" / "workspace")
-    member_agents: list[dict[str, Any]] = [
-        {"id": member_agent_id(member), "workspace": workspace} for member in members
-    ]
+    openclaw_root = paths.instance_dir / "openclaw"
+    template_workspace = openclaw_root / "workspace"
+    member_agents: list[dict[str, Any]] = []
+    for member in members:
+        member_workspace = member_workspace_path(openclaw_root, member)
+        if not member_workspace.exists():
+            if template_workspace.is_dir() and not template_workspace.is_symlink():
+                shutil.copytree(template_workspace, member_workspace, symlinks=True)
+            else:
+                member_workspace.mkdir(parents=True, mode=0o700)
+        if not member_workspace.is_dir() or member_workspace.is_symlink():
+            raise RuntimeError("OpenClaw member workspace is not a private directory")
+        member_workspace.chmod(0o700)
+        member_agents.append(
+            {
+                "id": member_agent_id(member),
+                "workspace": str(member_workspace),
+            }
+        )
     if not retained_agents and member_agents:
         member_agents[0]["default"] = True
     agents["list"] = retained_agents + member_agents

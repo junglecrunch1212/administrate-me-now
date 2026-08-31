@@ -5,12 +5,116 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from adminme.events.schemas.service_delegation import ServiceDelegationRequestedV1
 from adminme.events.schemas.ingest import MessagingReceivedV5, MessagingSentV5
 from adminme.service_identities import (
+    COS_AUTOMATION_OPERATOR_ID,
+    COS_PARTY_ID,
+    COS_SERVICE_PRINCIPAL_ID,
+    ServiceRequestContext,
     public_service_identity_inventory,
     resolve_service_channel_route,
     validate_service_identity_config,
 )
+
+
+def test_typed_service_context_keeps_actor_operator_member_and_scope_distinct() -> None:
+    context = ServiceRequestContext(
+        tenant_id="tenant-fixture",
+        actor_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
+        represented_service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        context_scope="member_private",
+        context_member_id="member-a",
+        on_behalf_of_member_id="member-a",
+        authority_grant_id="grant-a",
+        resource_owner_principal_id="member-a",
+        responsible_party_id=COS_PARTY_ID,
+        assignee_party_id=COS_PARTY_ID,
+        beneficiary_party_id="member-a",
+        approving_member_ids=("member-a",),
+        approval_quorum="member_owner",
+        permissions=frozenset({"read_context"}),
+    )
+    assert context.allowed_scopes == {
+        f"service-private:{COS_SERVICE_PRINCIPAL_ID}",
+        "private:member-a",
+    }
+    assert "private:member-b" not in context.allowed_scopes
+    assert "shared:household" not in context.allowed_scopes
+
+    with pytest.raises(ValueError, match="represented service principal"):
+        ServiceRequestContext(
+            tenant_id="tenant-fixture",
+            actor_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
+            represented_service_principal_id="service-principal:other",
+            context_scope="service_private",
+        )
+    with pytest.raises(ValueError, match="must not impersonate"):
+        ServiceRequestContext(
+            tenant_id="tenant-fixture",
+            actor_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            operator_principal_id="member-a",
+            represented_service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            context_scope="member_private",
+            context_member_id="member-a",
+            on_behalf_of_member_id="member-a",
+            authority_grant_id="grant-a",
+            resource_owner_principal_id="member-a",
+            approving_member_ids=("member-a",),
+            approval_quorum="member_owner",
+        )
+
+
+def test_unresolved_service_context_has_no_member_private_scope() -> None:
+    context = ServiceRequestContext(
+        tenant_id="tenant-fixture",
+        actor_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
+        represented_service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        context_scope="unresolved",
+    )
+    assert context.allowed_scopes == {f"service-private:{COS_SERVICE_PRINCIPAL_ID}"}
+    assert not any(scope.startswith("private:") for scope in context.allowed_scopes)
+
+
+def test_non_read_delegation_cannot_expose_member_private_scope() -> None:
+    context = ServiceRequestContext(
+        tenant_id="tenant-fixture",
+        actor_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
+        represented_service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        context_scope="member_private",
+        context_member_id="member-a",
+        on_behalf_of_member_id="member-a",
+        authority_grant_id="grant-create-only",
+        resource_owner_principal_id="member-a",
+        approving_member_ids=("member-a",),
+        approval_quorum="member_owner",
+        permissions=frozenset({"create_internal_work"}),
+    )
+    assert context.allowed_scopes == {f"service-private:{COS_SERVICE_PRINCIPAL_ID}"}
+
+
+def test_external_delegation_schema_requires_the_exact_member_resource_owner() -> None:
+    with pytest.raises(ValidationError, match="one member owner"):
+        ServiceDelegationRequestedV1.model_validate(
+            {
+                "grant_id": "grant-external",
+                "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+                "service_party_id": COS_PARTY_ID,
+                "context_scope": "external_contact",
+                "context_member_id": "member-a",
+                "resource_owner_principal_id": "member-b",
+                "owner_party_id": "party-external",
+                "requested_by_member_id": "member-a",
+                "required_approving_member_ids": ["member-a"],
+                "approval_quorum": "member_owner",
+                "permissions": ["read_context"],
+                "requested_at": "2026-08-31T12:00:00Z",
+            }
+        )
 
 
 def _configured_channel(*, state: str = "observation") -> dict[str, object]:

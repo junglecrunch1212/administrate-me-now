@@ -23,13 +23,18 @@ from adminme.events.log import AppendValidationError, EventLog
 from adminme.lib.session import Session
 from adminme.lib.skill_runner import wrapper as skill_wrapper
 from adminme.lib.skill_runner.wrapper import SkillContext
-from adminme.openclaw_topology import binding_fingerprints, member_agent_id
+from adminme.openclaw_topology import (
+    binding_fingerprints,
+    member_agent_id,
+    member_workspace_path,
+)
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import (
     AdministrateMeRuntime,
     RuntimeSettings,
     create_application,
 )
+from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 from adminme.source_assessment_recovery import latest_source_assessment
 from adminme.source_assessment_recovery import (
     SourceAssessmentRecoveryBatch,
@@ -100,10 +105,19 @@ def _strict_settings(
     now = datetime.now(timezone.utc).isoformat()
     openclaw_config_path = instance_dir / "openclaw" / "runtime" / "openclaw.json"
     openclaw_config_path.parent.mkdir(parents=True)
+    workspace = member_workspace_path(instance_dir / "openclaw", "member-a")
+    workspace.mkdir(parents=True)
     openclaw_config_path.write_text(
         json.dumps(
             {
-                "agents": {"list": [{"id": member_agent_id("member-a")}]},
+                "agents": {
+                    "list": [
+                        {
+                            "id": member_agent_id("member-a"),
+                            "workspace": str(workspace),
+                        }
+                    ]
+                },
                 "bindings": [],
                 "session": {"dmScope": "per-account-channel-peer"},
                 "plugins": {
@@ -593,12 +607,21 @@ def test_two_principals_have_distinct_ingress_agents_and_sessions(
     base = _strict_settings(tmp_path)
     members = frozenset({"member-a", "member-b"})
     assert base.openclaw_runtime_config_path is not None
+    openclaw_root = base.openclaw_runtime_config_path.parent.parent
+    for member in members:
+        member_workspace_path(openclaw_root, member).mkdir(parents=True, exist_ok=True)
     base.openclaw_runtime_config_path.write_text(
         json.dumps(
             {
                 "agents": {
                     "list": [
-                        {"id": member_agent_id(member)} for member in sorted(members)
+                        {
+                            "id": member_agent_id(member),
+                            "workspace": str(
+                                member_workspace_path(openclaw_root, member)
+                            ),
+                        }
+                        for member in sorted(members)
                     ]
                 },
                 "bindings": [],
@@ -1677,9 +1700,31 @@ def test_reviewed_household_enrollment_becomes_idempotent_people_truth(
             current_ids = client.portal.call(enrollment_ids)
             if run == 0:
                 enrollment_event_ids = current_ids
-                assert len(current_ids) == 8
+                assert len(current_ids) == 10
             else:
                 assert current_ids == enrollment_event_ids
+
+
+def test_cos_party_is_composed_without_household_enrollment(tmp_path: Path) -> None:
+    app = create_application(_settings(tmp_path))
+
+    with TestClient(app):
+        runtime = app.state.runtime
+        row = (
+            runtime.projections.connection("parties")
+            .execute(
+                "SELECT kind, attributes_json FROM parties WHERE tenant_id=? AND party_id=?",
+                (runtime.settings.instance.tenant_id, COS_PARTY_ID),
+            )
+            .fetchone()
+        )
+
+        assert row is not None
+        assert row["kind"] == "organization"
+        attributes = json.loads(str(row["attributes_json"]))
+        assert attributes["nonhuman_service"] is True
+        assert attributes["service_principal_id"] == COS_SERVICE_PRINCIPAL_ID
+        assert attributes["provider_authority"] is False
 
 
 async def test_repeated_shutdown_is_safe_and_log_reopens(tmp_path: Path) -> None:

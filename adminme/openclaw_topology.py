@@ -12,6 +12,12 @@ def member_agent_id(member_id: str) -> str:
     return "adminme-" + hashlib.sha256(member_id.encode()).hexdigest()[:16]
 
 
+def member_workspace_path(openclaw_root: Path, member_id: str) -> Path:
+    """Return a stable workspace owned by exactly one member agent."""
+
+    return openclaw_root / "member-workspaces" / member_agent_id(member_id)
+
+
 def binding_fingerprints(
     actor_identities: dict[str, str],
     member_chat_enabled_members: frozenset[str],
@@ -63,6 +69,22 @@ def inspect_runtime_topology(
         and isinstance(row.get("id"), str)
         and str(row["id"]).startswith("adminme-")
     ]
+    actual_agent_workspaces = {
+        str(row.get("id")): str(row.get("workspace") or "")
+        for row in raw_agents
+        if isinstance(row, dict)
+        and isinstance(row.get("id"), str)
+        and str(row["id"]).startswith("adminme-")
+    }
+    openclaw_root = path.parent.parent
+    expected_workspaces = {
+        member_agent_id(member): str(member_workspace_path(openclaw_root, member))
+        for member in expected_members
+    }
+    workspace_directories_ready = all(
+        Path(workspace).is_dir() and not Path(workspace).is_symlink()
+        for workspace in actual_agent_workspaces.values()
+    )
     actual_bindings: list[tuple[str, str, str, str]] = []
     malformed_member_binding = False
     for row in raw_bindings:
@@ -99,6 +121,9 @@ def inspect_runtime_topology(
         (
             len(actual_agent_ids) == len(set(actual_agent_ids)),
             set(actual_agent_ids) == expected_agents,
+            actual_agent_workspaces == expected_workspaces,
+            len(set(actual_agent_workspaces.values())) == len(expected_workspaces),
+            workspace_directories_ready,
             not malformed_member_binding,
             len(actual_bindings) == len(set(actual_bindings)),
             set(actual_bindings) == expected_bindings,
@@ -122,6 +147,7 @@ def inspect_runtime_topology(
         "member_ids_with_account_bindings": sorted(expected_members) if healthy else [],
         "unique_agents": healthy,
         "unique_accounts": healthy,
+        "unique_workspaces": healthy,
         "dm_scope": "per_account_channel_peer"
         if dm_scope == "per-account-channel-peer"
         else "invalid",
@@ -129,4 +155,9 @@ def inspect_runtime_topology(
     }
 
 
-__all__ = ["binding_fingerprints", "inspect_runtime_topology", "member_agent_id"]
+__all__ = [
+    "binding_fingerprints",
+    "inspect_runtime_topology",
+    "member_agent_id",
+    "member_workspace_path",
+]

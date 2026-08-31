@@ -196,6 +196,10 @@ def test_openclaw_result_endpoint_is_scoped_idempotent_and_sends_nothing(
         tmp_path,
         encryption_key=b"o" * 32,
         repository_root=REPO_ROOT,
+        member_identities={
+            "member-a.ts.net": "member-a",
+            "member-b.ts.net": "member-b",
+        },
         openclaw_enabled=True,
         openclaw_shared_secret=secret,
         openclaw_actor_identities={
@@ -231,6 +235,26 @@ def test_openclaw_result_endpoint_is_scoped_idempotent_and_sends_nothing(
     }
     headers = {"Authorization": f"Bearer {secret}"}
     with TestClient(create_application(settings)) as client:
+        delegation = client.post(
+            "/api/member/v1/cos/delegations",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+            json={
+                "request_id": "notification-result-cos",
+                "context_scope": "member_private",
+                "permissions": ["read_context", "manage_internal_work"],
+            },
+        )
+        assert delegation.status_code == 201, delegation.text
+        delegation_b = client.post(
+            "/api/member/v1/cos/delegations",
+            headers={"Tailscale-User-Login": "member-b.ts.net"},
+            json={
+                "request_id": "notification-result-cos-b",
+                "context_scope": "member_private",
+                "permissions": ["read_context", "manage_internal_work"],
+            },
+        )
+        assert delegation_b.status_code == 201, delegation_b.text
         first = client.post(
             "/api/openclaw/v1/notifications/result", json=body, headers=headers
         )

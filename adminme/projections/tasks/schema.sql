@@ -20,6 +20,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     title             TEXT NOT NULL,
     status            TEXT NOT NULL,          -- inbox | next | in_progress | waiting_on | deferred | done | cancelled | dismissed
     assignee_party    TEXT,                   -- REFERENCES parties(party_id); NULL = household-shared
+    work_kind         TEXT NOT NULL DEFAULT 'household_work'
+                      CHECK (work_kind IN ('member_obligation','household_work','service_operational')),
+    owner_member_id   TEXT,
+    owner_party_id    TEXT,
+    responsible_party_id TEXT,
+    beneficiary_party_id TEXT,
     domain            TEXT NOT NULL,
     energy            TEXT,                   -- low | medium | high
     effort            TEXT,                   -- tiny | small | medium | large
@@ -57,6 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_tenant_status
     ON tasks(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_assignee
     ON tasks(tenant_id, assignee_party);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant_owner_party
+    ON tasks(tenant_id, owner_party_id, work_kind);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_due
     ON tasks(tenant_id, due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_goal

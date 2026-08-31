@@ -92,6 +92,55 @@ class OpenClawToolCallRecordedV1(BaseModel):
     openclaw_commit: str = Field(min_length=7)
 
 
+class OpenClawToolCallRecordedV2(BaseModel):
+    """Service-aware audit with independent identity and lineage axes."""
+
+    model_config = {"extra": "forbid"}
+    operation: str = Field(min_length=1, max_length=120)
+    actor_principal_id: str = Field(min_length=1)
+    operator_principal_id: str = Field(min_length=1)
+    represented_service_principal_id: str = Field(min_length=1)
+    context_scope: Literal[
+        "service_private",
+        "member_private",
+        "household_shared",
+        "external_contact",
+        "unresolved",
+    ]
+    context_member_id: str | None = None
+    on_behalf_of_member_id: str | None = None
+    authority_grant_id: str | None = None
+    resource_owner_principal_id: str | None = None
+    owner_party_id: str | None = None
+    responsible_party_id: str | None = None
+    assignee_party_id: str | None = None
+    beneficiary_party_id: str | None = None
+    provider_account_owner_principal_id: str | None = None
+    audience: list[str] = Field(default_factory=list)
+    visibility: list[str] = Field(default_factory=list)
+    approving_member_ids: list[str] = Field(default_factory=list)
+    approval_quorum: Literal["service_self", "member_owner", "all_adult_principals"]
+    permissions: list[
+        Literal["read_context", "create_internal_work", "manage_internal_work"]
+    ] = Field(default_factory=list)
+    openclaw_actor_id: str = Field(min_length=1)
+    agent_id: str | None = None
+    session_key: str | None = None
+    session_id: str | None = None
+    channel_id: str = Field(min_length=1)
+    account_id: str | None = None
+    message_id: str | None = None
+    thread_id: str | None = None
+    request_correlation_id: str = Field(min_length=1)
+    causation_event_ids: list[str] = Field(default_factory=list)
+    result_event_ids: list[str] = Field(default_factory=list)
+    observation_event_ids: list[str] = Field(default_factory=list)
+    reconciliation_event_ids: list[str] = Field(default_factory=list)
+    call_kind: Literal["tool", "dashboard", "slash_command", "standing_order", "bridge"]
+    openclaw_version: str = Field(min_length=1)
+    openclaw_commit: str = Field(min_length=7)
+
+
 class OpenClawApprovalReceivedV1(BaseModel):
     """One resolved, content-bound OpenClaw plugin approval consumed once."""
 
@@ -123,6 +172,7 @@ registry.register(
 )
 registry.register("openclaw.model_call.recorded", 1, OpenClawModelCallRecordedV1)
 registry.register("openclaw.tool_call.recorded", 1, OpenClawToolCallRecordedV1)
+registry.register("openclaw.tool_call.recorded", 2, OpenClawToolCallRecordedV2)
 registry.register("openclaw.approval.received", 1, OpenClawApprovalReceivedV1)
 
 

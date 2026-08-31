@@ -147,7 +147,9 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
     conn.execute(
         """
         INSERT INTO tasks (
-            task_id, tenant_id, title, status, assignee_party, domain,
+            task_id, tenant_id, title, status, assignee_party, work_kind,
+            owner_member_id, owner_party_id, responsible_party_id,
+            beneficiary_party_id, domain,
             energy, effort, item_type, due_date, available_from, micro_script,
             linked_item_id, linked_item_kind, recurring_id,
             depends_on_json, goal_ref, life_event, auto_research,
@@ -155,11 +157,16 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             completed_at, completed_by, source_system, notes,
             owner_scope, visibility_scope, sensitivity, last_event_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, task_id) DO UPDATE SET
             title            = excluded.title,
             status           = excluded.status,
             assignee_party   = excluded.assignee_party,
+            work_kind        = excluded.work_kind,
+            owner_member_id  = excluded.owner_member_id,
+            owner_party_id   = excluded.owner_party_id,
+            responsible_party_id = excluded.responsible_party_id,
+            beneficiary_party_id = excluded.beneficiary_party_id,
             domain           = excluded.domain,
             energy           = excluded.energy,
             effort           = excluded.effort,
@@ -190,7 +197,15 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             envelope["tenant_id"],
             p["title"],
             p.get("status", "inbox"),
-            p.get("assignee_party") or p.get("owner_member_id"),
+            p.get("assignee_party_id")
+            or p.get("assignee_party")
+            or p.get("owner_member_id"),
+            p.get("work_kind")
+            or ("member_obligation" if p.get("owner_member_id") else "household_work"),
+            p.get("owner_member_id"),
+            p.get("owner_party_id") or p.get("owner_member_id"),
+            p.get("responsible_party_id"),
+            p.get("beneficiary_party_id"),
             p.get("domain") or "tasks",
             p.get("energy"),
             p.get("effort"),

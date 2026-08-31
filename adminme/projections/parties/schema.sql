@@ -267,6 +267,51 @@ CREATE TABLE IF NOT EXISTS party_access_grants (
 CREATE INDEX IF NOT EXISTS idx_party_access_grantee
     ON party_access_grants(tenant_id, grantee_member_id, party_id, revoked_at);
 
+-- Service delegations are authority records, not preferences or provider
+-- bindings.  Separate approval rows prevent one principal from asserting a
+-- household quorum on another principal's behalf.
+CREATE TABLE IF NOT EXISTS service_delegation_grants (
+    grant_id            TEXT NOT NULL,
+    tenant_id           TEXT NOT NULL,
+    service_principal_id TEXT NOT NULL,
+    service_party_id    TEXT NOT NULL,
+    context_scope       TEXT NOT NULL
+                        CHECK (context_scope IN ('member_private','household_shared','external_contact')),
+    context_member_id   TEXT,
+    resource_owner_principal_id TEXT,
+    owner_party_id      TEXT,
+    requested_by_member_id TEXT NOT NULL,
+    required_approvals_json TEXT NOT NULL,
+    approval_quorum     TEXT NOT NULL
+                        CHECK (approval_quorum IN ('member_owner','all_adult_principals')),
+    permissions_json    TEXT NOT NULL,
+    audience_json       TEXT NOT NULL DEFAULT '[]',
+    visibility_json     TEXT NOT NULL DEFAULT '[]',
+    requested_at        TEXT NOT NULL,
+    expires_at          TEXT,
+    revoked_at          TEXT,
+    revoked_by_member_id TEXT,
+    revocation_reason   TEXT,
+    owner_scope         TEXT NOT NULL,
+    visibility_scope    TEXT NOT NULL,
+    last_event_id       TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, grant_id)
+);
+
+CREATE TABLE IF NOT EXISTS service_delegation_approvals (
+    tenant_id           TEXT NOT NULL,
+    grant_id            TEXT NOT NULL,
+    approved_by_member_id TEXT NOT NULL,
+    approved_at         TEXT NOT NULL,
+    last_event_id       TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, grant_id, approved_by_member_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_delegation_context
+    ON service_delegation_grants(
+        tenant_id, service_principal_id, context_scope, context_member_id, revoked_at
+    );
+
 CREATE VIRTUAL TABLE IF NOT EXISTS people_fts USING fts5(
     tenant_id UNINDEXED,
     party_id UNINDEXED,

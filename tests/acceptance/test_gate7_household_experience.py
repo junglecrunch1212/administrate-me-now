@@ -44,6 +44,19 @@ HEADERS = {
 OPENCLAW_HEADERS = {"Authorization": f"Bearer {SECRET}"}
 
 
+def _grant_cos(client: TestClient, member: str, request_id: str) -> None:
+    response = client.post(
+        "/api/member/v1/cos/delegations",
+        headers=HEADERS[member],
+        json={
+            "request_id": request_id,
+            "context_scope": "member_private",
+            "permissions": ["read_context", "manage_internal_work"],
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
 def _settings(instance_dir: Path, *, model_configured: bool = True) -> RuntimeSettings:
     config_dir = instance_dir / "config"
     config_dir.mkdir(exist_ok=True)
@@ -538,6 +551,8 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert principal_history.json()["items"] == []
         assert "session" not in adult_history.text.lower()
         assert SECRET not in adult_history.text
+
+        _grant_cos(client, ADULT, "gate7-adult-cos")
 
         provenance = _portal_provenance(runtime, ADULT, "gate7-explicit-proposal")
         proposal_body = {
@@ -1293,6 +1308,7 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
     instance.mkdir()
     app = create_application(_settings(instance))
     with TestClient(app) as client:
+        _grant_cos(client, PRINCIPAL, "gate7-reminders-cos")
         runtime = app.state.runtime
         now = datetime.now(timezone.utc)
         common = {
@@ -1770,6 +1786,7 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
     instance.mkdir()
     app = create_application(_settings(instance))
     with TestClient(app) as client:
+        _grant_cos(client, PRINCIPAL, "gate7-today-cos")
         runtime = app.state.runtime
         seeded = client.portal.call(_seed_today_truth, runtime)
 

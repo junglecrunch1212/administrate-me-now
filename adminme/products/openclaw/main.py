@@ -37,6 +37,16 @@ from adminme.products.openclaw.constants import (
     PLUGIN_ID,
 )
 from adminme.projections.tasks.queries import get_task
+from adminme.projections.parties.queries import (
+    ServiceDelegationResolutionError,
+    resolve_service_delegation,
+)
+from adminme.service_identities import (
+    COS_AUTOMATION_OPERATOR_ID,
+    COS_PARTY_ID,
+    COS_SERVICE_PRINCIPAL_ID,
+    DelegationPermission,
+)
 
 router = APIRouter(prefix="/api/openclaw/v1", tags=["openclaw"])
 
@@ -178,6 +188,13 @@ class SkillRequest(ContextRequest):
     triggering_event_id: str | None = None
 
 
+class ServiceWorkRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=2000)
+    due: str | None = None
+
+
 class BridgeRequest(ContextRequest):
     event_kind: Literal["commitment_candidate", "household_action", "delivery_outcome"]
     content: str = Field(min_length=1, max_length=2000)
@@ -243,7 +260,12 @@ def _authenticate(request: Request) -> None:
         raise HTTPException(401, "OpenClaw transport credential rejected")
 
 
-def _session(request: Request, provenance: Provenance) -> Session:
+def _session(
+    request: Request,
+    provenance: Provenance,
+    *,
+    required_permission: DelegationPermission = "read_context",
+) -> Session:
     _authenticate(request)
     runtime = _runtime(request)
     account = provenance.account_id or "-"
@@ -282,6 +304,34 @@ def _session(request: Request, provenance: Provenance) -> Session:
         source = "openclaw_standing_order"
     else:
         source = "openclaw_plugin"
+    service_context = None
+    if role == "principal":
+        if runtime.projections is None:
+            raise HTTPException(503, "CoS delegation projection is unavailable")
+        chief_of_staff = [
+            principal
+            for principal in runtime.settings.service_principals
+            if principal.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+            and principal.kind == "chief_of_staff"
+        ]
+        if len(chief_of_staff) != 1:
+            raise HTTPException(503, "exactly one household CoS is required")
+        try:
+            service_context = resolve_service_delegation(
+                runtime.projections.connection("parties"),
+                tenant_id=runtime.settings.instance.tenant_id,
+                service_principal_id=chief_of_staff[0].service_principal_id,
+                operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
+                context_scope="member_private",
+                context_member_id=member_id,
+            )
+        except ServiceDelegationResolutionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        if required_permission not in service_context.permissions:
+            raise HTTPException(
+                403,
+                f"CoS delegation does not authorize {required_permission}",
+            )
     return Session(
         tenant_id=runtime.settings.instance.tenant_id,
         auth_member_id=member_id,
@@ -291,6 +341,7 @@ def _session(request: Request, provenance: Provenance) -> Session:
         dm_scope="per_account_channel_peer",
         source=source,
         correlation_id=provenance.correlation_id,
+        service_context=service_context,
     )
 
 
@@ -319,6 +370,7 @@ async def _append(
     request_id: str | None = None,
     causation_id: str | None = None,
     request_fingerprint: str | None = None,
+    schema_version: int = 1,
 ) -> tuple[str, bool]:
     key = (
         f"openclaw:{session.auth_member_id}:{event_type}:{request_id}"
@@ -336,14 +388,14 @@ async def _append(
         event_at_ms=int(time.time() * 1000),
         tenant_id=session.tenant_id,
         type=event_type,
-        schema_version=1,
+        schema_version=schema_version,
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter="openclaw-plugin",
         source_account_id=source_account_id,
         owner_scope=owner_scope,
         visibility_scope=visibility_scope,
         sensitivity=sensitivity,
-        actor_identity=session.auth_member_id,
+        actor_identity=session.event_actor_identity,
         idempotency_key=key,
         raw_ref=f"request-sha256:{fingerprint}" if key else None,
         payload=payload,
@@ -384,11 +436,40 @@ async def _record_tool_call(
     operation: str,
     result_event_ids: list[str] | None = None,
 ) -> str:
-    payload = {
-        "operation": operation,
-        "result_event_ids": list(result_event_ids or []),
-        **provenance.audit_payload(member_id=session.auth_member_id),
-    }
+    schema_version = 1
+    if session.service_context is None:
+        payload = {
+            "operation": operation,
+            "result_event_ids": list(result_event_ids or []),
+            **provenance.audit_payload(member_id=session.auth_member_id),
+        }
+    else:
+        context = session.service_context
+        portal = provenance.channel_id == "administrateme-portal"
+        payload = {
+            "operation": operation,
+            **context.audit_payload(),
+            "permissions": sorted(context.permissions),
+            "openclaw_actor_id": provenance.actor_id,
+            "agent_id": provenance.agent_id,
+            "session_key": None if portal else provenance.session_key,
+            "session_id": None if portal else provenance.session_id,
+            "channel_id": provenance.channel_id,
+            "account_id": provenance.account_id,
+            "message_id": provenance.message_id,
+            "thread_id": provenance.thread_id,
+            "request_correlation_id": provenance.correlation_id,
+            "causation_event_ids": list(
+                result_event_ids[-1:] if result_event_ids else []
+            ),
+            "result_event_ids": list(result_event_ids or []),
+            "observation_event_ids": [],
+            "reconciliation_event_ids": [],
+            "call_kind": provenance.call_kind,
+            "openclaw_version": provenance.openclaw_version,
+            "openclaw_commit": provenance.openclaw_commit,
+        }
+        schema_version = 2
     event_id, _ = await _append(
         _runtime(request),
         session,
@@ -399,6 +480,7 @@ async def _record_tool_call(
         payload=payload,
         request_id=f"{operation}:{provenance.correlation_id}",
         causation_id=result_event_ids[-1] if result_event_ids else None,
+        schema_version=schema_version,
     )
     return event_id
 
@@ -639,6 +721,74 @@ async def what_now(body: ContextRequest, request: Request) -> dict[str, Any]:
         request, session, body.provenance, operation="tools.what-now"
     )
     return result
+
+
+@router.post("/tools/service-work", status_code=201)
+async def create_service_work(
+    body: ServiceWorkRequest, request: Request
+) -> dict[str, Any]:
+    """Create internal CoS-owned work; never a member obligation or provider write."""
+
+    session = _session(
+        request,
+        body.provenance,
+        required_permission="create_internal_work",
+    )
+    context = session.service_context
+    if context is None or "create_internal_work" not in context.permissions:
+        raise HTTPException(403, "CoS delegation does not authorize internal work")
+    if context.context_scope != "member_private" or not context.context_member_id:
+        raise HTTPException(403, "service work requires one exact member context")
+    runtime = _runtime(request)
+    task_digest = hashlib.sha256(
+        f"{session.tenant_id}|{context.authority_grant_id}|{body.request_id}".encode()
+    ).hexdigest()[:32]
+    task_id = f"cos-task:{task_digest}"
+    payload = {
+        "task_id": task_id,
+        "title": body.title,
+        "description": body.description,
+        "due": body.due,
+        "work_kind": "service_operational",
+        "owner_member_id": None,
+        "owner_party_id": COS_PARTY_ID,
+        "responsible_party_id": COS_PARTY_ID,
+        "assignee_party_id": COS_PARTY_ID,
+        "beneficiary_party_id": context.context_member_id,
+        "created_by": context.actor_principal_id,
+        "source_system": "household-cos",
+    }
+    event_id, duplicate = await _append(
+        runtime,
+        session,
+        event_type="task.created",
+        schema_version=2,
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=f"private:{context.context_member_id}",
+        visibility_scope=f"private:{context.context_member_id}",
+        payload=payload,
+        request_id=body.request_id,
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.service-work",
+        result_event_ids=[event_id],
+    )
+    return {
+        "task_id": task_id,
+        "event_id": event_id,
+        "duplicate": duplicate,
+        "work_kind": "service_operational",
+        "owner_party_id": COS_PARTY_ID,
+        "responsible_party_id": COS_PARTY_ID,
+        "assignee_party_id": COS_PARTY_ID,
+        "beneficiary_party_id": context.context_member_id,
+        "member_obligation_created": False,
+        "provider_effects": 0,
+    }
 
 
 @router.post("/tools/execute-pending-provider-action")

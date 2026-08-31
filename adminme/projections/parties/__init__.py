@@ -15,7 +15,7 @@ from adminme.projections.parties import handlers
 
 class PartiesProjection(Projection):
     name = "parties"
-    version = 2
+    version = 3
     subscribes_to = [
         "party.created",
         "party.updated",
@@ -39,6 +39,9 @@ class PartiesProjection(Projection):
         "relationship_fact.revoked",
         "party.access_granted",
         "party.access_revoked",
+        "service.delegation.requested",
+        "service.delegation.approved",
+        "service.delegation.revoked",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

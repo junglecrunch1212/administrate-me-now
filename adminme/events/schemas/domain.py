@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -97,6 +97,30 @@ class TaskCreatedV1(BaseModel):
     created_by: str | None = None
     source_system: str | None = None
     source_commitment_id: str | None = None
+
+
+class TaskCreatedV2(TaskCreatedV1):
+    """Party-owned work without conflating service work and member obligations."""
+
+    work_kind: Literal["member_obligation", "household_work", "service_operational"]
+    owner_party_id: str | None = None
+    responsible_party_id: str | None = None
+    assignee_party_id: str | None = None
+    beneficiary_party_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_work_ownership(self) -> TaskCreatedV2:
+        if self.work_kind == "member_obligation":
+            if not self.owner_member_id or self.owner_party_id:
+                raise ValueError("member obligation requires one member owner")
+        elif self.work_kind == "service_operational":
+            if self.owner_member_id or not all(
+                (self.owner_party_id, self.responsible_party_id, self.assignee_party_id)
+            ):
+                raise ValueError("service work requires explicit Party ownership")
+        elif self.owner_member_id or not self.owner_party_id:
+            raise ValueError("household work requires a Party owner")
+        return self
 
 
 class TaskCompletedV1(BaseModel):
@@ -468,6 +492,7 @@ registry.register("commitment.cancelled", 1, CommitmentCancelledV1)
 registry.register("commitment.delegated", 1, CommitmentDelegatedV1)
 registry.register("commitment.expired", 1, CommitmentExpiredV1)
 registry.register("task.created", 1, TaskCreatedV1)
+registry.register("task.created", 2, TaskCreatedV2)
 registry.register("task.completed", 1, TaskCompletedV1)
 registry.register("task.deferred", 1, TaskDeferredV1)
 registry.register("task.snoozed", 1, TaskSnoozedV1)

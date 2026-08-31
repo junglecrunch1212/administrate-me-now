@@ -178,6 +178,17 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
                 item.get("id") == commitment_id for item in dashboard["items"]
             )
             before = client.get("/api/core/v1/what-now", headers=headers).json()
+            delegation = client.post(
+                "/api/member/v1/cos/delegations",
+                headers=headers,
+                json={
+                    "request_id": "doctor-cos-delegation",
+                    "context_scope": "member_private",
+                    "permissions": ["read_context", "manage_internal_work"],
+                },
+            )
+            if delegation.status_code != 201:
+                raise RuntimeError("canonical CoS delegation fixture failed")
             review_params = {
                 "request_id": "doctor-approve",
                 "action": "approve",

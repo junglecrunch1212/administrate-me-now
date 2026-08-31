@@ -34,9 +34,12 @@ through 08b's guardedWrite gate.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from adminme.lib.scope import ScopeViolation
+
+if TYPE_CHECKING:
+    from adminme.service_identities import ServiceRequestContext
 
 AuthRole = Literal["principal", "child", "ambient", "coach_session", "device"]
 ViewRole = Literal["principal", "child", "ambient", "device"]
@@ -99,6 +102,7 @@ class Session:
     # Used by tests in 08a; 08b populates from authority.yaml. Frozen
     # default avoids mutable-default trap.
     child_forbidden_tags: frozenset[str] = field(default_factory=frozenset)
+    service_context: ServiceRequestContext | None = None
 
     @property
     def is_view_as(self) -> bool:
@@ -114,6 +118,8 @@ class Session:
         Sensitivity / privileged-owner checks happen separately in
         ``scope.allowed_read``; this set is the visibility-scope axis only.
         """
+        if self.service_context is not None:
+            return self.service_context.allowed_scopes
         # Ambient: no surface at all.
         if self.auth_role == "ambient":
             return frozenset()
@@ -135,6 +141,14 @@ class Session:
         if self.auth_role in ("principal", "coach_session"):
             scopes.add("org:*")
         return frozenset(scopes)
+
+    @property
+    def event_actor_identity(self) -> str:
+        """The acting principal, independent from the context member."""
+
+        if self.service_context is not None:
+            return self.service_context.actor_principal_id
+        return self.auth_member_id
 
 
 def _validate(
