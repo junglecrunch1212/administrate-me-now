@@ -13,6 +13,15 @@ def session_from_request(request: Request) -> Session:
     if host not in {"127.0.0.1", "::1", "testclient"}:
         raise HTTPException(403, "identity header accepted only from trusted ingress")
     login = request.headers.get("Tailscale-User-Login")
+    if (
+        not login
+        and settings.synthetic_member_mode
+        and host in {"127.0.0.1", "::1", "testclient"}
+    ):
+        # This fallback exists only in an explicitly constructed synthetic
+        # runtime. Production settings cannot enable it from environment
+        # variables, so the trusted Tailscale ingress contract is unchanged.
+        login = settings.synthetic_member_identity
     normalized_login = login.strip().casefold() if isinstance(login, str) else ""
     matches = [
         member

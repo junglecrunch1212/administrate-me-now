@@ -58,3 +58,22 @@ Before a deployment, also run the full unscoped lint suite, all pack/package val
 ## Definition of done
 
 A claim is complete only when a process-level test demonstrates it through the production composition root. Unit tests for isolated layers are necessary but insufficient. Update governing documentation when behavior or scope changes, but do not create evidence-only follow-up work. Classify semantic changes as PRESERVE, MODERNIZE, SUPERSEDE, or DEFER and cite the governing source. DEFER is never valid for a required product function, projection capability, privacy/governance invariant, workbook round trip, or bootstrap safety.
+
+## Mandatory sandbox testing
+
+When a user asks a Codex task to "test in the sandbox", the task must use the
+single preflight wrapper; the test command belongs after the separator:
+
+```bash
+PYTHONPATH=bridge poetry run adminme sandbox test -- <test command>
+```
+
+Use `--require-gateway` before `--` only when the test needs current model
+semantics. The wrapper must reconcile a fresh signed profile from the exact
+active immutable release, prove dominance/privacy/isolation, clone the
+canonical encrypted baseline, run candidate code against only that clone, and
+discard it. Never test against the live family instance, bypass reconciliation,
+use a stale baseline or the nine-message demo, claim fidelity when the active
+profiler or a current signed artifact is unavailable, or mutate/serve the
+canonical baseline. A host without authorized read-only profiling must fail
+closed or be supplied a current signed artifact; it must not silently fall back.

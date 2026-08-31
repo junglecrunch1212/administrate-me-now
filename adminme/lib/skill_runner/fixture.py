@@ -157,8 +157,75 @@ def _response(request: httpx.Request) -> httpx.Response:
             ),
             None,
         )
+        synthetic_candidates: list[dict[str, Any]] = []
+        synthetic_cases: tuple[tuple[str, str, dict[str, Any]], ...] = (
+            (
+                "Please send the signed household form by Tuesday.",
+                "task",
+                {"due": "2026-09-01", "effort_min": 15},
+            ),
+            (
+                "Please answer the school permission request by Friday.",
+                "task",
+                {"due": "2026-09-04", "effort_min": 10},
+            ),
+            (
+                "Review the project brief before the 3 PM meeting.",
+                "task",
+                {"due": "2026-08-30T15:00:00-04:00", "effort_min": 30},
+            ),
+            (
+                "Review the new sign-in detected on your account.",
+                "task",
+                {"effort_min": 5},
+            ),
+            (
+                "Review the new sign-in detected on a second account.",
+                "task",
+                {"effort_min": 5},
+            ),
+            (
+                "Pay the synthetic utility statement by September 5.",
+                "task",
+                {
+                    "due": "2026-09-05",
+                    "description": "Synthetic monthly utility statement.",
+                },
+            ),
+        )
+        for quote, target_kind, candidate in synthetic_cases:
+            if quote in body_text:
+                synthetic_candidates.append(
+                    {
+                        "target_kind": target_kind,
+                        "title": quote,
+                        "evidence_quote": quote,
+                        "candidate": candidate,
+                        "confidence": 0.97,
+                        "reasons": ["synthetic fixture exact-evidence candidate"],
+                    }
+                )
+        if "This bill repeats monthly." in body_text:
+            synthetic_candidates.append(
+                {
+                    "target_kind": "recurrence",
+                    "title": "This bill repeats monthly.",
+                    "evidence_quote": "This bill repeats monthly.",
+                    "candidate": {
+                        "recurrence_text": "monthly",
+                        "rrule": "FREQ=MONTHLY",
+                        "next_occurrence": "2026-09-05T17:00:00Z",
+                        "kind": "bill_payment",
+                        "trackable": True,
+                    },
+                    "confidence": 0.96,
+                    "reasons": ["synthetic fixture explicit monthly cadence"],
+                }
+            )
         if candidates:
             pass
+        elif synthetic_candidates:
+            candidates = synthetic_candidates
         elif fixture_kind is not None:
             candidates = [
                 {
