@@ -1,6 +1,6 @@
 # CO-021 — Production-Faithful Synthetic Member
 
-Status: **PHASE A IMPLEMENTED; NO DEPLOYMENT OR LIVE PROVIDER CHANGE AUTHORIZED**
+Status: **PHASE A IMPLEMENTED; SMALL DEMO RETAINED; FIDELITY CLAIM SUPERSEDED BY CO-022**
 
 Date: 2026-08-30
 
@@ -74,6 +74,10 @@ The initial scenario includes:
 The fixture is behaviorally representative, not a copy or statistical claim
 about any named member. Adding real names, identifiers, addresses, account
 values, message bodies, or provider tokens to this scenario is prohibited.
+
+CO-022 supersedes this fixture as the meaning of "test in the sandbox". This
+nine-message scenario remains a fast developer demonstration only; it is not a
+current, live-scale, or live-fidelity baseline.
 
 ## Operator use
 

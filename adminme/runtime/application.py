@@ -2285,6 +2285,75 @@ async def historical_attribution(
     )
 
 
+@system_router.get("/sandbox-fidelity")
+async def sandbox_fidelity(
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Return fresh content-free aggregates from this exact running release.
+
+    The endpoint reuses the active runtime's already-open encrypted log.  A
+    candidate checkout therefore never opens a live database or applies a
+    newer migration while reconciling its sandbox.
+    """
+
+    require_principal(session)
+    runtime: AdministrateMeRuntime = request.app.state.runtime
+    from adminme.sandbox.profile import build_live_fidelity_manifest
+
+    return await build_live_fidelity_manifest(runtime)
+
+
+@system_router.post("/sandbox-privacy-compare")
+async def sandbox_privacy_compare(
+    body: dict[str, Any],
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Compare candidate fiction with live values in memory and expose counts only."""
+
+    require_principal(session)
+    raw_values = body.get("synthetic_values")
+    if (
+        not isinstance(raw_values, list)
+        or len(raw_values) > 10_000
+        or any(
+            not isinstance(value, str) or len(value) > 2_000_000 for value in raw_values
+        )
+        or sum(len(value) for value in raw_values) > 50_000_000
+    ):
+        raise HTTPException(422, "synthetic privacy corpus is invalid")
+    runtime: AdministrateMeRuntime = request.app.state.runtime
+    if runtime.event_log is None:
+        raise HTTPException(503, "live fidelity privacy comparison is unavailable")
+    live_values: list[str] = []
+    async for event in runtime.event_log.read_since():
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        for field_name in (
+            "subject",
+            "body_text",
+            "title",
+            "summary",
+            "description",
+            "notes",
+            "display_name",
+            "from_identifier",
+            "to_identifier",
+        ):
+            value = payload.get(field_name)
+            if isinstance(value, str) and value:
+                live_values.append(value)
+        for field_name in ("to_identifiers", "cc_identifiers", "bcc_identifiers"):
+            values = payload.get(field_name)
+            if isinstance(values, list):
+                live_values.extend(value for value in values if isinstance(value, str))
+    from adminme.sandbox.profile import privacy_compare
+
+    return privacy_compare(raw_values, live_values)
+
+
 @system_router.post("/source-assessment-recoveries", status_code=202)
 async def request_source_assessment_recoveries(
     body: SourceAssessmentRecoveryBatch,

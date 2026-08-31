@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,9 @@ from adminme.events.envelope import EventEnvelope
 SYNTHETIC_SCENARIO_ID = "member-life-v1"
 SYNTHETIC_SCENARIO_VERSION = 1
 SYNTHETIC_MEMBER_ID = "member_synthetic_principal"
+SYNTHETIC_SECONDARY_ID = "member_synthetic_secondary"
 SYNTHETIC_DEPENDENT_ID = "member_synthetic_dependent"
+SYNTHETIC_SECONDARY_DEPENDENT_ID = "member_synthetic_dependent_secondary"
 SYNTHETIC_IDENTITY = "synthetic-principal.local.invalid"
 SYNTHETIC_MEMBER_EMAIL = "principal@member-fixture.invalid"
 SYNTHETIC_SEEDED_AT = "2026-08-30T12:00:00Z"
@@ -175,8 +179,18 @@ def synthetic_household_mapping() -> dict[str, Any]:
                 "role": "principal",
             },
             {
+                "member_id": SYNTHETIC_SECONDARY_ID,
+                "label": "Synthetic Secondary",
+                "role": "principal",
+            },
+            {
                 "member_id": SYNTHETIC_DEPENDENT_ID,
                 "label": "Synthetic Dependent",
+                "role": "child",
+            },
+            {
+                "member_id": SYNTHETIC_SECONDARY_DEPENDENT_ID,
+                "label": "Synthetic Younger Dependent",
                 "role": "child",
             },
         ],
@@ -208,6 +222,16 @@ def synthetic_household_mapping() -> dict[str, Any]:
                 "party_id": SYNTHETIC_DEPENDENT_ID,
                 "role": "child",
             },
+            {
+                "membership_id": "membership_synthetic_secondary",
+                "party_id": SYNTHETIC_SECONDARY_ID,
+                "role": "principal",
+            },
+            {
+                "membership_id": "membership_synthetic_secondary_dependent",
+                "party_id": SYNTHETIC_SECONDARY_DEPENDENT_ID,
+                "role": "child",
+            },
         ],
         "relationships": [
             {
@@ -224,6 +248,48 @@ def synthetic_household_mapping() -> dict[str, Any]:
                 "kind": "friend",
                 "visibility_scope": f"private:{SYNTHETIC_MEMBER_ID}",
             },
+            {
+                "relationship_id": "relationship_synthetic_adults",
+                "from_party_id": SYNTHETIC_MEMBER_ID,
+                "to_party_id": SYNTHETIC_SECONDARY_ID,
+                "kind": "partner",
+                "visibility_scope": "shared:household",
+            },
+            {
+                "relationship_id": "relationship_synthetic_parent_secondary",
+                "from_party_id": SYNTHETIC_SECONDARY_ID,
+                "to_party_id": SYNTHETIC_DEPENDENT_ID,
+                "kind": "parent",
+                "visibility_scope": "shared:household",
+            },
+            {
+                "relationship_id": "relationship_synthetic_parent_younger",
+                "from_party_id": SYNTHETIC_MEMBER_ID,
+                "to_party_id": SYNTHETIC_SECONDARY_DEPENDENT_ID,
+                "kind": "parent",
+                "visibility_scope": "shared:household",
+            },
+            {
+                "relationship_id": "relationship_synthetic_secondary_parent_younger",
+                "from_party_id": SYNTHETIC_SECONDARY_ID,
+                "to_party_id": SYNTHETIC_SECONDARY_DEPENDENT_ID,
+                "kind": "parent",
+                "visibility_scope": "shared:household",
+            },
+            {
+                "relationship_id": "relationship_synthetic_siblings",
+                "from_party_id": SYNTHETIC_DEPENDENT_ID,
+                "to_party_id": SYNTHETIC_SECONDARY_DEPENDENT_ID,
+                "kind": "sibling",
+                "visibility_scope": "shared:household",
+            },
+            {
+                "relationship_id": "relationship_synthetic_school",
+                "from_party_id": SYNTHETIC_MEMBER_ID,
+                "to_party_id": "party_synthetic_school",
+                "kind": "guardian_contact",
+                "visibility_scope": "shared:household",
+            },
         ],
     }
 
@@ -234,6 +300,7 @@ def build_synthetic_member_settings(
     *,
     openclaw_gateway_token: str | None = None,
     openclaw_shared_secret: str | None = None,
+    encryption_key: bytes | None = None,
 ) -> Any:
     """Build an isolated settings object; production env parsing cannot opt in."""
 
@@ -245,13 +312,15 @@ def build_synthetic_member_settings(
         raise ValueError("OpenClaw Gateway mode requires its shared secret")
     return RuntimeSettings.credential_free(
         prepared,
-        encryption_key=_SYNTHETIC_KEY,
+        encryption_key=encryption_key or _SYNTHETIC_KEY,
         repository_root=repository_root,
         member_identities={SYNTHETIC_IDENTITY: SYNTHETIC_MEMBER_ID},
         household_mapping=synthetic_household_mapping(),
         member_roles={
             SYNTHETIC_MEMBER_ID: "principal",
+            SYNTHETIC_SECONDARY_ID: "principal",
             SYNTHETIC_DEPENDENT_ID: "child",
+            SYNTHETIC_SECONDARY_DEPENDENT_ID: "child",
         },
         deterministic_openclaw_fixture=not use_gateway,
         fixture_member_id=SYNTHETIC_MEMBER_ID,
@@ -708,6 +777,10 @@ async def reconcile_synthetic_member(runtime: Any) -> None:
 
     if runtime.events is None or runtime.event_log is None:
         raise RuntimeError("synthetic scenario requires a started runtime")
+    fidelity_path = runtime.settings.instance.config_dir / "live-fidelity-source.json"
+    if fidelity_path.is_file():
+        await _reconcile_live_fidelity(runtime, fidelity_path)
+        return
     marker_key = "synthetic-member:v1:message:real-contact-request"
     existing = await runtime.event_log.get_by_idempotency(
         runtime.settings.instance.tenant_id, marker_key
@@ -767,12 +840,188 @@ async def reconcile_synthetic_member(runtime: Any) -> None:
             waits.append(runtime.wait_for_projection(projection, checkpoint_event_id))
     if waits:
         await asyncio.gather(*waits)
+    await _wait_for_live_fidelity_settlement(runtime)
+
+
+async def _wait_for_live_fidelity_settlement(runtime: Any) -> None:
+    """Require every production projection and pipeline to reach a quiet zero lag."""
+
+    deadline = time.monotonic() + 180.0
+    quiet_samples = 0
+    while time.monotonic() < deadline:
+        projection_status = await runtime.projections.status()
+        pipeline_status = await runtime.pipelines.status()
+        projection_degraded = [
+            name for name, status in projection_status.items() if status.get("degraded")
+        ]
+        pipeline_degraded = [
+            name
+            for name, status in pipeline_status.items()
+            if (status.get("subscriber_status") or {}).get("degraded")
+        ]
+        if projection_degraded or pipeline_degraded:
+            raise RuntimeError(
+                "live-fidelity settlement degraded: "
+                + ", ".join(sorted(projection_degraded + pipeline_degraded))
+            )
+        lags = [
+            int(status.get("lag_count") or 0) for status in projection_status.values()
+        ]
+        lags.extend(
+            int((status.get("subscriber_status") or {}).get("lag_count") or 0)
+            for status in pipeline_status.values()
+        )
+        if lags and max(lags) == 0:
+            quiet_samples += 1
+            if quiet_samples >= 3:
+                return
+        else:
+            quiet_samples = 0
+        await asyncio.sleep(0.05)
+    raise TimeoutError("live-fidelity projections and pipelines did not settle")
+
+
+async def _reconcile_live_fidelity(runtime: Any, manifest_path: Path) -> None:
+    """Build a complete fidelity workload through the production event writer."""
+
+    from adminme.sandbox.generator import (
+        expected_coverage,
+        generated_domain_events,
+        generated_events,
+        generated_history_events,
+    )
+
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    coverage = expected_coverage(manifest)
+    expected = int(coverage["cardinalities"]["source_facts"])
+    existing = 0
+    async for event in runtime.event_log.read_since():
+        if str(event.get("idempotency_key") or "").startswith("live-fidelity:v2:"):
+            existing += 1
+    if existing > expected:
+        raise RuntimeError(
+            f"live-fidelity baseline contains unexpected generator facts: {existing}>{expected}"
+        )
+    if existing < expected:
+        batch = []
+        for envelope in generated_events(runtime.settings.instance.tenant_id, manifest):
+            batch.append(envelope)
+            if len(batch) == 1_000:
+                await runtime.events.write_batch(batch)
+                batch = []
+        if batch:
+            await runtime.events.write_batch(batch)
+
+    generated: list[dict[str, Any]] = []
+    async for event in runtime.event_log.read_since():
+        if str(event.get("idempotency_key") or "").startswith("live-fidelity:v2:"):
+            generated.append(event)
+    if len(generated) != expected:
+        raise RuntimeError(
+            f"live-fidelity source generation incomplete: {len(generated)}/{expected}"
+        )
+
+    message_source_ids = [
+        str(event["event_id"])
+        for event in generated
+        if event["type"] in {"messaging.received", "messaging.sent"}
+    ]
+    expected_domain = int(coverage["cardinalities"]["triage_candidates"])
+    existing_domain = 0
+    async for event in runtime.event_log.read_since():
+        if str(event.get("idempotency_key") or "").startswith(
+            "live-fidelity-domain:v2:"
+        ):
+            existing_domain += 1
+    if existing_domain > expected_domain:
+        raise RuntimeError(
+            "live-fidelity baseline contains unexpected domain pressure facts: "
+            f"{existing_domain}>{expected_domain}"
+        )
+    if existing_domain < expected_domain:
+        batch = []
+        for envelope in generated_domain_events(
+            runtime.settings.instance.tenant_id,
+            manifest,
+            source_event_ids=message_source_ids,
+        ):
+            batch.append(envelope)
+            if len(batch) == 500:
+                await runtime.events.write_batch(batch)
+                batch = []
+        if batch:
+            await runtime.events.write_batch(batch)
+
+    expected_history = list(
+        generated_history_events(
+            runtime.settings.instance.tenant_id,
+            manifest,
+            source_event_ids=message_source_ids,
+        )
+    )
+    existing_history = 0
+    async for event in runtime.event_log.read_since():
+        if str(event.get("idempotency_key") or "").startswith(
+            "live-fidelity-history:v2:"
+        ):
+            existing_history += 1
+    if existing_history > len(expected_history):
+        raise RuntimeError(
+            "live-fidelity baseline contains unexpected history pressure facts: "
+            f"{existing_history}>{len(expected_history)}"
+        )
+    if existing_history < len(expected_history):
+        await runtime.events.write_batch(expected_history)
+
+    waits = []
+    projection_types = {
+        "parties": {"contact.record.observed"},
+        "interactions": {"messaging.received", "messaging.sent"},
+        "calendars": {"calendar.event_added"},
+        "tasks": {"task.created"},
+        "lists": {"list_item.added"},
+        "recurrences": {"recurrence.added"},
+        "money": {"money_flow.provider_observed"},
+        "member_knowledge": {"member_knowledge.note_added"},
+    }
+    for projection, event_types in projection_types.items():
+        event_id = max(
+            (
+                str(event["event_id"])
+                for event in generated
+                if event["type"] in event_types
+            ),
+            default=None,
+        )
+        if event_id and projection in runtime.projections.projection_names():
+            waits.append(
+                runtime.wait_for_projection(projection, event_id, timeout_s=180.0)
+            )
+    latest_inbound = max(
+        (
+            str(event["event_id"])
+            for event in generated
+            if event["type"] == "messaging.received"
+        ),
+        default=None,
+    )
+    if latest_inbound:
+        waits.append(
+            runtime.wait_for_subscriber(
+                "pipeline:pipeline:noise_filtering", latest_inbound, timeout_s=180.0
+            )
+        )
+    if waits:
+        await asyncio.gather(*waits)
+    await _wait_for_live_fidelity_settlement(runtime)
 
 
 __all__ = [
     "SYNTHETIC_DEPENDENT_ID",
     "SYNTHETIC_IDENTITY",
     "SYNTHETIC_MEMBER_ID",
+    "SYNTHETIC_SECONDARY_ID",
+    "SYNTHETIC_SECONDARY_DEPENDENT_ID",
     "SYNTHETIC_SCENARIO_ID",
     "SYNTHETIC_SCENARIO_VERSION",
     "build_synthetic_member_settings",

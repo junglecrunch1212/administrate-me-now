@@ -82,13 +82,30 @@ PYTHONPATH=bridge poetry run adminme demo synthetic-member \
   --instance-dir /absolute/path/to/dedicated-synthetic-instance
 ```
 
-Open `http://127.0.0.1:8321/member/triage`. This persistent sandbox contains
+Open `http://127.0.0.1:8321/member/triage`. This small persistent demo contains
 only fictional members, accounts, source content, calendar/tasks, finance,
 Triage history, feedback, and rules. It uses the encrypted production event
 log and normal projections/pipelines, but never loads provider adapters. The
 default deterministic OpenClaw transport is repeatable and cost-free. An
 explicit `--model-transport gateway` uses only the pinned loopback Gateway and
 requires the normal OpenClaw token and shared-secret environment variables.
+It is not live-fidelity evidence and must not be used when a task says to test
+in the sandbox.
+
+The permanent live-fidelity sandbox always begins with active-release
+reconciliation and gives every test a disposable clone:
+
+```bash
+PYTHONPATH=bridge poetry run adminme sandbox capture-profile \
+  --tailscale-identity <authorized-adult-identity>
+PYTHONPATH=bridge poetry run adminme sandbox test -- <test command>
+```
+
+The wrapper measures the emitted synthetic workload, settles it through the
+production composition root, and applies an inherited operating-system network
+policy to every test process. It fails closed when currency, privacy,
+dominance, isolation, containment, or production settlement cannot be proved. See
+[`CO-022`](docs/refactor/CHANGE-ORDER-022-LIVE-FIDELITY-SANDBOX.md).
 
 ## Verification and architecture
 
