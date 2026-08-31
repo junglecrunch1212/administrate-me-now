@@ -49,10 +49,21 @@ from adminme.sandbox.manager import (
     tree_fingerprint,
 )
 from adminme.sandbox.profile import privacy_compare
-from adminme.synthetic_member import build_synthetic_member_settings
+from adminme.synthetic_member import (
+    _live_fidelity_settlement_timeout_s,
+    build_synthetic_member_settings,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_live_fidelity_settlement_deadline_scales_and_stays_bounded() -> None:
+    assert _live_fidelity_settlement_timeout_s(0) == 180.0
+    assert _live_fidelity_settlement_timeout_s(1_000) > 180.0
+    assert _live_fidelity_settlement_timeout_s(1_000_000) == 900.0
+    with pytest.raises(ValueError, match="cannot be negative"):
+        _live_fidelity_settlement_timeout_s(-1)
 
 
 def _projection_state_digest(

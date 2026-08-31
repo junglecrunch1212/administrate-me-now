@@ -33,6 +33,23 @@ SYNTHETIC_SEEDED_AT = "2026-08-30T12:00:00Z"
 _SYNTHETIC_KEY = hashlib.sha256(
     b"AdministrateMe credential-free synthetic member scenario v1"
 ).digest()
+_LIVE_FIDELITY_SETTLEMENT_BASE_S = 180.0
+_LIVE_FIDELITY_SETTLEMENT_MAX_S = 900.0
+_LIVE_FIDELITY_SETTLEMENT_PER_INBOUND_S = 0.25
+
+
+def _live_fidelity_settlement_timeout_s(inbound_messages: int) -> float:
+    """Size the fail-closed deadline while retaining a hard upper bound."""
+
+    if inbound_messages < 0:
+        raise ValueError("inbound message count cannot be negative")
+    workload_budget = 60.0 + (
+        inbound_messages * _LIVE_FIDELITY_SETTLEMENT_PER_INBOUND_S
+    )
+    return min(
+        _LIVE_FIDELITY_SETTLEMENT_MAX_S,
+        max(_LIVE_FIDELITY_SETTLEMENT_BASE_S, workload_budget),
+    )
 
 
 def prepare_synthetic_instance(instance_dir: Path) -> Path:
@@ -843,10 +860,14 @@ async def reconcile_synthetic_member(runtime: Any) -> None:
     await _wait_for_live_fidelity_settlement(runtime)
 
 
-async def _wait_for_live_fidelity_settlement(runtime: Any) -> None:
+async def _wait_for_live_fidelity_settlement(
+    runtime: Any,
+    *,
+    timeout_s: float = _LIVE_FIDELITY_SETTLEMENT_BASE_S,
+) -> None:
     """Require every production projection and pipeline to reach a quiet zero lag."""
 
-    deadline = time.monotonic() + 180.0
+    deadline = time.monotonic() + timeout_s
     quiet_samples = 0
     while time.monotonic() < deadline:
         projection_status = await runtime.projections.status()
@@ -926,6 +947,8 @@ async def _reconcile_live_fidelity(runtime: Any, manifest_path: Path) -> None:
         for event in generated
         if event["type"] in {"messaging.received", "messaging.sent"}
     ]
+    inbound_count = sum(event["type"] == "messaging.received" for event in generated)
+    settlement_timeout_s = _live_fidelity_settlement_timeout_s(inbound_count)
     expected_domain = int(coverage["cardinalities"]["triage_candidates"])
     existing_domain = 0
     async for event in runtime.event_log.read_since():
@@ -995,7 +1018,11 @@ async def _reconcile_live_fidelity(runtime: Any, manifest_path: Path) -> None:
         )
         if event_id and projection in runtime.projections.projection_names():
             waits.append(
-                runtime.wait_for_projection(projection, event_id, timeout_s=180.0)
+                runtime.wait_for_projection(
+                    projection,
+                    event_id,
+                    timeout_s=settlement_timeout_s,
+                )
             )
     latest_inbound = max(
         (
@@ -1008,12 +1035,17 @@ async def _reconcile_live_fidelity(runtime: Any, manifest_path: Path) -> None:
     if latest_inbound:
         waits.append(
             runtime.wait_for_subscriber(
-                "pipeline:pipeline:noise_filtering", latest_inbound, timeout_s=180.0
+                "pipeline:pipeline:noise_filtering",
+                latest_inbound,
+                timeout_s=settlement_timeout_s,
             )
         )
     if waits:
         await asyncio.gather(*waits)
-    await _wait_for_live_fidelity_settlement(runtime)
+    await _wait_for_live_fidelity_settlement(
+        runtime,
+        timeout_s=settlement_timeout_s,
+    )
 
 
 __all__ = [
