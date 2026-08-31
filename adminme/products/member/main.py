@@ -117,6 +117,16 @@ from adminme.settings_control import (
     compose_connections,
     member_label,
 )
+from adminme.source_policy import (
+    SignalAssessment,
+    SourceCoordinate,
+    SourcePolicyV2,
+    assess_source_signals,
+    policy_for_preset,
+    route_for_policy,
+    source_coordinate_for_event,
+    source_policy_event_types,
+)
 from adminme.projections.lists.queries import (
     get_item as get_list_item,
     items_for_member as list_items_for_member,
@@ -190,6 +200,24 @@ class SettingsCandidatePolicyRequest(BaseModel):
     mode: Literal["review", "manual", "quiet"]
     language_enabled: bool
     candidate_kinds: list[TriageTargetKind] = Field(min_length=1, max_length=11)
+
+
+class SettingsSourcePolicyV2Request(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    coordinate: SourceCoordinate
+    action: Literal["set", "reset"] = "set"
+    preset: Literal["focused", "balanced", "review_everything", "custom"] = "balanced"
+    policy: SourcePolicyV2 | None = None
+
+
+class SettingsSourcePolicyV2PreviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    coordinate: SourceCoordinate
+    preset: Literal["focused", "balanced", "review_everything", "custom"] = "balanced"
+    policy: SourcePolicyV2 | None = None
+    recent_limit: int = Field(default=100, ge=1, le=200)
 
 
 class SettingsBridgeRequest(BaseModel):
@@ -710,6 +738,38 @@ def _require_self_settings(session: Session) -> None:
         raise HTTPException(403, "Settings changes require an authenticated adult")
     if session.auth_member_id != session.view_member_id:
         raise HTTPException(403, "Settings are read-only while viewing another member")
+
+
+def _require_owned_source_coordinate(
+    session: Session, coordinate: SourceCoordinate
+) -> None:
+    if coordinate.tenant_id != session.tenant_id:
+        raise HTTPException(403, "source policy belongs to another tenant")
+    if (
+        coordinate.owner_kind != "member"
+        or coordinate.owner_principal_id != session.auth_member_id
+        or coordinate.context_member_id != session.auth_member_id
+    ):
+        raise HTTPException(403, "an adult may manage only their own source policy")
+    if not coordinate.exact:
+        raise HTTPException(
+            422, "source policy requires an exact account and adapter coordinate"
+        )
+
+
+def _resolved_source_policy(
+    preset: str, policy: SourcePolicyV2 | None
+) -> SourcePolicyV2:
+    if preset == "custom":
+        if policy is None or policy.preset != "custom":
+            raise HTTPException(422, "custom source policy requires bounded selections")
+        return policy
+    if policy is not None:
+        raise HTTPException(422, "preset source policy cannot include custom controls")
+    try:
+        return policy_for_preset(preset)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 async def _write_settings_receipt(
@@ -5137,6 +5197,278 @@ async def change_settings_candidate_policy(
             "policy": runtime.settings_control.effective_candidate_policy(
                 session.auth_member_id, source_id
             ),
+        }
+
+
+@router.post("/api/member/v1/settings/source-policies-v2/preview")
+async def preview_settings_source_policy_v2(
+    body: SettingsSourcePolicyV2PreviewRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Estimate a V2 policy from authorized metadata without changing state."""
+
+    _require_self_settings(session)
+    _require_owned_source_coordinate(session, body.coordinate)
+    policy = _resolved_source_policy(body.preset, body.policy)
+    runtime = _runtime(request)
+    if runtime.event_log is None:
+        raise HTTPException(503, "source policy preview is unavailable")
+    matches: list[dict[str, Any]] = []
+    async for event in runtime.event_log.read_since(
+        types=source_policy_event_types(runtime.settings.repository_root)
+    ):
+        if event.get("owner_scope") != f"private:{session.auth_member_id}":
+            continue
+        try:
+            coordinate = source_coordinate_for_event(
+                event, provider_bindings=runtime.settings.provider_bindings
+            )
+        except (TypeError, ValueError):
+            continue
+        if coordinate.key == body.coordinate.key:
+            matches.append(event)
+    matches = matches[-body.recent_limit :]
+    examples: list[dict[str, Any]] = []
+    counts = {
+        "source_facts": len(matches),
+        "triage": 0,
+        "alerts": 0,
+        "context": 0,
+        "provenance_only": 0,
+    }
+    for event in matches:
+        signals = assess_source_signals(event)
+        route = route_for_policy(body.coordinate, policy, signals)
+        counts["triage"] += route.triage != "none"
+        counts["alerts"] += route.alert != "none"
+        counts["context"] += route.context != "none"
+        counts["provenance_only"] += (
+            route.triage == "none" and route.alert == "none" and route.context == "none"
+        )
+        if len(examples) < 5:
+            examples.append(
+                {
+                    "synthetic": False,
+                    "source_event_id": event["event_id"],
+                    "route": route.model_dump(mode="json"),
+                    "content_returned": False,
+                }
+            )
+    if not examples:
+        direct = body.coordinate.source_class == "direct_authenticated_intent"
+        signals = SignalAssessment(
+            authenticated_member_instruction=direct,
+            direction="member_authored" if direct else "state",
+            deterministic_actionability_evidence=(
+                ["authenticated_member_intent"] if direct else []
+            ),
+        )
+        examples.append(
+            {
+                "synthetic": True,
+                "source_event_id": None,
+                "route": route_for_policy(body.coordinate, policy, signals).model_dump(
+                    mode="json"
+                ),
+                "content_returned": False,
+            }
+        )
+    return {
+        "contract": "source-policy-v2-preview",
+        "policy_key": body.coordinate.key,
+        "policy": policy.model_dump(mode="json"),
+        "estimated_recent_effect": counts,
+        "examples": examples,
+        "mutation_performed": False,
+        "reversible": True,
+        "live_admission_changed": False,
+        "provider_effects": False,
+        "limitations": [
+            "This is an estimate over already authorized source metadata.",
+            "No source content, prompt, model setting, credential, or raw configuration is returned.",
+            "V2 remains shadow-only; current Triage admission is unchanged.",
+        ],
+    }
+
+
+@router.get("/api/member/v1/settings/source-policies-v2/why/{source_event_id}")
+async def explain_settings_source_policy_v2(
+    source_event_id: str,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Explain one owner-visible current and shadow source route."""
+
+    runtime = _runtime(request)
+    if runtime.event_log is None:
+        raise HTTPException(503, "source policy explanation is unavailable")
+    source = await runtime.event_log.get(source_event_id)
+    if (
+        source is None
+        or source.get("owner_scope") != f"private:{session.auth_member_id}"
+    ):
+        raise HTTPException(404, "source policy explanation was not found")
+    evaluations = [
+        event
+        for event in await runtime.event_log.get_by_causation(source_event_id)
+        if event.get("type") == "source.policy_v2.shadow_evaluated"
+        and event.get("owner_scope") == f"private:{session.auth_member_id}"
+    ]
+    if not evaluations:
+        raise HTTPException(404, "source policy shadow evaluation is still pending")
+    payload = evaluations[-1]["payload"]
+    current_route = payload["current_route"]
+    shadow_route = payload["shadow_route"]
+    return {
+        "contract": "source-policy-v2-why",
+        "source_event_id": source_event_id,
+        "current": {
+            "explanation": (
+                "The live V1 policy sent this source to Triage review."
+                if current_route["triage"] != "none"
+                else "The live V1 policy did not send this source to Triage."
+            ),
+            "route": current_route,
+        },
+        "shadow": {
+            "explanation": (
+                "The proposed V2 policy would send this source to Triage."
+                if shadow_route["triage"] != "none"
+                else "The proposed V2 policy would keep this source out of Triage."
+            ),
+            "route": shadow_route,
+        },
+        "reason_codes": payload["reason_codes"],
+        "provider_labels_authoritative": False,
+        "urgency_authoritative": False,
+        "llm_claims_authoritative": False,
+        "provider_effects": False,
+    }
+
+
+@router.post("/api/member/v1/settings/source-policies-v2/{policy_key}", status_code=202)
+async def change_settings_source_policy_v2(
+    policy_key: str,
+    body: SettingsSourcePolicyV2Request,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Append one owner-scoped exact policy while live admission stays V1."""
+
+    _require_self_settings(session)
+    _require_owned_source_coordinate(session, body.coordinate)
+    if body.coordinate.key != policy_key:
+        raise HTTPException(422, "policy key does not match exact source coordinate")
+    policy = (
+        None
+        if body.action == "reset"
+        else _resolved_source_policy(body.preset, body.policy)
+    )
+    if body.action == "reset" and body.policy is not None:
+        raise HTTPException(422, "reset cannot include a source policy")
+    runtime = _runtime(request)
+    values = {
+        "policy_key": policy_key,
+        "expected_revision": body.expected_revision,
+        "coordinate": body.coordinate.model_dump(mode="json"),
+        "action": body.action,
+        "policy": policy.model_dump(mode="json") if policy is not None else None,
+    }
+    fingerprint = _settings_request_fingerprint(
+        "settings.source_policy_v2_changed", values
+    )
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        try:
+            await runtime.settings_control.replay_source_policy_v2_events(
+                runtime.event_log
+            )
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(
+                503, "source policy settings could not be replayed"
+            ) from exc
+        prior = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.source_policy_v2_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior is not None:
+            effective = runtime.settings_control.effective_source_policy_v2(
+                session.auth_member_id, body.coordinate
+            )
+            return {
+                "accepted": True,
+                "idempotent": True,
+                "event_id": prior["event_id"],
+                **effective,
+                "live_admission_changed": False,
+                "provider_effects": False,
+            }
+        try:
+            revision = runtime.settings_control.prepare_source_policy_v2_change(
+                session.auth_member_id,
+                body.coordinate,
+                expected_revision=body.expected_revision,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.source_policy_v2_changed",
+            {
+                "owner_principal_id": session.auth_member_id,
+                **values,
+                "scope_widening": False,
+                "credential_creation": False,
+                "provider_write_authority": False,
+                "live_admission_changed": False,
+            },
+        )
+        changed_at = EventEnvelope.now_utc_iso()
+        payload = {
+            "owner_principal_id": session.auth_member_id,
+            "owner_kind": "member",
+            "policy_key": policy_key,
+            "coordinate": body.coordinate.model_dump(mode="json"),
+            "action": body.action,
+            "policy": policy.model_dump(mode="json") if policy is not None else None,
+            "revision": revision,
+            "changed_by_principal_id": session.auth_member_id,
+            "changed_at": changed_at,
+            "scope_widening": False,
+            "credential_creation": False,
+            "provider_write_authority": False,
+            "live_admission_changed": False,
+        }
+        event_id = await _write_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.source_policy_v2_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            owner_member_id=session.auth_member_id,
+            payload=payload,
+        )
+        try:
+            runtime.settings_control.apply_source_policy_v2_event(payload)
+        except Exception as exc:
+            raise HTTPException(
+                503,
+                "source policy audit was saved but its local view needs replay",
+            ) from exc
+        effective = runtime.settings_control.effective_source_policy_v2(
+            session.auth_member_id, body.coordinate
+        )
+        return {
+            "accepted": True,
+            "event_id": event_id,
+            **effective,
+            "live_admission_changed": False,
+            "provider_effects": False,
         }
 
 

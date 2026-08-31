@@ -24,6 +24,12 @@ from adminme.candidate_policy import (
     effective_policy,
     validate_policy_override,
 )
+from adminme.source_policy import (
+    V2_CANDIDATE_KINDS,
+    SourceCoordinate,
+    SourcePolicyV2,
+    policy_for_preset,
+)
 
 
 ConnectionAction = Literal["pause", "resume"]
@@ -196,7 +202,7 @@ class SettingsMutation:
 class SettingsControlStore:
     """Atomic, secret-free desired-state journal for member controls."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -210,6 +216,9 @@ class SettingsControlStore:
             "member_preferences": {},
             "bridge_requests": {},
             "candidate_policies": {},
+            "source_policies_v2": {},
+            "source_policy_v2_revisions": {},
+            "source_policy_v2_migrations": {},
         }
 
     def read(self) -> dict[str, Any]:
@@ -219,12 +228,20 @@ class SettingsControlStore:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("Settings control journal is unreadable") from exc
-        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2}:
+        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2, 3}:
             raise RuntimeError("Settings control journal has an unsupported schema")
         if value["schema_version"] == 1:
             value = copy.deepcopy(value)
-            value["schema_version"] = self.SCHEMA_VERSION
+            value["schema_version"] = 2
             value["candidate_policies"] = {}
+        if value["schema_version"] == 2:
+            value = copy.deepcopy(value)
+            value["schema_version"] = self.SCHEMA_VERSION
+            value["source_policies_v2"] = {}
+            value["source_policy_v2_revisions"] = {}
+            value["source_policy_v2_migrations"] = self._candidate_policy_migrations(
+                value.get("candidate_policies") or {}
+            )
         if not isinstance(value.get("revision"), int):
             raise RuntimeError("Settings control journal revision is invalid")
         for key in (
@@ -232,6 +249,9 @@ class SettingsControlStore:
             "member_preferences",
             "bridge_requests",
             "candidate_policies",
+            "source_policies_v2",
+            "source_policy_v2_revisions",
+            "source_policy_v2_migrations",
         ):
             if not isinstance(value.get(key), dict):
                 raise RuntimeError(f"Settings control journal {key} is invalid")
@@ -264,7 +284,58 @@ class SettingsControlStore:
                     raise RuntimeError(
                         "Settings control journal candidate policy is invalid"
                     ) from exc
+        for owner_id, owner_rows in value["source_policies_v2"].items():
+            if not isinstance(owner_rows, dict):
+                raise RuntimeError("Settings source policies V2 are invalid")
+            owner_revision = value["source_policy_v2_revisions"].get(owner_id)
+            if not isinstance(owner_revision, int) or owner_revision < 0:
+                raise RuntimeError("Settings source policy V2 revision is invalid")
+            for policy_key, record in owner_rows.items():
+                if (
+                    not isinstance(policy_key, str)
+                    or not policy_key.startswith("spv2_")
+                    or not isinstance(record, dict)
+                    or not isinstance(record.get("revision"), int)
+                    or record["revision"] < 1
+                    or not isinstance(record.get("policy"), dict)
+                ):
+                    raise RuntimeError("Settings source policy V2 is invalid")
+                try:
+                    SourcePolicyV2.model_validate(record["policy"])
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("Settings source policy V2 is invalid") from exc
+        if set(value["source_policy_v2_revisions"]) - set(value["source_policies_v2"]):
+            raise RuntimeError("Settings source policy V2 owner revision is invalid")
+        for migrations in value["source_policy_v2_migrations"].values():
+            if not isinstance(migrations, dict) or any(
+                not isinstance(record, dict)
+                or record.get("state") != "migration_needed"
+                or record.get("live_behavior_preserved") is not True
+                for record in migrations.values()
+            ):
+                raise RuntimeError("Settings source policy migration state is invalid")
         return value
+
+    @staticmethod
+    def _candidate_policy_migrations(
+        candidate_policies: dict[str, Any],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        migrations: dict[str, dict[str, dict[str, Any]]] = {}
+        for owner_id, rows in candidate_policies.items():
+            if not isinstance(rows, dict):
+                continue
+            for source_id, override in rows.items():
+                if not isinstance(override, dict):
+                    continue
+                migrations.setdefault(str(owner_id), {})[str(source_id)] = {
+                    "state": "migration_needed",
+                    "reason": "candidate_policy_v1_lacks_exact_source_coordinate",
+                    "legacy_mode": str(override.get("mode") or "review"),
+                    "live_behavior_preserved": True,
+                    "adapter_wide_expansion": False,
+                    "write_authority_created": False,
+                }
+        return migrations
 
     def connection_lifecycle(self, connection_id: str) -> str | None:
         value = self.read()["connections"].get(connection_id)
@@ -372,6 +443,14 @@ class SettingsControlStore:
             "changed_at": datetime.now(timezone.utc).isoformat(),
         }
         member_rows[source_id] = current
+        state["source_policy_v2_migrations"].setdefault(member_id, {})[source_id] = {
+            "state": "migration_needed",
+            "reason": "candidate_policy_v1_lacks_exact_source_coordinate",
+            "legacy_mode": normalized["mode"],
+            "live_behavior_preserved": True,
+            "adapter_wide_expansion": False,
+            "write_authority_created": False,
+        }
         state["revision"] += 1
         _atomic_json(self.path, state)
         return SettingsMutation(previous, current, state["revision"])
@@ -389,6 +468,157 @@ class SettingsControlStore:
         return effective_policy(
             source_id, override if isinstance(override, dict) else None
         )
+
+    def source_policy_v2_revision(
+        self, owner_principal_id: str, *, state: dict[str, Any] | None = None
+    ) -> int:
+        current = state or self.read()
+        value = current["source_policy_v2_revisions"].get(owner_principal_id, 0)
+        return int(value) if isinstance(value, int) and value >= 0 else 0
+
+    def prepare_source_policy_v2_change(
+        self,
+        owner_principal_id: str,
+        coordinate: SourceCoordinate,
+        *,
+        expected_revision: int,
+    ) -> int:
+        if coordinate.owner_principal_id != owner_principal_id:
+            raise ValueError("source policy owner does not match the source coordinate")
+        state = self.read()
+        current = self.source_policy_v2_revision(owner_principal_id, state=state)
+        if current != expected_revision:
+            raise ValueError("Source policy settings changed; refresh before saving")
+        return current + 1
+
+    @staticmethod
+    def _apply_source_policy_v2_payload(
+        state: dict[str, Any], payload: dict[str, Any]
+    ) -> SettingsMutation:
+        coordinate = SourceCoordinate.model_validate(payload.get("coordinate"))
+        owner_id = str(payload.get("owner_principal_id") or "")
+        if coordinate.owner_principal_id != owner_id:
+            raise ValueError("source policy owner does not match exact coordinate")
+        policy_key = str(payload.get("policy_key") or "")
+        if coordinate.key != policy_key:
+            raise ValueError("source policy key does not match exact coordinate")
+        revision = payload.get("revision")
+        if not isinstance(revision, int) or revision < 1:
+            raise ValueError("source policy revision is invalid")
+        current_revision = int(state["source_policy_v2_revisions"].get(owner_id, 0))
+        owner_rows = state["source_policies_v2"].setdefault(owner_id, {})
+        previous = copy.deepcopy(owner_rows.get(policy_key) or {})
+        if revision <= current_revision:
+            raise ValueError(
+                "source policy event revision is duplicate or moved backwards"
+            )
+        if revision != current_revision + 1:
+            raise ValueError("source policy event revision has a gap")
+        action = payload.get("action")
+        if action == "reset":
+            owner_rows.pop(policy_key, None)
+            current: dict[str, Any] = {}
+        elif action == "set":
+            policy = SourcePolicyV2.model_validate(payload.get("policy"))
+            current = {
+                "policy": policy.model_dump(mode="json"),
+                "revision": revision,
+                "changed_at": str(payload.get("changed_at") or ""),
+                "changed_by_principal_id": str(
+                    payload.get("changed_by_principal_id") or ""
+                ),
+            }
+            owner_rows[policy_key] = current
+        else:
+            raise ValueError("source policy event action is invalid")
+        state["source_policy_v2_revisions"][owner_id] = revision
+        return SettingsMutation(previous, copy.deepcopy(current), revision)
+
+    def apply_source_policy_v2_event(self, payload: dict[str, Any]) -> SettingsMutation:
+        state = self.read()
+        mutation = self._apply_source_policy_v2_payload(state, payload)
+        _atomic_json(self.path, state)
+        return mutation
+
+    async def replay_source_policy_v2_events(self, event_log: Any) -> int:
+        """Rebuild the V2 cache only from encrypted append-only receipts."""
+
+        state = self.read()
+        state["source_policies_v2"] = {}
+        state["source_policy_v2_revisions"] = {}
+        count = 0
+        async for event in event_log.read_since(
+            types=["settings.source_policy_v2_changed"]
+        ):
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                raise RuntimeError("source policy event payload is invalid")
+            try:
+                self._apply_source_policy_v2_payload(state, payload)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("source policy V2 replay failed closed") from exc
+            count += 1
+        _atomic_json(self.path, state)
+        return count
+
+    def effective_source_policy_v2(
+        self,
+        owner_principal_id: str,
+        coordinate: SourceCoordinate,
+        *,
+        state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if coordinate.owner_principal_id != owner_principal_id:
+            raise ValueError("source policy owner does not match exact coordinate")
+        current = state or self.read()
+        owner_rows = current["source_policies_v2"].get(owner_principal_id)
+        record = (
+            owner_rows.get(coordinate.key) if isinstance(owner_rows, dict) else None
+        )
+        migrations = current["source_policy_v2_migrations"].get(owner_principal_id)
+        migration = (
+            migrations.get(coordinate.source_kind)
+            if isinstance(migrations, dict)
+            else None
+        )
+        if isinstance(record, dict):
+            policy = SourcePolicyV2.model_validate(record["policy"])
+            origin = "exact_override"
+            migration_state = "resolved" if migration is not None else "not_required"
+        else:
+            policy = policy_for_preset("balanced")
+            origin = (
+                "migration_needed" if migration is not None else "recommended_default"
+            )
+            migration_state = (
+                "migration_needed" if migration is not None else "not_required"
+            )
+        return {
+            "policy": policy.model_dump(mode="json"),
+            "policy_key": coordinate.key,
+            "revision": self.source_policy_v2_revision(
+                owner_principal_id, state=current
+            ),
+            "origin": origin,
+            "migration_state": migration_state,
+            "migration": copy.deepcopy(migration) if migration is not None else None,
+            "exact_coordinate": coordinate.exact,
+            "live_admission": "candidate_policy_v1",
+            "admission_active": False,
+        }
+
+    def source_policy_v2_migrations(
+        self, owner_principal_id: str, *, state: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        current = state or self.read()
+        rows = current["source_policy_v2_migrations"].get(owner_principal_id)
+        if not isinstance(rows, dict):
+            return []
+        return [
+            {"source_id": source_id, **copy.deepcopy(record)}
+            for source_id, record in sorted(rows.items())
+            if isinstance(record, dict)
+        ]
 
     def effective_adapter_config(
         self, value: dict[str, Any], *, state: dict[str, Any] | None = None
@@ -595,6 +825,189 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: (row["product"], row["label"].casefold()))
 
 
+def _source_policy_adapter_shape(kind: str) -> tuple[str, str]:
+    if kind.startswith("messaging-"):
+        return "communication", "passive_communication"
+    if kind.startswith(("calendaring-", "tasks-", "reminders-", "contacts-")):
+        return "external_state_mirror", "passive_state_mirror"
+    if kind.startswith("knowledge-"):
+        return "personal_knowledge", "personal_knowledge"
+    if kind.startswith("financial-"):
+        return "inbound_data", "financial_observation"
+    if kind.startswith("automation-"):
+        return "inbound_data", "context_observation"
+    return "unknown", "unknown"
+
+
+def compose_source_policy_v2_sources(
+    runtime: Any, member_id: str, *, state: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Compose only exact owner-visible coordinates; never adapter-wide rows."""
+
+    connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
+    sources: list[dict[str, Any]] = []
+    for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
+        if not isinstance(entry, dict):
+            continue
+        config = entry.get("config")
+        if not isinstance(config, dict) or config.get("member_id") != member_id:
+            continue
+        kind = str(entry.get("kind") or "").removeprefix("adapter:")
+        meta = PROVIDER_CATALOG.get(kind)
+        if meta is None:
+            continue
+        connection_id = str(entry.get("id") or f"adapter-{index}")
+        binding = next(
+            (
+                item
+                for item in getattr(runtime.settings, "provider_bindings", ())
+                if item.adapter_id == connection_id and item.owner_id == member_id
+            ),
+            None,
+        )
+        provider_account_id = str(
+            config.get("provider_account_id")
+            or (binding.provider_account_id if binding is not None else "")
+            or "unattributed"
+        )
+        workspace = str(
+            config.get("workspace")
+            or (binding.workspace if binding is not None else "")
+            or "unknown"
+        )
+        adapter_category, source_class = _source_policy_adapter_shape(kind)
+        catalog_source = next(
+            (source for source in SOURCE_CATALOG if source.get("adapter_kind") == kind),
+            None,
+        )
+        source_kind = str(
+            catalog_source.get("id")
+            if isinstance(catalog_source, dict)
+            else f"adapter:{meta['provider']}"
+        )
+        native_kind = None
+        native_id = None
+        for candidate_kind, key in (
+            ("calendar", "calendar_external_id"),
+            ("calendar", "calendar_id"),
+            ("list", "list_external_id"),
+            ("list", "list_id"),
+            ("label", "label_id"),
+            ("label", "label"),
+            ("folder", "folder_id"),
+        ):
+            value = config.get(key)
+            if isinstance(value, str) and value.strip():
+                native_kind = candidate_kind
+                native_id = value.strip()
+                break
+        coordinate = SourceCoordinate.model_validate(
+            {
+                "tenant_id": runtime.settings.instance.tenant_id,
+                "owner_principal_id": member_id,
+                "owner_kind": "member",
+                "context_member_id": member_id,
+                "adapter_category": adapter_category,
+                "adapter_kind": kind,
+                "adapter_instance_id": connection_id,
+                "provider": str(meta["provider"]),
+                "provider_account_id": provider_account_id,
+                "workspace": workspace,
+                "source_kind": source_kind,
+                "source_class": source_class,
+                "trusted_route": f"member_private:{member_id}",
+                "native_container_kind": native_kind,
+                "native_container_id": native_id,
+            }
+        )
+        effective = runtime.settings_control.effective_source_policy_v2(
+            member_id, coordinate, state=state
+        )
+        connection = connections.get(connection_id, {})
+        sources.append(
+            {
+                "policy_key": coordinate.key,
+                "label": _account_label(config, str(meta["label"])),
+                "provider_label": str(meta["label"]),
+                "account_hint": _account_hint(config),
+                "workspace": workspace,
+                "adapter_instance_id": connection_id,
+                "source_kind": source_kind,
+                "coordinate": coordinate.model_dump(mode="json"),
+                "coordinate_state": "exact" if coordinate.exact else "ambiguous",
+                "configurable": coordinate.exact,
+                "acquisition": {
+                    "state": effective["policy"]["acquisition_state"],
+                    "coverage": "unknown",
+                    "freshness": "current"
+                    if connection.get("last_sync_at")
+                    else "unknown",
+                    "provider_capability": "available"
+                    if connection.get("setup") in {"connected", "configured", "paused"}
+                    else "unknown",
+                    "scope_widening": False,
+                    "credential_creation": False,
+                },
+                **effective,
+            }
+        )
+
+    for source in SOURCE_CATALOG:
+        source_id = str(source["id"])
+        if not source_id.startswith("surface:"):
+            continue
+        coordinate = SourceCoordinate(
+            tenant_id=runtime.settings.instance.tenant_id,
+            owner_principal_id=member_id,
+            owner_kind="member",
+            context_member_id=member_id,
+            adapter_category="member_surface",
+            adapter_kind="member-surface",
+            adapter_instance_id=source_id,
+            provider="administrateme",
+            provider_account_id=member_id,
+            workspace="private_portal",
+            source_kind=source_id,
+            source_class="direct_authenticated_intent",
+            trusted_route=f"member_private:{member_id}",
+        )
+        effective = runtime.settings_control.effective_source_policy_v2(
+            member_id, coordinate, state=state
+        )
+        sources.append(
+            {
+                "policy_key": coordinate.key,
+                "label": str(source["label"]),
+                "provider_label": "AdministrateMe",
+                "account_hint": None,
+                "workspace": "private_portal",
+                "adapter_instance_id": source_id,
+                "source_kind": source_id,
+                "coordinate": coordinate.model_dump(mode="json"),
+                "coordinate_state": "exact",
+                "configurable": False,
+                "direct_authenticated_intent": True,
+                "acquisition": {
+                    "state": "active",
+                    "coverage": "complete",
+                    "freshness": "current",
+                    "provider_capability": "available",
+                    "scope_widening": False,
+                    "credential_creation": False,
+                },
+                **effective,
+            }
+        )
+    return sorted(
+        sources,
+        key=lambda row: (
+            not bool(row.get("direct_authenticated_intent")),
+            str(row["provider_label"]),
+            str(row["label"]),
+        ),
+    )
+
+
 def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
     state = runtime.settings_control.read()
     auth_id = session.auth_member_id
@@ -740,6 +1153,17 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "policy": policy,
             }
         )
+    source_policy_owner_visible = auth_id == view_id
+    source_policy_sources = (
+        compose_source_policy_v2_sources(runtime, auth_id, state=state)
+        if source_policy_owner_visible
+        else []
+    )
+    source_policy_migrations = (
+        runtime.settings_control.source_policy_v2_migrations(auth_id, state=state)
+        if source_policy_owner_visible
+        else []
+    )
     return {
         "revision": state["revision"],
         "identity": {
@@ -781,6 +1205,52 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "human confirmation before canonical truth",
                 "governance and observation before provider effects",
             ],
+        },
+        "source_policy_v2": {
+            "contract": "per-principal-per-source-policy-v2-shadow",
+            "owner_only": True,
+            "owner_visible": source_policy_owner_visible,
+            "owner_principal_id": auth_id if source_policy_owner_visible else None,
+            "revision": runtime.settings_control.source_policy_v2_revision(
+                auth_id, state=state
+            )
+            if source_policy_owner_visible
+            else None,
+            "live_admission": "candidate_policy_v1",
+            "shadow_only": True,
+            "provider_execution_is_a_policy_plane": False,
+            "presets": [
+                {
+                    "id": "focused",
+                    "label": "Focused",
+                    "explanation": "Reviews only typed actionable signals; keeps critical financial and security alerts.",
+                },
+                {
+                    "id": "balanced",
+                    "label": "Balanced",
+                    "explanation": "Reviews useful source facts while filtering typed low-actionability signals.",
+                },
+                {
+                    "id": "review_everything",
+                    "label": "Review Everything",
+                    "explanation": "Sends every permitted source fact to review without granting action authority.",
+                },
+            ],
+            "candidate_kinds": list(V2_CANDIDATE_KINDS),
+            "sources": source_policy_sources,
+            "migrations": source_policy_migrations,
+            "safety_limitations": [
+                "Policies cannot widen provider scopes or create credentials.",
+                "Policies cannot establish identity, ownership, priority, disclosure, or write authority.",
+                "Provider labels, sender urgency, and language claims are non-authoritative evidence.",
+                "Direct authenticated member intent cannot be suppressed by passive-source presets.",
+                "V2 admission remains shadow-only until a later, separately approved activation.",
+            ],
+            "preview": {
+                "mutates": False,
+                "uses": "synthetic or already authorized source metadata",
+                "content_returned": False,
+            },
         },
         "behavior": {
             "active_profile_id": active_profile.get("id")

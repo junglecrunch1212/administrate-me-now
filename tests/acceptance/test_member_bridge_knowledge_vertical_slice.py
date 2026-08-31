@@ -272,12 +272,14 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             runtime_a.event_log,
             event_ids[1],
             (
+                "source.policy_v2.shadow_evaluated",
                 "embedding.revoked",
                 "member_knowledge.index_skipped",
                 "triage.intent.features_extracted",
             ),
         )
         assert [event["type"] for event in derived] == [
+            "source.policy_v2.shadow_evaluated",
             "embedding.revoked",
             "member_knowledge.index_skipped",
             "triage.intent.features_extracted",
@@ -402,12 +404,14 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             runtime_a.event_log,
             correction_ids[0],
             (
+                "source.policy_v2.shadow_evaluated",
                 "embedding.generated",
                 "skill.call.failed",
                 "triage.intent.features_extracted",
             ),
         )
         assert [event["type"] for event in corrected_derivatives] == [
+            "source.policy_v2.shadow_evaluated",
             "embedding.generated",
             "skill.call.failed",
             "triage.intent.features_extracted",
