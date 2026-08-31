@@ -100,6 +100,21 @@ def _provenance() -> dict[str, object]:
     }
 
 
+def _grant_cos_private_context(client: TestClient, request_id: str) -> str:
+    response = client.post(
+        "/api/member/v1/cos/delegations",
+        headers=AUTH,
+        json={
+            "request_id": request_id,
+            "context_scope": "member_private",
+            "permissions": ["read_context", "create_internal_work"],
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["provider_authority"] is False
+    return str(response.json()["grant_id"])
+
+
 async def _message_proposals_for_source(
     event_log: Any, source_event_id: str
 ) -> list[dict[str, Any]]:
@@ -842,6 +857,7 @@ def test_canonical_truth_wins_race_before_triage_confirmation(
     app = create_application(_settings(instance))
     with TestClient(app) as client:
         runtime = app.state.runtime
+        _grant_cos_private_context(client, "cos-canonical-race-grant")
         proposed = client.post(
             "/api/openclaw/v1/tools/action",
             headers=OPENCLAW_AUTH,
@@ -1127,6 +1143,7 @@ def test_proposal_requires_member_triage_before_official_task(
 
     with TestClient(app) as client:
         runtime = app.state.runtime
+        _grant_cos_private_context(client, "cos-triage-vertical-grant")
         proposed = client.post(
             "/api/openclaw/v1/tools/action",
             headers=OPENCLAW_AUTH,

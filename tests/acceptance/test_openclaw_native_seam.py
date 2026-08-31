@@ -86,6 +86,24 @@ def _post(
     return response.json()
 
 
+def _grant_cos(client: TestClient, request_id: str) -> str:
+    response = client.post(
+        "/api/member/v1/cos/delegations",
+        headers=DEMO_HEADERS,
+        json={
+            "request_id": request_id,
+            "context_scope": "member_private",
+            "permissions": [
+                "read_context",
+                "create_internal_work",
+                "manage_internal_work",
+            ],
+        },
+    )
+    assert response.status_code in {200, 201}, response.text
+    return response.json()["grant_id"]
+
+
 def _health_report(
     state: str,
     reason: str,
@@ -184,6 +202,7 @@ def test_actor_boundary_observation_bridge_model_and_dashboard_scope(
     app = create_application(_settings(instance_dir))
 
     with TestClient(app) as client:
+        _grant_cos(client, "gate4-boundary-cos")
         _seed_slice(client, "gate4-boundary")
         missing_transport = client.post(
             "/api/openclaw/v1/tools/state",
@@ -382,23 +401,21 @@ def test_actor_boundary_observation_bridge_model_and_dashboard_scope(
         audit = next(
             row for row in correlated if row["type"] == "openclaw.tool_call.recorded"
         )
-        assert audit["payload"] == {
-            "operation": "tools.action",
-            "result_event_ids": [proposal["event_id"]],
-            "actor_id": "actor-a",
-            "member_id": PRINCIPAL,
-            "agent_id": "agent-a",
-            "session_key": "adminme:tenant:actor-a:dm",
-            "session_id": "session:actor-a",
-            "channel_id": "discord",
-            "account_id": "account-a",
-            "message_id": "message:observation-action",
-            "thread_id": "thread-a",
-            "correlation_id": "observation-action",
-            "call_kind": "tool",
-            "openclaw_version": OPENCLAW_VERSION,
-            "openclaw_commit": OPENCLAW_COMMIT,
-        }
+        assert audit["schema_version"] == 2
+        assert audit["actor_identity"] == "service-principal:chief-of-staff"
+        assert audit["payload"]["operation"] == "tools.action"
+        assert audit["payload"]["result_event_ids"] == [proposal["event_id"]]
+        assert audit["payload"]["actor_principal_id"] == audit["actor_identity"]
+        assert audit["payload"]["operator_principal_id"] == (
+            "operator:openclaw:automation"
+        )
+        assert audit["payload"]["context_member_id"] == PRINCIPAL
+        assert audit["payload"]["on_behalf_of_member_id"] == PRINCIPAL
+        assert audit["payload"]["authority_grant_id"]
+        assert audit["payload"]["resource_owner_principal_id"] == PRINCIPAL
+        assert audit["payload"]["openclaw_actor_id"] == "actor-a"
+        assert audit["payload"]["request_correlation_id"] == "observation-action"
+        assert audit["payload"]["provider_account_owner_principal_id"] is None
 
 
 def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
@@ -410,6 +427,7 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
     app = create_application(_settings(instance_dir))
 
     with TestClient(app) as client:
+        _grant_cos(client, "gate4-lifecycle-cos")
         output = _seed_slice(client, "gate4-outcomes")
         runtime = app.state.runtime
         task_row = (

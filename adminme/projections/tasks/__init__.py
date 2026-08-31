@@ -15,7 +15,8 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 4
+    version = 5
+    replay_retained_events_on_version_change = True
     subscribes_to = [
         "task.created",
         "task.completed",
@@ -46,9 +47,26 @@ class TasksProjection(Projection):
             conn.execute("ALTER TABLE tasks ADD COLUMN lifecycle_at TEXT")
         if "lifecycle_reason" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN lifecycle_reason TEXT")
+        if "work_kind" not in columns:
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN work_kind "
+                "TEXT NOT NULL DEFAULT 'household_work'"
+            )
+        if "owner_member_id" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN owner_member_id TEXT")
+        if "owner_party_id" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN owner_party_id TEXT")
+        if "responsible_party_id" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN responsible_party_id TEXT")
+        if "beneficiary_party_id" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN beneficiary_party_id TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_available "
             "ON tasks(tenant_id, available_from)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_owner_party "
+            "ON tasks(tenant_id, owner_party_id, work_kind)"
         )
 
 

@@ -10,7 +10,7 @@ content, or grant access to member-owned provider data.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Any, Literal
 
@@ -29,6 +29,22 @@ ChannelState = Literal[
 RouteScope = Literal[
     "member_private", "household_shared", "external_contact", "unresolved"
 ]
+ServiceContextScope = Literal[
+    "service_private",
+    "member_private",
+    "household_shared",
+    "external_contact",
+    "unresolved",
+]
+DelegationPermission = Literal[
+    "read_context", "create_internal_work", "manage_internal_work"
+]
+ApprovalQuorum = Literal["service_self", "member_owner", "all_adult_principals"]
+
+COS_SERVICE_PRINCIPAL_ID = "service-principal:chief-of-staff"
+COS_PARTY_ID = "service-party:chief-of-staff"
+COS_AUTOMATION_OPERATOR_ID = "operator:openclaw:automation"
+COS_DETERMINISTIC_OPERATOR_ID = "operator:administrateme:deterministic-automation"
 
 CHANNEL_STATES = frozenset(
     {
@@ -57,6 +73,183 @@ class ServicePrincipal:
     service_principal_id: str
     kind: str
     party_id: str
+    display_name: str
+    private_scope: str
+
+
+@dataclass(frozen=True)
+class ServiceRequestContext:
+    """Typed, immutable attribution for one authenticated service request.
+
+    ``context_member_id`` identifies whose private context is active while
+    ``actor_principal_id`` remains the non-human CoS.  The operator is the
+    authenticated automation or individual human controlling that service;
+    neither coordinate may impersonate the context member.
+    """
+
+    tenant_id: str
+    actor_principal_id: str
+    operator_principal_id: str
+    represented_service_principal_id: str
+    context_scope: ServiceContextScope
+    context_member_id: str | None = None
+    on_behalf_of_member_id: str | None = None
+    authority_grant_id: str | None = None
+    resource_owner_principal_id: str | None = None
+    owner_party_id: str | None = None
+    responsible_party_id: str | None = None
+    assignee_party_id: str | None = None
+    beneficiary_party_id: str | None = None
+    provider_account_owner_principal_id: str | None = None
+    audience: tuple[str, ...] = ()
+    visibility: tuple[str, ...] = ()
+    approving_member_ids: tuple[str, ...] = ()
+    approval_quorum: ApprovalQuorum = "service_self"
+    permissions: frozenset[DelegationPermission] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        required = {
+            "tenant_id": self.tenant_id,
+            "actor_principal_id": self.actor_principal_id,
+            "operator_principal_id": self.operator_principal_id,
+            "represented_service_principal_id": self.represented_service_principal_id,
+        }
+        missing = [name for name, value in required.items() if not value.strip()]
+        if missing:
+            raise ValueError(f"service request context is missing {missing[0]}")
+        if self.actor_principal_id != self.represented_service_principal_id:
+            raise ValueError("CoS actor and represented service principal disagree")
+        if self.operator_principal_id == self.actor_principal_id:
+            raise ValueError("operator identity must remain distinct from the CoS")
+        if (
+            self.context_member_id
+            and self.operator_principal_id == self.context_member_id
+        ):
+            raise ValueError("operator must not impersonate the active member")
+        if self.context_scope == "member_private":
+            if not self.context_member_id or not self.on_behalf_of_member_id:
+                raise ValueError("member-private service context requires one member")
+            if self.context_member_id != self.on_behalf_of_member_id:
+                raise ValueError(
+                    "member-private context and on-behalf-of member disagree"
+                )
+            if not self.authority_grant_id:
+                raise ValueError(
+                    "member-private service context requires an exact grant"
+                )
+            if self.resource_owner_principal_id != self.context_member_id:
+                raise ValueError(
+                    "member-private resource owner must be the active member"
+                )
+            if self.approval_quorum != "member_owner":
+                raise ValueError(
+                    "member-private service context requires owner approval"
+                )
+            if self.approving_member_ids != (self.context_member_id,):
+                raise ValueError(
+                    "member-private service context requires exact owner approval"
+                )
+        elif self.context_scope == "household_shared":
+            if (
+                self.context_member_id is not None
+                or self.on_behalf_of_member_id is not None
+            ):
+                raise ValueError("household-shared context cannot impersonate a member")
+            if not self.authority_grant_id:
+                raise ValueError(
+                    "household-shared service context requires an exact grant"
+                )
+            if self.approval_quorum != "all_adult_principals":
+                raise ValueError("household-shared context requires the adult quorum")
+            if len(self.approving_member_ids) < 2:
+                raise ValueError(
+                    "household-shared context requires multiple adult approvals"
+                )
+        elif self.context_scope == "external_contact":
+            if not self.authority_grant_id or not self.owner_party_id:
+                raise ValueError("external-contact context requires a grant and Party")
+            if self.approval_quorum != "member_owner":
+                raise ValueError("external-contact context requires owner approval")
+            if (
+                not self.context_member_id
+                or self.on_behalf_of_member_id != self.context_member_id
+                or self.resource_owner_principal_id != self.context_member_id
+                or self.approving_member_ids != (self.context_member_id,)
+            ):
+                raise ValueError(
+                    "external-contact context requires its exact member owner"
+                )
+        elif self.context_scope == "service_private":
+            if any(
+                (
+                    self.context_member_id,
+                    self.on_behalf_of_member_id,
+                    self.authority_grant_id,
+                )
+            ):
+                raise ValueError(
+                    "service-private context cannot carry member authority"
+                )
+            if self.approval_quorum != "service_self":
+                raise ValueError("service-private context uses service-self authority")
+        elif self.context_scope == "unresolved":
+            if any(
+                (
+                    self.context_member_id,
+                    self.on_behalf_of_member_id,
+                    self.authority_grant_id,
+                    self.resource_owner_principal_id,
+                    self.owner_party_id,
+                )
+            ):
+                raise ValueError("unresolved context cannot retain resolved authority")
+
+    @property
+    def allowed_scopes(self) -> frozenset[str]:
+        service_scope = service_private_scope(self.actor_principal_id)
+        if self.context_scope == "member_private":
+            assert self.context_member_id is not None
+            scopes = {service_scope}
+            if "read_context" in self.permissions:
+                scopes.add(f"private:{self.context_member_id}")
+            return frozenset(scopes)
+        if self.context_scope == "household_shared":
+            scopes = {service_scope}
+            if "read_context" in self.permissions:
+                scopes.add("shared:household")
+            return frozenset(scopes)
+        if self.context_scope == "external_contact":
+            assert self.owner_party_id is not None
+            scopes = {service_scope}
+            if "read_context" in self.permissions:
+                scopes.add(f"external-contact:{self.owner_party_id}")
+            return frozenset(scopes)
+        return frozenset({service_scope})
+
+    def audit_payload(self) -> dict[str, Any]:
+        """Return every applicable attribution axis without overloading one."""
+
+        return {
+            "actor_principal_id": self.actor_principal_id,
+            "operator_principal_id": self.operator_principal_id,
+            "represented_service_principal_id": self.represented_service_principal_id,
+            "context_scope": self.context_scope,
+            "context_member_id": self.context_member_id,
+            "on_behalf_of_member_id": self.on_behalf_of_member_id,
+            "authority_grant_id": self.authority_grant_id,
+            "resource_owner_principal_id": self.resource_owner_principal_id,
+            "owner_party_id": self.owner_party_id,
+            "responsible_party_id": self.responsible_party_id,
+            "assignee_party_id": self.assignee_party_id,
+            "beneficiary_party_id": self.beneficiary_party_id,
+            "provider_account_owner_principal_id": (
+                self.provider_account_owner_principal_id
+            ),
+            "audience": list(self.audience),
+            "visibility": list(self.visibility),
+            "approving_member_ids": list(self.approving_member_ids),
+            "approval_quorum": self.approval_quorum,
+        }
 
 
 @dataclass(frozen=True)
@@ -82,12 +275,20 @@ class ServiceChannelAccount:
     routes: tuple[ChannelRoute, ...]
 
 
+def service_private_scope(service_principal_id: str) -> str:
+    if not isinstance(service_principal_id, str) or not service_principal_id.strip():
+        raise ValueError("service_principal_id is required")
+    return f"service-private:{service_principal_id.strip()}"
+
+
 DEFAULT_SERVICE_IDENTITY_CONFIG: dict[str, Any] = {
     "principals": [
         {
-            "service_principal_id": "service-principal:chief-of-staff",
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
             "kind": "chief_of_staff",
-            "party_id": "service-party:chief-of-staff",
+            "party_id": COS_PARTY_ID,
+            "display_name": "Household Chief of Staff",
+            "private_scope": service_private_scope(COS_SERVICE_PRINCIPAL_ID),
         }
     ],
     "channels": [
@@ -95,7 +296,7 @@ DEFAULT_SERVICE_IDENTITY_CONFIG: dict[str, Any] = {
             "channel_id": "channel:chief-of-staff:apple-imessage",
             "display_name": "CoS Apple service identity",
             "provider": "apple_imessage",
-            "service_principal_id": "service-principal:chief-of-staff",
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
             "state": "planned",
             "provider_account_reference": None,
             "endpoint_reference": None,
@@ -152,8 +353,19 @@ def validate_service_identity_config(
                 service_principal_id=principal_id,
                 kind=_required_text(row.get("kind"), "service principal kind"),
                 party_id=party_id,
+                display_name=_required_text(
+                    row.get("display_name")
+                    or str(row.get("kind") or "service").replace("_", " ").title(),
+                    "service principal display_name",
+                ),
+                private_scope=_required_text(
+                    row.get("private_scope") or service_private_scope(principal_id),
+                    "service principal private_scope",
+                ),
             )
         )
+        if principals[-1].private_scope != service_private_scope(principal_id):
+            raise ValueError("service principal private scope is not exact")
 
     channels: list[ServiceChannelAccount] = []
     channel_ids: set[str] = set()
@@ -341,12 +553,21 @@ def public_service_identity_inventory(
 
 
 __all__ = [
+    "ApprovalQuorum",
     "CHANNEL_STATES",
+    "COS_AUTOMATION_OPERATOR_ID",
+    "COS_DETERMINISTIC_OPERATOR_ID",
+    "COS_PARTY_ID",
+    "COS_SERVICE_PRINCIPAL_ID",
     "DEFAULT_SERVICE_IDENTITY_CONFIG",
     "ChannelRoute",
+    "DelegationPermission",
     "ServiceChannelAccount",
+    "ServiceContextScope",
     "ServicePrincipal",
+    "ServiceRequestContext",
     "public_service_identity_inventory",
     "resolve_service_channel_route",
+    "service_private_scope",
     "validate_service_identity_config",
 ]

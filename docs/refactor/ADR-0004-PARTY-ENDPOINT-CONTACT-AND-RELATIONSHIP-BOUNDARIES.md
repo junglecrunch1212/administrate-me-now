@@ -51,6 +51,36 @@ remain separate and independently revocable. In particular, the planned CoS
 Apple service identity cannot resolve as either human member and grants no
 access to either member's private Apple sources.
 
+The built-in household Chief of Staff is one stable
+`service-principal:chief-of-staff` plus one qualified, non-human
+`service-party:chief-of-staff`.  They are separate coordinates: the principal
+acts and receives authority, while the Party may own, be responsible for, or
+be assigned internal work.  Startup reconciles the Party and its
+`household_service` membership through idempotent events.  Historical member
+or device events are never reattributed to it.
+
+Service access uses immutable `ServiceRequestContext` values. Actor, operator,
+represented service, active member/external context, on-behalf-of member,
+exact grant, resource owner, work owner/responsible/assignee/beneficiary,
+provider-account owner, audience/visibility, approval quorum, and event
+lineage remain independent axes. An OpenClaw route identifies the active
+member but grants no access: an adult request resolves only when exactly one
+unexpired, unrevoked, fully approved member-to-CoS grant matches. Ambiguous or
+missing grants fail closed. Member-private grants require that exact member;
+household-shared grants require every configured adult principal; each adult
+records their own approval event. Preferences, profiles, provider shares,
+devices, Host/Admin status, credentials, OpenClaw approvals, and natural
+language cannot create a delegation.
+
+The CoS has an explicit service-private scope. A member-private context with
+`read_context` adds only that member's private scope; a create-only grant does
+not expose it, and no grant carries another member's scope or general household
+scope forward. Household-shared and authorized external-contact contexts are
+separate grant resolutions. Unknown or conflicting routes remain unresolved
+and expose no member-private content. OpenClaw's automation identity and a
+future individually authenticated human operator both operate the same
+represented CoS through the same grant without impersonating the member.
+
 Provider records, identifier links, facts, interactions, and member profiles
 are owner-private by default. Household-visible Parties do not expose another
 adult's private provider record, identifiers, interaction history, or member
@@ -115,12 +145,14 @@ identity, or provider fields.
   member isolation, human gating, governance, observation, and replay.
 - **MODERNIZE:** People as relationship memory; provider-neutral contact
   records; scoped identity resolution; member-specific relationship profiles;
-  explicit non-human service principals and deterministic channel routing.
+  explicit non-human service principals, event-sourced delegation, Party-owned
+  service work, and deterministic channel routing.
 - **SUPERSEDE:** sender-as-person, implicit provider-share authorization,
   tenant-wide exact-identifier uniqueness, model closeness/ranking, agent
   proliferation, and any blanket interpretation that forbids a separate CoS
   Apple service identity while preserving the ban on central member-source
   ingestion.
-- **DEFER:** only live enrollment of an optional contact provider and its
-  separately approved write operations. The People product function, privacy
-  boundary, replay, and fixture-backed adapter contracts are not deferred.
+- **DEFER:** live provider/channel enrollment, service-provider representation,
+  service sending, and separately approved provider writes. No identity,
+  delegation, revocation, privacy, replay, or internal-work requirement is
+  deferred.

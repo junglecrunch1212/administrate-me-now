@@ -16,12 +16,17 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import sqlcipher3
 
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
+from adminme.service_identities import ServiceRequestContext
+
+
+class ServiceDelegationResolutionError(RuntimeError):
+    """No single, fully approved grant authorizes the requested context."""
 
 
 def _row_to_dict(row: sqlcipher3.Row | None) -> dict[str, Any] | None:
@@ -31,6 +36,143 @@ def _row_to_dict(row: sqlcipher3.Row | None) -> dict[str, Any] | None:
     if "attributes_json" in out:
         out["attributes"] = json.loads(out["attributes_json"])
     return out
+
+
+def list_service_delegations(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    service_principal_id: str,
+) -> list[dict[str, Any]]:
+    """List authority facts visible to the authenticated member."""
+
+    rows = conn.execute(
+        """
+        SELECT g.*,
+               COALESCE((
+                   SELECT json_group_array(ordered.approved_by_member_id)
+                     FROM (
+                         SELECT a.approved_by_member_id
+                           FROM service_delegation_approvals a
+                          WHERE a.tenant_id=g.tenant_id AND a.grant_id=g.grant_id
+                          ORDER BY a.approved_by_member_id
+                     ) AS ordered
+               ), '[]') AS approving_member_ids_json
+          FROM service_delegation_grants g
+         WHERE g.tenant_id=? AND g.service_principal_id=?
+         ORDER BY g.requested_at, g.grant_id
+        """,
+        (session.tenant_id, service_principal_id),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        if row["context_scope"] == "household_shared":
+            if session.auth_role != "principal":
+                continue
+        elif session.auth_member_id not in {
+            row["context_member_id"],
+            row["requested_by_member_id"],
+        }:
+            continue
+        for name in (
+            "required_approvals_json",
+            "permissions_json",
+            "audience_json",
+            "visibility_json",
+            "approving_member_ids_json",
+        ):
+            row[name.removesuffix("_json")] = json.loads(str(row.pop(name)))
+        required = set(row["required_approvals"])
+        approved = set(row["approving_member_ids"])
+        row["active"] = (
+            row["revoked_at"] is None
+            and required == approved
+            and not _is_expired(row.get("expires_at"))
+        )
+        result.append(row)
+    return result
+
+
+def _is_expired(expires_at: str | None) -> bool:
+    if not expires_at:
+        return False
+    try:
+        value = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value <= datetime.now(timezone.utc)
+
+
+def resolve_service_delegation(
+    conn: sqlcipher3.Connection,
+    *,
+    tenant_id: str,
+    service_principal_id: str,
+    operator_principal_id: str,
+    context_scope: str,
+    context_member_id: str | None,
+    owner_party_id: str | None = None,
+) -> ServiceRequestContext:
+    """Resolve exactly one unexpired grant with its exact approval quorum."""
+
+    rows = conn.execute(
+        """
+        SELECT * FROM service_delegation_grants
+         WHERE tenant_id=? AND service_principal_id=? AND context_scope=?
+           AND context_member_id IS ? AND owner_party_id IS ?
+           AND revoked_at IS NULL
+         ORDER BY grant_id
+        """,
+        (
+            tenant_id,
+            service_principal_id,
+            context_scope,
+            context_member_id,
+            owner_party_id,
+        ),
+    ).fetchall()
+    matches: list[tuple[dict[str, Any], tuple[str, ...]]] = []
+    for raw in rows:
+        row = dict(raw)
+        if _is_expired(row.get("expires_at")):
+            continue
+        required = tuple(json.loads(str(row["required_approvals_json"])))
+        approved = tuple(
+            str(approval[0])
+            for approval in conn.execute(
+                "SELECT approved_by_member_id FROM service_delegation_approvals "
+                "WHERE tenant_id=? AND grant_id=? ORDER BY approved_by_member_id",
+                (tenant_id, row["grant_id"]),
+            ).fetchall()
+        )
+        if set(required) == set(approved):
+            matches.append((row, tuple(sorted(approved))))
+    if len(matches) != 1:
+        raise ServiceDelegationResolutionError(
+            "service context requires exactly one active approved delegation"
+        )
+    row, approved = matches[0]
+    return ServiceRequestContext(
+        tenant_id=tenant_id,
+        actor_principal_id=str(row["service_principal_id"]),
+        operator_principal_id=operator_principal_id,
+        represented_service_principal_id=str(row["service_principal_id"]),
+        context_scope=cast(Any, row["context_scope"]),
+        context_member_id=row["context_member_id"],
+        on_behalf_of_member_id=row["context_member_id"],
+        authority_grant_id=str(row["grant_id"]),
+        resource_owner_principal_id=row["resource_owner_principal_id"],
+        owner_party_id=row["owner_party_id"],
+        provider_account_owner_principal_id=None,
+        audience=tuple(json.loads(str(row["audience_json"]))),
+        visibility=tuple(json.loads(str(row["visibility_json"]))),
+        approving_member_ids=approved,
+        approval_quorum=cast(Any, row["approval_quorum"]),
+        permissions=frozenset(json.loads(str(row["permissions_json"]))),
+    )
 
 
 def get_party(

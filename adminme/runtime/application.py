@@ -66,6 +66,8 @@ from adminme.openclaw_topology import inspect_runtime_topology, member_agent_id
 from adminme.bridge_authorization import validate_bridge_record_set
 from adminme.provider_bindings import ProviderBinding, validate_provider_bindings
 from adminme.service_identities import (
+    COS_PARTY_ID,
+    COS_SERVICE_PRINCIPAL_ID,
     ServiceChannelAccount,
     ServicePrincipal,
     validate_service_identity_config,
@@ -82,6 +84,7 @@ from adminme.products.capture.main import router as capture_router
 from adminme.products.comms.main import router as comms_router
 from adminme.products.core.main import router as core_router
 from adminme.products.member.main import router as member_router
+from adminme.products.member.cos import router as member_cos_router
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw.main import router as openclaw_router
 from adminme.projections.runner import ProjectionRunner, register_default_projections
@@ -171,6 +174,16 @@ class RuntimeSettings:
             member_ids=known_members,
             household_party_ids=household_party_ids,
         )
+        chief_of_staff = [
+            principal
+            for principal in service_principals
+            if principal.kind == "chief_of_staff"
+        ]
+        if len(chief_of_staff) != 1 or (
+            chief_of_staff[0].service_principal_id != COS_SERVICE_PRINCIPAL_ID
+            or chief_of_staff[0].party_id != COS_PARTY_ID
+        ):
+            raise ValueError("runtime requires one stable household CoS identity")
         service_coordinates = {
             value
             for principal in service_principals
@@ -939,8 +952,6 @@ class AdministrateMeRuntime:
         """
 
         mapping = self.settings.household_mapping
-        if not mapping:
-            return []
         now = EventEnvelope.now_utc_iso()
         household_party_id = str(
             mapping.get("household_party_id")
@@ -988,7 +999,32 @@ class AdministrateMeRuntime:
             )
 
         values: list[EventEnvelope] = []
-        values.append(
+        for principal in self.settings.service_principals:
+            values.append(
+                envelope(
+                    "party.created",
+                    {
+                        "party_id": principal.party_id,
+                        "kind": "organization",
+                        "display_name": principal.display_name,
+                        "sort_name": principal.display_name.casefold(),
+                        "attributes": {
+                            "source": "service_identity_reconciliation",
+                            "nonhuman_service": True,
+                            "service_principal_id": principal.service_principal_id,
+                            "service_kind": principal.kind,
+                            "private_scope": principal.private_scope,
+                            "provider_authority": False,
+                        },
+                    },
+                    domain_id=principal.party_id,
+                )
+            )
+        if not mapping:
+            return values
+
+        values.insert(
+            0,
             envelope(
                 "party.created",
                 {
@@ -1001,8 +1037,31 @@ class AdministrateMeRuntime:
                     "attributes": {"source": "household_enrollment"},
                 },
                 domain_id=household_party_id,
-            )
+            ),
         )
+        for principal in self.settings.service_principals:
+            values.append(
+                envelope(
+                    "membership.added",
+                    {
+                        "membership_id": (
+                            "membership:household-service:chief-of-staff"
+                            if principal.service_principal_id
+                            == COS_SERVICE_PRINCIPAL_ID
+                            else f"membership:household-service:{principal.party_id}"
+                        ),
+                        "party_id": principal.party_id,
+                        "parent_party_id": household_party_id,
+                        "role": "household_service",
+                        "attributes": {
+                            "source": "service_identity_reconciliation",
+                            "nonhuman": True,
+                            "provider_authority": False,
+                        },
+                    },
+                    domain_id=f"service-membership:{principal.party_id}",
+                )
+            )
         for member in mapping["members"]:
             party_id = str(member["member_id"])
             label = str(member["label"]).strip()
@@ -2293,6 +2352,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(ingest_router)
     app.include_router(openclaw_router)
     app.include_router(member_router)
+    app.include_router(member_cos_router)
     app.include_router(system_router)
     return app
 

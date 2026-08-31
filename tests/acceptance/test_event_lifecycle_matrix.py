@@ -51,6 +51,19 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
     )
 
 
+def _grant_cos(client: TestClient, request_id: str) -> None:
+    response = client.post(
+        "/api/member/v1/cos/delegations",
+        headers=AUTH,
+        json={
+            "request_id": request_id,
+            "context_scope": "member_private",
+            "permissions": ["read_context", "manage_internal_work"],
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
 def _private_envelope(
     runtime: Any,
     *,
@@ -575,6 +588,7 @@ def test_openclaw_clock_expires_only_stale_unconfirmed_commitments(
 
     app = create_application(_settings(tmp_path / "instance-lifecycle-clock"))
     with TestClient(app) as client:
+        _grant_cos(client, "lifecycle-clock-cos")
         runtime = app.state.runtime
 
         async def seed(commitment_id: str, confirm: bool) -> str:
@@ -697,6 +711,7 @@ def test_openclaw_clock_expires_only_stale_unconfirmed_commitments(
 def test_openclaw_add_for_review_reaches_every_triage_target(tmp_path: Path) -> None:
     app = create_application(_settings(tmp_path / "instance-openclaw"))
     with TestClient(app) as client:
+        _grant_cos(client, "lifecycle-add-review-cos")
         for index, kind in enumerate(TRIAGE_KINDS):
             response = client.post(
                 "/api/openclaw/v1/tools/add-for-review",

@@ -1432,6 +1432,7 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("openclaw.", "openclaw"),
     ("household.", "openclaw_compatibility"),
     ("settings.", "settings"),
+    ("service.delegation.", "service_delegation"),
     ("temporary_surface.", "temporary_surface"),
     ("xlsx.", "workbook_runtime"),
     ("runtime.", "runtime"),

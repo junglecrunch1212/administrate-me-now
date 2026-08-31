@@ -174,6 +174,8 @@ def compose_people_cockpit(
         attributes: dict[str, Any] = (
             raw_attributes if isinstance(raw_attributes, dict) else {}
         )
+        if attributes.get("nonhuman_service") is True:
+            continue
         raw_profile = row.get("profile")
         profile: dict[str, Any] = raw_profile if isinstance(raw_profile, dict) else {}
         entry = {

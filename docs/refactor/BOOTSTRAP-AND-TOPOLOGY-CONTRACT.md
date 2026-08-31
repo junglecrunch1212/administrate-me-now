@@ -49,7 +49,8 @@ address matching, possession of a token, and vendor-side sharing are never
 AdministrateMe authority.
 
 A Chief-of-Staff service principal, its provider account, addressable Endpoint,
-optional Party, Tailscale infrastructure node, and OpenClaw agent/session are
+qualified non-human Party, Tailscale infrastructure node, operator identity,
+and OpenClaw agent/session are
 separate coordinates. The planned **CoS Apple service identity** is a
 household-owned, non-human channel identity and must never resolve as either
 human member. Its initial state is `planned` / `account_not_created`: there is
@@ -71,7 +72,11 @@ Human-to-human provider traffic is normalized by Cat-A adapters and does not
 enter an OpenClaw model session. For member-to-CoS DMs, bootstrap binds one
 isolated OpenClaw agent per human member and configures account-aware DM scope
 (`per-account-channel-peer`) so two people or two provider accounts cannot
-share session memory. A second work agent for the same member is created only
+share session memory. Each agent has a distinct owner-only member workspace;
+sharing the compiled workspace directory is topology drift. Runtime member
+routes still require one exact active member-to-CoS delegation and represent
+the same stable CoS actor with a separately audited OpenClaw operator. A second
+work agent for the same member is created only
 when its tools, model, retention, or organization policy must differ—not just
 to render a work filter. Provider account credentials and OpenClaw agent
 credentials remain separately revocable.
