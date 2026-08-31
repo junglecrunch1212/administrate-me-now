@@ -1,5 +1,24 @@
 # Migration map
 
+G02 exact-source policy V2 update (2026-08-31): candidate policy is
+**MODERNIZED IN SHADOW** without changing live admission. The secret-free
+Settings cache advances additively from schema v2 to v3 and accepts v1/v2
+inputs. Existing connection lifecycle and `candidate_policy_v1` rows remain
+authoritative for live behavior. Each ambiguous V1 source-family override
+becomes a migration-needed marker only; it is not copied to provider accounts,
+does not widen read scope, does not create credentials or provider-write
+authority, and is resolved only by an owner selecting one exact account and
+adapter coordinate. Exact changes are sourced from private encrypted
+`settings.source_policy_v2_changed@v1` events and replay into the cache at
+startup. Reset appends another event. The additive
+`source.policy_v2.shadow_evaluated@v1` receipt compares current V1 and proposed
+V2 routes for declared non-terminal source facts while changing neither
+admission nor providers. Rollback may ignore the two new event types and schema
+v3 cache fields; immutable source facts, V1 policy, projection truth,
+credentials, provider configuration, and prior decisions require no rewrite.
+G03 activation, deployment, runtime/dependency migration, provider enrollment,
+scope change, and write enablement remain separate owner-authorized work.
+
 Phase B live-closure amendment (2026-08-26): protected merge
 `7ed10ac599e08dc1e616f6b9c3f0ab3b11dfb9b7` is active after an ordinary
 same-runtime governed upgrade. Startup appended four exact refusals for the

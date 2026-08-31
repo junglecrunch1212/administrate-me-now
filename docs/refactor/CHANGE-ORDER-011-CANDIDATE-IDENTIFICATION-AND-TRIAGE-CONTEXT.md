@@ -8,6 +8,36 @@ Affected architecture: member Settings, source adapters, candidate-bearing
 pipelines, the pinned OpenClaw language seam, source assurance, Triage, all ten
 member surfaces, event schemas, replay, privacy, and release evidence.
 
+## G02 exact-source policy V2 amendment (2026-08-31)
+
+This change **MODERNIZES** the policy contract while **PRESERVING** V1 as the
+only live admission path until G03 or a later separately reviewed activation:
+
+- one immutable coordinate distinguishes tenant, member or service-principal
+  owner, optional context member, adapter category/kind/instance, provider,
+  provider account, workspace, source kind/class, trusted route, and an
+  optional safe native container;
+- acquisition, Triage, alert, context, and candidate-kind choices are bounded
+  independently, while provider execution remains outside the policy plane;
+- `settings.source_policy_v2_changed@v1` is the encrypted, private source of
+  truth; the schema-v3 Settings file is a secret-free replayable cache;
+- `source.policy_v2.shadow_evaluated@v1` records policy version/revision,
+  typed signals, current V1 route, proposed V2 route, exact reasons, and
+  `provider_effects:false` for every declared non-terminal source fact;
+- ambiguous V1 source-family preferences remain live, are not copied to every
+  account, and are reported as migration-needed until the owner chooses an
+  exact source policy; and
+- owner-only Settings expose Focused, Balanced, Review Everything, bounded
+  advanced controls, non-mutating preview, reset, pause/resume, and route
+  explanation without exposing prompts, models, regexes, code, credentials,
+  or raw configuration.
+
+Direct authenticated member intent remains eligible even if a passive-source
+preset is suppressive. Provider labels, sender/provider urgency, and model
+claims remain non-authoritative evidence and cannot establish identity,
+ownership, priority, routing, policy applicability, disclosure, relationships,
+or write authority.
+
 ## 1. Engineered objective
 
 Replace the ambiguous request for “candidate identification settings” with one
@@ -219,6 +249,18 @@ not adapter evidence.
 - `settings.candidate_policy_changed@v1` is a private immutable audit receipt.
   It explicitly records that source retention and routing authority did not
   change.
+- The additive V2 cache advances `settings-control.json` to schema v3. Startup
+  reconstructs every exact V2 override and owner revision from encrypted
+  `settings.source_policy_v2_changed@v1` events; reset is an event, not a
+  deletion from audit history. V1 rows and connection pause state remain
+  unchanged.
+- Ambiguous V1 rows produce content-free migration-needed records. They never
+  manufacture provider accounts, workspaces, credentials, scopes, admission,
+  disclosure, or provider-write authority, and never expand one source-family
+  setting across accounts.
+- The shadow consumer compares V1 and V2 only for declared source facts. It
+  excludes provider action requests and terminal execution results because
+  provider execution is not a source-policy plane.
 - Policy applies to new or changed source facts. Existing Triage proposals keep
   their recorded evidence and decision history; quiet mode never deletes or
   rewrites them. Historical reassessment remains an explicit replay/source-link
@@ -249,3 +291,11 @@ CO-011 is complete only when:
    backup/restore, clean macOS rehearsal, review, merge, guarded deployment,
    Doctor, source settlement, and authenticated live proof pass without a
    provider effect.
+
+For the G02 V2 amendment, production composition must additionally prove
+distinct same-owner accounts and different owners can hold different exact
+policies; service-owned sources need no fake member; adults cannot read or
+mutate another adult's policy; preview is non-mutating; context-only and ignore
+retain their separate semantics and provenance; direct member intent cannot be
+suppressed; replay reconstructs settings after the cache is removed; and no
+provider terminal reports `provider_called:true`.

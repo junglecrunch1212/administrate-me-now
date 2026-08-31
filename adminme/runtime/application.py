@@ -91,6 +91,8 @@ from adminme.projections.runner import ProjectionRunner, register_default_projec
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.settings_control import SettingsControlStore
+from adminme.source_policy import source_policy_event_types
+from adminme.source_policy_shadow import SourcePolicyShadowEvaluator
 from adminme.source_assurance import audit_source_assurance
 from adminme.source_assessment_recovery import (
     SourceAssessmentRecoveryBatch,
@@ -620,6 +622,7 @@ class AdministrateMeRuntime:
         self.settings_control = SettingsControlStore(
             settings.instance.config_dir / "settings-control.json"
         )
+        self.source_policy_shadow: SourcePolicyShadowEvaluator | None = None
         self.temporary_surfaces = TemporarySurfaceStore(
             settings.instance.config_dir / "temporary-surfaces.json"
         )
@@ -655,6 +658,13 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            await self.settings_control.replay_source_policy_v2_events(self.event_log)
+            self.source_policy_shadow = SourcePolicyShadowEvaluator(
+                self.events,
+                self.settings_control,
+                self.settings_control.effective_candidate_policy,
+                self.settings.provider_bindings,
+            )
             await self._hydrate_openclaw_state()
             set_default_event_sink(self.events)
             self.observation = ObservationManager(
@@ -794,6 +804,13 @@ class AdministrateMeRuntime:
                 ),
             )
             self.adapters.prepare()
+            self.bus.subscribe(
+                "source-policy-v2:shadow",
+                source_policy_event_types(self.settings.repository_root),
+                self.source_policy_shadow.handle,
+                consumer_version=self.source_policy_shadow.CONSUMER_VERSION,
+                replay_on_version_change=True,
+            )
             self.bus.subscribe(
                 "external-sync:central-providers",
                 ["external_sync.write_requested"],

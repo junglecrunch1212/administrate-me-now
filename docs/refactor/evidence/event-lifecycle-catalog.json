@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 234,
-    "technical_event_types": 197,
+    "technical_event_schemas": 245,
+    "technical_event_types": 203,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -3552,6 +3552,67 @@
         "authenticated_at"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "adapter.authenticated",
+      "family": "adapter_runtime",
+      "properties": {
+        "adapter_family": {
+          "minLength": 1,
+          "title": "Adapter Family",
+          "type": "string"
+        },
+        "adapter_name": {
+          "minLength": 1,
+          "title": "Adapter Name",
+          "type": "string"
+        },
+        "authenticated_at": {
+          "minLength": 1,
+          "title": "Authenticated At",
+          "type": "string"
+        },
+        "bridge_enrollment_id": {
+          "minLength": 1,
+          "title": "Bridge Enrollment Id",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "pattern": "^provider-account:[0-9a-f]{32,64}$",
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "token_storage_ref": {
+          "description": "Secure-provider reference \u2014 NEVER the secret itself.",
+          "minLength": 1,
+          "pattern": "^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
+          "title": "Token Storage Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_name",
+        "adapter_family",
+        "token_storage_ref",
+        "authenticated_at",
+        "bridge_enrollment_id",
+        "configuration_sha256",
+        "provider_account_id"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -3967,7 +4028,7 @@
       "family": "bridge",
       "properties": {
         "adapters_active": {
-          "description": "Bridge packs reporting healthy at enrollment time; empty is a valid transport-only enrollment and makes no provider claim.",
+          "description": "Non-authorizing compatibility telemetry. Current transport-only enrollment emits an empty list and makes no provider claim.",
           "items": {
             "type": "string"
           },
@@ -7714,6 +7775,84 @@
     },
     {
       "additional_properties": false,
+      "event_type": "external_sync.legacy_effect_reconciled",
+      "family": "external_write",
+      "properties": {
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "legacy_approval_state": {
+          "const": "pre_governance_absent",
+          "title": "Legacy Approval State",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_called": {
+          "title": "Provider Called",
+          "type": "boolean"
+        },
+        "reconciled_at": {
+          "format": "date-time",
+          "title": "Reconciled At",
+          "type": "string"
+        },
+        "reconciliation_basis": {
+          "const": "v1_completed_terminal_evidence",
+          "title": "Reconciliation Basis",
+          "type": "string"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "suppressed": {
+          "title": "Suppressed",
+          "type": "boolean"
+        },
+        "terminal_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Terminal Event Id",
+          "type": "string"
+        },
+        "terminal_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Terminal Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_event_id",
+        "terminal_event_id",
+        "command_id",
+        "provider_account_id",
+        "provider_called",
+        "suppressed",
+        "legacy_approval_state",
+        "reconciliation_basis",
+        "request_fingerprint",
+        "terminal_fingerprint",
+        "reconciled_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "external_sync.write_completed",
       "family": "external_write",
       "properties": {
@@ -7757,6 +7896,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -7877,6 +8017,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -7992,6 +8133,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -8103,6 +8245,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -8198,6 +8341,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -8322,6 +8466,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -12316,6 +12461,7 @@
             "google_calendar",
             "google_tasks",
             "apple_calendar",
+            "apple_contacts",
             "apple_reminders",
             "gmail",
             "microsoft_graph",
@@ -15368,6 +15514,286 @@
     },
     {
       "additional_properties": false,
+      "event_type": "messaging.received",
+      "family": "communication",
+      "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "bcc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Bcc Identifiers",
+          "type": "array"
+        },
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "cc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Cc Identifiers",
+          "type": "array"
+        },
+        "from_identifier": {
+          "minLength": 1,
+          "title": "From Identifier",
+          "type": "string"
+        },
+        "important": {
+          "default": false,
+          "title": "Important",
+          "type": "boolean"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "native_message_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Native Message Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_labels": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Provider Labels",
+          "type": "array"
+        },
+        "received_at": {
+          "minLength": 1,
+          "title": "Received At",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "reply_to_identifier": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reply To Identifier"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "routing_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact",
+            "unresolved"
+          ],
+          "title": "Routing Scope",
+          "type": "string"
+        },
+        "routing_target_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Routing Target Id"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "starred": {
+          "default": false,
+          "title": "Starred",
+          "type": "boolean"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "to_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "To Identifiers",
+          "type": "array"
+        },
+        "unread": {
+          "default": true,
+          "title": "Unread",
+          "type": "boolean"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "from_identifier",
+        "to_identifier",
+        "received_at",
+        "native_message_id",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "routing_scope"
+      ],
+      "schema_version": 5
+    },
+    {
+      "additional_properties": false,
       "event_type": "messaging.semantic_features_extracted",
       "family": "communication",
       "properties": {
@@ -16015,6 +16441,244 @@
         "workspace"
       ],
       "schema_version": 4
+    },
+    {
+      "additional_properties": false,
+      "event_type": "messaging.sent",
+      "family": "communication",
+      "properties": {
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "delivery_status": {
+          "enum": [
+            "queued",
+            "sent",
+            "failed"
+          ],
+          "title": "Delivery Status",
+          "type": "string"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "in_reply_to_interaction_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To Interaction Id"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "native_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Message Id"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "routing_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact"
+          ],
+          "title": "Routing Scope",
+          "type": "string"
+        },
+        "routing_target_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Routing Target Id"
+        },
+        "send_as": {
+          "enum": [
+            "member",
+            "service_principal"
+          ],
+          "title": "Send As",
+          "type": "string"
+        },
+        "sent_at": {
+          "minLength": 1,
+          "title": "Sent At",
+          "type": "string"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "to_identifier",
+        "sent_at",
+        "delivery_status",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "send_as",
+        "routing_scope"
+      ],
+      "schema_version": 5
     },
     {
       "additional_properties": false,
@@ -17884,6 +18548,346 @@
         "openclaw_commit"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "openclaw.tool_call.recorded",
+      "family": "openclaw",
+      "properties": {
+        "account_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account Id"
+        },
+        "actor_principal_id": {
+          "minLength": 1,
+          "title": "Actor Principal Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Id"
+        },
+        "approval_quorum": {
+          "enum": [
+            "service_self",
+            "member_owner",
+            "all_adult_principals"
+          ],
+          "title": "Approval Quorum",
+          "type": "string"
+        },
+        "approving_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Approving Member Ids",
+          "type": "array"
+        },
+        "assignee_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assignee Party Id"
+        },
+        "audience": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Audience",
+          "type": "array"
+        },
+        "authority_grant_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Grant Id"
+        },
+        "beneficiary_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Beneficiary Party Id"
+        },
+        "call_kind": {
+          "enum": [
+            "tool",
+            "dashboard",
+            "slash_command",
+            "standing_order",
+            "bridge"
+          ],
+          "title": "Call Kind",
+          "type": "string"
+        },
+        "causation_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Causation Event Ids",
+          "type": "array"
+        },
+        "channel_id": {
+          "minLength": 1,
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "context_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Member Id"
+        },
+        "context_scope": {
+          "enum": [
+            "service_private",
+            "member_private",
+            "household_shared",
+            "external_contact",
+            "unresolved"
+          ],
+          "title": "Context Scope",
+          "type": "string"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message Id"
+        },
+        "observation_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Observation Event Ids",
+          "type": "array"
+        },
+        "on_behalf_of_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On Behalf Of Member Id"
+        },
+        "openclaw_actor_id": {
+          "minLength": 1,
+          "title": "Openclaw Actor Id",
+          "type": "string"
+        },
+        "openclaw_commit": {
+          "minLength": 7,
+          "title": "Openclaw Commit",
+          "type": "string"
+        },
+        "openclaw_version": {
+          "minLength": 1,
+          "title": "Openclaw Version",
+          "type": "string"
+        },
+        "operation": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Operation",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "minLength": 1,
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "owner_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Party Id"
+        },
+        "permissions": {
+          "items": {
+            "enum": [
+              "read_context",
+              "create_internal_work",
+              "manage_internal_work"
+            ],
+            "type": "string"
+          },
+          "title": "Permissions",
+          "type": "array"
+        },
+        "provider_account_owner_principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Account Owner Principal Id"
+        },
+        "reconciliation_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reconciliation Event Ids",
+          "type": "array"
+        },
+        "represented_service_principal_id": {
+          "minLength": 1,
+          "title": "Represented Service Principal Id",
+          "type": "string"
+        },
+        "request_correlation_id": {
+          "minLength": 1,
+          "title": "Request Correlation Id",
+          "type": "string"
+        },
+        "resource_owner_principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resource Owner Principal Id"
+        },
+        "responsible_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Responsible Party Id"
+        },
+        "result_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Result Event Ids",
+          "type": "array"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "session_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Key"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "visibility": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Visibility",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation",
+        "actor_principal_id",
+        "operator_principal_id",
+        "represented_service_principal_id",
+        "context_scope",
+        "approval_quorum",
+        "openclaw_actor_id",
+        "channel_id",
+        "request_correlation_id",
+        "call_kind",
+        "openclaw_version",
+        "openclaw_commit"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -19884,6 +20888,219 @@
     },
     {
       "additional_properties": false,
+      "event_type": "service.delegation.approved",
+      "family": "service_delegation",
+      "properties": {
+        "approved_at": {
+          "minLength": 1,
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by_member_id": {
+          "minLength": 1,
+          "title": "Approved By Member Id",
+          "type": "string"
+        },
+        "grant_id": {
+          "minLength": 1,
+          "title": "Grant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "approved_by_member_id",
+        "approved_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "service.delegation.requested",
+      "family": "service_delegation",
+      "properties": {
+        "approval_quorum": {
+          "enum": [
+            "member_owner",
+            "all_adult_principals"
+          ],
+          "title": "Approval Quorum",
+          "type": "string"
+        },
+        "audience": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Audience",
+          "type": "array"
+        },
+        "context_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Member Id"
+        },
+        "context_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact"
+          ],
+          "title": "Context Scope",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "grant_id": {
+          "minLength": 1,
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "owner_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Party Id"
+        },
+        "permissions": {
+          "items": {
+            "enum": [
+              "read_context",
+              "create_internal_work",
+              "manage_internal_work"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Permissions",
+          "type": "array"
+        },
+        "requested_at": {
+          "minLength": 1,
+          "title": "Requested At",
+          "type": "string"
+        },
+        "requested_by_member_id": {
+          "minLength": 1,
+          "title": "Requested By Member Id",
+          "type": "string"
+        },
+        "required_approving_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Approving Member Ids",
+          "type": "array"
+        },
+        "resource_owner_principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resource Owner Principal Id"
+        },
+        "service_party_id": {
+          "minLength": 1,
+          "title": "Service Party Id",
+          "type": "string"
+        },
+        "service_principal_id": {
+          "minLength": 1,
+          "title": "Service Principal Id",
+          "type": "string"
+        },
+        "visibility": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Visibility",
+          "type": "array"
+        }
+      },
+      "required": [
+        "grant_id",
+        "service_principal_id",
+        "service_party_id",
+        "context_scope",
+        "requested_by_member_id",
+        "required_approving_member_ids",
+        "approval_quorum",
+        "permissions",
+        "requested_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "service.delegation.revoked",
+      "family": "service_delegation",
+      "properties": {
+        "grant_id": {
+          "minLength": 1,
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "revoked_at": {
+          "minLength": 1,
+          "title": "Revoked At",
+          "type": "string"
+        },
+        "revoked_by_member_id": {
+          "minLength": 1,
+          "title": "Revoked By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "revoked_by_member_id",
+        "revoked_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "settings.bridge_enrollment_requested",
       "family": "settings",
       "properties": {
@@ -20188,6 +21405,105 @@
         "member_id",
         "profile_id",
         "changed_by_member_id",
+        "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.source_policy_v2_changed",
+      "family": "settings",
+      "properties": {
+        "action": {
+          "enum": [
+            "set",
+            "reset"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "changed_at": {
+          "minLength": 1,
+          "title": "Changed At",
+          "type": "string"
+        },
+        "changed_by_principal_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Changed By Principal Id",
+          "type": "string"
+        },
+        "coordinate": {
+          "$ref": "#/$defs/SourceCoordinate"
+        },
+        "credential_creation": {
+          "const": false,
+          "default": false,
+          "title": "Credential Creation",
+          "type": "boolean"
+        },
+        "live_admission_changed": {
+          "const": false,
+          "default": false,
+          "title": "Live Admission Changed",
+          "type": "boolean"
+        },
+        "owner_kind": {
+          "enum": [
+            "member",
+            "service_principal"
+          ],
+          "title": "Owner Kind",
+          "type": "string"
+        },
+        "owner_principal_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Owner Principal Id",
+          "type": "string"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourcePolicyV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "policy_key": {
+          "pattern": "^spv2_[0-9a-f]{64}$",
+          "title": "Policy Key",
+          "type": "string"
+        },
+        "provider_write_authority": {
+          "const": false,
+          "default": false,
+          "title": "Provider Write Authority",
+          "type": "boolean"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "scope_widening": {
+          "const": false,
+          "default": false,
+          "title": "Scope Widening",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "owner_principal_id",
+        "owner_kind",
+        "policy_key",
+        "coordinate",
+        "action",
+        "revision",
+        "changed_by_principal_id",
         "changed_at"
       ],
       "schema_version": 1
@@ -20556,6 +21872,128 @@
     },
     {
       "additional_properties": false,
+      "event_type": "source.policy_v2.shadow_evaluated",
+      "family": "source_policy",
+      "properties": {
+        "acquisition": {
+          "$ref": "#/$defs/AcquisitionEvidence"
+        },
+        "coordinate": {
+          "$ref": "#/$defs/SourceCoordinate"
+        },
+        "coordinate_state": {
+          "enum": [
+            "exact",
+            "ambiguous"
+          ],
+          "title": "Coordinate State",
+          "type": "string"
+        },
+        "current_route": {
+          "$ref": "#/$defs/RouteDecision"
+        },
+        "evaluated_at": {
+          "minLength": 1,
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "live_admission_changed": {
+          "const": false,
+          "default": false,
+          "title": "Live Admission Changed",
+          "type": "boolean"
+        },
+        "llm_authority": {
+          "const": false,
+          "default": false,
+          "title": "Llm Authority",
+          "type": "boolean"
+        },
+        "migration_state": {
+          "enum": [
+            "not_required",
+            "migration_needed",
+            "resolved"
+          ],
+          "title": "Migration State",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/SourcePolicyV2"
+        },
+        "policy_key": {
+          "pattern": "^spv2_[0-9a-f]{64}$",
+          "title": "Policy Key",
+          "type": "string"
+        },
+        "policy_origin": {
+          "enum": [
+            "exact_override",
+            "recommended_default",
+            "migration_needed"
+          ],
+          "title": "Policy Origin",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 0,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "policy_version": {
+          "const": "source-policy-v2",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "shadow_route": {
+          "$ref": "#/$defs/RouteDecision"
+        },
+        "signals": {
+          "$ref": "#/$defs/SignalAssessment"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "policy_version",
+        "policy_key",
+        "coordinate",
+        "coordinate_state",
+        "policy_revision",
+        "policy",
+        "policy_origin",
+        "migration_state",
+        "acquisition",
+        "signals",
+        "current_route",
+        "shadow_route",
+        "reason_codes",
+        "evaluated_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "task.blocked",
       "family": "task",
       "properties": {
@@ -20892,6 +22330,287 @@
         "title"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "task.created",
+      "family": "task",
+      "properties": {
+        "assignee_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assignee Party Id"
+        },
+        "available_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available From"
+        },
+        "beneficiary_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Beneficiary Party Id"
+        },
+        "created_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created By"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due"
+        },
+        "due_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due Date"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "tiny",
+                "small",
+                "medium",
+                "large"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "effort_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort Min"
+        },
+        "energy": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy"
+        },
+        "item_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "purchase",
+                "appointment",
+                "research",
+                "decision",
+                "chore",
+                "maintenance"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Type"
+        },
+        "micro_script": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Micro Script"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "owner_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Party Id"
+        },
+        "responsible_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Responsible Party Id"
+        },
+        "source_commitment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Commitment Id"
+        },
+        "source_system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source System"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "work_kind": {
+          "enum": [
+            "member_obligation",
+            "household_work",
+            "service_operational"
+          ],
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "work_kind"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
