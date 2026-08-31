@@ -89,9 +89,7 @@ class SourceCoordinate(BaseModel):
     source_kind: str = Field(min_length=1, max_length=240)
     source_class: SourceClass
     trusted_route: str = Field(min_length=1, max_length=500)
-    native_container_kind: Literal["folder", "list", "label", "calendar"] | None = (
-        None
-    )
+    native_container_kind: Literal["folder", "list", "label", "calendar"] | None = None
     native_container_id: str | None = Field(default=None, min_length=1, max_length=1000)
 
     @model_validator(mode="after")
@@ -99,20 +97,24 @@ class SourceCoordinate(BaseModel):
         if self.owner_kind == "member":
             if self.context_member_id != self.owner_principal_id:
                 raise ValueError("member source context must match its owner principal")
-            if self.trusted_route.startswith("member_private:") and self.trusted_route != (
-                f"member_private:{self.owner_principal_id}"
-            ):
+            if self.trusted_route.startswith(
+                "member_private:"
+            ) and self.trusted_route != (f"member_private:{self.owner_principal_id}"):
                 raise ValueError("member-private route must match its owner principal")
         elif self.context_member_id is not None and not self.trusted_route.startswith(
             ("member_private:", "external_contact:")
         ):
-            raise ValueError("service source member context requires an exact trusted route")
+            raise ValueError(
+                "service source member context requires an exact trusted route"
+            )
         elif (
             self.context_member_id is not None
             and self.trusted_route.startswith("member_private:")
             and self.trusted_route != f"member_private:{self.context_member_id}"
         ):
-            raise ValueError("service source member route must match its context member")
+            raise ValueError(
+                "service source member route must match its context member"
+            )
         if (self.native_container_kind is None) != (self.native_container_id is None):
             raise ValueError("native container kind and id must be supplied together")
         return self
@@ -367,7 +369,9 @@ def source_coordinate_for_event(
         and owner_scope.startswith("service-private:")
         and owner_scope.removeprefix("service-private:") != service_id
     ):
-        raise ValueError("source service principal contradicts its private envelope owner")
+        raise ValueError(
+            "source service principal contradicts its private envelope owner"
+        )
     if service_id:
         owner_kind: OwnerKind = "service_principal"
         owner_id = service_id
@@ -396,9 +400,7 @@ def source_coordinate_for_event(
         or "unknown"
     )
     adapter_instance = str(
-        payload.get("adapter_instance_id")
-        or event.get("source_adapter")
-        or "unknown"
+        payload.get("adapter_instance_id") or event.get("source_adapter") or "unknown"
     )
     account_id = str(
         payload.get("provider_account_id")
@@ -464,15 +466,14 @@ def source_coordinate_for_event(
             coordinate.provider == "unknown"
             or str(getattr(binding, "provider_family", "")).casefold()
             == coordinate.provider.casefold()
-            or str(getattr(binding, "kind", "")).casefold().find(
-                coordinate.provider.casefold()
-            )
+            or str(getattr(binding, "kind", ""))
+            .casefold()
+            .find(coordinate.provider.casefold())
             >= 0
         )
         and (
             coordinate.adapter_instance_id == "unknown"
-            or str(getattr(binding, "adapter_id", ""))
-            == coordinate.adapter_instance_id
+            or str(getattr(binding, "adapter_id", "")) == coordinate.adapter_instance_id
         )
         and (
             coordinate.workspace == "unknown"
@@ -542,12 +543,12 @@ def assess_source_signals(event: Mapping[str, Any]) -> SignalAssessment:
     known_evidence = _text_list(payload.get("known_correspondent_evidence"), limit=20)
     prior_evidence = _text_list(payload.get("prior_interaction_evidence"), limit=20)
     trusted_known_human = bool(
-        direction == "inbound"
-        and sender_class == "known_human"
-        and known_evidence
+        direction == "inbound" and sender_class == "known_human" and known_evidence
     )
     provider_urgency = payload.get("provider_urgency")
-    if provider_urgency is None and (payload.get("important") or payload.get("starred")):
+    if provider_urgency is None and (
+        payload.get("important") or payload.get("starred")
+    ):
         provider_urgency = "provider_marked"
 
     typed_flags = {
@@ -610,9 +611,7 @@ def route_for_policy(
             triage="direct_work_order_proposal",
             alert="none",
             context=(
-                "typed_facts"
-                if policy.context_mode == "none"
-                else policy.context_mode
+                "typed_facts" if policy.context_mode == "none" else policy.context_mode
             ),
             candidate_kinds=list(policy.candidate_kinds),
             reason_codes=[*reasons, "authenticated_member_intent_cannot_be_suppressed"],
@@ -663,9 +662,7 @@ def route_for_policy(
         )
     if policy.triage_mode == "context_only":
         context = (
-            "typed_facts"
-            if policy.context_mode == "none"
-            else policy.context_mode
+            "typed_facts" if policy.context_mode == "none" else policy.context_mode
         )
         return RouteDecision(
             triage="none",
@@ -686,9 +683,18 @@ def route_for_policy(
     ):
         triage: Literal["direct_work_order_proposal", "review", "none"] = "none"
         reasons.append("focused_requires_typed_actionability")
-    elif policy.preset == "balanced" and any(
-        (signals.spam, signals.promotion, signals.bulk_notification, signals.receipt)
-    ) and not signals.relationship_valued_communication:
+    elif (
+        policy.preset == "balanced"
+        and any(
+            (
+                signals.spam,
+                signals.promotion,
+                signals.bulk_notification,
+                signals.receipt,
+            )
+        )
+        and not signals.relationship_valued_communication
+    ):
         triage = "none"
         reasons.append("balanced_suppresses_low_actionability_signal")
     else:
@@ -706,7 +712,9 @@ def route_for_policy(
     )
 
 
-def current_v1_route(event: Mapping[str, Any], policy: Mapping[str, Any]) -> RouteDecision:
+def current_v1_route(
+    event: Mapping[str, Any], policy: Mapping[str, Any]
+) -> RouteDecision:
     event_type = str(event.get("type") or "")
     if event_type == "triage.intent.submitted":
         triage: Literal["direct_work_order_proposal", "review", "none"] = "review"
@@ -735,8 +743,7 @@ def source_policy_event_types(repository_root: Any) -> list[str]:
         {
             obligation.event_type
             for obligation in load_source_obligations(repository_root)
-            if obligation.mode
-            not in {"action_request_terminal", "terminal_action"}
+            if obligation.mode not in {"action_request_terminal", "terminal_action"}
         }
     )
 

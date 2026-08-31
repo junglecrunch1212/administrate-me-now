@@ -304,9 +304,7 @@ class SettingsControlStore:
                     SourcePolicyV2.model_validate(record["policy"])
                 except (TypeError, ValueError) as exc:
                     raise RuntimeError("Settings source policy V2 is invalid") from exc
-        if set(value["source_policy_v2_revisions"]) - set(
-            value["source_policies_v2"]
-        ):
+        if set(value["source_policy_v2_revisions"]) - set(value["source_policies_v2"]):
             raise RuntimeError("Settings source policy V2 owner revision is invalid")
         for migrations in value["source_policy_v2_migrations"].values():
             if not isinstance(migrations, dict) or any(
@@ -445,9 +443,7 @@ class SettingsControlStore:
             "changed_at": datetime.now(timezone.utc).isoformat(),
         }
         member_rows[source_id] = current
-        state["source_policy_v2_migrations"].setdefault(member_id, {})[
-            source_id
-        ] = {
+        state["source_policy_v2_migrations"].setdefault(member_id, {})[source_id] = {
             "state": "migration_needed",
             "reason": "candidate_policy_v1_lacks_exact_source_coordinate",
             "legacy_mode": normalized["mode"],
@@ -513,7 +509,9 @@ class SettingsControlStore:
         owner_rows = state["source_policies_v2"].setdefault(owner_id, {})
         previous = copy.deepcopy(owner_rows.get(policy_key) or {})
         if revision <= current_revision:
-            raise ValueError("source policy event revision is duplicate or moved backwards")
+            raise ValueError(
+                "source policy event revision is duplicate or moved backwards"
+            )
         if revision != current_revision + 1:
             raise ValueError("source policy event revision has a gap")
         action = payload.get("action")
@@ -536,9 +534,7 @@ class SettingsControlStore:
         state["source_policy_v2_revisions"][owner_id] = revision
         return SettingsMutation(previous, copy.deepcopy(current), revision)
 
-    def apply_source_policy_v2_event(
-        self, payload: dict[str, Any]
-    ) -> SettingsMutation:
+    def apply_source_policy_v2_event(self, payload: dict[str, Any]) -> SettingsMutation:
         state = self.read()
         mutation = self._apply_source_policy_v2_payload(state, payload)
         _atomic_json(self.path, state)
@@ -591,8 +587,12 @@ class SettingsControlStore:
             migration_state = "resolved" if migration is not None else "not_required"
         else:
             policy = policy_for_preset("balanced")
-            origin = "migration_needed" if migration is not None else "recommended_default"
-            migration_state = "migration_needed" if migration is not None else "not_required"
+            origin = (
+                "migration_needed" if migration is not None else "recommended_default"
+            )
+            migration_state = (
+                "migration_needed" if migration is not None else "not_required"
+            )
         return {
             "policy": policy.model_dump(mode="json"),
             "policy_key": coordinate.key,
@@ -877,11 +877,7 @@ def compose_source_policy_v2_sources(
         )
         adapter_category, source_class = _source_policy_adapter_shape(kind)
         catalog_source = next(
-            (
-                source
-                for source in SOURCE_CATALOG
-                if source.get("adapter_kind") == kind
-            ),
+            (source for source in SOURCE_CATALOG if source.get("adapter_kind") == kind),
             None,
         )
         source_kind = str(

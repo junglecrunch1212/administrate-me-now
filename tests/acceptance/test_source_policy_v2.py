@@ -361,9 +361,12 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
         ]
         assert shadow["payload"]["signals"]["security_alert"] is False
         assert shadow["payload"]["provider_effects"] is False
-        assert runtime.settings_control.effective_candidate_policy(
-            A, "adapter:gmail"
-        )["mode"] == "review"
+        assert (
+            runtime.settings_control.effective_candidate_policy(A, "adapter:gmail")[
+                "mode"
+            ]
+            == "review"
+        )
         cross_owner_read = client.get(
             f"/api/member/v1/settings/source-policies-v2/why/{source_id}",
             headers=B_HEADERS,
@@ -398,9 +401,9 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
             "provider-account-a",
             "message-policy-context",
         )
-        context_shadow = client.portal.call(
-            _wait_for_shadow, runtime, context_source
-        )["payload"]
+        context_shadow = client.portal.call(_wait_for_shadow, runtime, context_source)[
+            "payload"
+        ]
         assert context_shadow["shadow_route"]["triage"] == "none"
         assert context_shadow["shadow_route"]["context"] == "typed_facts"
 
@@ -424,9 +427,9 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
             "provider-account-a",
             "message-policy-ignore",
         )
-        ignored_shadow = client.portal.call(
-            _wait_for_shadow, runtime, ignored_source
-        )["payload"]
+        ignored_shadow = client.portal.call(_wait_for_shadow, runtime, ignored_source)[
+            "payload"
+        ]
         assert ignored_shadow["shadow_route"]["triage"] == "none"
         assert ignored_shadow["shadow_route"]["context"] == "none"
         assert client.portal.call(runtime.event_log.get, ignored_source) is not None
@@ -437,8 +440,7 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
             if source["source_kind"] == "surface:triage"
         )
         suppress_direct = client.post(
-            "/api/member/v1/settings/source-policies-v2/"
-            + direct_source["policy_key"],
+            "/api/member/v1/settings/source-policies-v2/" + direct_source["policy_key"],
             headers=A_HEADERS,
             json={
                 "expected_revision": 4,
@@ -467,17 +469,16 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
             _wait_for_shadow, runtime, direct.json()["intent_event_id"]
         )["payload"]
         assert direct_shadow["policy_origin"] == "exact_override"
-        assert direct_shadow["shadow_route"]["triage"] == (
-            "direct_work_order_proposal"
+        assert direct_shadow["shadow_route"]["triage"] == ("direct_work_order_proposal")
+        assert (
+            "authenticated_member_intent_cannot_be_suppressed"
+            in direct_shadow["shadow_route"]["reason_codes"]
         )
-        assert "authenticated_member_intent_cannot_be_suppressed" in direct_shadow[
-            "shadow_route"
-        ]["reason_codes"]
 
         service_source = client.portal.call(_append_service_message, runtime)
-        service_shadow = client.portal.call(
-            _wait_for_shadow, runtime, service_source
-        )["payload"]
+        service_shadow = client.portal.call(_wait_for_shadow, runtime, service_source)[
+            "payload"
+        ]
         assert service_shadow["coordinate"]["owner_kind"] == "service_principal"
         assert service_shadow["coordinate"]["owner_principal_id"] == (
             COS_SERVICE_PRINCIPAL_ID
@@ -510,6 +511,6 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
             if source["policy_key"] == a_work_provider["policy_key"]
         )
         assert restored_work["policy"]["preset"] == "review_everything"
-        assert client.portal.call(
-            _provider_effect_count, restored_app.state.runtime
-        ) == 0
+        assert (
+            client.portal.call(_provider_effect_count, restored_app.state.runtime) == 0
+        )

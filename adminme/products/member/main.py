@@ -208,18 +208,14 @@ class SettingsSourcePolicyV2Request(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     coordinate: SourceCoordinate
     action: Literal["set", "reset"] = "set"
-    preset: Literal["focused", "balanced", "review_everything", "custom"] = (
-        "balanced"
-    )
+    preset: Literal["focused", "balanced", "review_everything", "custom"] = "balanced"
     policy: SourcePolicyV2 | None = None
 
 
 class SettingsSourcePolicyV2PreviewRequest(BaseModel):
     model_config = {"extra": "forbid"}
     coordinate: SourceCoordinate
-    preset: Literal["focused", "balanced", "review_everything", "custom"] = (
-        "balanced"
-    )
+    preset: Literal["focused", "balanced", "review_everything", "custom"] = "balanced"
     policy: SourcePolicyV2 | None = None
     recent_limit: int = Field(default=100, ge=1, le=200)
 
@@ -5248,9 +5244,7 @@ async def preview_settings_source_policy_v2(
         counts["alerts"] += route.alert != "none"
         counts["context"] += route.context != "none"
         counts["provenance_only"] += (
-            route.triage == "none"
-            and route.alert == "none"
-            and route.context == "none"
+            route.triage == "none" and route.alert == "none" and route.context == "none"
         )
         if len(examples) < 5:
             examples.append(
@@ -5274,9 +5268,9 @@ async def preview_settings_source_policy_v2(
             {
                 "synthetic": True,
                 "source_event_id": None,
-                "route": route_for_policy(
-                    body.coordinate, policy, signals
-                ).model_dump(mode="json"),
+                "route": route_for_policy(body.coordinate, policy, signals).model_dump(
+                    mode="json"
+                ),
                 "content_returned": False,
             }
         )
@@ -5310,7 +5304,10 @@ async def explain_settings_source_policy_v2(
     if runtime.event_log is None:
         raise HTTPException(503, "source policy explanation is unavailable")
     source = await runtime.event_log.get(source_event_id)
-    if source is None or source.get("owner_scope") != f"private:{session.auth_member_id}":
+    if (
+        source is None
+        or source.get("owner_scope") != f"private:{session.auth_member_id}"
+    ):
         raise HTTPException(404, "source policy explanation was not found")
     evaluations = [
         event
@@ -5350,9 +5347,7 @@ async def explain_settings_source_policy_v2(
     }
 
 
-@router.post(
-    "/api/member/v1/settings/source-policies-v2/{policy_key}", status_code=202
-)
+@router.post("/api/member/v1/settings/source-policies-v2/{policy_key}", status_code=202)
 async def change_settings_source_policy_v2(
     policy_key: str,
     body: SettingsSourcePolicyV2Request,

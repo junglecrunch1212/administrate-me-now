@@ -49,15 +49,18 @@ def _coordinate(
 
 def test_policy_key_distinguishes_principal_account_workspace_and_instance() -> None:
     baseline = _coordinate()
-    assert len(
-        {
-            baseline.key,
-            _coordinate(owner="member-b").key,
-            _coordinate(account="provider-account-b").key,
-            _coordinate(workspace="work").key,
-            _coordinate(adapter="gmail-instance-b").key,
-        }
-    ) == 5
+    assert (
+        len(
+            {
+                baseline.key,
+                _coordinate(owner="member-b").key,
+                _coordinate(account="provider-account-b").key,
+                _coordinate(workspace="work").key,
+                _coordinate(adapter="gmail-instance-b").key,
+            }
+        )
+        == 5
+    )
 
 
 def test_service_owned_source_needs_no_fake_member() -> None:

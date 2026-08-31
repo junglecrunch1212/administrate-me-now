@@ -64,7 +64,9 @@ class SourcePolicyShadowEvaluator:
         current_route = current_v1_route(event, current_policy)
         shadow_route = route_for_policy(coordinate, policy, signals)
         evaluated_at = str(
-            event.get("recorded_at") or event.get("occurred_at") or "1970-01-01T00:00:00Z"
+            event.get("recorded_at")
+            or event.get("occurred_at")
+            or "1970-01-01T00:00:00Z"
         )
         reasons = [
             "source_policy_v2_shadow_only",

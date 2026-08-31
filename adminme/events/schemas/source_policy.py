@@ -56,9 +56,7 @@ class SourcePolicyV2ShadowEvaluatedV1(BaseModel):
     coordinate_state: Literal["exact", "ambiguous"]
     policy_revision: int = Field(ge=0)
     policy: SourcePolicyV2
-    policy_origin: Literal[
-        "exact_override", "recommended_default", "migration_needed"
-    ]
+    policy_origin: Literal["exact_override", "recommended_default", "migration_needed"]
     migration_state: Literal["not_required", "migration_needed", "resolved"]
     acquisition: AcquisitionEvidence
     signals: SignalAssessment
