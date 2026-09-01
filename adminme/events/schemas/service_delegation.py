@@ -15,7 +15,11 @@ from adminme.events.registry import registry
 
 ServiceContextScope = Literal["member_private", "household_shared", "external_contact"]
 DelegationPermission = Literal[
-    "read_context", "create_internal_work", "manage_internal_work"
+    "read_context",
+    "create_internal_work",
+    "manage_internal_work",
+    "manage_member_obligations",
+    "coordinate_household_work",
 ]
 ApprovalQuorum = Literal["member_owner", "all_adult_principals"]
 

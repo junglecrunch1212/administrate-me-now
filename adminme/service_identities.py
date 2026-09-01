@@ -37,7 +37,11 @@ ServiceContextScope = Literal[
     "unresolved",
 ]
 DelegationPermission = Literal[
-    "read_context", "create_internal_work", "manage_internal_work"
+    "read_context",
+    "create_internal_work",
+    "manage_internal_work",
+    "manage_member_obligations",
+    "coordinate_household_work",
 ]
 ApprovalQuorum = Literal["service_self", "member_owner", "all_adult_principals"]
 

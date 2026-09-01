@@ -16,6 +16,29 @@ const LifecycleAction = Type.Union([
   Type.Literal("block"),
   Type.Literal("unblock"),
 ]);
+const ServiceContextScope = Type.Union([
+  Type.Literal("member_private"),
+  Type.Literal("household_shared"),
+]);
+const ServiceAssignmentRole = Type.Union([
+  Type.Literal("manages_member_obligation"),
+  Type.Literal("manages_household_obligation"),
+  Type.Literal("delegatee"),
+  Type.Literal("internal"),
+]);
+const ServiceWorkType = Type.Union([
+  Type.Literal("operational_task"),
+  Type.Literal("waiting_for"),
+  Type.Literal("follow_up"),
+  Type.Literal("clarification"),
+  Type.Literal("exception"),
+  Type.Literal("preparation"),
+  Type.Literal("held_action"),
+  Type.Literal("provider_failure"),
+  Type.Literal("reconciliation"),
+  Type.Literal("operational_calendar"),
+  Type.Literal("reminder_like"),
+]);
 
 function makeTool(
   context: OpenClawPluginToolContext,
@@ -24,7 +47,8 @@ function makeTool(
     name: string;
     description: string;
     parameters: unknown;
-    path: string;
+    path: string | ((params: Record<string, unknown>) => string);
+    pathParam?: string;
     standingOrder?: boolean;
   },
 ): AnyAgentTool {
@@ -40,10 +64,16 @@ function makeTool(
         runtime.transport.config.sharedSecretEnv,
       );
       trackSession(runtime, provenance);
-      const invocationParams = definition.standingOrder
-        ? { ...params, trigger_id: id }
-        : params;
-      const result = await runtime.transport.request(definition.path, {
+      const typedParams = params as Record<string, unknown>;
+      const invocationParams: Record<string, unknown> = definition.standingOrder
+        ? { ...typedParams, trigger_id: id }
+        : { ...typedParams };
+      const path =
+        typeof definition.path === "function"
+          ? definition.path(invocationParams)
+          : definition.path;
+      if (definition.pathParam) delete invocationParams[definition.pathParam];
+      const result = await runtime.transport.request(path, {
         ...invocationParams,
         provenance,
       });
@@ -149,6 +179,105 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
         { additionalProperties: false },
       ),
       path: "/api/openclaw/v1/tools/correct",
+    },
+    {
+      name: "administrateme_service_work",
+      description:
+        "Create exact-grant CoS-owned or CoS-managed work without invoking a provider or scheduler.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          service_assignment_role: Type.Optional(ServiceAssignmentRole),
+          service_work_type: Type.Optional(ServiceWorkType),
+          title: Type.String({ minLength: 1, maxLength: 500 }),
+          description: Type.Optional(Type.String({ maxLength: 2000 })),
+          due: Type.Optional(Type.String()),
+          scheduled_start_at: Type.Optional(Type.String()),
+          scheduled_end_at: Type.Optional(Type.String()),
+          follow_up_at: Type.Optional(Type.String()),
+          waiting_on_party_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+          linked_item_kind: Type.Optional(
+            Type.Union([
+              Type.Literal("task"),
+              Type.Literal("commitment"),
+              Type.Literal("calendar_event"),
+              Type.Literal("list_item"),
+              Type.Literal("provider_failure"),
+              Type.Literal("coordination"),
+            ]),
+          ),
+          linked_item_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+          coordination_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+          source_event_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+          recurrence_rrule: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+          recurrence_next_occurrence: Type.Optional(Type.String()),
+          provider_representation_owner_kind: Type.Optional(
+            Type.Union([
+              Type.Literal("none"),
+              Type.Literal("member"),
+              Type.Literal("service"),
+            ]),
+          ),
+          provider_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+          provider_account_reference: Type.Optional(
+            Type.String({ minLength: 1, maxLength: 300 }),
+          ),
+          provider_workspace_reference: Type.Optional(
+            Type.String({ minLength: 1, maxLength: 300 }),
+          ),
+          provider_external_reference_digest: Type.Optional(
+            Type.String({ pattern: "^[0-9a-f]{64}$" }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/service-work",
+    },
+    {
+      name: "administrateme_service_work_state",
+      description:
+        "Advance one exact-grant CoS work item without impersonating a member or calling a provider.",
+      parameters: Type.Object(
+        {
+          task_id: Type.String({ minLength: 1, maxLength: 240 }),
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          expected_last_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+          action: Type.Union([
+            Type.Literal("start"),
+            Type.Literal("wait_on_member"),
+            Type.Literal("wait_on_other"),
+            Type.Literal("follow_up"),
+            Type.Literal("hold"),
+            Type.Literal("resume"),
+            Type.Literal("complete"),
+            Type.Literal("cancel"),
+          ]),
+          waiting_on_member_id: Type.Optional(
+            Type.String({ minLength: 1, maxLength: 200 }),
+          ),
+          waiting_on_party_id: Type.Optional(
+            Type.String({ minLength: 1, maxLength: 200 }),
+          ),
+          follow_up_at: Type.Optional(Type.String()),
+          reason_code: Type.Union([
+            Type.Literal("member_input"),
+            Type.Literal("external_dependency"),
+            Type.Literal("clarification"),
+            Type.Literal("provider_failure"),
+            Type.Literal("reconciliation"),
+            Type.Literal("scheduled_hold"),
+            Type.Literal("completed"),
+            Type.Literal("cancelled"),
+            Type.Literal("other"),
+          ]),
+        },
+        { additionalProperties: false },
+      ),
+      path: (params: Record<string, unknown>) =>
+        `/api/openclaw/v1/tools/service-work/${encodeURIComponent(String(params.task_id))}/state`,
+      pathParam: "task_id",
     },
     {
       name: "administrateme_execute_pending_provider_action",

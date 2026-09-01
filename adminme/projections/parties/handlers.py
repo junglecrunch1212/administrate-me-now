@@ -59,6 +59,13 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "service.delegation.requested": on_service_delegation_requested,
         "service.delegation.approved": on_service_delegation_approved,
         "service.delegation.revoked": on_service_delegation_revoked,
+        "operating_agreement.constitution_registered": on_constitution_registered,
+        "operating_agreement.proposed": on_operating_agreement_proposed,
+        "operating_agreement.approved": on_operating_agreement_approved,
+        "operating_agreement.rejected": on_operating_agreement_rejected,
+        "operating_agreement.suspended": on_operating_agreement_suspended,
+        "operating_agreement.revoked": on_operating_agreement_revoked,
+        "operating_agreement.exception_consumed": on_operating_agreement_exception_consumed,
     }
     handler = dispatch.get(event_type)
     if handler is None:
@@ -1180,5 +1187,313 @@ def on_service_delegation_revoked(
             envelope["event_id"],
             envelope["tenant_id"],
             payload["grant_id"],
+        ),
+    )
+
+
+def _json_value(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, default=str)
+
+
+def on_constitution_registered(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if envelope.get("source_adapter") != "constitutional-operating-agreement":
+        raise ValueError("constitutional agreement is release-registered only")
+    conn.execute(
+        """
+        INSERT INTO operating_agreements (
+            tenant_id, agreement_id, revision, layer, authority_scope,
+            owner_member_id, state, supersedes_revision, proposed_by_member_id,
+            proposed_at, registered_at, effective_from, expires_at,
+            one_time_use_limit, consumed_count, required_approvals_json,
+            approval_quorum, principal_set_digest, proposal_event_id, rule_json,
+            provenance_event_ids_json, provenance_digests_json, release_commit,
+            definition_digest, approved_at, rejected_at, suspended_at, revoked_at,
+            lifecycle_actor_member_id, lifecycle_reason_code, owner_scope,
+            visibility_scope, sensitivity, last_event_id
+        ) VALUES (?,?,?,'constitutional','household_shared',NULL,'active',NULL,
+                  NULL,NULL,?,NULL,NULL,NULL,0,'[]','constitutional',NULL,NULL,?,
+                  '[]','[]',?,?,?,NULL,NULL,NULL,NULL,NULL,?,?,?,?)
+        ON CONFLICT(tenant_id, agreement_id, revision) DO UPDATE SET
+            rule_json=excluded.rule_json, release_commit=excluded.release_commit,
+            definition_digest=excluded.definition_digest,
+            registered_at=excluded.registered_at, owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            sensitivity=excluded.sensitivity, last_event_id=excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            payload["revision"],
+            payload["registered_at"],
+            _json_value(payload["rule"]),
+            payload["release_commit"],
+            payload["definition_digest"],
+            payload["registered_at"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """UPDATE operating_agreements SET state='superseded',
+                  lifecycle_reason_code='superseded'
+            WHERE tenant_id=? AND agreement_id=? AND revision<?
+              AND layer='constitutional' AND state='active'""",
+        (envelope["tenant_id"], payload["agreement_id"], payload["revision"]),
+    )
+
+
+def on_operating_agreement_proposed(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if envelope.get("actor_identity") != payload["proposed_by_member_id"]:
+        raise ValueError("agreement proposer must match the event actor")
+    values: dict[str, Any] = {
+        "tenant_id": envelope["tenant_id"],
+        "agreement_id": payload["agreement_id"],
+        "revision": payload["revision"],
+        "layer": payload["layer"],
+        "authority_scope": payload["authority_scope"],
+        "owner_member_id": payload.get("owner_member_id"),
+        "state": "proposed",
+        "supersedes_revision": payload.get("supersedes_revision"),
+        "proposed_by_member_id": payload["proposed_by_member_id"],
+        "proposed_at": payload["proposed_at"],
+        "registered_at": None,
+        "effective_from": payload.get("effective_from"),
+        "expires_at": payload.get("expires_at"),
+        "one_time_use_limit": payload.get("one_time_use_limit"),
+        "consumed_count": 0,
+        "required_approvals_json": _json_value(
+            payload["required_approving_member_ids"]
+        ),
+        "approval_quorum": payload["approval_quorum"],
+        "principal_set_digest": payload["principal_set_digest"],
+        "proposal_event_id": envelope["event_id"],
+        "rule_json": _json_value(payload["rule"]),
+        "provenance_event_ids_json": _json_value(
+            payload.get("provenance_event_ids") or []
+        ),
+        "provenance_digests_json": _json_value(payload.get("provenance_digests") or []),
+        "release_commit": None,
+        "definition_digest": None,
+        "approved_at": None,
+        "rejected_at": None,
+        "suspended_at": None,
+        "revoked_at": None,
+        "lifecycle_actor_member_id": None,
+        "lifecycle_reason_code": None,
+        "owner_scope": envelope["owner_scope"],
+        "visibility_scope": envelope["visibility_scope"],
+        "sensitivity": envelope["sensitivity"],
+        "last_event_id": envelope["event_id"],
+    }
+    columns = tuple(values)
+    conn.execute(
+        f"INSERT INTO operating_agreements ({', '.join(columns)}) VALUES "
+        f"({', '.join('?' for _ in columns)}) "
+        "ON CONFLICT(tenant_id, agreement_id, revision) DO NOTHING",
+        tuple(values[column] for column in columns),
+    )
+
+
+def _agreement_for_lifecycle(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> Any:
+    payload = envelope["payload"]
+    row = conn.execute(
+        "SELECT * FROM operating_agreements "
+        "WHERE tenant_id=? AND agreement_id=? AND revision=?",
+        (envelope["tenant_id"], payload["agreement_id"], payload["revision"]),
+    ).fetchone()
+    if row is None:
+        raise ValueError("operating agreement revision does not exist")
+    if (
+        row["authority_scope"] != payload["authority_scope"]
+        or row["owner_member_id"] != payload.get("owner_member_id")
+        or row["owner_scope"] != envelope["owner_scope"]
+        or row["visibility_scope"] != envelope["visibility_scope"]
+    ):
+        raise ValueError("operating agreement lifecycle scope changed")
+    return row
+
+
+def on_operating_agreement_approved(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if envelope.get("actor_identity") != payload["approved_by_member_id"]:
+        raise ValueError("agreement approver must match the event actor")
+    row = _agreement_for_lifecycle(envelope, conn)
+    required = set(json.loads(str(row["required_approvals_json"])))
+    if (
+        row["state"] not in {"proposed", "active"}
+        or payload["approved_by_member_id"] not in required
+        or row["proposal_event_id"] != payload["proposal_event_id"]
+        or row["principal_set_digest"] != payload["principal_set_digest"]
+    ):
+        raise ValueError("agreement approval does not match the proposal")
+    conn.execute(
+        """
+        INSERT INTO operating_agreement_approvals (
+            tenant_id, agreement_id, revision, approved_by_member_id,
+            approved_at, proposal_event_id, principal_set_digest, last_event_id
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(tenant_id, agreement_id, revision, approved_by_member_id)
+        DO NOTHING
+        """,
+        (
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            payload["revision"],
+            payload["approved_by_member_id"],
+            payload["approved_at"],
+            payload["proposal_event_id"],
+            payload["principal_set_digest"],
+            envelope["event_id"],
+        ),
+    )
+    approvals = {
+        str(item[0])
+        for item in conn.execute(
+            "SELECT approved_by_member_id FROM operating_agreement_approvals "
+            "WHERE tenant_id=? AND agreement_id=? AND revision=?",
+            (envelope["tenant_id"], payload["agreement_id"], payload["revision"]),
+        ).fetchall()
+    }
+    if approvals == required:
+        conn.execute(
+            """UPDATE operating_agreements SET state='active', approved_at=?,
+                      lifecycle_actor_member_id=?, last_event_id=?
+                WHERE tenant_id=? AND agreement_id=? AND revision=?""",
+            (
+                payload["approved_at"],
+                payload["approved_by_member_id"],
+                envelope["event_id"],
+                envelope["tenant_id"],
+                payload["agreement_id"],
+                payload["revision"],
+            ),
+        )
+        if row["supersedes_revision"] is not None:
+            conn.execute(
+                """UPDATE operating_agreements SET state='superseded',
+                          lifecycle_reason_code='superseded'
+                    WHERE tenant_id=? AND agreement_id=? AND revision=?
+                      AND state IN ('active','suspended')""",
+                (
+                    envelope["tenant_id"],
+                    payload["agreement_id"],
+                    row["supersedes_revision"],
+                ),
+            )
+
+
+def on_operating_agreement_rejected(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    row = _agreement_for_lifecycle(envelope, conn)
+    required = set(json.loads(str(row["required_approvals_json"])))
+    if (
+        envelope.get("actor_identity") != payload["rejected_by_member_id"]
+        or payload["rejected_by_member_id"] not in required
+    ):
+        raise ValueError("agreement rejection is not authorized")
+    conn.execute(
+        """UPDATE operating_agreements SET state='rejected', rejected_at=?,
+                  lifecycle_actor_member_id=?, lifecycle_reason_code=?, last_event_id=?
+            WHERE tenant_id=? AND agreement_id=? AND revision=?
+              AND state='proposed'""",
+        (
+            payload["rejected_at"],
+            payload["rejected_by_member_id"],
+            payload["reason_code"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            payload["revision"],
+        ),
+    )
+
+
+def on_operating_agreement_suspended(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    row = _agreement_for_lifecycle(envelope, conn)
+    required = set(json.loads(str(row["required_approvals_json"])))
+    if (
+        envelope.get("actor_identity") != payload["suspended_by_member_id"]
+        or payload["suspended_by_member_id"] not in required
+    ):
+        raise ValueError("agreement suspension is not authorized")
+    conn.execute(
+        """UPDATE operating_agreements SET state='suspended', suspended_at=?,
+                  lifecycle_actor_member_id=?, lifecycle_reason_code=?, last_event_id=?
+            WHERE tenant_id=? AND agreement_id=? AND revision=? AND state='active'""",
+        (
+            payload["suspended_at"],
+            payload["suspended_by_member_id"],
+            payload["reason_code"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            payload["revision"],
+        ),
+    )
+
+
+def on_operating_agreement_revoked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    row = _agreement_for_lifecycle(envelope, conn)
+    required = set(json.loads(str(row["required_approvals_json"])))
+    if (
+        envelope.get("actor_identity") != payload["revoked_by_member_id"]
+        or payload["revoked_by_member_id"] not in required
+    ):
+        raise ValueError("agreement revocation is not authorized")
+    conn.execute(
+        """UPDATE operating_agreements SET state='revoked', revoked_at=?,
+                  lifecycle_actor_member_id=?, lifecycle_reason_code=?, last_event_id=?
+            WHERE tenant_id=? AND agreement_id=? AND revision=?
+              AND state NOT IN ('revoked','superseded')""",
+        (
+            payload["revoked_at"],
+            payload["revoked_by_member_id"],
+            payload["reason_code"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            payload["revision"],
+        ),
+    )
+
+
+def on_operating_agreement_exception_consumed(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    row = _agreement_for_lifecycle(envelope, conn)
+    if row["layer"] != "exception" or row["one_time_use_limit"] != 1:
+        raise ValueError("only a one-time exception can be consumed")
+    if row["state"] != "active" or int(row["consumed_count"]) >= 1:
+        raise ValueError("one-time exception is not applicable")
+    conn.execute(
+        """UPDATE operating_agreements SET state='consumed', consumed_count=1,
+                  lifecycle_reason_code='consumed', last_event_id=?
+            WHERE tenant_id=? AND agreement_id=? AND revision=?""",
+        (
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            payload["revision"],
         ),
     )

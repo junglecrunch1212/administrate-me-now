@@ -312,6 +312,63 @@ CREATE INDEX IF NOT EXISTS idx_service_delegation_context
         tenant_id, service_principal_id, context_scope, context_member_id, revoked_at
     );
 
+-- Structured operating agreements share the Parties authority projection;
+-- they are not source policies, Markdown, or provider-execution grants.
+CREATE TABLE IF NOT EXISTS operating_agreements (
+    tenant_id TEXT NOT NULL,
+    agreement_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    layer TEXT NOT NULL,
+    authority_scope TEXT NOT NULL,
+    owner_member_id TEXT,
+    state TEXT NOT NULL,
+    supersedes_revision INTEGER,
+    proposed_by_member_id TEXT,
+    proposed_at TEXT,
+    registered_at TEXT,
+    effective_from TEXT,
+    expires_at TEXT,
+    one_time_use_limit INTEGER,
+    consumed_count INTEGER NOT NULL DEFAULT 0,
+    required_approvals_json TEXT NOT NULL,
+    approval_quorum TEXT NOT NULL,
+    principal_set_digest TEXT,
+    proposal_event_id TEXT,
+    rule_json TEXT NOT NULL,
+    provenance_event_ids_json TEXT NOT NULL DEFAULT '[]',
+    provenance_digests_json TEXT NOT NULL DEFAULT '[]',
+    release_commit TEXT,
+    definition_digest TEXT,
+    approved_at TEXT,
+    rejected_at TEXT,
+    suspended_at TEXT,
+    revoked_at TEXT,
+    lifecycle_actor_member_id TEXT,
+    lifecycle_reason_code TEXT,
+    owner_scope TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    sensitivity TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, agreement_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_operating_agreement_scope_state
+    ON operating_agreements(tenant_id, authority_scope, owner_member_id, state);
+
+CREATE TABLE IF NOT EXISTS operating_agreement_approvals (
+    tenant_id TEXT NOT NULL,
+    agreement_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    approved_by_member_id TEXT NOT NULL,
+    approved_at TEXT NOT NULL,
+    proposal_event_id TEXT NOT NULL,
+    principal_set_digest TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (
+        tenant_id, agreement_id, revision, approved_by_member_id
+    )
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS people_fts USING fts5(
     tenant_id UNINDEXED,
     party_id UNINDEXED,

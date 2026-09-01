@@ -66,6 +66,7 @@ from adminme.member_chat import (
     UnavailableMemberChatTransport,
 )
 from adminme.openclaw_approvals import OpenClawApprovalStore
+from adminme.operating_agreements import constitutional_agreement_payload
 from adminme.openclaw_topology import inspect_runtime_topology, member_agent_id
 from adminme.bridge_authorization import validate_bridge_record_set
 from adminme.provider_bindings import (
@@ -941,6 +942,7 @@ class AdministrateMeRuntime:
             )
             await self.xlsx_reverse.start()
             await self._reconcile_household_enrollment()
+            await self._reconcile_constitutional_operating_agreement()
             await self._refresh_capability_registry()
             self.started = True
 
@@ -1271,6 +1273,61 @@ class AdministrateMeRuntime:
             return
         event_ids = await self._require_events().write_batch(envelopes)
         await self.wait_for_projection("parties", max(event_ids))
+
+    async def _reconcile_constitutional_operating_agreement(self) -> None:
+        principals = sorted(
+            member_id
+            for member_id, role in self.settings.member_roles.items()
+            if role == "principal"
+        )
+        now = EventEnvelope.now_utc_iso()
+        payload = constitutional_agreement_payload(
+            adult_principal_ids=principals,
+            registered_at=now,
+            repository_root=self.settings.repository_root,
+        )
+        if self.projections is None:
+            raise RuntimeError("projection runner unavailable")
+        existing = (
+            self.projections.connection("parties")
+            .execute(
+                "SELECT definition_digest FROM operating_agreements "
+                "WHERE tenant_id=? AND agreement_id=? AND revision=?",
+                (
+                    self.settings.instance.tenant_id,
+                    payload["agreement_id"],
+                    payload["revision"],
+                ),
+            )
+            .fetchone()
+        )
+        if existing is not None and str(existing["definition_digest"]) == str(
+            payload["definition_digest"]
+        ):
+            return
+        event_id = await self._require_events().write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=self.settings.instance.tenant_id,
+                type="operating_agreement.constitution_registered",
+                schema_version=1,
+                occurred_at=now,
+                source_adapter="constitutional-operating-agreement",
+                source_account_id="release-baseline",
+                owner_scope="shared:household",
+                visibility_scope="shared:household",
+                sensitivity="normal",
+                actor_identity="system:constitutional-safety",
+                idempotency_key=(
+                    "constitutional-operating-agreement:"
+                    f"{payload['agreement_id']}:{payload['revision']}:"
+                    f"{payload['definition_digest']}"
+                ),
+                raw_ref=f"definition-sha256:{payload['definition_digest']}",
+                payload=payload,
+            )
+        )
+        await self.wait_for_projection("parties", event_id)
 
     async def _dispatch_external_write(self, event: dict[str, Any]) -> None:
         """Execute central-hosted provider commands; Apple commands wait for bridges."""

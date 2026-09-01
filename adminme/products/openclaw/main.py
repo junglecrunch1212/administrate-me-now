@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
@@ -36,9 +36,14 @@ from adminme.products.openclaw.constants import (
     PHASE3_SKILL_IDS,
     PLUGIN_ID,
 )
-from adminme.projections.tasks.queries import get_task
+from adminme.projections.tasks.queries import (
+    get_task,
+    list_coordination_records,
+    service_work_for_context,
+)
 from adminme.projections.parties.queries import (
     ServiceDelegationResolutionError,
+    effective_operating_agreements,
     resolve_service_delegation,
 )
 from adminme.service_identities import (
@@ -190,9 +195,145 @@ class SkillRequest(ContextRequest):
 
 class ServiceWorkRequest(ContextRequest):
     request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    service_assignment_role: Literal[
+        "manages_member_obligation",
+        "manages_household_obligation",
+        "delegatee",
+        "internal",
+    ] = "internal"
+    service_work_type: Literal[
+        "operational_task",
+        "waiting_for",
+        "follow_up",
+        "clarification",
+        "exception",
+        "preparation",
+        "held_action",
+        "provider_failure",
+        "reconciliation",
+        "operational_calendar",
+        "reminder_like",
+    ] = "operational_task"
     title: str = Field(min_length=1, max_length=500)
     description: str | None = Field(default=None, max_length=2000)
-    due: str | None = None
+    due: AwareDatetime | None = None
+    scheduled_start_at: AwareDatetime | None = None
+    scheduled_end_at: AwareDatetime | None = None
+    follow_up_at: AwareDatetime | None = None
+    waiting_on_party_id: str | None = Field(default=None, min_length=1, max_length=200)
+    linked_item_kind: (
+        Literal[
+            "task",
+            "commitment",
+            "calendar_event",
+            "list_item",
+            "provider_failure",
+            "coordination",
+        ]
+        | None
+    ) = None
+    linked_item_id: str | None = Field(default=None, min_length=1, max_length=200)
+    coordination_id: str | None = Field(default=None, min_length=1, max_length=200)
+    source_event_id: str | None = Field(default=None, min_length=1, max_length=240)
+    recurrence_rrule: str | None = Field(default=None, min_length=1, max_length=500)
+    recurrence_next_occurrence: AwareDatetime | None = None
+    provider_representation_owner_kind: Literal["none", "member", "service"] = "none"
+    provider_id: str | None = Field(default=None, min_length=1, max_length=120)
+    provider_account_reference: str | None = Field(
+        default=None, min_length=1, max_length=300
+    )
+    provider_workspace_reference: str | None = Field(
+        default=None, min_length=1, max_length=300
+    )
+    provider_external_reference_digest: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+
+    @model_validator(mode="after")
+    def validate_work_shape(self) -> ServiceWorkRequest:
+        if (self.scheduled_start_at is None) != (self.scheduled_end_at is None):
+            raise ValueError("scheduled work requires both start and end")
+        if (
+            self.scheduled_start_at is not None
+            and self.scheduled_end_at is not None
+            and self.scheduled_end_at <= self.scheduled_start_at
+        ):
+            raise ValueError("scheduled work must end after it starts")
+        if (self.linked_item_kind is None) != (self.linked_item_id is None):
+            raise ValueError("linked item kind and id must be supplied together")
+        if (self.recurrence_rrule is None) != (self.recurrence_next_occurrence is None):
+            raise ValueError("recurring work requires a rule and next occurrence")
+        representation = (
+            self.provider_id,
+            self.provider_account_reference,
+            self.provider_workspace_reference,
+            self.provider_external_reference_digest,
+        )
+        if self.provider_representation_owner_kind == "none" and any(representation):
+            raise ValueError("unrepresented work cannot carry provider coordinates")
+        if self.provider_representation_owner_kind != "none" and not all(
+            representation[:2]
+        ):
+            raise ValueError("provider representation requires provider and account")
+        return self
+
+
+class ServiceWorkTransitionRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    action: Literal[
+        "start",
+        "wait_on_member",
+        "wait_on_other",
+        "follow_up",
+        "hold",
+        "resume",
+        "complete",
+        "cancel",
+    ]
+    waiting_on_member_id: str | None = Field(default=None, min_length=1, max_length=200)
+    waiting_on_party_id: str | None = Field(default=None, min_length=1, max_length=200)
+    follow_up_at: AwareDatetime | None = None
+    reason_code: Literal[
+        "member_input",
+        "external_dependency",
+        "clarification",
+        "provider_failure",
+        "reconciliation",
+        "scheduled_hold",
+        "completed",
+        "cancelled",
+        "other",
+    ]
+
+    @model_validator(mode="after")
+    def validate_transition_shape(self) -> ServiceWorkTransitionRequest:
+        if self.action == "wait_on_member":
+            if not self.waiting_on_member_id or self.waiting_on_party_id:
+                raise ValueError("member wait requires exactly one member dependency")
+        elif self.action == "wait_on_other":
+            if not self.waiting_on_party_id or self.waiting_on_member_id:
+                raise ValueError("external wait requires exactly one Party dependency")
+        elif self.action in {"follow_up", "hold"}:
+            if self.follow_up_at is None:
+                raise ValueError("follow-up/hold requires a future activation")
+            if self.waiting_on_member_id or self.waiting_on_party_id:
+                raise ValueError("follow-up/hold cannot name a waiting dependency")
+        elif (
+            self.waiting_on_member_id
+            or self.waiting_on_party_id
+            or self.follow_up_at is not None
+        ):
+            raise ValueError(
+                "this action cannot carry waiting or follow-up coordinates"
+            )
+        if self.follow_up_at is not None and self.follow_up_at <= datetime.now(
+            timezone.utc
+        ):
+            raise ValueError("follow-up activation must be in the future")
+        return self
 
 
 class BridgeRequest(ContextRequest):
@@ -265,6 +406,7 @@ def _session(
     provenance: Provenance,
     *,
     required_permission: DelegationPermission = "read_context",
+    context_scope: Literal["member_private", "household_shared"] = "member_private",
 ) -> Session:
     _authenticate(request)
     runtime = _runtime(request)
@@ -322,8 +464,10 @@ def _session(
                 tenant_id=runtime.settings.instance.tenant_id,
                 service_principal_id=chief_of_staff[0].service_principal_id,
                 operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
-                context_scope="member_private",
-                context_member_id=member_id,
+                context_scope=context_scope,
+                context_member_id=(
+                    member_id if context_scope == "member_private" else None
+                ),
             )
         except ServiceDelegationResolutionError as exc:
             raise HTTPException(403, str(exc)) from exc
@@ -704,10 +848,23 @@ async def report_health(body: HealthReport, request: Request) -> dict[str, Any]:
 async def inspect_state(body: ContextRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
     runtime = _runtime(request)
+    now = EventEnvelope.now_utc_iso()
     result = {
         "what_now": core._what_now(runtime, session),
         "triage": await core.triage(request, session),
         "commitments": await core.active_commitments(request, session),
+        "cos_work": service_work_for_context(
+            runtime.projections.connection("tasks"),
+            session,
+            service_party_id=COS_PARTY_ID,
+        ),
+        "coordination": list_coordination_records(
+            runtime.projections.connection("tasks"), session, as_of_iso=now
+        ),
+        "operating_agreements": effective_operating_agreements(
+            runtime.projections.connection("parties"), session, as_of_iso=now
+        ),
+        "provider_effect_count": 0,
     }
     await _record_tool_call(request, session, body.provenance, operation="tools.state")
     return result
@@ -727,34 +884,131 @@ async def what_now(body: ContextRequest, request: Request) -> dict[str, Any]:
 async def create_service_work(
     body: ServiceWorkRequest, request: Request
 ) -> dict[str, Any]:
-    """Create internal CoS-owned work; never a member obligation or provider write."""
+    """Create typed CoS-managed or CoS-owned work without a provider write."""
 
+    required_permission: DelegationPermission
+    if body.service_assignment_role == "manages_member_obligation":
+        required_permission = "manage_member_obligations"
+    elif body.service_assignment_role == "manages_household_obligation":
+        required_permission = "coordinate_household_work"
+    else:
+        required_permission = "create_internal_work"
     session = _session(
         request,
         body.provenance,
-        required_permission="create_internal_work",
+        required_permission=required_permission,
+        context_scope=body.context_scope,
     )
     context = session.service_context
-    if context is None or "create_internal_work" not in context.permissions:
-        raise HTTPException(403, "CoS delegation does not authorize internal work")
-    if context.context_scope != "member_private" or not context.context_member_id:
-        raise HTTPException(403, "service work requires one exact member context")
+    if context is None or required_permission not in context.permissions:
+        raise HTTPException(403, "CoS delegation does not authorize this work")
+    if body.service_assignment_role in {
+        "manages_member_obligation",
+        "delegatee",
+    } and (context.context_scope != "member_private" or not context.context_member_id):
+        raise HTTPException(403, "member work requires one exact member context")
+    if body.service_assignment_role == "manages_household_obligation" and (
+        context.context_scope != "household_shared"
+    ):
+        raise HTTPException(403, "household work requires shared household authority")
+    if body.provider_representation_owner_kind == "member" and (
+        context.context_scope != "member_private" or not context.context_member_id
+    ):
+        raise HTTPException(403, "member provider representation requires its owner")
     runtime = _runtime(request)
     task_digest = hashlib.sha256(
         f"{session.tenant_id}|{context.authority_grant_id}|{body.request_id}".encode()
     ).hexdigest()[:32]
     task_id = f"cos-task:{task_digest}"
+    household_party_id = str(
+        runtime.settings.household_mapping.get("household_party_id")
+        or "household:default"
+    )
+    member_id = context.context_member_id
+    if body.service_assignment_role == "manages_member_obligation":
+        work_kind = "member_obligation"
+        owner_member_id = member_id
+        owner_party_id = None
+        delegated_by_member_id = member_id
+        on_behalf_of_member_id = member_id
+        beneficiary_party_id = member_id
+    elif body.service_assignment_role == "manages_household_obligation":
+        work_kind = "household_work"
+        owner_member_id = None
+        owner_party_id = household_party_id
+        delegated_by_member_id = None
+        on_behalf_of_member_id = None
+        beneficiary_party_id = household_party_id
+    else:
+        work_kind = "service_operational"
+        owner_member_id = None
+        owner_party_id = COS_PARTY_ID
+        delegated_by_member_id = (
+            member_id if body.service_assignment_role == "delegatee" else None
+        )
+        on_behalf_of_member_id = (
+            member_id if body.service_assignment_role == "delegatee" else None
+        )
+        beneficiary_party_id = member_id
+    owner_scope = (
+        "shared:household"
+        if body.service_assignment_role == "manages_household_obligation"
+        else (
+            f"private:{member_id}"
+            if member_id is not None
+            else f"service-private:{COS_SERVICE_PRINCIPAL_ID}"
+        )
+    )
+    recurrence_id = (
+        f"cos-recurrence:{task_digest}" if body.recurrence_rrule is not None else None
+    )
+    representation_owner = (
+        member_id
+        if body.provider_representation_owner_kind == "member"
+        else (
+            COS_SERVICE_PRINCIPAL_ID
+            if body.provider_representation_owner_kind == "service"
+            else None
+        )
+    )
     payload = {
         "task_id": task_id,
         "title": body.title,
         "description": body.description,
-        "due": body.due,
-        "work_kind": "service_operational",
-        "owner_member_id": None,
-        "owner_party_id": COS_PARTY_ID,
+        "due": body.due.isoformat() if body.due else None,
+        "work_kind": work_kind,
+        "owner_member_id": owner_member_id,
+        "owner_party_id": owner_party_id,
         "responsible_party_id": COS_PARTY_ID,
         "assignee_party_id": COS_PARTY_ID,
-        "beneficiary_party_id": context.context_member_id,
+        "beneficiary_party_id": beneficiary_party_id,
+        "service_assignment_role": body.service_assignment_role,
+        "service_party_id": COS_PARTY_ID,
+        "authority_grant_id": context.authority_grant_id,
+        "on_behalf_of_member_id": on_behalf_of_member_id,
+        "delegated_by_member_id": delegated_by_member_id,
+        "service_work_type": body.service_work_type,
+        "linked_item_kind": body.linked_item_kind,
+        "linked_item_id": body.linked_item_id,
+        "recurring_id": recurrence_id,
+        "scheduled_start_at": (
+            body.scheduled_start_at.isoformat() if body.scheduled_start_at else None
+        ),
+        "scheduled_end_at": (
+            body.scheduled_end_at.isoformat() if body.scheduled_end_at else None
+        ),
+        "follow_up_at": body.follow_up_at.isoformat() if body.follow_up_at else None,
+        "waiting_on_party_id": body.waiting_on_party_id,
+        "coordination_id": body.coordination_id,
+        "source_event_id": body.source_event_id,
+        "source_invocation_id": body.provenance.correlation_id,
+        "provider_representation_owner_kind": (body.provider_representation_owner_kind),
+        "provider_representation_owner_principal_id": representation_owner,
+        "provider_id": body.provider_id,
+        "provider_account_reference": body.provider_account_reference,
+        "provider_workspace_reference": body.provider_workspace_reference,
+        "provider_external_reference_digest": (body.provider_external_reference_digest),
+        "provider_effect_count": 0,
         "created_by": context.actor_principal_id,
         "source_system": "household-cos",
     }
@@ -762,10 +1016,147 @@ async def create_service_work(
         runtime,
         session,
         event_type="task.created",
-        schema_version=2,
+        schema_version=3,
         source_account_id=body.provenance.account_id or body.provenance.channel_id,
-        owner_scope=f"private:{context.context_member_id}",
-        visibility_scope=f"private:{context.context_member_id}",
+        owner_scope=owner_scope,
+        visibility_scope=owner_scope,
+        payload=payload,
+        request_id=body.request_id,
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    result_event_ids = [event_id]
+    recurrence_event_id: str | None = None
+    if recurrence_id is not None:
+        assert body.recurrence_rrule is not None
+        assert body.recurrence_next_occurrence is not None
+        recurrence_event_id, _ = await _append(
+            runtime,
+            session,
+            event_type="recurrence.added",
+            source_account_id=(
+                body.provenance.account_id or body.provenance.channel_id
+            ),
+            owner_scope=owner_scope,
+            visibility_scope=owner_scope,
+            payload={
+                "recurrence_id": recurrence_id,
+                "linked_kind": "household",
+                "linked_id": household_party_id,
+                "kind": f"cos:{body.service_work_type}",
+                "rrule": body.recurrence_rrule,
+                "next_occurrence": body.recurrence_next_occurrence.isoformat(),
+                "lead_time_days": 0,
+                "trackable": True,
+                "notes": "Typed CoS work recurrence; does not invoke OpenClaw",
+            },
+            request_id=f"{body.request_id}:recurrence",
+        )
+        await runtime.wait_for_projection("recurrences", recurrence_event_id)
+        result_event_ids.append(recurrence_event_id)
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.service-work",
+        result_event_ids=result_event_ids,
+    )
+    return {
+        "task_id": task_id,
+        "event_id": event_id,
+        "recurrence_event_id": recurrence_event_id,
+        "duplicate": duplicate,
+        "work_kind": work_kind,
+        "service_assignment_role": body.service_assignment_role,
+        "owner_member_id": owner_member_id,
+        "owner_party_id": owner_party_id,
+        "responsible_party_id": COS_PARTY_ID,
+        "assignee_party_id": COS_PARTY_ID,
+        "beneficiary_party_id": beneficiary_party_id,
+        "member_obligation_created": work_kind == "member_obligation",
+        "member_obligation_managed_by_cos": (
+            body.service_assignment_role == "manages_member_obligation"
+        ),
+        "recurrence_invokes_openclaw": False,
+        "provider_effects": 0,
+    }
+
+
+@router.post("/tools/service-work/{task_id}/state")
+async def transition_service_work(
+    task_id: str, body: ServiceWorkTransitionRequest, request: Request
+) -> dict[str, Any]:
+    """Advance CoS work under its exact grant without impersonating a member."""
+
+    permission_by_role: dict[str, DelegationPermission] = {
+        "manages_member_obligation": "manage_member_obligations",
+        "manages_household_obligation": "coordinate_household_work",
+        "delegatee": "manage_internal_work",
+        "internal": "manage_internal_work",
+    }
+    # Resolve read context first so the task can select the narrower lifecycle
+    # permission without accepting caller-provided ownership claims.
+    session = _session(
+        request,
+        body.provenance,
+        required_permission="read_context",
+        context_scope=body.context_scope,
+    )
+    runtime = _runtime(request)
+    row = get_task(runtime.projections.connection("tasks"), session, task_id=task_id)
+    if row is None or row.get("service_party_id") != COS_PARTY_ID:
+        raise HTTPException(404, "CoS work not found")
+    role = str(row.get("service_assignment_role") or "")
+    required = permission_by_role.get(role)
+    context = session.service_context
+    if required is None or context is None or required not in context.permissions:
+        raise HTTPException(403, "CoS delegation does not authorize this transition")
+    if row.get("authority_grant_id") != context.authority_grant_id:
+        raise HTTPException(403, "CoS work belongs to a different authority grant")
+    if row.get("last_event_id") != body.expected_last_event_id:
+        raise HTTPException(409, "CoS work changed")
+    if body.waiting_on_member_id is not None:
+        if context.context_scope == "member_private" and (
+            body.waiting_on_member_id != context.context_member_id
+        ):
+            raise HTTPException(403, "private work may wait only on its active member")
+        if body.waiting_on_member_id not in runtime.settings.member_roles:
+            raise HTTPException(422, "waiting member is not in the household")
+    status_by_action = {
+        "start": "in_progress",
+        "wait_on_member": "waiting_on",
+        "wait_on_other": "waiting_on",
+        "follow_up": "deferred",
+        "hold": "deferred",
+        "resume": "next",
+        "complete": "done",
+        "cancel": "cancelled",
+    }
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "task_id": task_id,
+        "action": body.action,
+        "resulting_status": status_by_action[body.action],
+        "changed_at": now,
+        "actor_service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "actor_service_party_id": COS_PARTY_ID,
+        "operator_principal_id": COS_AUTOMATION_OPERATOR_ID,
+        "authority_grant_id": context.authority_grant_id,
+        "active_member_id": context.context_member_id,
+        "on_behalf_of_member_id": context.context_member_id,
+        "waiting_on_party_id": body.waiting_on_party_id,
+        "waiting_on_member_id": body.waiting_on_member_id,
+        "follow_up_at": body.follow_up_at.isoformat() if body.follow_up_at else None,
+        "reason_code": body.reason_code,
+        "expected_last_event_id": body.expected_last_event_id,
+        "provider_effect_count": 0,
+    }
+    event_id, duplicate = await _append(
+        runtime,
+        session,
+        event_type="cos.work.state_changed",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=str(row["owner_scope"]),
+        visibility_scope=str(row["visibility_scope"]),
         payload=payload,
         request_id=body.request_id,
     )
@@ -774,20 +1165,17 @@ async def create_service_work(
         request,
         session,
         body.provenance,
-        operation="tools.service-work",
+        operation="tools.service-work.state",
         result_event_ids=[event_id],
     )
     return {
         "task_id": task_id,
         "event_id": event_id,
         "duplicate": duplicate,
-        "work_kind": "service_operational",
-        "owner_party_id": COS_PARTY_ID,
-        "responsible_party_id": COS_PARTY_ID,
-        "assignee_party_id": COS_PARTY_ID,
-        "beneficiary_party_id": context.context_member_id,
-        "member_obligation_created": False,
-        "provider_effects": 0,
+        "status": status_by_action[body.action],
+        "actor_service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "completed_by_member_id": None,
+        "provider_effect_count": 0,
     }
 
 

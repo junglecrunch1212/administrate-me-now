@@ -1,5 +1,23 @@
 # Migration map
 
+G06 CoS work, coordination, and operating-agreement update (2026-09-01): no
+projection is added and the governed count remains fifteen. Tasks advances
+additively from v5 to v6 with orthogonal service assignment/provenance fields,
+service-authored lifecycle state, and normalized coordination/participant/
+field/receipt/private-conversation tables. Parties advances additively from v3
+to v4 with structured agreement revisions and approvals. `task.created@v3`,
+`cos.work.state_changed@v1`, `coordination.*@v1`, and
+`operating_agreement.*@v1` are additive; established schemas remain
+registered. The release constitutional baseline is idempotently appended and
+all mutable rules remain proposal-first. Rebuild, restart, and encrypted
+backup/restore reproduce ownership, assignment, audience, handoff, quorum,
+expiry, revocation, and lifecycle state with zero provider effects. Rollback
+selects the G05/CO-023 predecessor and rebuilds disposable projections; no
+source fact, member decision, credential, provider configuration, checkpoint,
+external object, or provider state is rewritten. G07 provider execution,
+deployment, enrollment, permission/credential change, write enablement, and
+every provider effect remain separate owner decisions.
+
 G05 service-owned CoS source and direct-intake update (2026-09-01): the
 interactions projection advances additively to v5 with a service-private source
 table. Gmail, Google Calendar, and Google Tasks gain exact reviewed service

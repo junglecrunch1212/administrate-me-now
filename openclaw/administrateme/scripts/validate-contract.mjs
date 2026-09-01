@@ -18,6 +18,8 @@ const expectedTools = [
   "administrateme_review",
   "administrateme_lifecycle",
   "administrateme_correct",
+  "administrateme_service_work",
+  "administrateme_service_work_state",
   "administrateme_execute_pending_provider_action",
   "administrateme_skill",
   "administrateme_notification_result",
