@@ -113,10 +113,22 @@ def load_builtin_adapters(
             or adapter_config.get("subject_email")
             or adapter_config.get("user_email")
         )
-        member = adapter_config.get("member_id")
+        owner_kind = (
+            "member" if adapter_config.get("member_id") else "service_principal"
+        )
+        owner_id = adapter_config.get("member_id") or adapter_config.get(
+            "service_principal_id"
+        )
         configured_id = entry.get("id") or ":".join(
             str(value)
-            for value in (kind, member, account, index)
+            for value in (
+                kind,
+                owner_kind,
+                owner_id,
+                account,
+                adapter_config.get("workspace"),
+                index,
+            )
             if value not in (None, "")
         )
         setattr(adapter, "instance_name", str(configured_id))

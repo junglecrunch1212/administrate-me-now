@@ -69,6 +69,7 @@ write_capabilities:
   - move_event
 sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
+supported_owner_kinds: [member, service_principal]
 observation_mode_required: true
 dedup_strategy:
   kind: provider_sync_token_etag

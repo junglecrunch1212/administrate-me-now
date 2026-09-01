@@ -1,0 +1,92 @@
+# Phase A fixture/example only. This file is not the active adapter inventory.
+# It contains no credentials and does not enroll, poll, send, or write anything.
+service_identities:
+  principals:
+    - service_principal_id: service-principal:chief-of-staff
+      kind: chief_of_staff
+      party_id: service-party:chief-of-staff
+      display_name: Household Chief of Staff
+      private_scope: service-private:service-principal:chief-of-staff
+  channels:
+    - channel_id: channel:chief-of-staff:gmail
+      display_name: CoS Gmail intake fixture
+      provider: gmail
+      service_principal_id: service-principal:chief-of-staff
+      state: observation
+      provider_account_reference: provider-account:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      endpoint_reference: cos-channel-account:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      enrolled: true
+      observation_active: true
+      sending_enabled: false
+      required_for_activation: false
+      routes:
+        - route_key: route:1111111111111111111111111111111111111111111111111111111111111111
+          scope: member_private
+          target_id: member-fixture-a
+        - route_key: route:2222222222222222222222222222222222222222222222222222222222222222
+          scope: member_private
+          target_id: member-fixture-b
+        - route_key: route:3333333333333333333333333333333333333333333333333333333333333333
+          scope: household_shared
+          target_id: null
+        - route_key: route:4444444444444444444444444444444444444444444444444444444444444444
+          scope: external_contact
+          target_id: party-fixture-external
+
+adapters:
+  - id: cos-gmail-read
+    kind: messaging-gmail-api
+    family: messaging
+    enabled: true
+    config:
+      service_account_key_ref: op://Fixture/cos-google/service-account-json
+      user_email: cos-service@example.invalid
+      provider_account_id: cos-service@example.invalid
+      service_principal_id: service-principal:chief-of-staff
+      workspace: service
+      read_only: true
+      enable_writes: false
+      permission_scope:
+        - https://www.googleapis.com/auth/gmail.readonly
+      binding_provenance: service-account-delegation
+      ownership_attested: true
+      channel_id: channel:chief-of-staff:gmail
+      trusted_sender_routes:
+        - exact_from_identifier: member-a@example.invalid
+          route_key: route:1111111111111111111111111111111111111111111111111111111111111111
+        - exact_from_identifier: member-b@example.invalid
+          route_key: route:2222222222222222222222222222222222222222222222222222222222222222
+
+  - id: cos-google-calendar-read
+    kind: calendaring-google-calendar
+    family: calendaring
+    enabled: true
+    config:
+      service_account_key_ref: op://Fixture/cos-google/service-account-json
+      user_email: cos-service@example.invalid
+      provider_account_id: cos-service@example.invalid
+      service_principal_id: service-principal:chief-of-staff
+      workspace: service
+      read_only: true
+      permission_scope:
+        - https://www.googleapis.com/auth/calendar.readonly
+      binding_provenance: service-account-delegation
+      ownership_attested: true
+      calendar_id: primary
+
+  - id: cos-google-tasks-read
+    kind: tasks-google-tasks
+    family: tasks
+    enabled: true
+    config:
+      service_account_key_ref: op://Fixture/cos-google/service-account-json
+      user_email: cos-service@example.invalid
+      provider_account_id: cos-service@example.invalid
+      service_principal_id: service-principal:chief-of-staff
+      workspace: service
+      read_only: true
+      permission_scope:
+        - https://www.googleapis.com/auth/tasks.readonly
+      binding_provenance: service-account-delegation
+      ownership_attested: true
+      tasklist_id: "@default"

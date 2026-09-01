@@ -3,12 +3,18 @@
   "title": "Google Tasks adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tasklist_id", "user_email", "provider_account_id", "member_id", "workspace", "permission_scope", "binding_provenance", "ownership_attested"],
+  "required": ["tasklist_id", "user_email", "provider_account_id", "workspace", "permission_scope", "binding_provenance", "ownership_attested"],
   "oneOf": [
     { "required": ["oauth_credentials_ref"] },
     { "required": ["service_account_key_ref"] }
   ],
   "allOf": [
+    {
+      "oneOf": [
+        { "required": ["member_id"], "not": { "required": ["service_principal_id"] } },
+        { "required": ["service_principal_id"], "not": { "required": ["member_id"] } }
+      ]
+    },
     {
       "if": {
         "required": ["read_only"],
@@ -21,6 +27,18 @@
           }
         }
       }
+    },
+    {
+      "if": { "required": ["service_principal_id"] },
+      "then": {
+        "required": ["read_only"],
+        "properties": {
+          "workspace": { "const": "service" },
+          "read_only": { "const": true },
+          "permission_scope": { "const": ["https://www.googleapis.com/auth/tasks.readonly"] }
+        }
+      },
+      "else": { "properties": { "workspace": { "enum": ["personal", "work"] } } }
     }
   ],
   "properties": {
@@ -46,7 +64,7 @@
     },
     "workspace": {
       "type": "string",
-      "enum": ["personal", "work"],
+      "enum": ["personal", "work", "service"],
       "description": "Exact reviewed isolation workspace for this account."
     },
     "permission_scope": {
@@ -94,6 +112,11 @@
       "type": "string",
       "minLength": 1,
       "description": "AdministrateMe member id that owns this Google Tasks integration; passed through to ListItemAddedV1.member_id."
+    },
+    "service_principal_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact non-human owner for a reviewed CoS Google Tasks source."
     },
     "list_name": {
       "type": "string",

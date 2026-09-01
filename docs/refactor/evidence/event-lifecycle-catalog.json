@@ -53,6 +53,33 @@
       "source_family": "member_intent"
     },
     {
+      "assessment_owner": "inline:direct-intake-exact-route",
+      "candidate_targets": [
+        "task",
+        "commitment",
+        "calendar_event",
+        "reminder",
+        "list",
+        "list_item",
+        "recurrence",
+        "party_identifier",
+        "party_candidate",
+        "party_relationship",
+        "relationship_fact"
+      ],
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "first_surfaces": [
+        "triage"
+      ],
+      "input_event_types": [
+        "messaging.received",
+        "direct_intake.routed"
+      ],
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "source_family": "service_direct_intake"
+    },
+    {
       "assessment_owner": "pipeline:noise_filtering",
       "candidate_targets": [
         "task",
@@ -2449,6 +2476,83 @@
       "target_kind": "relationship_fact"
     },
     {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "task"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "commitment"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "calendar_event"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "reminder"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "list"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "list_item"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "recurrence"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "party_identifier"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "party_candidate"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "party_relationship"
+    },
+    {
+      "channel_id": "cos_direct_gmail",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
+      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "target_kind": "relationship_fact"
+    },
+    {
       "channel_id": "gmail_message",
       "coverage": "supported",
       "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
@@ -3144,14 +3248,14 @@
   ],
   "summary": {
     "ambiguous_lifecycle_transitions": [],
-    "candidate_channels": 11,
+    "candidate_channels": 12,
     "life_patterns": 15,
     "missing_lifecycle_transitions": [],
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
-    "source_candidate_cells": 121,
-    "technical_event_schemas": 251,
-    "technical_event_types": 209,
+    "source_candidate_cells": 132,
+    "technical_event_schemas": 266,
+    "technical_event_types": 210,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -4500,6 +4604,393 @@
     },
     {
       "additional_properties": false,
+      "event_type": "calendar.event_added",
+      "family": "calendar",
+      "properties": {
+        "alarms": {
+          "items": {
+            "$ref": "#/$defs/CalendarAlarmV2"
+          },
+          "maxItems": 5,
+          "title": "Alarms",
+          "type": "array"
+        },
+        "all_day": {
+          "default": false,
+          "title": "All Day",
+          "type": "boolean"
+        },
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/CalendarAttachmentV2"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "attendees": {
+          "items": {
+            "$ref": "#/$defs/CalendarParticipantV2"
+          },
+          "title": "Attendees",
+          "type": "array"
+        },
+        "availability": {
+          "default": "busy",
+          "enum": [
+            "busy",
+            "free",
+            "tentative",
+            "unavailable"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "calendar_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Calendar External Id",
+          "type": "string"
+        },
+        "calendar_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calendar Name"
+        },
+        "color_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color Id"
+        },
+        "completion_policy": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "on_attended",
+            "on_elapsed"
+          ],
+          "title": "Completion Policy",
+          "type": "string"
+        },
+        "conference": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conference"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "end": {
+          "minLength": 1,
+          "title": "End",
+          "type": "string"
+        },
+        "end_time_zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Time Zone"
+        },
+        "event_type": {
+          "default": "default",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "external_event_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "External Event Id",
+          "type": "string"
+        },
+        "html_link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Html Link"
+        },
+        "ical_uid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ical Uid"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment",
+                "list_item"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "organizer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalendarParticipantV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "enum": [
+            "google_calendar",
+            "apple_calendar"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "recurrence": {
+          "$ref": "#/$defs/CalendarRecurrenceV2"
+        },
+        "sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        },
+        "start": {
+          "minLength": 1,
+          "title": "Start",
+          "type": "string"
+        },
+        "start_time_zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Time Zone"
+        },
+        "status": {
+          "default": "confirmed",
+          "enum": [
+            "confirmed",
+            "tentative",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "structured_location": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Structured Location"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "updated_at": {
+          "minLength": 1,
+          "title": "Updated At",
+          "type": "string"
+        },
+        "use_default_alarms": {
+          "default": false,
+          "title": "Use Default Alarms",
+          "type": "boolean"
+        },
+        "visibility": {
+          "default": "default",
+          "enum": [
+            "default",
+            "public",
+            "private",
+            "confidential"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "calendar_external_id",
+        "external_event_id",
+        "summary",
+        "start",
+        "end",
+        "updated_at",
+        "workspace"
+      ],
+      "schema_version": 3
+    },
+    {
+      "additional_properties": false,
       "event_type": "calendar.event_deleted",
       "family": "calendar",
       "properties": {
@@ -4608,6 +5099,114 @@
         "deleted_at"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "calendar.event_deleted",
+      "family": "calendar",
+      "properties": {
+        "calendar_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Calendar External Id",
+          "type": "string"
+        },
+        "deleted_at": {
+          "minLength": 1,
+          "title": "Deleted At",
+          "type": "string"
+        },
+        "external_event_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "External Event Id",
+          "type": "string"
+        },
+        "ical_uid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ical Uid"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "provider": {
+          "enum": [
+            "google_calendar",
+            "apple_calendar"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "calendar_external_id",
+        "external_event_id",
+        "deleted_at",
+        "workspace"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,
@@ -5126,6 +5725,393 @@
     },
     {
       "additional_properties": false,
+      "event_type": "calendar.event_updated",
+      "family": "calendar",
+      "properties": {
+        "alarms": {
+          "items": {
+            "$ref": "#/$defs/CalendarAlarmV2"
+          },
+          "maxItems": 5,
+          "title": "Alarms",
+          "type": "array"
+        },
+        "all_day": {
+          "default": false,
+          "title": "All Day",
+          "type": "boolean"
+        },
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/CalendarAttachmentV2"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "attendees": {
+          "items": {
+            "$ref": "#/$defs/CalendarParticipantV2"
+          },
+          "title": "Attendees",
+          "type": "array"
+        },
+        "availability": {
+          "default": "busy",
+          "enum": [
+            "busy",
+            "free",
+            "tentative",
+            "unavailable"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "calendar_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Calendar External Id",
+          "type": "string"
+        },
+        "calendar_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calendar Name"
+        },
+        "color_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color Id"
+        },
+        "completion_policy": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "on_attended",
+            "on_elapsed"
+          ],
+          "title": "Completion Policy",
+          "type": "string"
+        },
+        "conference": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conference"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "end": {
+          "minLength": 1,
+          "title": "End",
+          "type": "string"
+        },
+        "end_time_zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Time Zone"
+        },
+        "event_type": {
+          "default": "default",
+          "title": "Event Type",
+          "type": "string"
+        },
+        "external_event_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "External Event Id",
+          "type": "string"
+        },
+        "html_link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Html Link"
+        },
+        "ical_uid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ical Uid"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment",
+                "list_item"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "organizer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalendarParticipantV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "enum": [
+            "google_calendar",
+            "apple_calendar"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "recurrence": {
+          "$ref": "#/$defs/CalendarRecurrenceV2"
+        },
+        "sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        },
+        "start": {
+          "minLength": 1,
+          "title": "Start",
+          "type": "string"
+        },
+        "start_time_zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Time Zone"
+        },
+        "status": {
+          "default": "confirmed",
+          "enum": [
+            "confirmed",
+            "tentative",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "structured_location": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Structured Location"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "updated_at": {
+          "minLength": 1,
+          "title": "Updated At",
+          "type": "string"
+        },
+        "use_default_alarms": {
+          "default": false,
+          "title": "Use Default Alarms",
+          "type": "boolean"
+        },
+        "visibility": {
+          "default": "default",
+          "enum": [
+            "default",
+            "public",
+            "private",
+            "confidential"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "calendar_external_id",
+        "external_event_id",
+        "summary",
+        "start",
+        "end",
+        "updated_at",
+        "workspace"
+      ],
+      "schema_version": 3
+    },
+    {
+      "additional_properties": false,
       "event_type": "calendar.rule.configured",
       "family": "calendar",
       "properties": {
@@ -5467,6 +6453,166 @@
         "observed_at"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "calendar.source_observed",
+      "family": "calendar",
+      "properties": {
+        "access_role": {
+          "enum": [
+            "none",
+            "free_busy",
+            "reader",
+            "writer",
+            "owner"
+          ],
+          "title": "Access Role",
+          "type": "string"
+        },
+        "calendar_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Calendar External Id",
+          "type": "string"
+        },
+        "calendar_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Calendar Name",
+          "type": "string"
+        },
+        "color_id": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color Id"
+        },
+        "default_reminders": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Default Reminders",
+          "type": "array"
+        },
+        "hidden": {
+          "default": false,
+          "title": "Hidden",
+          "type": "boolean"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "primary": {
+          "default": false,
+          "title": "Primary",
+          "type": "boolean"
+        },
+        "provider": {
+          "enum": [
+            "google_calendar",
+            "apple_calendar"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "read_details": {
+          "title": "Read Details",
+          "type": "boolean"
+        },
+        "read_free_busy": {
+          "title": "Read Free Busy",
+          "type": "boolean"
+        },
+        "selected": {
+          "default": false,
+          "title": "Selected",
+          "type": "boolean"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        },
+        "write_events": {
+          "title": "Write Events",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "calendar_external_id",
+        "calendar_name",
+        "access_role",
+        "read_details",
+        "read_free_busy",
+        "write_events",
+        "observed_at",
+        "workspace"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -7495,6 +8641,122 @@
         "validation_failed",
         "delivered",
         "today_iso"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "direct_intake.routed",
+      "family": "source_routing",
+      "properties": {
+        "authority": {
+          "enum": [
+            "proposal_only",
+            "external_contact_not_instruction",
+            "none"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "cue_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cue Event Id"
+        },
+        "cue_kind": {
+          "enum": [
+            "primary_triage_cue",
+            "none"
+          ],
+          "title": "Cue Kind",
+          "type": "string"
+        },
+        "provider_effect_permitted": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effect Permitted",
+          "type": "boolean"
+        },
+        "route_source": {
+          "const": "exact_authenticated_metadata",
+          "title": "Route Source",
+          "type": "string"
+        },
+        "route_state": {
+          "enum": [
+            "resolved",
+            "unresolved"
+          ],
+          "title": "Route State",
+          "type": "string"
+        },
+        "routing_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact",
+            "unresolved"
+          ],
+          "title": "Routing Scope",
+          "type": "string"
+        },
+        "routing_target_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Routing Target Id"
+        },
+        "service_principal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Service Principal Id",
+          "type": "string"
+        },
+        "source_content_exposed": {
+          "const": false,
+          "default": false,
+          "title": "Source Content Exposed",
+          "type": "boolean"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "channel_id",
+        "service_principal_id",
+        "route_source",
+        "route_state",
+        "routing_scope",
+        "cue_kind",
+        "authority"
       ],
       "schema_version": 1
     },
@@ -9644,6 +10906,120 @@
     },
     {
       "additional_properties": false,
+      "event_type": "list.created",
+      "family": "provider_list",
+      "properties": {
+        "changed_at": {
+          "format": "date-time",
+          "title": "Changed At",
+          "type": "string"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color"
+        },
+        "is_default": {
+          "default": false,
+          "title": "Is Default",
+          "type": "boolean"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "list_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "List Name",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "list_name",
+        "changed_at",
+        "workspace"
+      ],
+      "schema_version": 2
+    },
+    {
+      "additional_properties": false,
       "event_type": "list.deleted",
       "family": "provider_list",
       "properties": {
@@ -9688,6 +11064,84 @@
         "deleted_at"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "list.deleted",
+      "family": "provider_list",
+      "properties": {
+        "deleted_at": {
+          "format": "date-time",
+          "title": "Deleted At",
+          "type": "string"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "deleted_at",
+        "workspace"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -9771,6 +11225,120 @@
         "changed_at"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "list.updated",
+      "family": "provider_list",
+      "properties": {
+        "changed_at": {
+          "format": "date-time",
+          "title": "Changed At",
+          "type": "string"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color"
+        },
+        "is_default": {
+          "default": false,
+          "title": "Is Default",
+          "type": "boolean"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "list_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "List Name",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "list_name",
+        "changed_at",
+        "workspace"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -10455,6 +12023,350 @@
         "sync_cycle_id"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "list_item.added",
+      "family": "provider_list_item",
+      "properties": {
+        "alarms": {
+          "items": {
+            "$ref": "#/$defs/ReminderAlarmV2"
+          },
+          "title": "Alarms",
+          "type": "array"
+        },
+        "completed": {
+          "default": false,
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "completion_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion At"
+        },
+        "completion_policy": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "mirror"
+          ],
+          "title": "Completion Policy",
+          "type": "string"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "flagged": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flagged"
+        },
+        "item_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Item External Id",
+          "type": "string"
+        },
+        "last_modified_at": {
+          "format": "date-time",
+          "title": "Last Modified At",
+          "type": "string"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "list_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Color"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "list_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "List Name",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "parent_external_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent External Id"
+        },
+        "priority": {
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            5,
+            9
+          ],
+          "title": "Priority",
+          "type": "integer"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_data": {
+          "additionalProperties": true,
+          "title": "Provider Data",
+          "type": "object"
+        },
+        "provider_position": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Position"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "read_only_reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Only Reason"
+        },
+        "recurrence_rules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recurrence Rules",
+          "type": "array"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "sort_order": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sort Order"
+        },
+        "source_links": {
+          "items": {
+            "$ref": "#/$defs/ReminderSourceLinkV3"
+          },
+          "title": "Source Links",
+          "type": "array"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sync_cycle_id": {
+          "minLength": 1,
+          "title": "Sync Cycle Id",
+          "type": "string"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "item_external_id",
+        "list_name",
+        "title",
+        "last_modified_at",
+        "sync_cycle_id",
+        "workspace"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,
@@ -11144,6 +13056,350 @@
     },
     {
       "additional_properties": false,
+      "event_type": "list_item.completed",
+      "family": "provider_list_item",
+      "properties": {
+        "alarms": {
+          "items": {
+            "$ref": "#/$defs/ReminderAlarmV2"
+          },
+          "title": "Alarms",
+          "type": "array"
+        },
+        "completed": {
+          "default": false,
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "completion_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion At"
+        },
+        "completion_policy": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "mirror"
+          ],
+          "title": "Completion Policy",
+          "type": "string"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "flagged": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flagged"
+        },
+        "item_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Item External Id",
+          "type": "string"
+        },
+        "last_modified_at": {
+          "format": "date-time",
+          "title": "Last Modified At",
+          "type": "string"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "list_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Color"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "list_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "List Name",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "parent_external_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent External Id"
+        },
+        "priority": {
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            5,
+            9
+          ],
+          "title": "Priority",
+          "type": "integer"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_data": {
+          "additionalProperties": true,
+          "title": "Provider Data",
+          "type": "object"
+        },
+        "provider_position": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Position"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "read_only_reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Only Reason"
+        },
+        "recurrence_rules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recurrence Rules",
+          "type": "array"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "sort_order": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sort Order"
+        },
+        "source_links": {
+          "items": {
+            "$ref": "#/$defs/ReminderSourceLinkV3"
+          },
+          "title": "Source Links",
+          "type": "array"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sync_cycle_id": {
+          "minLength": 1,
+          "title": "Sync Cycle Id",
+          "type": "string"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "item_external_id",
+        "list_name",
+        "title",
+        "last_modified_at",
+        "sync_cycle_id",
+        "workspace"
+      ],
+      "schema_version": 4
+    },
+    {
+      "additional_properties": false,
       "event_type": "list_item.deleted",
       "family": "provider_list_item",
       "properties": {
@@ -11241,6 +13497,97 @@
         "sync_cycle_id"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "list_item.deleted",
+      "family": "provider_list_item",
+      "properties": {
+        "deleted_at": {
+          "format": "date-time",
+          "title": "Deleted At",
+          "type": "string"
+        },
+        "item_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Item External Id",
+          "type": "string"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "sync_cycle_id": {
+          "minLength": 1,
+          "title": "Sync Cycle Id",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "item_external_id",
+        "deleted_at",
+        "sync_cycle_id",
+        "workspace"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,
@@ -11829,6 +14176,350 @@
         "sync_cycle_id"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "list_item.uncompleted",
+      "family": "provider_list_item",
+      "properties": {
+        "alarms": {
+          "items": {
+            "$ref": "#/$defs/ReminderAlarmV2"
+          },
+          "title": "Alarms",
+          "type": "array"
+        },
+        "completed": {
+          "default": false,
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "completion_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion At"
+        },
+        "completion_policy": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "mirror"
+          ],
+          "title": "Completion Policy",
+          "type": "string"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "flagged": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flagged"
+        },
+        "item_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Item External Id",
+          "type": "string"
+        },
+        "last_modified_at": {
+          "format": "date-time",
+          "title": "Last Modified At",
+          "type": "string"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "list_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Color"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "list_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "List Name",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "parent_external_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent External Id"
+        },
+        "priority": {
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            5,
+            9
+          ],
+          "title": "Priority",
+          "type": "integer"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_data": {
+          "additionalProperties": true,
+          "title": "Provider Data",
+          "type": "object"
+        },
+        "provider_position": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Position"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "read_only_reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Only Reason"
+        },
+        "recurrence_rules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recurrence Rules",
+          "type": "array"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "sort_order": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sort Order"
+        },
+        "source_links": {
+          "items": {
+            "$ref": "#/$defs/ReminderSourceLinkV3"
+          },
+          "title": "Source Links",
+          "type": "array"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sync_cycle_id": {
+          "minLength": 1,
+          "title": "Sync Cycle Id",
+          "type": "string"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "item_external_id",
+        "list_name",
+        "title",
+        "last_modified_at",
+        "sync_cycle_id",
+        "workspace"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,
@@ -12520,6 +15211,350 @@
         "sync_cycle_id"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "list_item.updated",
+      "family": "provider_list_item",
+      "properties": {
+        "alarms": {
+          "items": {
+            "$ref": "#/$defs/ReminderAlarmV2"
+          },
+          "title": "Alarms",
+          "type": "array"
+        },
+        "completed": {
+          "default": false,
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "completion_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion At"
+        },
+        "completion_policy": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "mirror"
+          ],
+          "title": "Completion Policy",
+          "type": "string"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "flagged": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flagged"
+        },
+        "item_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Item External Id",
+          "type": "string"
+        },
+        "last_modified_at": {
+          "format": "date-time",
+          "title": "Last Modified At",
+          "type": "string"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "list_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "List Color"
+        },
+        "list_external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List External Id",
+          "type": "string"
+        },
+        "list_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "List Name",
+          "type": "string"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "parent_external_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent External Id"
+        },
+        "priority": {
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            5,
+            9
+          ],
+          "title": "Priority",
+          "type": "integer"
+        },
+        "provider": {
+          "enum": [
+            "apple_reminders",
+            "google_tasks",
+            "apple_notes_checklist"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_data": {
+          "additionalProperties": true,
+          "title": "Provider Data",
+          "type": "object"
+        },
+        "provider_position": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Position"
+        },
+        "provider_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Revision"
+        },
+        "read_only_reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Read Only Reason"
+        },
+        "recurrence_rules": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recurrence Rules",
+          "type": "array"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "sort_order": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sort Order"
+        },
+        "source_links": {
+          "items": {
+            "$ref": "#/$defs/ReminderSourceLinkV3"
+          },
+          "title": "Source Links",
+          "type": "array"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDateComponentsV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sync_cycle_id": {
+          "minLength": 1,
+          "title": "Sync Cycle Id",
+          "type": "string"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_account_id",
+        "list_external_id",
+        "item_external_id",
+        "list_name",
+        "title",
+        "last_modified_at",
+        "sync_cycle_id",
+        "workspace"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,
@@ -15919,6 +18954,312 @@
     },
     {
       "additional_properties": false,
+      "event_type": "messaging.received",
+      "family": "communication",
+      "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "bcc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Bcc Identifiers",
+          "type": "array"
+        },
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "cc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Cc Identifiers",
+          "type": "array"
+        },
+        "channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "from_identifier": {
+          "minLength": 1,
+          "title": "From Identifier",
+          "type": "string"
+        },
+        "important": {
+          "default": false,
+          "title": "Important",
+          "type": "boolean"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "native_message_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Native Message Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_labels": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Provider Labels",
+          "type": "array"
+        },
+        "received_at": {
+          "minLength": 1,
+          "title": "Received At",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "reply_to_identifier": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reply To Identifier"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "route_source": {
+          "const": "exact_authenticated_metadata",
+          "title": "Route Source",
+          "type": "string"
+        },
+        "routing_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact",
+            "unresolved"
+          ],
+          "title": "Routing Scope",
+          "type": "string"
+        },
+        "routing_target_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Routing Target Id"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "starred": {
+          "default": false,
+          "title": "Starred",
+          "type": "boolean"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "to_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "To Identifiers",
+          "type": "array"
+        },
+        "trusted_route_key": {
+          "anyOf": [
+            {
+              "pattern": "^route:[0-9a-f]{32,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trusted Route Key"
+        },
+        "unread": {
+          "default": true,
+          "title": "Unread",
+          "type": "boolean"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "from_identifier",
+        "to_identifier",
+        "received_at",
+        "native_message_id",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "routing_scope",
+        "channel_id",
+        "route_source"
+      ],
+      "schema_version": 6
+    },
+    {
+      "additional_properties": false,
       "event_type": "messaging.semantic_features_extracted",
       "family": "communication",
       "properties": {
@@ -16804,6 +20145,258 @@
         "routing_scope"
       ],
       "schema_version": 5
+    },
+    {
+      "additional_properties": false,
+      "event_type": "messaging.sent",
+      "family": "communication",
+      "properties": {
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "delivery_status": {
+          "enum": [
+            "queued",
+            "sent",
+            "failed"
+          ],
+          "title": "Delivery Status",
+          "type": "string"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "in_reply_to_interaction_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To Interaction Id"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "native_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Message Id"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "route_source": {
+          "const": "exact_authenticated_metadata",
+          "title": "Route Source",
+          "type": "string"
+        },
+        "routing_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact",
+            "unresolved"
+          ],
+          "title": "Routing Scope",
+          "type": "string"
+        },
+        "routing_target_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Routing Target Id"
+        },
+        "send_as": {
+          "enum": [
+            "member",
+            "service_principal"
+          ],
+          "title": "Send As",
+          "type": "string"
+        },
+        "sent_at": {
+          "minLength": 1,
+          "title": "Sent At",
+          "type": "string"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "to_identifier",
+        "sent_at",
+        "delivery_status",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "send_as",
+        "routing_scope",
+        "channel_id",
+        "route_source"
+      ],
+      "schema_version": 6
     },
     {
       "additional_properties": false,

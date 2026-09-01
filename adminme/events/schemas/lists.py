@@ -62,7 +62,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -273,6 +273,92 @@ class ListItemV3(ListItemV2):
     read_only_reason: str | None = Field(default=None, max_length=500)
 
 
+class _OwnerAwareListFact(BaseModel):
+    member_id: str | None = Field(default=None, min_length=1, max_length=240)
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_owner(self) -> "_OwnerAwareListFact":
+        if (self.member_id is None) == (self.service_principal_id is None):
+            raise ValueError("list observation requires exactly one owner")
+        if self.service_principal_id is not None and self.workspace != "service":
+            raise ValueError("service list observation requires service workspace")
+        if self.member_id is not None and self.workspace == "service":
+            raise ValueError("member list observation cannot use service workspace")
+        return self
+
+
+class ListItemV4(ListItemV3):
+    """Current owner-aware list item emitted by Google Tasks."""
+
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_owner(self) -> "ListItemV4":
+        _OwnerAwareListFact(
+            member_id=self.member_id,
+            service_principal_id=self.service_principal_id,
+            workspace=self.workspace,
+        )
+        return self
+
+
+class ListItemDeletedV3(ListItemDeletedV2):
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_owner(self) -> "ListItemDeletedV3":
+        _OwnerAwareListFact(
+            member_id=self.member_id,
+            service_principal_id=self.service_principal_id,
+            workspace=self.workspace,
+        )
+        return self
+
+
+class ListChangedV2(ListChangedV1):
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_owner(self) -> "ListChangedV2":
+        _OwnerAwareListFact(
+            member_id=self.member_id,
+            service_principal_id=self.service_principal_id,
+            workspace=self.workspace,
+        )
+        return self
+
+
+class ListDeletedV2(ListDeletedV1):
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_owner(self) -> "ListDeletedV2":
+        _OwnerAwareListFact(
+            member_id=self.member_id,
+            service_principal_id=self.service_principal_id,
+            workspace=self.workspace,
+        )
+        return self
+
+
 registry.register("list_item.added", 1, ListItemAddedV1)
 registry.register("list_item.updated", 1, ListItemUpdatedV1)
 registry.register("list_item.completed", 1, ListItemCompletedV1)
@@ -289,3 +375,11 @@ registry.register("list_item.added", 3, ListItemV3)
 registry.register("list_item.updated", 3, ListItemV3)
 registry.register("list_item.completed", 3, ListItemV3)
 registry.register("list_item.uncompleted", 3, ListItemV3)
+registry.register("list_item.added", 4, ListItemV4)
+registry.register("list_item.updated", 4, ListItemV4)
+registry.register("list_item.completed", 4, ListItemV4)
+registry.register("list_item.uncompleted", 4, ListItemV4)
+registry.register("list_item.deleted", 3, ListItemDeletedV3)
+registry.register("list.created", 2, ListChangedV2)
+registry.register("list.updated", 2, ListChangedV2)
+registry.register("list.deleted", 2, ListDeletedV2)

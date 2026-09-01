@@ -7,6 +7,7 @@ from typing import Any
 
 from adminme.adapters.base import AdapterContext, SensitivityFloor
 from adminme.events.envelope import EventEnvelope, Sensitivity
+from adminme.service_identities import service_private_scope
 
 
 async def write_adapter_event(
@@ -36,9 +37,15 @@ async def write_adapter_event(
         raise RuntimeError("adapter EventSink is not bound to a tenant")
     member_id = config.get("member_id")
     normalized_member_id = member_id.strip() if isinstance(member_id, str) else ""
+    service_principal_id = config.get("service_principal_id")
+    normalized_service_id = (
+        service_principal_id.strip() if isinstance(service_principal_id, str) else ""
+    )
+    if normalized_member_id and normalized_service_id:
+        raise RuntimeError("adapter event requires exactly one owner principal")
+    if not normalized_member_id and not normalized_service_id and schema_version != 1:
+        raise RuntimeError("adapter event requires exactly one owner principal")
     member_bound = bool(normalized_member_id)
-    if not member_bound and schema_version != 1:
-        raise RuntimeError("adapter event requires an explicit member_id")
     source_account = (
         config.get("source_account_id")
         or config.get("provider_account_id")
@@ -52,7 +59,11 @@ async def write_adapter_event(
     # V1 remains readable for the bounded legacy fixture/migration path. Every
     # current provider fact is v2+ and therefore cannot use this shared scope.
     owner_scope = (
-        f"private:{normalized_member_id}" if member_bound else "shared:household"
+        f"private:{normalized_member_id}"
+        if member_bound
+        else service_private_scope(normalized_service_id)
+        if normalized_service_id
+        else "shared:household"
     )
     source_account_id = source_account.strip()
     correlation = correlation_id or ctx.correlation_id_factory()

@@ -1,5 +1,25 @@
 # Migration map
 
+G05 service-owned CoS source and direct-intake update (2026-09-01): the
+interactions projection advances additively to v5 with a service-private source
+table. Gmail, Google Calendar, and Google Tasks gain exact reviewed service
+ownership and additive current owner-aware event schemas; established member
+schemas remain registered. New `direct_intake.routed@v1` receipts retain a
+content-free exact route decision while bounded member-primary cues continue
+through `triage.intent.submitted@v1` and the existing admission seam. The
+direct-intake and reconciliation consumers are versioned and idempotent, so
+replay, projection rebuild, and restart preserve owner and route without a
+provider call. Older code may ignore the additive schemas and route receipt.
+Existing member cursor/lease/retry/dedupe metadata is copied once to the full
+owner coordinate and then mirrored to the retained predecessor key; occupied
+or double-bound coordinates fail closed, and rollback retains current progress.
+Rollback otherwise selects the G04 predecessor and rebuilds disposable
+projections; no source fact, canonical object, member decision, credential,
+provider config, event-log checkpoint, permission, or provider state is
+rewritten. Provider and channel enrollment, Apple/SMS/phone support,
+deployment, scope changes, sending, writes, and provider effects remain
+separate Phase B owner decisions.
+
 G04 human-centered Triage update (2026-09-01): Context Fabric advances
 additively to v4 and Triage to v11. New immutable
 `triage.item.managed@v1`, `triage.source_policy_rule.proposed@v1`,

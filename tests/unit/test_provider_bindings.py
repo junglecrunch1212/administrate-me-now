@@ -47,6 +47,25 @@ def _apple_entry(
     }
 
 
+def _service_entry(kind: str, scope: str) -> dict[str, object]:
+    config: dict[str, object] = {
+        "service_principal_id": "service-principal:chief-of-staff",
+        "user_email": "cos-service@example.invalid",
+        "provider_account_id": "cos-service@example.invalid",
+        "workspace": "service",
+        "permission_scope": [scope],
+        "binding_provenance": "service-account-delegation",
+        "ownership_attested": True,
+        "service_account_key_ref": "op://Fixture/cos-google/service-account-json",
+        "read_only": True,
+    }
+    if kind == "calendaring-google-calendar":
+        config["calendar_id"] = "primary"
+    if kind == "tasks-google-tasks":
+        config["tasklist_id"] = "@default"
+    return {"id": f"cos-{kind}", "kind": kind, "config": config}
+
+
 def test_explicit_provider_binding_is_accepted() -> None:
     [binding] = validate_provider_bindings(
         {"adapters": [_entry()]},
@@ -143,7 +162,7 @@ def test_planned_service_principal_cannot_gain_authority_from_call_site_allowlis
     assert isinstance(config, dict)
     config.pop("member_id")
     config["service_principal_id"] = "service-principal:chief-of-staff"
-    with pytest.raises(ValueError, match="cannot use a planned service principal"):
+    with pytest.raises(ValueError, match="does not support service ownership"):
         validate_provider_bindings(
             {"adapters": [entry]},
             member_roles={"member-a": "principal"},
@@ -178,15 +197,57 @@ def test_current_member_apple_adapters_never_enter_central_inventory(kind: str) 
             )
 
 
-def test_planned_service_principal_authorizes_no_provider_binding() -> None:
+@pytest.mark.parametrize(
+    ("kind", "scope"),
+    [
+        ("messaging-gmail-api", "https://www.googleapis.com/auth/gmail.readonly"),
+        (
+            "calendaring-google-calendar",
+            "https://www.googleapis.com/auth/calendar.readonly",
+        ),
+        ("tasks-google-tasks", "https://www.googleapis.com/auth/tasks.readonly"),
+    ],
+)
+def test_reviewed_google_sources_accept_exact_service_ownership(
+    kind: str, scope: str
+) -> None:
+    [binding] = validate_provider_bindings(
+        {"adapters": [_service_entry(kind, scope)]},
+        member_roles={"member-a": "principal"},
+        household_mapping={},
+        service_principal_ids={"service-principal:chief-of-staff"},
+    )
+    assert binding.owner_kind == "service_principal"
+    assert binding.member_id is None
+    assert binding.workspace == "service"
+    assert binding.permission_scope == (scope,)
+    assert binding.owner_scope == ("service-private:service-principal:chief-of-staff")
+
+
+def test_service_workspace_cannot_fake_member_ownership() -> None:
     entry = _entry()
     config = entry["config"]
     assert isinstance(config, dict)
-    config.pop("member_id")
-    config["service_principal_id"] = "service-principal:chief-of-staff"
-    with pytest.raises(ValueError, match="cannot use a planned service principal"):
+    config["workspace"] = "service"
+    with pytest.raises(ValueError, match="cannot fake member ownership"):
         validate_provider_bindings(
             {"adapters": [entry]},
+            member_roles={"member-a": "principal"},
+            household_mapping={},
+        )
+
+
+def test_full_service_owner_account_adapter_collision_fails_closed() -> None:
+    first = _service_entry(
+        "messaging-gmail-api", "https://www.googleapis.com/auth/gmail.readonly"
+    )
+    second = _service_entry(
+        "messaging-gmail-api", "https://www.googleapis.com/auth/gmail.readonly"
+    )
+    second["id"] = "cos-gmail-duplicate"
+    with pytest.raises(ValueError, match="full owner/account/adapter coordinate"):
+        validate_provider_bindings(
+            {"adapters": [first, second]},
             member_roles={"member-a": "principal"},
             household_mapping={},
             service_principal_ids={"service-principal:chief-of-staff"},

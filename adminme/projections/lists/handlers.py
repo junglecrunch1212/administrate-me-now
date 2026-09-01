@@ -101,6 +101,11 @@ def _record_list_item_observation(
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    # CoS Google Tasks observations are service-private facts, not member
+    # Lists truth. Direct intake or a later reviewed work-order contract may
+    # propose member work without forging a member_id here.
+    if (envelope.get("payload") or {}).get("service_principal_id"):
+        return
     event_type = envelope["type"]
     if event_type in {"list.created", "list.updated"}:
         apply_list_changed(envelope, conn)

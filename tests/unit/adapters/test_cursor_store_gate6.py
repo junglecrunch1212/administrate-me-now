@@ -76,6 +76,39 @@ def test_cursor_success_requires_complete_dedupe_identity(tmp_path: Path) -> Non
         store.close()
 
 
+def test_full_owner_coordinate_adopts_legacy_state_and_collisions_fail(
+    tmp_path: Path,
+) -> None:
+    store = AdapterCursorStore(tmp_path / "cursor-coordinate.db")
+    try:
+        store.record_success(
+            "legacy-member-key",
+            provider_watermark="provider-page-9",
+            external_id="external-9",
+            fingerprint="sha-9",
+            event_id="event-9",
+        )
+        store.record_error("legacy-member-key", recovery_after_ms=120_000, now_ms=2_000)
+        coordinate = "gmail|member|fixture|account|personal"
+        assert store.adopt_legacy_coordinate("legacy-member-key", coordinate)
+        adopted = store.get(coordinate)
+        assert adopted.provider_watermark == "provider-page-9"
+        assert adopted.error_count == 1
+        assert store.dedupe_event(coordinate, "external-9", "sha-9") == "event-9"
+        assert store.get("legacy-member-key").provider_watermark == "provider-page-9"
+
+        store.record_success("occupied-coordinate", provider_watermark="other-page")
+        try:
+            store.adopt_legacy_coordinate("legacy-member-key", "occupied-coordinate")
+        except ValueError as exc:
+            assert "collision" in str(exc)
+        else:
+            raise AssertionError("occupied owner coordinate was overwritten")
+        assert store.get("occupied-coordinate").provider_watermark == "other-page"
+    finally:
+        store.close()
+
+
 def test_expired_lease_owner_cannot_commit_after_takeover(tmp_path: Path) -> None:
     store = AdapterCursorStore(tmp_path / "cursor-fencing.db")
     try:

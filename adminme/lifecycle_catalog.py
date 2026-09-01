@@ -200,6 +200,16 @@ CANDIDATE_CHANNELS: tuple[CandidateChannel, ...] = (
         "The typed OpenClaw tool records the same exact member-intent fact; generic chat remains non-canonical.",
     ),
     CandidateChannel(
+        "cos_direct_gmail",
+        "service_direct_intake",
+        ("messaging.received", "direct_intake.routed"),
+        ("triage",),
+        "inline:direct-intake-exact-route",
+        _ALL_TRIAGE_TARGETS,
+        "supported",
+        "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+    ),
+    CandidateChannel(
         "gmail_message",
         "communications",
         ("messaging.received", "messaging.sent"),
@@ -314,6 +324,10 @@ _SUPPORTED_CHANNEL_TESTS = {
     "openclaw_add_for_review": (
         "tests/acceptance/test_event_lifecycle_matrix.py::"
         "test_openclaw_add_for_review_reaches_every_triage_target"
+    ),
+    "cos_direct_gmail": (
+        "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::"
+        "test_g05_direct_routes_isolate_members_fail_closed_and_replay"
     ),
     "gmail_message": (
         "tests/acceptance/test_event_lifecycle_matrix.py::"
@@ -1433,6 +1447,7 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("household.", "openclaw_compatibility"),
     ("settings.", "settings"),
     ("service.delegation.", "service_delegation"),
+    ("direct_intake.", "source_routing"),
     ("temporary_surface.", "temporary_surface"),
     ("xlsx.", "workbook_runtime"),
     ("runtime.", "runtime"),

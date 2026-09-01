@@ -44,6 +44,7 @@ capabilities:
     event_families: [messaging.received, messaging.sent]
 observation_mode_required: true
 sharing_model_discriminator: owner_member_id
+supported_owner_kinds: [member, service_principal]
 dedup_strategy:
   kind: external_id
 source_assurance:

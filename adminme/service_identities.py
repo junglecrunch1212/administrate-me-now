@@ -515,6 +515,7 @@ def resolve_service_channel_route(
     return {
         "state": "resolved",
         "route_scope": route.scope,
+        "routing_target_id": route.target_id,
         "owner_scope": scope,
         "visibility_scope": scope,
         "content_exposed": False,

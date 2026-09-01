@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from collections.abc import Mapping, Set
 from typing import Any, Iterable
 
+from adminme.service_identities import service_private_scope
+
 
 WORKSPACES = frozenset({"personal", "work", "service"})
 PROVENANCE_KINDS = frozenset(
@@ -31,6 +33,22 @@ MEMBER_BRIDGE_ONLY_ADAPTER_KINDS = frozenset(
         "reminders-apple-eventkit",
     }
 )
+SERVICE_OWNER_ADAPTER_KINDS = frozenset(
+    {
+        "messaging-gmail-api",
+        "calendaring-google-calendar",
+        "tasks-google-tasks",
+    }
+)
+SERVICE_OWNER_READONLY_SCOPES = {
+    "messaging-gmail-api": frozenset(
+        {"https://www.googleapis.com/auth/gmail.readonly"}
+    ),
+    "calendaring-google-calendar": frozenset(
+        {"https://www.googleapis.com/auth/calendar.readonly"}
+    ),
+    "tasks-google-tasks": frozenset({"https://www.googleapis.com/auth/tasks.readonly"}),
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +64,24 @@ class ProviderBinding:
     workspace: str
     permission_scope: tuple[str, ...]
     binding_provenance: str
+
+    @property
+    def coordinate(self) -> tuple[str, str, str, str, str]:
+        """The isolation coordinate for cursor, lease, dedupe, and health state."""
+
+        return (
+            self.owner_kind,
+            self.owner_id,
+            self.provider_account_id.casefold(),
+            self.workspace,
+            self.kind,
+        )
+
+    @property
+    def owner_scope(self) -> str:
+        if self.owner_kind == "service_principal":
+            return service_private_scope(self.owner_id)
+        return f"private:{self.owner_id}"
 
     def public(self) -> dict[str, Any]:
         """Return non-identifying binding metadata only.
@@ -92,6 +128,28 @@ def _account_id(config: dict[str, Any]) -> str | None:
     if len(normalized) != 1:
         raise ValueError("provider account coordinates disagree")
     return values[0]
+
+
+def adapter_owner_coordinate_id(adapter_name: str, config: Mapping[str, Any]) -> str:
+    """Return the exact durable namespace for one configured producer."""
+
+    member_id = config.get("member_id")
+    service_id = config.get("service_principal_id")
+    member_owner = isinstance(member_id, str) and bool(member_id.strip())
+    service_owner = isinstance(service_id, str) and bool(service_id.strip())
+    if member_owner == service_owner:
+        raise ValueError("adapter coordinate requires exactly one owner principal")
+    account = _account_id(dict(config))
+    workspace = config.get("workspace")
+    if member_owner and not workspace:
+        # Legacy fixture/direct-construction paths predate the production
+        # binding validator. Production loader rows always carry workspace.
+        workspace = "personal"
+    if account is None or not isinstance(workspace, str) or not workspace:
+        raise ValueError("adapter coordinate requires account and workspace")
+    owner_kind = "member" if member_owner else "service_principal"
+    owner_id = str(member_id if member_owner else service_id)
+    return "|".join((adapter_name, owner_kind, owner_id, account, workspace))
 
 
 def _known_member_ids(
@@ -191,10 +249,10 @@ def validate_provider_bindings(
             raise ValueError(
                 f"enabled provider adapter {index} collapses owner and provider account"
             )
-        if service_owner:
+        if service_owner and kind not in SERVICE_OWNER_ADAPTER_KINDS:
             raise ValueError(
-                f"enabled provider adapter {index} cannot use a planned service "
-                "principal; service-owned provider authority is not implemented"
+                f"enabled provider adapter {index} has no reviewed service-owned "
+                "provider authority and does not support service ownership"
             )
         if workspace not in WORKSPACES:
             raise ValueError(
@@ -220,6 +278,38 @@ def validate_provider_bindings(
             raise ValueError(
                 f"enabled provider adapter {index} requires ownership_attested=true"
             )
+        if member_owner and workspace == "service":
+            raise ValueError(
+                f"enabled provider adapter {index} cannot fake member ownership "
+                "for a service workspace"
+            )
+        if service_owner:
+            if workspace != "service":
+                raise ValueError(
+                    f"enabled provider adapter {index} requires service workspace"
+                )
+            reviewed_scopes = SERVICE_OWNER_READONLY_SCOPES[kind]
+            if frozenset(permission_scope) != reviewed_scopes:
+                raise ValueError(
+                    f"enabled provider adapter {index} exceeds the reviewed "
+                    "service-owner read scope"
+                )
+            if adapter_config.get("read_only") is not True:
+                raise ValueError(
+                    f"enabled provider adapter {index} requires read_only=true "
+                    "for service ownership"
+                )
+            if adapter_config.get("enable_writes") is True:
+                raise ValueError(
+                    f"enabled provider adapter {index} cannot enable service writes"
+                )
+            if provenance != "service-account-delegation" or not isinstance(
+                adapter_config.get("service_account_key_ref"), str
+            ):
+                raise ValueError(
+                    f"enabled provider adapter {index} requires reviewed "
+                    "service-account delegation for service ownership"
+                )
         bindings.append(
             ProviderBinding(
                 adapter_id=str(entry.get("id") or f"adapter-{index}"),
@@ -240,16 +330,16 @@ def validate_provider_bindings(
             )
         )
 
-    exact_seen: set[tuple[str, str, str]] = set()
+    adapter_ids: set[str] = set()
+    exact_seen: set[tuple[str, str, str, str, str]] = set()
     ownership: dict[tuple[str, str], tuple[str, str]] = {}
     for binding in bindings:
-        exact = (
-            binding.kind,
-            binding.provider_account_id.casefold(),
-            binding.workspace,
-        )
+        if binding.adapter_id in adapter_ids:
+            raise ValueError("duplicate enabled adapter id")
+        adapter_ids.add(binding.adapter_id)
+        exact = binding.coordinate
         if exact in exact_seen:
-            raise ValueError("duplicate enabled provider binding coordinate")
+            raise ValueError("duplicate full owner/account/adapter coordinate")
         exact_seen.add(exact)
         account = (binding.provider_family, binding.provider_account_id.casefold())
         coordinate = (binding.owner_id, binding.workspace)
@@ -277,12 +367,68 @@ def public_binding_inventory(bindings: Iterable[ProviderBinding]) -> dict[str, A
     }
 
 
+def public_service_source_readiness(
+    bindings: Iterable[ProviderBinding],
+    *,
+    adapter_inventory: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Content-free permission, cursor, freshness, and runtime readiness."""
+
+    inventory = adapter_inventory or {}
+    rows: list[dict[str, Any]] = []
+    for binding in bindings:
+        if binding.owner_kind != "service_principal":
+            continue
+        runtime = inventory.get(binding.adapter_id) or {}
+        extra = runtime.get("extra") if isinstance(runtime, Mapping) else {}
+        extra = extra if isinstance(extra, Mapping) else {}
+        durable = extra.get("durable_cursor")
+        durable = durable if isinstance(durable, Mapping) else {}
+        state = str(runtime.get("state") or "configured_not_running")
+        rows.append(
+            {
+                "adapter_id": binding.adapter_id,
+                "adapter_kind": binding.kind,
+                "owner_kind": binding.owner_kind,
+                "workspace": binding.workspace,
+                "permission_scope": list(binding.permission_scope),
+                "binding_provenance": binding.binding_provenance,
+                "state": state,
+                "freshness_at": runtime.get("last_cursor_advance_at"),
+                "cursor_state": (
+                    "present" if durable.get("provider_watermark") else "not_observed"
+                ),
+                "lease_state": extra.get("cursor_lease") or "not_reported",
+                "ready": state == "running",
+                "sending_enabled": False,
+                "content_exposed": False,
+            }
+        )
+    return {
+        "contract": "service-source-readiness-v1",
+        "state": (
+            "not_configured"
+            if not rows
+            else "ready"
+            if all(row["ready"] for row in rows)
+            else "configured_not_ready"
+        ),
+        "sources": rows,
+        "provider_effect_permitted": False,
+        "content_exposed": False,
+    }
+
+
 __all__ = [
     "ACCOUNT_KEYS",
     "PROVENANCE_KINDS",
     "MEMBER_BRIDGE_ONLY_ADAPTER_KINDS",
+    "SERVICE_OWNER_ADAPTER_KINDS",
+    "SERVICE_OWNER_READONLY_SCOPES",
     "ProviderBinding",
     "WORKSPACES",
+    "adapter_owner_coordinate_id",
     "public_binding_inventory",
+    "public_service_source_readiness",
     "validate_provider_bindings",
 ]

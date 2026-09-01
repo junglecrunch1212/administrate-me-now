@@ -830,7 +830,7 @@ def choose_decision(
 class ReconciliationAdmissionEvaluator:
     """Durable bus consumer that emits decision revisions from authorized state."""
 
-    CONSUMER_VERSION = "1.0.0"
+    CONSUMER_VERSION = "1.1.0"
 
     def __init__(
         self,
@@ -1127,6 +1127,49 @@ class ReconciliationAdmissionEvaluator:
             ),
         )
 
+    async def _handle_member_intent(self, intent: Mapping[str, Any]) -> None:
+        """Admit the primary cue without interpreting it as canonical work.
+
+        A member intent already has a Triage row.  This synthetic proposal view
+        exists only so the established source-policy and reconciliation seam
+        can issue its immutable admission receipt.  The source remains the
+        authenticated intent event itself; no target kind or provider authority
+        is invented here.
+        """
+
+        if intent.get("source_adapter") != "direct-intake":
+            return
+        payload = _payload(intent)
+        intent_id = str(payload.get("intent_id") or "")
+        member_id = str(payload.get("member_id") or "")
+        text = str(payload.get("text") or "")
+        if not intent_id or not member_id or not text:
+            return
+        owner_scope = f"private:{member_id}"
+        if (
+            intent.get("owner_scope") != owner_scope
+            or intent.get("visibility_scope") != owner_scope
+        ):
+            return
+        proposal = {
+            **intent,
+            "payload": {
+                "proposal_id": intent_id,
+                "owner_member_id": member_id,
+                "target_kind": payload.get("kind_hint"),
+                "title": text,
+                "candidate": {
+                    "source_surface": payload.get("source_surface"),
+                    "exact_text": text,
+                },
+                "route": {"member_id": member_id},
+                "source_event_id": str(intent["event_id"]),
+                "confidence": None,
+                "reasons": ["authenticated_member_intent"],
+            },
+        }
+        await self._handle_proposal(proposal)
+
     async def _handle_state_evidence(self, trigger: Mapping[str, Any]) -> None:
         trigger_profile = evidence_profile(trigger)
         if (
@@ -1215,6 +1258,8 @@ class ReconciliationAdmissionEvaluator:
         event_type = str(event.get("type") or "")
         if event_type == "triage.item.proposed":
             await self._handle_proposal(event)
+        elif event_type == "triage.intent.submitted":
+            await self._handle_member_intent(event)
         elif event_type == "context.reconciliation.typed_fact_shared":
             await self._handle_state_evidence(event)
         elif event_type != "triage.reconciliation.decided":
