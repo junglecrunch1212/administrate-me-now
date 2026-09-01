@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 247,
-    "technical_event_types": 205,
+    "technical_event_schemas": 251,
+    "technical_event_types": 209,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -24224,6 +24224,220 @@
     },
     {
       "additional_properties": false,
+      "event_type": "triage.item.managed",
+      "family": "triage",
+      "properties": {
+        "action": {
+          "enum": [
+            "link_existing",
+            "mark_handled",
+            "mark_duplicate",
+            "keep_context",
+            "route_alert",
+            "dismiss_not_useful",
+            "propose_suppression",
+            "ask_clarification",
+            "snooze",
+            "reopen",
+            "correct_extraction",
+            "correct_ownership"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "action_revision": {
+          "minimum": 1,
+          "title": "Action Revision",
+          "type": "integer"
+        },
+        "corrected_owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corrected Owner Member Id"
+        },
+        "corrected_target_kind": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corrected Target Kind"
+        },
+        "corrected_title": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corrected Title"
+        },
+        "duplicate_of_proposal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duplicate Of Proposal Id"
+        },
+        "evidence_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Evidence Event Ids",
+          "type": "array"
+        },
+        "expected_last_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Expected Last Event Id",
+          "type": "string"
+        },
+        "linked_object_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Object Id"
+        },
+        "linked_object_kind": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Object Kind"
+        },
+        "managed_at": {
+          "format": "date-time",
+          "title": "Managed At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "policy_proposal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Proposal Id"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "reversible": {
+          "const": true,
+          "default": true,
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "snoozed_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snoozed Until"
+        },
+        "supersedes_action_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Action Id"
+        }
+      },
+      "required": [
+        "action_id",
+        "proposal_id",
+        "member_id",
+        "action",
+        "action_revision",
+        "expected_last_event_id",
+        "managed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "triage.item.materialized",
       "family": "triage",
       "properties": {
@@ -25316,6 +25530,416 @@
         "priority_basis",
         "reason_codes",
         "decided_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.source_policy_rule.decided",
+      "family": "triage",
+      "properties": {
+        "access_widening": {
+          "const": false,
+          "default": false,
+          "title": "Access Widening",
+          "type": "boolean"
+        },
+        "cross_member_effect": {
+          "const": false,
+          "default": false,
+          "title": "Cross Member Effect",
+          "type": "boolean"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        },
+        "decided_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Decided By Member Id",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "edit",
+            "trial",
+            "reject",
+            "suppress"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "decision_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "instruction": {
+          "enum": [
+            "always",
+            "usually",
+            "ask",
+            "never"
+          ],
+          "title": "Instruction",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "outcome_kind": {
+          "enum": [
+            "dismiss_not_useful",
+            "keep_context",
+            "mark_duplicate",
+            "correct_extraction",
+            "correct_ownership",
+            "reopen"
+          ],
+          "title": "Outcome Kind",
+          "type": "string"
+        },
+        "policy_proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Proposal Id",
+          "type": "string"
+        },
+        "preview_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Preview Digest",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "scope_kind": {
+          "enum": [
+            "candidate_kind",
+            "sender",
+            "context",
+            "account",
+            "workspace"
+          ],
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_value_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Value Digest",
+          "type": "string"
+        },
+        "trial_proposal_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Trial Proposal Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision_id",
+        "policy_proposal_id",
+        "member_id",
+        "scope_kind",
+        "scope_value_digest",
+        "outcome_kind",
+        "decision",
+        "instruction",
+        "preview_digest",
+        "decided_by_member_id",
+        "decided_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.source_policy_rule.proposed",
+      "family": "triage",
+      "properties": {
+        "access_widening": {
+          "const": false,
+          "default": false,
+          "title": "Access Widening",
+          "type": "boolean"
+        },
+        "affected_proposal_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Affected Proposal Ids",
+          "type": "array"
+        },
+        "cross_member_effect": {
+          "const": false,
+          "default": false,
+          "title": "Cross Member Effect",
+          "type": "boolean"
+        },
+        "explanation": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "instruction": {
+          "enum": [
+            "always",
+            "usually",
+            "ask",
+            "never"
+          ],
+          "title": "Instruction",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "outcome_kind": {
+          "enum": [
+            "dismiss_not_useful",
+            "keep_context",
+            "mark_duplicate",
+            "correct_extraction",
+            "correct_ownership",
+            "reopen"
+          ],
+          "title": "Outcome Kind",
+          "type": "string"
+        },
+        "policy_diff": {
+          "additionalProperties": true,
+          "title": "Policy Diff",
+          "type": "object"
+        },
+        "policy_proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Proposal Id",
+          "type": "string"
+        },
+        "preview_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Preview Digest",
+          "type": "string"
+        },
+        "proposed_at": {
+          "format": "date-time",
+          "title": "Proposed At",
+          "type": "string"
+        },
+        "proposed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposed By Member Id",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "scope_kind": {
+          "enum": [
+            "candidate_kind",
+            "sender",
+            "context",
+            "account",
+            "workspace"
+          ],
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_value_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Value Digest",
+          "type": "string"
+        },
+        "self_activates": {
+          "const": false,
+          "default": false,
+          "title": "Self Activates",
+          "type": "boolean"
+        },
+        "verified_feedback_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Verified Feedback Event Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "policy_proposal_id",
+        "member_id",
+        "scope_kind",
+        "scope_value_digest",
+        "instruction",
+        "outcome_kind",
+        "verified_feedback_event_ids",
+        "preview_digest",
+        "policy_diff",
+        "explanation",
+        "proposed_by_member_id",
+        "proposed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.source_policy_rule.reviewed",
+      "family": "triage",
+      "properties": {
+        "access_widening": {
+          "const": false,
+          "default": false,
+          "title": "Access Widening",
+          "type": "boolean"
+        },
+        "cross_member_effect": {
+          "const": false,
+          "default": false,
+          "title": "Cross Member Effect",
+          "type": "boolean"
+        },
+        "decision": {
+          "enum": [
+            "retain",
+            "narrow",
+            "suspend",
+            "revoke"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "negative_outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "false_suppression",
+                "missed_obligation",
+                "member_correction",
+                "scope_mismatch"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Negative Outcome"
+        },
+        "previous_instruction": {
+          "enum": [
+            "always",
+            "usually",
+            "ask",
+            "never"
+          ],
+          "title": "Previous Instruction",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "replacement_instruction": {
+          "anyOf": [
+            {
+              "enum": [
+                "always",
+                "usually",
+                "ask",
+                "never"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replacement Instruction"
+        },
+        "review_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Review Id",
+          "type": "string"
+        },
+        "reviewed_at": {
+          "format": "date-time",
+          "title": "Reviewed At",
+          "type": "string"
+        },
+        "reviewed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reviewed By Member Id",
+          "type": "string"
+        },
+        "rule_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Rule Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "review_id",
+        "rule_id",
+        "member_id",
+        "decision",
+        "previous_instruction",
+        "reason",
+        "reviewed_by_member_id",
+        "reviewed_at"
       ],
       "schema_version": 1
     },

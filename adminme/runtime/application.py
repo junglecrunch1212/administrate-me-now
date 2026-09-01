@@ -140,6 +140,7 @@ class RuntimeSettings:
     deployment_evidence: dict[str, Any] = field(default_factory=dict)
     deployment_evidence_required: bool = False
     reconciliation_admission_enabled: bool = False
+    human_triage_management_enabled: bool = False
     provider_bindings: tuple[ProviderBinding, ...] = field(
         default_factory=tuple, init=False
     )
@@ -494,6 +495,10 @@ class RuntimeSettings:
                 "ADMINME_RECONCILIATION_ADMISSION_ENABLED", "0"
             )
             == "1",
+            human_triage_management_enabled=os.environ.get(
+                "ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED", "0"
+            )
+            == "1",
         )
 
     @classmethod
@@ -524,6 +529,7 @@ class RuntimeSettings:
         deployment_evidence: dict[str, Any] | None = None,
         deployment_evidence_required: bool = False,
         reconciliation_admission_enabled: bool = False,
+        human_triage_management_enabled: bool = False,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -556,6 +562,7 @@ class RuntimeSettings:
             deployment_evidence=dict(deployment_evidence or {}),
             deployment_evidence_required=deployment_evidence_required,
             reconciliation_admission_enabled=reconciliation_admission_enabled,
+            human_triage_management_enabled=human_triage_management_enabled,
         )
 
 

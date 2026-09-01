@@ -189,6 +189,64 @@ CREATE INDEX IF NOT EXISTS idx_feedback_member_reason
 CREATE INDEX IF NOT EXISTS idx_policy_member_status
     ON triage_policy_rules(tenant_id, member_id, status, scope_kind);
 
+-- G04 learned policies are inert until an exact member decision activates a
+-- bounded rule.  These tables retain only digests, diffs, and event lineage.
+CREATE TABLE IF NOT EXISTS triage_source_policy_proposals (
+    tenant_id          TEXT NOT NULL,
+    policy_proposal_id TEXT NOT NULL,
+    member_id          TEXT NOT NULL,
+    scope_kind         TEXT NOT NULL,
+    scope_value_digest TEXT NOT NULL,
+    instruction        TEXT NOT NULL,
+    outcome_kind       TEXT NOT NULL,
+    verified_feedback_event_ids_json TEXT NOT NULL,
+    affected_proposal_ids_json TEXT NOT NULL,
+    preview_digest     TEXT NOT NULL,
+    policy_diff_json   TEXT NOT NULL,
+    explanation        TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (
+        status IN ('proposed','approved','trial','rejected','suppressed')
+    ),
+    self_activates     INTEGER NOT NULL CHECK (self_activates=0),
+    provider_effects   INTEGER NOT NULL CHECK (provider_effects=0),
+    proposed_at        TEXT NOT NULL,
+    owner_scope        TEXT NOT NULL,
+    visibility_scope   TEXT NOT NULL,
+    sensitivity        TEXT NOT NULL,
+    last_event_id      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, policy_proposal_id)
+);
+
+CREATE TABLE IF NOT EXISTS triage_source_policy_rules (
+    tenant_id          TEXT NOT NULL,
+    rule_id            TEXT NOT NULL,
+    policy_proposal_id TEXT NOT NULL,
+    member_id          TEXT NOT NULL,
+    scope_kind         TEXT NOT NULL,
+    scope_value_digest TEXT NOT NULL,
+    instruction        TEXT NOT NULL,
+    activation_mode    TEXT NOT NULL CHECK (activation_mode IN ('approved','trial')),
+    trial_proposal_ids_json TEXT NOT NULL DEFAULT '[]',
+    status             TEXT NOT NULL CHECK (
+        status IN ('active','trial','suspended','revoked')
+    ),
+    last_review_decision TEXT,
+    last_review_reason TEXT,
+    activated_at       TEXT NOT NULL,
+    reviewed_at        TEXT,
+    owner_scope        TEXT NOT NULL,
+    visibility_scope   TEXT NOT NULL,
+    sensitivity        TEXT NOT NULL,
+    provider_effects   INTEGER NOT NULL CHECK (provider_effects=0),
+    last_event_id      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, rule_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_policy_proposals_member
+    ON triage_source_policy_proposals(tenant_id, member_id, status, proposed_at);
+CREATE INDEX IF NOT EXISTS idx_source_policy_rules_member
+    ON triage_source_policy_rules(tenant_id, member_id, status, scope_kind);
+
 CREATE TABLE IF NOT EXISTS context_matter_sessions (
     tenant_id          TEXT NOT NULL,
     owner_member_id    TEXT NOT NULL,

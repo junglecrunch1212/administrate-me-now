@@ -11,7 +11,7 @@ from adminme.projections.context_fabric import handlers
 
 class ContextFabricProjection(Projection):
     name = "context_fabric"
-    version = 3
+    version = 4
     subscribes_to = "*"
     schema_path = Path(__file__).parent / "schema.sql"
 

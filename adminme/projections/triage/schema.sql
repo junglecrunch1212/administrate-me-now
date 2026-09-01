@@ -47,6 +47,16 @@ CREATE TABLE IF NOT EXISTS triage_items (
     reconciliation_freshness     TEXT NOT NULL DEFAULT 'unknown',
     priority_rank                INTEGER NOT NULL DEFAULT 60,
     priority_basis_json          TEXT NOT NULL DEFAULT '["standard_actionable_candidate"]',
+    human_lane                   TEXT NOT NULL DEFAULT 'low_confidence_review',
+    management_state             TEXT NOT NULL DEFAULT 'open',
+    management_action            TEXT,
+    management_action_id         TEXT,
+    management_revision          INTEGER NOT NULL DEFAULT 0,
+    management_event_id          TEXT,
+    management_reason_codes_json TEXT NOT NULL DEFAULT '[]',
+    snoozed_until                TEXT,
+    learned_policy_state         TEXT NOT NULL DEFAULT 'none',
+    learned_rule_id              TEXT,
     state                        TEXT NOT NULL
                                  CHECK (state IN (
                                    'pending_interpretation','pending_review','approved',
@@ -76,6 +86,51 @@ CREATE INDEX IF NOT EXISTS idx_triage_tenant_owner_state
     ON triage_items(tenant_id, owner_member_id, state, proposed_at);
 CREATE INDEX IF NOT EXISTS idx_triage_tenant_source
     ON triage_items(tenant_id, source_event_id);
+CREATE TABLE IF NOT EXISTS triage_management_actions (
+    tenant_id             TEXT NOT NULL,
+    action_id             TEXT NOT NULL,
+    proposal_id           TEXT NOT NULL,
+    member_id             TEXT NOT NULL,
+    action                TEXT NOT NULL,
+    action_revision       INTEGER NOT NULL,
+    supersedes_action_id  TEXT,
+    reason_codes_json     TEXT NOT NULL DEFAULT '[]',
+    evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
+    linked_object_kind    TEXT,
+    linked_object_id      TEXT,
+    duplicate_of_proposal_id TEXT,
+    snoozed_until         TEXT,
+    policy_proposal_id    TEXT,
+    reversible            INTEGER NOT NULL CHECK (reversible=1),
+    provider_effects      INTEGER NOT NULL CHECK (provider_effects=0),
+    managed_at            TEXT NOT NULL,
+    owner_scope           TEXT NOT NULL,
+    visibility_scope      TEXT NOT NULL,
+    sensitivity           TEXT NOT NULL,
+    last_event_id         TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, action_id),
+    UNIQUE (tenant_id, proposal_id, action_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_triage_management_member
+    ON triage_management_actions(tenant_id, member_id, proposal_id, action_revision);
+
+CREATE TABLE IF NOT EXISTS triage_learned_policy_rules (
+    tenant_id             TEXT NOT NULL,
+    rule_id               TEXT NOT NULL,
+    policy_proposal_id    TEXT NOT NULL,
+    member_id             TEXT NOT NULL,
+    scope_kind            TEXT NOT NULL,
+    scope_value_digest    TEXT NOT NULL,
+    outcome_kind          TEXT NOT NULL,
+    instruction           TEXT NOT NULL,
+    activation_mode       TEXT NOT NULL CHECK (activation_mode IN ('approved','trial')),
+    trial_proposal_ids_json TEXT NOT NULL DEFAULT '[]',
+    status                TEXT NOT NULL CHECK (
+        status IN ('active','trial','suspended','revoked')
+    ),
+    last_event_id         TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, rule_id)
+);
 CREATE TABLE IF NOT EXISTS canonical_object_fingerprints (
     tenant_id          TEXT NOT NULL,
     owner_member_id    TEXT,
