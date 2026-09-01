@@ -38,6 +38,17 @@ claims remain non-authoritative evidence and cannot establish identity,
 ownership, priority, routing, policy applicability, disclosure, relationships,
 or write authority.
 
+## G03 reconciliation and admission amendment (2026-09-01)
+
+CO-021 adds immutable `triage.reconciliation.decided@v1` receipts over exact
+G02 source coordinates and typed evidence. Context Fabric v3 indexes scoped
+relationships and Triage v10 can apply their queue disposition only behind an
+explicit default-off runtime gate. Weak similarity remains review-only; exact
+cross-member state requires a content-free, source-member-authored typed share;
+known-human priority requires an exact prior interaction; and member promises
+retain exact authored-text digest provenance. Live activation, historical
+backlog mutation, deployment, and provider effects remain separately deferred.
+
 ## 1. Engineered objective
 
 Replace the ambiguous request for “candidate identification settings” with one

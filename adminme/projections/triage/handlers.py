@@ -695,6 +695,132 @@ def _resolve(
     )
 
 
+def _apply_reconciliation(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    expected_scope = f"private:{payload['owner_member_id']}"
+    if (
+        envelope.get("owner_scope") != expected_scope
+        or envelope.get("visibility_scope") != expected_scope
+    ):
+        return
+    # Phase A receipts remain queryable through the immutable log and Context
+    # Fabric, but must not mutate the live Triage backlog until activation is
+    # separately authorized.
+    if not payload["admission_active"]:
+        return
+    relationships = list(payload.get("relationships") or [])
+    conn.execute(
+        """UPDATE triage_items
+              SET admission_decision=?, reconciliation_active=?,
+                  reconciliation_id=?, reconciliation_event_id=?,
+                  reconciliation_revision=?, reconciliation_reasons_json=?,
+                  reconciliation_evidence_json=?,
+                  reconciliation_authored_text_digest=?,
+                  reconciliation_policy_json=?,
+                  reconciliation_scope_json=?, reconciliation_freshness=?,
+                  priority_rank=?, priority_basis_json=?
+            WHERE tenant_id=? AND proposal_id=?
+              AND owner_member_id=? AND owner_scope=? AND visibility_scope=?
+              AND reconciliation_revision < ?""",
+        (
+            payload["decision"],
+            int(bool(payload["admission_active"])),
+            payload["reconciliation_id"],
+            envelope["event_id"],
+            payload["decision_revision"],
+            _json(payload["reason_codes"]),
+            _json(relationships),
+            payload.get("member_authored_text_digest"),
+            _json(payload["policy"]),
+            _json(payload["source_coordinate"]),
+            payload["freshness"],
+            payload["priority_rank"],
+            _json(payload["priority_basis"]),
+            envelope["tenant_id"],
+            payload["proposal_id"],
+            payload["owner_member_id"],
+            expected_scope,
+            expected_scope,
+            payload["decision_revision"],
+        ),
+    )
+    decision = str(payload["decision"])
+    review_decisions = {"admit", "conflict_review", "unresolved"}
+    terminal_decisions = {
+        "update_existing_matter",
+        "attach_evidence",
+        "alert_only",
+        "context_only",
+        "already_satisfied",
+        "superseded",
+        "duplicate",
+        "source_policy_suppression",
+    }
+    disposition = "decision" if decision in review_decisions else "evidence_only"
+    queue_lane = (
+        "member_priority"
+        if "explicit_member_instruction" in payload["priority_basis"]
+        else "member_promise"
+        if "exact_member_commitment" in payload["priority_basis"]
+        else "time_bound"
+        if "verified_deadline" in payload["priority_basis"]
+        else "known_human_request"
+        if "known_human_actionable_request" in payload["priority_basis"]
+        else "standard"
+    )
+    if decision in terminal_decisions:
+        conn.execute(
+            """UPDATE triage_items
+                  SET state='dismissed', resolved_at=?,
+                      resolved_by='system:cross-source-reconciliation',
+                      resolution_reason=?, decision_disposition=?,
+                      duplicate_of_proposal_id=?, policy_disposition=?,
+                      context_id=?, context_kind='deterministic_matter',
+                      queue_lane=?, last_event_id=?
+                WHERE tenant_id=? AND proposal_id=?
+                  AND state IN ('pending_interpretation','pending_review')
+                  AND reconciliation_revision=? AND last_event_id < ?""",
+            (
+                payload["decided_at"],
+                f"reconciliation:{decision}",
+                disposition,
+                payload.get("primary_proposal_id"),
+                decision,
+                payload["matter_id"],
+                queue_lane,
+                envelope["event_id"],
+                envelope["tenant_id"],
+                payload["proposal_id"],
+                payload["decision_revision"],
+                envelope["event_id"],
+            ),
+        )
+    else:
+        conn.execute(
+            """UPDATE triage_items
+                  SET decision_disposition='decision',
+                      duplicate_of_proposal_id=?, policy_disposition=?,
+                      context_id=?, context_kind='deterministic_matter',
+                      queue_lane=?, last_event_id=?
+                WHERE tenant_id=? AND proposal_id=?
+                  AND state IN ('pending_interpretation','pending_review')
+                  AND reconciliation_revision=? AND last_event_id < ?""",
+            (
+                payload.get("primary_proposal_id"),
+                decision,
+                payload["matter_id"],
+                queue_lane,
+                envelope["event_id"],
+                envelope["tenant_id"],
+                payload["proposal_id"],
+                payload["decision_revision"],
+                envelope["event_id"],
+            ),
+        )
+
+
 _CANONICAL_EVENT_FIELDS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "task.created": (("task",), "task_id", "title"),
     "recurrence.added": (("recurrence",), "recurrence_id", "kind"),
@@ -775,6 +901,8 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _index_canonical(envelope, conn)
     elif event_type == "triage.item.proposed":
         _apply_triage_proposed(envelope, conn)
+    elif event_type == "triage.reconciliation.decided":
+        _apply_reconciliation(envelope, conn)
     elif event_type == "triage.intent.submitted":
         _apply_intent_submitted(envelope, conn)
     elif event_type == "household.action.proposed":

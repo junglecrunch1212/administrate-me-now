@@ -58,6 +58,81 @@ CREATE TABLE IF NOT EXISTS contexts (
     PRIMARY KEY (tenant_id, context_id)
 );
 
+-- Reconciliation is an evidence/decision index, not a universal Matter store.
+-- It retains only typed coordinates, digests, reasons, and lineage.
+CREATE TABLE IF NOT EXISTS reconciliation_decisions (
+    tenant_id          TEXT NOT NULL,
+    reconciliation_id TEXT NOT NULL,
+    proposal_id        TEXT NOT NULL,
+    primary_proposal_id TEXT,
+    matter_id          TEXT NOT NULL,
+    owner_member_id    TEXT NOT NULL,
+    source_event_id    TEXT NOT NULL,
+    evidence_source_event_ids_json TEXT NOT NULL DEFAULT '[]',
+    member_authored_text_digest TEXT,
+    decision           TEXT NOT NULL,
+    decision_revision  INTEGER NOT NULL,
+    supersedes_reconciliation_event_id TEXT,
+    policy_json        TEXT NOT NULL,
+    source_coordinate_json TEXT NOT NULL,
+    freshness          TEXT NOT NULL,
+    priority_rank      INTEGER NOT NULL,
+    priority_basis_json TEXT NOT NULL DEFAULT '[]',
+    reason_codes_json  TEXT NOT NULL DEFAULT '[]',
+    admission_active   INTEGER NOT NULL DEFAULT 0,
+    decided_at         TEXT NOT NULL,
+    owner_scope        TEXT NOT NULL,
+    visibility_scope   TEXT NOT NULL,
+    sensitivity        TEXT NOT NULL CHECK (sensitivity IN ('normal','sensitive','privileged')),
+    last_event_id      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, reconciliation_id),
+    UNIQUE (tenant_id, proposal_id, decision_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_member_decision
+    ON reconciliation_decisions(tenant_id, owner_member_id, decision, decided_at);
+
+CREATE TABLE IF NOT EXISTS reconciliation_relationships (
+    tenant_id          TEXT NOT NULL,
+    relationship_id   TEXT NOT NULL,
+    reconciliation_id TEXT NOT NULL,
+    proposal_id        TEXT NOT NULL,
+    source_event_id    TEXT NOT NULL,
+    related_source_event_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    authority          TEXT NOT NULL,
+    automatic_effect   INTEGER NOT NULL,
+    reason_codes_json  TEXT NOT NULL DEFAULT '[]',
+    owner_member_id    TEXT NOT NULL,
+    owner_scope        TEXT NOT NULL,
+    visibility_scope   TEXT NOT NULL,
+    sensitivity        TEXT NOT NULL CHECK (sensitivity IN ('normal','sensitive','privileged')),
+    last_event_id      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, relationship_id, reconciliation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_relationship_source
+    ON reconciliation_relationships(
+        tenant_id, owner_member_id, source_event_id, related_source_event_id
+    );
+
+CREATE TABLE IF NOT EXISTS shared_reconciliation_facts (
+    tenant_id          TEXT NOT NULL,
+    fact_id            TEXT NOT NULL,
+    source_member_id   TEXT NOT NULL,
+    shared_with_member_ids_json TEXT NOT NULL,
+    share_grant_id     TEXT NOT NULL,
+    source_reference_digest TEXT NOT NULL,
+    fact_kind          TEXT NOT NULL,
+    references_json    TEXT NOT NULL,
+    current_state      TEXT NOT NULL,
+    occurred_at        TEXT NOT NULL,
+    expires_at         TEXT,
+    owner_scope        TEXT NOT NULL,
+    visibility_scope   TEXT NOT NULL,
+    sensitivity        TEXT NOT NULL CHECK (sensitivity IN ('normal','sensitive','privileged')),
+    last_event_id      TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, fact_id)
+);
+
 CREATE TABLE IF NOT EXISTS triage_feedback (
     tenant_id          TEXT NOT NULL,
     feedback_id        TEXT NOT NULL,

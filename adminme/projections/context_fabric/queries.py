@@ -64,6 +64,57 @@ def context_summary(
     return result
 
 
+def reconciliation_for_proposal(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    proposal_id: str,
+    member_id: str,
+) -> dict[str, Any] | None:
+    """Return the latest exact private reconciliation receipt and relationships."""
+
+    private_scope = f"private:{member_id}"
+    row = conn.execute(
+        """SELECT * FROM reconciliation_decisions
+            WHERE tenant_id=? AND proposal_id=? AND owner_member_id=?
+              AND owner_scope=? AND visibility_scope=?
+            ORDER BY decision_revision DESC LIMIT 1""",
+        (session.tenant_id, proposal_id, member_id, private_scope, private_scope),
+    ).fetchone()
+    visible = filter_one(session, dict(row) if row is not None else None)
+    if visible is None:
+        return None
+    result = dict(visible)
+    for field in (
+        "evidence_source_event_ids_json",
+        "policy_json",
+        "source_coordinate_json",
+        "priority_basis_json",
+        "reason_codes_json",
+    ):
+        result[field.removesuffix("_json")] = json.loads(result.pop(field) or "[]")
+    rows = conn.execute(
+        """SELECT * FROM reconciliation_relationships
+            WHERE tenant_id=? AND reconciliation_id=? AND owner_member_id=?
+              AND owner_scope=? AND visibility_scope=?
+            ORDER BY relationship_type, relationship_id""",
+        (
+            session.tenant_id,
+            result["reconciliation_id"],
+            member_id,
+            private_scope,
+            private_scope,
+        ),
+    ).fetchall()
+    result["relationships"] = []
+    for relationship in filter_rows(session, [dict(value) for value in rows]):
+        relationship["reason_codes"] = json.loads(
+            relationship.pop("reason_codes_json") or "[]"
+        )
+        result["relationships"].append(relationship)
+    return result
+
+
 def bounded_traversal(
     conn: sqlcipher3.Connection,
     session: Session,
@@ -313,4 +364,5 @@ __all__ = [
     "feedback_scope_count",
     "get_policy_rule",
     "policy_rules_for_member",
+    "reconciliation_for_proposal",
 ]

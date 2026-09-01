@@ -132,6 +132,41 @@ def test_attention_lane_requires_real_fact_and_ignores_provider_category() -> No
     )
 
 
+def test_attention_order_preserves_default_lanes_and_leads_with_active_priority() -> (
+    None
+):
+    projection, conn = _projection()
+    standard = _event(0)
+    deadline = _event(1)
+    deadline["payload"]["candidate"] = {"due": "2030-01-03"}
+    projection.apply(standard, conn)
+    projection.apply(deadline, conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+
+    default_page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates"
+    )
+    assert [matter["root_proposal_id"] for matter in default_page["matters"]] == [
+        "proposal-0001",
+        "proposal-0000",
+    ]
+
+    conn.execute(
+        """UPDATE triage_items
+              SET reconciliation_active=1, priority_rank=20,
+                  queue_lane='known_human_request'
+            WHERE tenant_id=? AND proposal_id='proposal-0000'""",
+        (TENANT,),
+    )
+    active_page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates"
+    )
+    assert [matter["root_proposal_id"] for matter in active_page["matters"]] == [
+        "proposal-0000",
+        "proposal-0001",
+    ]
+
+
 def test_complete_lens_counts_and_inventory_filters_are_cursor_bound() -> None:
     projection, conn = _projection()
     for index in range(8):

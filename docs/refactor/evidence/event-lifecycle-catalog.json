@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 245,
-    "technical_event_types": 203,
+    "technical_event_schemas": 247,
+    "technical_event_types": 205,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -6649,6 +6649,131 @@
         "target_context_id",
         "merged_by_member_id",
         "merged_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.reconciliation.typed_fact_shared",
+      "family": "context",
+      "properties": {
+        "action_authority": {
+          "const": false,
+          "default": false,
+          "title": "Action Authority",
+          "type": "boolean"
+        },
+        "current_state": {
+          "enum": [
+            "current",
+            "satisfied",
+            "completed",
+            "canceled",
+            "superseded"
+          ],
+          "title": "Current State",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "fact_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "fact_kind": {
+          "enum": [
+            "payment_state",
+            "account_state",
+            "appointment_state",
+            "canonical_object_state",
+            "obligation_state"
+          ],
+          "title": "Fact Kind",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "owner_transfer": {
+          "const": false,
+          "default": false,
+          "title": "Owner Transfer",
+          "type": "boolean"
+        },
+        "raw_body_included": {
+          "const": false,
+          "default": false,
+          "title": "Raw Body Included",
+          "type": "boolean"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/ReconciliationReferenceV1"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "References",
+          "type": "array"
+        },
+        "share_grant_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Share Grant Id",
+          "type": "string"
+        },
+        "shared_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Shared By Member Id",
+          "type": "string"
+        },
+        "shared_with_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Shared With Member Ids",
+          "type": "array"
+        },
+        "source_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Member Id",
+          "type": "string"
+        },
+        "source_reference_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Reference Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "source_member_id",
+        "shared_with_member_ids",
+        "shared_by_member_id",
+        "share_grant_id",
+        "source_reference_digest",
+        "fact_kind",
+        "references",
+        "current_state",
+        "occurred_at"
       ],
       "schema_version": 1
     },
@@ -24964,6 +25089,233 @@
         "revoked_by_member_id",
         "revoked_at",
         "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.reconciliation.decided",
+      "family": "triage",
+      "properties": {
+        "admission_active": {
+          "default": false,
+          "title": "Admission Active",
+          "type": "boolean"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "admit",
+            "update_existing_matter",
+            "attach_evidence",
+            "alert_only",
+            "context_only",
+            "already_satisfied",
+            "superseded",
+            "duplicate",
+            "conflict_review",
+            "source_policy_suppression",
+            "unresolved"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "decision_revision": {
+          "minimum": 1,
+          "title": "Decision Revision",
+          "type": "integer"
+        },
+        "evidence_source_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Source Event Ids",
+          "type": "array"
+        },
+        "freshness": {
+          "enum": [
+            "current",
+            "stale",
+            "unknown"
+          ],
+          "title": "Freshness",
+          "type": "string"
+        },
+        "llm_authority": {
+          "const": false,
+          "default": false,
+          "title": "Llm Authority",
+          "type": "boolean"
+        },
+        "matter_id": {
+          "pattern": "^ctx_reconciled_[0-9a-f]{32}$",
+          "title": "Matter Id",
+          "type": "string"
+        },
+        "member_authored_text_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Authored Text Digest"
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/ReconciliationPolicySnapshotV1"
+        },
+        "primary_proposal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Primary Proposal Id"
+        },
+        "priority_basis": {
+          "items": {
+            "enum": [
+              "explicit_member_instruction",
+              "exact_member_commitment",
+              "verified_deadline",
+              "known_human_actionable_request",
+              "current_state_and_consequence",
+              "household_policy",
+              "standard_actionable_candidate"
+            ],
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Priority Basis",
+          "type": "array"
+        },
+        "priority_rank": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Priority Rank",
+          "type": "integer"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "raw_cross_member_join": {
+          "const": false,
+          "default": false,
+          "title": "Raw Cross Member Join",
+          "type": "boolean"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 60,
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "reconciliation_id": {
+          "pattern": "^recon_[0-9a-f]{32}$",
+          "title": "Reconciliation Id",
+          "type": "string"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/ReconciliationEvidenceRelationshipV1"
+          },
+          "maxItems": 100,
+          "title": "Relationships",
+          "type": "array"
+        },
+        "source_coordinate": {
+          "$ref": "#/$defs/SourceCoordinate"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "supersedes_reconciliation_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Reconciliation Event Id"
+        },
+        "weak_similarity_authorized_action": {
+          "const": false,
+          "default": false,
+          "title": "Weak Similarity Authorized Action",
+          "type": "boolean"
+        },
+        "weak_similarity_changed_identity": {
+          "const": false,
+          "default": false,
+          "title": "Weak Similarity Changed Identity",
+          "type": "boolean"
+        },
+        "weak_similarity_transferred_ownership": {
+          "const": false,
+          "default": false,
+          "title": "Weak Similarity Transferred Ownership",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reconciliation_id",
+        "proposal_id",
+        "matter_id",
+        "owner_member_id",
+        "source_event_id",
+        "evidence_source_event_ids",
+        "decision",
+        "decision_revision",
+        "policy",
+        "source_coordinate",
+        "freshness",
+        "priority_rank",
+        "priority_basis",
+        "reason_codes",
+        "decided_at"
       ],
       "schema_version": 1
     },

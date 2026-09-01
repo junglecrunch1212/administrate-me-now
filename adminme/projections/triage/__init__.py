@@ -23,7 +23,7 @@ from adminme.triage_review import proposal_source_id, triage_review_state
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 9
+    version = 10
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "triage.item.proposed",
@@ -32,6 +32,7 @@ class TriageProjection(Projection):
         "triage.item.materialized",
         "triage.item.dismissed",
         "triage.item.superseded",
+        "triage.reconciliation.decided",
         "triage.intent.submitted",
         "triage.intent.features_extracted",
         "household.action.proposed",
@@ -161,6 +162,21 @@ class TriageProjection(Projection):
             "existing_object_kind": "TEXT",
             "existing_object_id": "TEXT",
             "policy_disposition": "TEXT NOT NULL DEFAULT 'none'",
+            "admission_decision": "TEXT NOT NULL DEFAULT 'admit'",
+            "reconciliation_active": "INTEGER NOT NULL DEFAULT 0",
+            "reconciliation_id": "TEXT",
+            "reconciliation_event_id": "TEXT",
+            "reconciliation_revision": "INTEGER NOT NULL DEFAULT 0",
+            "reconciliation_reasons_json": "TEXT NOT NULL DEFAULT '[]'",
+            "reconciliation_evidence_json": "TEXT NOT NULL DEFAULT '[]'",
+            "reconciliation_authored_text_digest": "TEXT",
+            "reconciliation_policy_json": "TEXT",
+            "reconciliation_scope_json": "TEXT",
+            "reconciliation_freshness": "TEXT NOT NULL DEFAULT 'unknown'",
+            "priority_rank": "INTEGER NOT NULL DEFAULT 60",
+            "priority_basis_json": (
+                "TEXT NOT NULL DEFAULT '[\"standard_actionable_candidate\"]'"
+            ),
             "confirmation_event_id": "TEXT",
             "confirmation_request_id": "TEXT",
             "dismissal_event_id": "TEXT",
