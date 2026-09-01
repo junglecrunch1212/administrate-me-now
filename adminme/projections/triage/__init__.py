@@ -23,7 +23,7 @@ from adminme.triage_review import proposal_source_id, triage_review_state
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 10
+    version = 11
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "triage.item.proposed",
@@ -32,6 +32,9 @@ class TriageProjection(Projection):
         "triage.item.materialized",
         "triage.item.dismissed",
         "triage.item.superseded",
+        "triage.item.managed",
+        "triage.source_policy_rule.decided",
+        "triage.source_policy_rule.reviewed",
         "triage.reconciliation.decided",
         "triage.intent.submitted",
         "triage.intent.features_extracted",
@@ -177,6 +180,16 @@ class TriageProjection(Projection):
             "priority_basis_json": (
                 "TEXT NOT NULL DEFAULT '[\"standard_actionable_candidate\"]'"
             ),
+            "human_lane": "TEXT NOT NULL DEFAULT 'low_confidence_review'",
+            "management_state": "TEXT NOT NULL DEFAULT 'open'",
+            "management_action": "TEXT",
+            "management_action_id": "TEXT",
+            "management_revision": "INTEGER NOT NULL DEFAULT 0",
+            "management_event_id": "TEXT",
+            "management_reason_codes_json": "TEXT NOT NULL DEFAULT '[]'",
+            "snoozed_until": "TEXT",
+            "learned_policy_state": "TEXT NOT NULL DEFAULT 'none'",
+            "learned_rule_id": "TEXT",
             "confirmation_event_id": "TEXT",
             "confirmation_request_id": "TEXT",
             "dismissal_event_id": "TEXT",
@@ -187,6 +200,47 @@ class TriageProjection(Projection):
                 conn.execute(f"ALTER TABLE triage_items ADD COLUMN {name} {sql_type}")
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS triage_management_actions (
+                tenant_id TEXT NOT NULL, action_id TEXT NOT NULL,
+                proposal_id TEXT NOT NULL, member_id TEXT NOT NULL,
+                action TEXT NOT NULL, action_revision INTEGER NOT NULL,
+                supersedes_action_id TEXT, reason_codes_json TEXT NOT NULL DEFAULT '[]',
+                evidence_event_ids_json TEXT NOT NULL DEFAULT '[]',
+                linked_object_kind TEXT, linked_object_id TEXT,
+                duplicate_of_proposal_id TEXT, snoozed_until TEXT,
+                policy_proposal_id TEXT,
+                reversible INTEGER NOT NULL CHECK (reversible=1),
+                provider_effects INTEGER NOT NULL CHECK (provider_effects=0),
+                managed_at TEXT NOT NULL, owner_scope TEXT NOT NULL,
+                visibility_scope TEXT NOT NULL, sensitivity TEXT NOT NULL,
+                last_event_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, action_id),
+                UNIQUE (tenant_id, proposal_id, action_revision)
+            );
+            CREATE INDEX IF NOT EXISTS idx_triage_management_member
+                ON triage_management_actions(
+                    tenant_id, member_id, proposal_id, action_revision
+                );
+            CREATE TABLE IF NOT EXISTS triage_learned_policy_rules (
+                tenant_id TEXT NOT NULL, rule_id TEXT NOT NULL,
+                policy_proposal_id TEXT NOT NULL, member_id TEXT NOT NULL,
+                scope_kind TEXT NOT NULL, scope_value_digest TEXT NOT NULL,
+                outcome_kind TEXT NOT NULL, instruction TEXT NOT NULL,
+                activation_mode TEXT NOT NULL CHECK (
+                    activation_mode IN ('approved','trial')
+                ),
+                trial_proposal_ids_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL CHECK (
+                    status IN ('active','trial','suspended','revoked')
+                ),
+                last_event_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, rule_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_triage_human_queue
+                ON triage_items(
+                    tenant_id, owner_member_id, management_state,
+                    human_lane, proposed_at
+                );
             CREATE TABLE IF NOT EXISTS triage_context_sessions (
                 tenant_id TEXT NOT NULL, owner_member_id TEXT NOT NULL,
                 thread_key TEXT NOT NULL, sequence INTEGER NOT NULL,

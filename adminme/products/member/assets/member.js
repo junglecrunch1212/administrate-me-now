@@ -167,10 +167,17 @@ function triageReviewView(item) {
 
 function triageLanePresentation(lane) {
   return {
+    direct_instruction: ["Your direct instruction", "You explicitly asked AdministrateMe to remember or act on this matter."],
+    member_promise: ["Your promise", "This is grounded in an exact commitment you made."],
+    known_human_request: ["Known person request", "A known person made an actionable request."],
+    scheduled_deadline: ["Scheduled or deadline", "This matter has a verified date or deadline."],
+    waiting_follow_up: ["Waiting or follow-up", "This matter is waiting on someone or has a follow-up point."],
+    clarification_conflict: ["Needs clarification", "Evidence conflicts or is not strong enough for an ordinary obligation."],
+    alerts_safety: ["Alert or safety", "This is separated from the ordinary work queue."],
+    low_confidence_review: ["Low-confidence review", "This remains reviewable without being presented as a confident obligation."],
     security: ["Account or security", "A reviewed security phrase appears in this already-eligible item."],
     time_bound: ["Date or deadline", "This proposal contains an actual date or deadline."],
     financial: ["Money", "This proposal contains a reviewed bill or payment signal."],
-    member_promise: ["Your promise", "This appears to describe something you agreed to do."],
     member_priority: ["Your priority", "You or a typed source marked this as a priority."],
     known_human_request: ["Known person request", "A known correspondent with prior interaction made an actionable request."],
     recurring_exception: ["Recurring issue", "A recurrence appears missed, overdue, failed, or exceptional."],
@@ -802,6 +809,31 @@ function triageSourceContext(item) {
   return section;
 }
 
+async function manageTriageMatter(item, action, button) {
+  if (triageInteractionLocked()) return;
+  button.disabled = true;
+  const payload = {
+    request_id: crypto.randomUUID(),
+    expected_last_event_id: item.last_event_id,
+    action,
+    reason_codes: [`member_${action}`],
+    evidence_event_ids: [item.source_event_id].filter(Boolean),
+  };
+  if (action === "snooze") payload.snoozed_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/manage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    });
+    setBanner(`${titleCase(action)} recorded. The local decision is reversible and produced ${result.provider_effects || 0} provider effects.`);
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} Nothing was changed.`);
+    button.disabled = false;
+  }
+}
+
 function triageDetail(item, data, readOnly = false) {
   const section = document.createElement("section"); section.className = "card triage-detail";
   if (!item) {
@@ -813,7 +845,7 @@ function triageDetail(item, data, readOnly = false) {
   const reviewHeading = item.interpretation?.compact_summary || item.title;
   section.append(text("p", readOnly ? "RECENT DECISION" : "YOUR DECISION", "eyebrow"), text("h2", reviewHeading));
   if (!readOnly) {
-    const [laneLabel, laneReason] = triageLanePresentation(item.queue_lane);
+    const [laneLabel, laneReason] = triageLanePresentation(item.human_lane || item.queue_lane);
     const reason = document.createElement("div"); reason.className = "triage-attention-reason";
     reason.append(text("strong", laneLabel), text("span", laneReason));
     section.append(reason);
@@ -833,13 +865,41 @@ function triageDetail(item, data, readOnly = false) {
       section.append(destination);
     }
     const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id)); section.append(evidence);
+    if (data.human_triage_management?.active && item.management?.state && item.management.state !== "open" && item.management?.event_id && ["pending_interpretation", "pending_review"].includes(item.state)) {
+      const reopen = text("button", "Reopen this local decision", "button button-quiet"); reopen.type = "button";
+      reopen.addEventListener("click", () => manageTriageMatter(item, "reopen", reopen));
+      section.append(reopen, text("small", "Reopening appends a reversal and restores the admitted matter without contacting a provider.", "state-note"));
+    }
     return section;
   }
 
   const form = document.createElement("form"); form.className = "triage-review-form";
   const effect = document.createElement("div"); effect.className = "triage-proposed-effect";
-  effect.append(text("p", "PROPOSED EFFECT", "eyebrow"), text("strong", `Create a ${titleCase(item.target_kind || "household item")} for ${state.bootstrap.member.label || "this household member"}.`), text("small", "Nothing becomes official until you confirm. Provider work still passes governance and observation controls."));
+  const disposition = item.disposition?.disposition || "ordinary_queue";
+  const consequence = disposition === "alerts"
+    ? "Keep this in the separate alerts and safety lane."
+    : disposition === "context"
+      ? "Keep this source as searchable context without creating an ordinary obligation."
+      : disposition === "handled"
+        ? "Keep the audit trail without returning this to the ordinary queue."
+        : `Create or enrich a ${titleCase(item.target_kind || "household item")} for ${state.bootstrap.member.label || "this household member"}.`;
+  effect.append(text("p", "PROPOSED EFFECT", "eyebrow"), text("strong", consequence), text("small", "The consequence is local, explicit, reversible where no provider effect exists, and never authorizes a provider write by itself."));
   form.append(effect);
+  if (data.human_triage_management?.active) {
+    const management = document.createElement("details"); management.className = "triage-management";
+    management.append(text("summary", "Manage this matter without creating provider work"));
+    management.append(text("p", "Handled, context, alert, clarification, snooze, dismissal, suppression proposal, and reopen are event-sourced member decisions. Nothing here contacts a provider.", "state-note"));
+    const managementRow = document.createElement("div"); managementRow.className = "button-row";
+    const actions = item.management?.state && item.management.state !== "open"
+      ? [["reopen", "Reopen"]]
+      : [["mark_handled", "Handled"], ["keep_context", "Context only"], ["route_alert", "Route to alerts"], ["ask_clarification", "Ask clarification"], ["snooze", "Snooze 1 day"], ["dismiss_not_useful", "Not useful"]];
+    for (const [action, label] of actions) {
+      const button = text("button", label, "button button-quiet"); button.type = "button";
+      button.addEventListener("click", () => manageTriageMatter(item, action, button));
+      managementRow.append(button);
+    }
+    management.append(managementRow); form.append(management);
+  }
   const grid = document.createElement("div"); grid.className = "field-grid";
   const schema = data.enrichment_schema || {};
   const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
@@ -1017,6 +1077,7 @@ function triageDetail(item, data, readOnly = false) {
 function triageCandidateMatches(item, view) {
   if (view === "recent") return false;
   if (view === "all_candidates") return true;
+  if (view === "alerts") return item.disposition?.disposition === "alerts" || item.management?.state === "alert";
   if (view === "needs_interpretation") return item.review_state?.state === "needs_interpretation";
   if (view === "needs_details") return item.review_state?.state === "needs_details" && item.decision_disposition === "decision";
   if (view === "ready") return item.queue_lane !== "standard" && item.decision_disposition === "decision";
@@ -1162,6 +1223,84 @@ async function revokeTriageRule(rule, button) {
   } finally { finishTriageOperation(token); }
 }
 
+function triageLearningOutcome(reason) {
+  if (reason === "duplicate") return "mark_duplicate";
+  if (["wrong_kind", "wrong_context"].includes(reason)) return "correct_extraction";
+  if (["not_mine", "wrong_owner"].includes(reason)) return "correct_ownership";
+  return "dismiss_not_useful";
+}
+
+async function proposeTriageLearningSuggestion(suggestion, button) {
+  if (triageInteractionLocked()) return;
+  const values = {
+    scope_kind: suggestion.scope_kind,
+    scope_value: suggestion.scope_value,
+    instruction: "usually",
+    outcome_kind: triageLearningOutcome(suggestion.reason),
+  };
+  button.disabled = true;
+  try {
+    if (!button.dataset.previewDigest) {
+      const preview = await api("/api/member/v1/triage-learning/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify(values),
+      });
+      button.dataset.previewDigest = preview.preview_digest;
+      button.textContent = "Propose this bounded rule";
+      setBanner(`${preview.explanation} ${preview.recent_impact.matching_outcomes} verified outcomes and ${preview.recent_impact.bounded_proposals} recent candidates are in this read-only preview. Nothing activated.`);
+      button.disabled = false;
+      return;
+    }
+    const proposed = await api("/api/member/v1/triage-learning/propose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ ...values, request_id: crypto.randomUUID(), preview_digest: button.dataset.previewDigest }),
+    });
+    setBanner(`Rule proposal recorded as ${proposed.state}. It did not self-activate and produced ${proposed.provider_effects || 0} provider effects.`);
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} No learned rule was activated.`);
+    button.disabled = false;
+  }
+}
+
+async function decideTriageLearningProposal(proposal, decision, button) {
+  if (triageInteractionLocked()) return;
+  button.disabled = true;
+  const trialProposalIds = decision === "trial" ? (proposal.affected_proposal_ids || []).slice(0, 25) : [];
+  try {
+    const result = await api(`/api/member/v1/triage-learning/${encodeURIComponent(proposal.policy_proposal_id)}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), decision, instruction: proposal.instruction, preview_digest: proposal.preview_digest, trial_proposal_ids: trialProposalIds }),
+    });
+    setBanner(`${titleCase(decision)} recorded. ${decision === "trial" ? `${trialProposalIds.length} exact candidates are in the bounded trial.` : "The proposal remains member-scoped."} ${result.provider_effects || 0} provider effects.`);
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The proposal remains unchanged.`);
+    button.disabled = false;
+  }
+}
+
+async function reviewTriageLearningRule(rule, decision, button) {
+  if (triageInteractionLocked()) return;
+  button.disabled = true;
+  const nextInstruction = { always: "usually", usually: "ask", ask: "never" }[rule.instruction] || null;
+  try {
+    await api(`/api/member/v1/triage-learning/rules/${encodeURIComponent(rule.rule_id)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), decision, negative_outcome: decision === "suspend" ? "member_correction" : null, replacement_instruction: decision === "narrow" ? nextInstruction : null, reason: `${titleCase(decision)} from Triage learning controls` }),
+    });
+    setBanner(`${titleCase(decision)} recorded. Matching admission has been recomputed without a provider effect.`);
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The rule remains unchanged.`);
+    button.disabled = false;
+  }
+}
+
 function triageSurface(data, { preserveView = false } = {}) {
   const fragment = document.createDocumentFragment();
   const pending = data.items || [];
@@ -1170,8 +1309,10 @@ function triageSurface(data, { preserveView = false } = {}) {
   const candidateCount = inventory.total_candidates || 0; const matterCount = inventory.total_matters || 0;
   const suggestions = data.triage?.feedback_suggestions || [];
   const policyRules = data.triage?.policy_rules || [];
+  const sourcePolicyProposals = data.triage?.source_policy_proposals || [];
+  const sourcePolicyRules = data.triage?.source_policy_rules || [];
   const activePolicyRules = policyRules.filter((rule) => rule.status === "active");
-  const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"]);
+  const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "alerts", "all_candidates", "recent"]);
   if (!views.has(state.triageView)) state.triageView = "ready";
   if (!preserveView && state.triageSelected && data.focus?.state === "pending") state.triageView = "all_candidates";
   if (!preserveView && state.triageSelected && data.focus?.state === "resolved") state.triageView = "recent";
@@ -1179,6 +1320,7 @@ function triageSurface(data, { preserveView = false } = {}) {
   const attentionCount = viewCounts.ready?.candidates ?? pending.filter((item) => triageCandidateMatches(item, "ready")).length;
   const overview = document.createElement("section"); overview.className = "card triage-overview";
   overview.append(text("p", "TRIAGE", "eyebrow"));
+  if (data.human_triage_management?.active) overview.append(text("p", "Focus contains admitted obligations only. Alerts and searchable context remain separate, and promotion, spam, routine updates, receipts, and context-only material do not become ordinary work.", "state-note"));
   if (attentionCount) {
     overview.append(text("h2", `${attentionCount} decision${attentionCount === 1 ? "" : "s"} need${attentionCount === 1 ? "s" : ""} your attention.`), text("p", "Start with the clearest security, date, money, promise, priority, and recurring-issue signals. Other suggestions stay available without crowding this queue."));
   } else {
@@ -1201,7 +1343,7 @@ function triageSurface(data, { preserveView = false } = {}) {
 
   const controls = document.createElement("section"); controls.className = "triage-view-controls";
   const tabs = document.createElement("div"); tabs.className = "triage-lens-tabs"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
-  for (const [key, label] of [["ready", "Needs attention"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
+  for (const [key, label] of [["ready", "Needs attention"], ["alerts", "Alerts"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
     const count = key === "recent" ? recent.length : key === "learned_rules" ? activePolicyRules.length : viewCounts[key]?.candidates ?? pending.filter((item) => triageCandidateMatches(item, key)).length;
     const button = document.createElement("button"); button.className = "comms-filter"; button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key)); button.setAttribute("aria-label", `${label}, ${count}`);
     button.append(text("span", label), text("span", count, "triage-tab-count"));
@@ -1241,6 +1383,24 @@ function triageSurface(data, { preserveView = false } = {}) {
     advanced.append(text("p", `${selectedCount} matching candidate${selectedCount === 1 ? "" : "s"}. Filters change only this recovery view, never importance or candidate state.`, "state-note field-span"));
     controls.append(advanced);
   }
+  if (data.human_triage_management?.backlog_preview_available) {
+    const preview = document.createElement("section"); preview.className = "card triage-backlog-preview";
+    preview.append(text("p", "BACKLOG REASSESSMENT", "eyebrow"), text("h2", "Preview old and proposed handling"), text("p", "The preview is bounded and read-only. It preserves every source and audit event, applies no mass dismissal, and cannot contact a provider.", "state-note"));
+    const previewButton = text("button", "Preview first batch", "button button-quiet"); previewButton.type = "button";
+    const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
+    previewButton.addEventListener("click", async () => {
+      previewButton.disabled = true;
+      try {
+        const result = await api("/api/member/v1/triage/backlog-reassessment-preview?limit=25");
+        output.replaceChildren(text("p", `${result.batch.count} of ${result.batch.total} candidates previewed · ${result.changes.filter((change) => change.changed).length} proposed changes · 0 provider effects.`, "state-note"));
+        const list = document.createElement("ul");
+        for (const change of result.changes.slice(0, 10)) list.append(text("li", `${titleCase(change.old.disposition)} → ${titleCase(change.proposed.disposition)} · ${titleCase(change.proposed.lane)} · ${(change.proposed.reason_codes || []).join(", ") || "deterministic admission rule"}`));
+        output.append(list);
+      } catch (error) { output.replaceChildren(text("p", error.message, "review-state")); }
+      finally { previewButton.disabled = false; }
+    });
+    preview.append(previewButton, output); fragment.append(preview);
+  }
   fragment.append(controls);
   const visibleMatters = triageVisibleMatters(data, state.triageView);
   const missingRequestedCandidate = Boolean(state.triageSelected && data.focus?.state === "not_found");
@@ -1249,7 +1409,7 @@ function triageSurface(data, { preserveView = false } = {}) {
   else if (!state.triageMatter || !visibleMatters.some((matter) => matter.context_id === state.triageMatter)) state.triageMatter = visibleMatters[0]?.context_id || null;
   const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
-  const workspaceLabels = { ready: "Decisions that need you", needs_details: "Decisions missing details", needs_interpretation: "Items to classify", low_signal: "Other suggestions", recurring_exceptions: "Recurring issues", learned_rules: "Items matching shadow rules", all_candidates: "Complete candidate inventory", recent: "Recent decisions" };
+  const workspaceLabels = { ready: "Decisions that need you", needs_details: "Decisions missing details", needs_interpretation: "Items to classify", low_signal: "Other suggestions", recurring_exceptions: "Recurring issues", learned_rules: "Items matching shadow rules", alerts: "Alerts and safety", all_candidates: "Complete candidate inventory", recent: "Recent decisions" };
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", workspaceLabels[state.triageView] || "Decisions to review"));
   if (state.triageView === "recent") master.append(text("p", "Read-only audit history. System-retired candidates are historical lifecycle receipts, not new sender rules.", "state-note"));
   if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing needs your attention right now." : state.triageView === "needs_details" ? "No decisions are waiting for missing details." : state.triageView === "needs_interpretation" ? "No items are waiting for a type." : state.triageView === "low_signal" ? "No lower-signal suggestions are waiting." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing matches this view.", "empty"));
@@ -1281,10 +1441,29 @@ function triageSurface(data, { preserveView = false } = {}) {
     detail.append(unavailable);
   } else if (selectedMatter) { if (selectedMatter.candidates.length > 1) detail.append(text("p", `${selectedMatter.candidates.length} related decisions are shown together. Confirming one never confirms the others.`, "state-note")); for (const item of selectedMatter.candidates) detail.append(triageDetail(item, data, state.triageView === "recent")); }
   workspace.append(master, detail); fragment.append(workspace);
-  if (suggestions.length || activePolicyRules.length) {
+  if (suggestions.length || activePolicyRules.length || sourcePolicyProposals.length || sourcePolicyRules.length) {
     const learning = document.createElement("section"); learning.className = "card triage-learning"; learning.append(text("p", "REVERSIBLE LEARNING", "eyebrow"), text("h2", `${suggestions.length} suggested pattern${suggestions.length === 1 ? "" : "s"} · ${activePolicyRules.length} shadow rule${activePolicyRules.length === 1 ? "" : "s"}`), text("p", "Rules begin in shadow mode. They stay visible and reversible, and cannot silently confirm or suppress household truth.", "state-note"));
-    for (const suggestion of suggestions.slice(0, 5)) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${suggestion.occurrences} × ${titleCase(suggestion.reason)} in ${titleCase(suggestion.scope_kind)}`)); const approve = text("button", "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => approveTriageSuggestion(suggestion, approve)); row.append(approve); learning.append(row); }
+    for (const suggestion of suggestions.slice(0, 5)) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${suggestion.occurrences} × ${titleCase(suggestion.reason)} in ${titleCase(suggestion.scope_kind)}`)); const approve = text("button", data.human_triage_management?.active ? "Preview narrow rule" : "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => data.human_triage_management?.active ? proposeTriageLearningSuggestion(suggestion, approve) : approveTriageSuggestion(suggestion, approve)); row.append(approve); learning.append(row); }
     for (const rule of activePolicyRules) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${titleCase(rule.disposition)} · ${titleCase(rule.scope_kind)} · shadow only`)); const revoke = text("button", "Revoke", "button button-quiet"); revoke.type = "button"; revoke.addEventListener("click", () => revokeTriageRule(rule, revoke)); row.append(revoke); learning.append(row); }
+    for (const proposal of sourcePolicyProposals.filter((value) => value.status === "proposed")) {
+      const row = document.createElement("div"); row.className = "button-row";
+      row.append(text("span", `${titleCase(proposal.instruction)} · ${titleCase(proposal.scope_kind)} · proposed only`));
+      for (const [decision, label] of [["approve", "Approve"], ["trial", "Start bounded trial"], ["edit", "Edit in new preview"], ["reject", "Reject"], ["suppress", "Suppress proposal"]]) {
+        const action = text("button", label, "button button-quiet"); action.type = "button";
+        action.addEventListener("click", () => decideTriageLearningProposal(proposal, decision, action)); row.append(action);
+      }
+      learning.append(row);
+    }
+    for (const rule of sourcePolicyRules.filter((value) => ["active", "trial"].includes(value.status))) {
+      const row = document.createElement("div"); row.className = "button-row";
+      row.append(text("span", `${titleCase(rule.instruction)} · ${titleCase(rule.scope_kind)} · ${titleCase(rule.status)}`));
+      const reviews = [["retain", "Retain"], ...(rule.instruction === "never" ? [] : [["narrow", "Narrow one step"]]), ["suspend", "Suspend"], ["revoke", "Revoke"]];
+      for (const [decision, label] of reviews) {
+        const action = text("button", label, "button button-quiet"); action.type = "button";
+        action.addEventListener("click", () => reviewTriageLearningRule(rule, decision, action)); row.append(action);
+      }
+      learning.append(row);
+    }
     fragment.append(learning);
   }
   if (state.triageSelected && state.triageFocusPending && !missingRequestedCandidate) {
@@ -1809,6 +1988,7 @@ function commsControls(cockpit, data) {
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "Communication focus view");
   const choices = [
+    ["alerts", "Alerts", cockpit.counts.alerts || 0],
     ["focus", "Focus", cockpit.counts.focus],
     ["waiting", "Waiting", cockpit.counts.waiting],
     ["snoozed", "Snoozed", cockpit.counts.snoozed],
@@ -1843,11 +2023,11 @@ function commsHero(cockpit) {
   hero.append(
     text("p", "COMMUNICATION COCKPIT", "eyebrow"),
     text("h2", cockpit.counts.focus === 1 ? "1 conversation deserves a look." : cockpit.counts.focus ? `${cockpit.counts.focus} conversations deserve a look.` : "No conversation is pulling on your working memory.", "action-title"),
-    text("p", "Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
+    text("p", cockpit.attention_policy?.focus_requires_admitted_matter ? "Focus contains only conversations with an admitted obligation. Other messages remain searchable context, while alerts stay in their own lane." : "Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
   );
   const stats = document.createElement("dl");
   stats.className = "brief-stats comms-stats";
-  for (const [label, value] of [["Needs reply", cockpit.counts.needs_reply], ["Waiting", cockpit.counts.waiting], ["To Triage", cockpit.counts.triage], ["Quieted", cockpit.counts.quieted]]) {
+  for (const [label, value] of [["Alerts", cockpit.counts.alerts || 0], ["Needs reply", cockpit.counts.needs_reply], ["Waiting", cockpit.counts.waiting], ["To Triage", cockpit.counts.triage], ["Quieted", cockpit.counts.quieted]]) {
     const stat = text("div", "", "stat"); stat.append(text("dt", label), text("dd", value)); stats.append(stat);
   }
   hero.append(stats);
@@ -4121,13 +4301,13 @@ async function initialize() {
     const requestedView = params.get("view");
     if (active === "today" && ["brief", "carousel"].includes(requestedView)) state.todayView = requestedView;
     if (active === "triage") {
-      if (["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"].includes(requestedView)) state.triageView = requestedView;
+      if (["needs_interpretation", "ready", "alerts", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"].includes(requestedView)) state.triageView = requestedView;
       state.triageSelected = params.get("item");
       state.triageMatter = params.get("matter");
       state.triageFocusPending = Boolean(state.triageSelected);
     }
     if (active === "comms") {
-      if (["focus", "waiting", "snoozed", "quieted", "all"].includes(requestedView)) state.commsView = requestedView;
+      if (["alerts", "focus", "waiting", "snoozed", "quieted", "all"].includes(requestedView)) state.commsView = requestedView;
       state.commsAccount = params.get("account") || "all";
       state.commsThread = params.get("thread");
     }

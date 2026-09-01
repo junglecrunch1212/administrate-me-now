@@ -17,6 +17,7 @@ from adminme.surface_contracts import attention_explanation, surface_link
 
 
 _BUCKET_WEIGHT = {
+    "alerts": 600,
     "focus": 500,
     "needs_reply": 400,
     "waiting": 300,
@@ -58,6 +59,11 @@ def _json_object(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return result if isinstance(result, dict) else {}
+
+
+def _link_disposition(value: dict[str, Any]) -> dict[str, Any]:
+    disposition = value.get("disposition")
+    return disposition if isinstance(disposition, dict) else {}
 
 
 def _clean_message_text(value: Any) -> str | None:
@@ -148,7 +154,12 @@ def _active_snooze(value: Any, now: datetime) -> bool:
 
 
 def message_attention_decision(
-    latest: dict[str, Any], now: datetime, *, triage_count: int = 0
+    latest: dict[str, Any],
+    now: datetime,
+    *,
+    triage_count: int = 0,
+    alert_count: int = 0,
+    admitted_matters_only: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Apply Focus v2: unread is presentation state, never urgency by itself."""
 
@@ -182,6 +193,8 @@ def message_attention_decision(
         "security_code_active": security_code_active,
         "security_code_age_seconds": security_code_age_seconds,
         "triage_count": triage_count,
+        "alert_count": alert_count,
+        "admitted_matters_only": admitted_matters_only,
     }
 
     def decision(
@@ -201,6 +214,12 @@ def message_attention_decision(
         )
     if _active_snooze(latest.get("snoozed_until"), now):
         return decision("snoozed", "comms.snoozed", ["Snoozed until the chosen time"])
+    if alert_count:
+        return decision(
+            "alerts",
+            "comms.alerts-safety-v1",
+            [f"{alert_count} admitted safety or time-sensitive alert"],
+        )
     if latest.get("direction") == "outbound":
         return decision(
             "waiting",
@@ -208,6 +227,12 @@ def message_attention_decision(
             ["Your message is the latest in this thread"],
         )
     if latest.get("direction") == "inbound":
+        if admitted_matters_only and not triage_count:
+            return decision(
+                "later",
+                "comms.context-without-admitted-matter-v1",
+                ["The conversation remains searchable but has no admitted obligation"],
+            )
         if reply_signal == "required":
             why.append("A typed semantic signal says a reply is required")
         if urgency in {"today", "urgent", "high", "critical"}:
@@ -252,6 +277,7 @@ def compose_comms_cockpit(
     accounts: list[dict[str, Any]],
     triage_items: list[dict[str, Any]],
     now: datetime | None = None,
+    human_centered: bool = False,
 ) -> dict[str, Any]:
     """Group account-bound interactions into explainable, stable threads."""
 
@@ -306,6 +332,8 @@ def compose_comms_cockpit(
                 "matter_id": str(item.get("context_id") or item["proposal_id"]),
                 "title": item.get("title") or "Review extracted candidate",
                 "queue_lane": item.get("queue_lane") or "standard",
+                "human_lane": item.get("human_lane") or "low_confidence_review",
+                "disposition": item.get("disposition") or {},
                 "surface_link": surface_link(
                     "triage",
                     object_kind="item",
@@ -319,9 +347,32 @@ def compose_comms_cockpit(
             }
             for item in triage_candidates
         ]
-        triage_count = len(triage_links)
+        ordinary_links = (
+            [
+                item
+                for item in triage_links
+                if bool(_link_disposition(item).get("ordinary_queue"))
+            ]
+            if human_centered
+            else triage_links
+        )
+        alert_links = (
+            [
+                item
+                for item in triage_links
+                if _link_disposition(item).get("disposition") == "alerts"
+            ]
+            if human_centered
+            else []
+        )
+        triage_count = len(ordinary_links)
+        alert_count = len(alert_links)
         bucket, attention = message_attention_decision(
-            latest, as_of, triage_count=triage_count
+            latest,
+            as_of,
+            triage_count=triage_count,
+            alert_count=alert_count,
+            admitted_matters_only=human_centered,
         )
         why = attention["reasons"]
         counterparties = []
@@ -359,6 +410,7 @@ def compose_comms_cockpit(
                     {item["matter_id"] for item in triage_links}
                 ),
                 "triage_candidates": triage_links,
+                "alert_count": alert_count,
                 "snoozed_until": latest.get("snoozed_until"),
                 "quieted": bool(latest.get("quieted")),
                 "archived": bool(latest.get("archived")),
@@ -388,6 +440,7 @@ def compose_comms_cockpit(
     )
     counts = {
         "focus": sum(1 for item in threads if item["bucket"] == "focus"),
+        "alerts": sum(1 for item in threads if item["bucket"] == "alerts"),
         "needs_reply": sum(1 for item in threads if item["needs_reply"]),
         "waiting": sum(1 for item in threads if item["bucket"] == "waiting"),
         "snoozed": sum(1 for item in threads if item["bucket"] == "snoozed"),
@@ -396,7 +449,11 @@ def compose_comms_cockpit(
         "all": len(threads),
     }
     return {
-        "contract": "deterministic-comms-cockpit-v2",
+        "contract": (
+            "human-centered-comms-cockpit-v1"
+            if human_centered
+            else "deterministic-comms-cockpit-v2"
+        ),
         "member_id": member_id,
         "as_of": as_of.isoformat().replace("+00:00", "Z"),
         "decision_maker": "rules_not_model",
@@ -406,6 +463,7 @@ def compose_comms_cockpit(
             "id": "comms-focus-v2",
             "unread_is_visual_state_only": True,
             "model_decides_attention": False,
+            "focus_requires_admitted_matter": human_centered,
         },
         "accounts": accounts,
         "counts": counts,

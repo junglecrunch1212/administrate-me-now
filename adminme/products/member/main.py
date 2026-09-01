@@ -105,10 +105,19 @@ from adminme.projections.member_knowledge.queries import (
     list_visible as list_visible_notes,
     search_visible as search_visible_notes,
 )
-from adminme.projections.triage.queries import get_item as get_triage_item
+from adminme.projections.triage.queries import (
+    backlog_for_member as triage_backlog_for_member,
+    get_item as get_triage_item,
+)
 from adminme.projections.context_fabric.queries import (
     feedback_scope_count,
+    get_source_policy_proposal,
+    get_source_policy_rule,
     get_policy_rule,
+    reconciliation_for_proposal,
+    source_policy_proposals_for_member,
+    source_policy_rules_for_member,
+    verified_feedback_for_scope,
 )
 from adminme.projections.tasks.queries import get_task
 from adminme.projections.money.queries import get_finance_goal
@@ -147,6 +156,10 @@ from adminme.triage_intent import (
 )
 from adminme.triage_contract import candidate_update_fields, triage_destination
 from adminme.triage_context import add_triage_source_context
+from adminme.triage_management import (
+    backlog_reassessment_preview,
+    source_policy_rule_preview,
+)
 from adminme.today import add_today_decision_context
 
 
@@ -670,6 +683,88 @@ class TriagePolicyRevokeRequest(BaseModel):
     model_config = {"extra": "forbid"}
     request_id: str = Field(min_length=8, max_length=120)
     reason: str = Field(min_length=1, max_length=240)
+
+
+class TriageManagementRequest(BaseModel):
+    """One exact reversible action on an owned Triage candidate."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    action: Literal[
+        "link_existing",
+        "mark_handled",
+        "mark_duplicate",
+        "keep_context",
+        "route_alert",
+        "dismiss_not_useful",
+        "propose_suppression",
+        "ask_clarification",
+        "snooze",
+        "reopen",
+        "correct_extraction",
+        "correct_ownership",
+    ]
+    reason_codes: list[str] = Field(default_factory=list, max_length=20)
+    evidence_event_ids: list[str] = Field(default_factory=list, max_length=100)
+    linked_object_kind: str | None = Field(default=None, max_length=120)
+    linked_object_id: str | None = Field(default=None, max_length=240)
+    duplicate_of_proposal_id: str | None = Field(default=None, max_length=240)
+    snoozed_until: datetime | None = None
+    corrected_title: str | None = Field(default=None, min_length=1, max_length=500)
+    corrected_target_kind: str | None = Field(default=None, max_length=120)
+    corrected_owner_member_id: str | None = Field(default=None, max_length=240)
+    policy_proposal_id: str | None = Field(default=None, max_length=240)
+
+
+TriagePolicyInstruction = Literal["always", "usually", "ask", "never"]
+TriagePolicyOutcome = Literal[
+    "dismiss_not_useful",
+    "keep_context",
+    "mark_duplicate",
+    "correct_extraction",
+    "correct_ownership",
+    "reopen",
+]
+
+
+class TriageLearningPreviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    scope_kind: Literal["candidate_kind", "sender", "context", "account", "workspace"]
+    scope_value: str = Field(min_length=1, max_length=500)
+    instruction: TriagePolicyInstruction
+    outcome_kind: TriagePolicyOutcome
+
+
+class TriageLearningProposeRequest(TriageLearningPreviewRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TriageLearningDecisionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    decision: Literal["approve", "edit", "trial", "reject", "suppress"]
+    instruction: TriagePolicyInstruction
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    trial_proposal_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class TriageLearningReviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    decision: Literal["retain", "narrow", "suspend", "revoke"]
+    negative_outcome: (
+        Literal[
+            "false_suppression",
+            "missed_obligation",
+            "member_correction",
+            "scope_mismatch",
+        ]
+        | None
+    ) = None
+    replacement_instruction: TriagePolicyInstruction | None = None
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class TriageIntentRequest(BaseModel):
@@ -2915,6 +3010,425 @@ def _require_self_triage_policy(session: Session) -> None:
 
 def _triage_policy_digest(scope_kind: str, scope_value: str) -> str:
     return policy_scope_digest(scope_kind, scope_value)
+
+
+def _require_human_triage_management(runtime: Any) -> None:
+    if not runtime.settings.human_triage_management_enabled:
+        raise HTTPException(
+            409,
+            "Human-centered Triage management is disabled until separately activated",
+        )
+
+
+def _learning_preview(
+    runtime: Any,
+    session: Session,
+    body: TriageLearningPreviewRequest,
+) -> dict[str, Any]:
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    evidence = verified_feedback_for_scope(
+        runtime.projections.connection("context_fabric"),
+        session,
+        member_id=session.auth_member_id,
+        scope_kind=body.scope_kind,
+        scope_value=body.scope_value,
+    )
+    if not evidence:
+        raise HTTPException(422, "a policy proposal requires a verified member outcome")
+    return source_policy_rule_preview(
+        scope_kind=body.scope_kind,
+        scope_value_digest=_triage_policy_digest(body.scope_kind, body.scope_value),
+        instruction=body.instruction,
+        outcome_kind=body.outcome_kind,
+        feedback_event_ids=[str(value["last_event_id"]) for value in evidence],
+        proposal_ids=[str(value["proposal_id"]) for value in evidence],
+    )
+
+
+@router.get("/api/member/v1/triage/backlog-reassessment-preview")
+async def preview_triage_backlog_reassessment(
+    request: Request,
+    session: SessionDep,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=2000),
+) -> dict[str, Any]:
+    """Preview old/proposed dispositions without appending or deleting anything."""
+
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "triage projections unavailable")
+    items = triage_backlog_for_member(
+        runtime.projections.connection("triage"),
+        session,
+        member_id=session.auth_member_id,
+        limit=500,
+    )
+    reconciliations: dict[str, dict[str, Any]] = {}
+    context_conn = runtime.projections.connection("context_fabric")
+    for item in items:
+        receipt = reconciliation_for_proposal(
+            context_conn,
+            session,
+            proposal_id=str(item["proposal_id"]),
+            member_id=session.auth_member_id,
+        )
+        if receipt is not None:
+            reconciliations[str(item["proposal_id"])] = receipt
+    try:
+        preview = backlog_reassessment_preview(
+            items,
+            reconciliations,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        **preview,
+        "human_triage_management_active": (
+            runtime.settings.human_triage_management_enabled
+        ),
+        "inventory_cap": 500,
+        "recoverable_from_event_log": True,
+    }
+
+
+@router.post("/api/member/v1/triage/{proposal_id}/manage")
+async def manage_triage_item(
+    proposal_id: str,
+    body: TriageManagementRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    _require_human_triage_management(runtime)
+    item = _owned_triage_item(runtime, session, proposal_id)
+    if item["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "triage item changed; refresh before deciding")
+    if body.action == "correct_ownership" and body.corrected_owner_member_id not in {
+        None,
+        session.auth_member_id,
+    }:
+        # A member can reject ownership, but cannot place private evidence in
+        # another adult's queue without that adult's own scoped authorization.
+        raise HTTPException(403, "ownership correction cannot assign another member")
+    required = {
+        "link_existing": bool(body.linked_object_kind and body.linked_object_id),
+        "mark_duplicate": bool(body.duplicate_of_proposal_id),
+        "snooze": body.snoozed_until is not None,
+        "correct_extraction": bool(body.corrected_title or body.corrected_target_kind),
+        "correct_ownership": body.corrected_owner_member_id is not None,
+        "propose_suppression": body.policy_proposal_id is not None,
+    }
+    if body.action in required and not required[body.action]:
+        raise HTTPException(422, f"{body.action} is missing its exact target")
+    fingerprint = _triage_request_fingerprint(proposal_id, body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.item.managed",
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("triage", prior["event_id"])
+        return {"event_id": prior["event_id"], "duplicate": True}
+    revision = int((item.get("management") or {}).get("revision") or 0) + 1
+    action_id = (
+        "triage_action_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:32]
+    )
+    payload = {
+        **body.model_dump(mode="json", exclude={"request_id"}),
+        "action_id": action_id,
+        "proposal_id": proposal_id,
+        "member_id": session.auth_member_id,
+        "action_revision": revision,
+        "supersedes_action_id": (item.get("management") or {}).get("action_id"),
+        "reversible": True,
+        "provider_effects": False,
+        "managed_at": EventEnvelope.now_utc_iso(),
+    }
+    await _guard_triage_write(runtime, session, "triage.item.managed", payload)
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.item.managed",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=item["last_event_id"],
+            sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+        )
+    )
+    await runtime.wait_for_projection("triage", event_id)
+    return {
+        "event_id": event_id,
+        "action_id": action_id,
+        "state": "recorded",
+        "reversible": True,
+        "provider_effects": 0,
+        "duplicate": False,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/preview")
+async def preview_triage_learning_rule(
+    body: TriageLearningPreviewRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    return _learning_preview(_runtime(request), session, body)
+
+
+@router.post("/api/member/v1/triage-learning/propose")
+async def propose_triage_learning_rule(
+    body: TriageLearningProposeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    preview = _learning_preview(runtime, session, body)
+    if preview["preview_digest"] != body.preview_digest:
+        raise HTTPException(409, "verified outcomes changed; preview the rule again")
+    fingerprint = _triage_request_fingerprint("source-policy-proposal", body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.source_policy_rule.proposed",
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+    )
+    policy_proposal_id = (
+        "triage_policy_proposal_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:28]
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("context_fabric", prior["event_id"])
+        return {
+            "event_id": prior["event_id"],
+            "policy_proposal_id": policy_proposal_id,
+            "state": "proposed",
+            "duplicate": True,
+        }
+    payload = {
+        "policy_proposal_id": policy_proposal_id,
+        "member_id": session.auth_member_id,
+        "scope_kind": body.scope_kind,
+        "scope_value_digest": preview["scope_value_digest"],
+        "instruction": body.instruction,
+        "outcome_kind": body.outcome_kind,
+        "verified_feedback_event_ids": preview["feedback_event_ids"],
+        "affected_proposal_ids": preview["proposal_ids"],
+        "preview_digest": preview["preview_digest"],
+        "policy_diff": preview["policy_diff"],
+        "explanation": preview["explanation"],
+        "proposed_by_member_id": session.auth_member_id,
+        "proposed_at": EventEnvelope.now_utc_iso(),
+        "self_activates": False,
+        "access_widening": False,
+        "cross_member_effect": False,
+        "provider_effects": False,
+    }
+    await _guard_triage_write(
+        runtime, session, "triage.source_policy_rule.proposed", payload
+    )
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.source_policy_rule.proposed",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=preview["feedback_event_ids"][0],
+        )
+    )
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {
+        "event_id": event_id,
+        "policy_proposal_id": policy_proposal_id,
+        "state": "proposed",
+        "self_activated": False,
+        "provider_effects": 0,
+        "duplicate": False,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/{policy_proposal_id}/decide")
+async def decide_triage_learning_rule(
+    policy_proposal_id: str,
+    body: TriageLearningDecisionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    _require_human_triage_management(runtime)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    proposal = get_source_policy_proposal(
+        runtime.projections.connection("context_fabric"),
+        session,
+        member_id=session.auth_member_id,
+        policy_proposal_id=policy_proposal_id,
+    )
+    if proposal is None:
+        raise HTTPException(404, "source policy proposal not found")
+    if proposal["preview_digest"] != body.preview_digest:
+        raise HTTPException(409, "policy preview changed")
+    if body.decision != "edit" and body.instruction != proposal["instruction"]:
+        raise HTTPException(409, "changed instructions require a new preview")
+    affected = set(proposal["affected_proposal_ids"])
+    if body.decision == "trial" and (
+        not body.trial_proposal_ids or not set(body.trial_proposal_ids) <= affected
+    ):
+        raise HTTPException(422, "trial must be a non-empty subset of previewed items")
+    if body.decision != "trial" and body.trial_proposal_ids:
+        raise HTTPException(422, "only a trial may name a bounded cohort")
+    rule_id = (
+        "triage_source_rule_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{policy_proposal_id}".encode()
+        ).hexdigest()[:28]
+        if body.decision in {"approve", "trial"}
+        else None
+    )
+    fingerprint = _triage_request_fingerprint(policy_proposal_id, body)
+    payload = {
+        "decision_id": "triage_policy_decision_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:28],
+        "policy_proposal_id": policy_proposal_id,
+        "rule_id": rule_id,
+        "member_id": session.auth_member_id,
+        "scope_kind": proposal["scope_kind"],
+        "scope_value_digest": proposal["scope_value_digest"],
+        "outcome_kind": proposal["outcome_kind"],
+        "decision": body.decision,
+        "instruction": body.instruction,
+        "preview_digest": body.preview_digest,
+        "trial_proposal_ids": body.trial_proposal_ids,
+        "decided_by_member_id": session.auth_member_id,
+        "decided_at": EventEnvelope.now_utc_iso(),
+        "access_widening": False,
+        "cross_member_effect": False,
+        "provider_effects": False,
+    }
+    await _guard_triage_write(
+        runtime, session, "triage.source_policy_rule.decided", payload
+    )
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.source_policy_rule.decided",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=str(proposal["last_event_id"]),
+        )
+    )
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {
+        "event_id": event_id,
+        "rule_id": rule_id,
+        "state": body.decision,
+        "provider_effects": 0,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/rules/{rule_id}/review")
+async def review_triage_learning_rule(
+    rule_id: str,
+    body: TriageLearningReviewRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    _require_human_triage_management(runtime)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    rule = get_source_policy_rule(
+        runtime.projections.connection("context_fabric"),
+        session,
+        member_id=session.auth_member_id,
+        rule_id=rule_id,
+    )
+    if rule is None:
+        raise HTTPException(404, "source policy rule not found")
+    if body.negative_outcome and body.decision not in {"narrow", "suspend", "revoke"}:
+        raise HTTPException(422, "negative outcomes may only narrow or deactivate")
+    if (body.decision == "narrow") != (body.replacement_instruction is not None):
+        raise HTTPException(422, "narrow review requires one replacement instruction")
+    narrowing_order = {"always": 0, "usually": 1, "ask": 2, "never": 3}
+    if (
+        body.replacement_instruction is not None
+        and narrowing_order[body.replacement_instruction]
+        <= narrowing_order[str(rule["instruction"])]
+    ):
+        raise HTTPException(422, "replacement instruction must narrow admission")
+    fingerprint = _triage_request_fingerprint(rule_id, body)
+    payload = {
+        **body.model_dump(mode="json", exclude={"request_id"}),
+        "review_id": "triage_policy_review_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:28],
+        "rule_id": rule_id,
+        "member_id": session.auth_member_id,
+        "previous_instruction": rule["instruction"],
+        "reviewed_by_member_id": session.auth_member_id,
+        "reviewed_at": EventEnvelope.now_utc_iso(),
+        "access_widening": False,
+        "cross_member_effect": False,
+        "provider_effects": False,
+    }
+    await _guard_triage_write(
+        runtime, session, "triage.source_policy_rule.reviewed", payload
+    )
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.source_policy_rule.reviewed",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=str(rule["last_event_id"]),
+        )
+    )
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {"event_id": event_id, "rule_id": rule_id, "state": body.decision}
+
+
+@router.get("/api/member/v1/triage-learning")
+async def list_triage_learning(
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    conn = runtime.projections.connection("context_fabric")
+    return {
+        "proposals": source_policy_proposals_for_member(
+            conn, session, member_id=session.auth_member_id
+        ),
+        "rules": source_policy_rules_for_member(
+            conn, session, member_id=session.auth_member_id
+        ),
+        "active": runtime.settings.human_triage_management_enabled,
+        "provider_effects": 0,
+    }
 
 
 @router.post("/api/member/v1/triage-policy/preview")

@@ -1,5 +1,20 @@
 # Migration map
 
+G04 human-centered Triage update (2026-09-01): Context Fabric advances
+additively to v4 and Triage to v11. New immutable
+`triage.item.managed@v1`, `triage.source_policy_rule.proposed@v1`,
+`triage.source_policy_rule.decided@v1`, and
+`triage.source_policy_rule.reviewed@v1` events preserve exact member action,
+preview, evidence, bounded activation, review, reversal, scope, and zero-effect
+lineage. The `ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED` behavior gate defaults
+off. Existing projection databases add columns and audit/policy tables only
+after legacy schema open; replay rebuilds the same state. No source fact,
+canonical object, historical decision, credential, provider configuration,
+checkpoint, or provider state is rewritten. Older code may ignore the new
+events. Rollback selects the CO-021 predecessor and rebuilds the disposable
+projections. Live activation, backlog application, deployment, and provider
+effects remain separate Phase B owner decisions.
+
 G03 cross-source reconciliation update (2026-09-01): Context Fabric advances
 additively to v3 and Triage to v10. New immutable
 `context.reconciliation.typed_fact_shared@v1` and

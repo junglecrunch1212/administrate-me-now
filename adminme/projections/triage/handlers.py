@@ -16,12 +16,205 @@ from adminme.context_fabric import (
     queue_lane,
     stable_digest,
     triage_context_id,
+    policy_scope_digest,
 )
 from adminme.triage_review import proposal_source_id, triage_review_state
+from adminme.triage_management import human_triage_lane
 
 
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+_LEARNED_INSTRUCTION_ORDER = {"always": 0, "usually": 1, "ask": 2, "never": 3}
+
+
+def _learned_scope_digest(row: dict[str, Any], scope_kind: str) -> str | None:
+    candidate = json.loads(row.get("candidate_json") or "{}")
+    reconciliation_scope = json.loads(row.get("reconciliation_scope_json") or "{}")
+    values = {
+        "candidate_kind": row.get("target_kind"),
+        "context": row.get("context_id"),
+        "account": reconciliation_scope.get("provider_account_id"),
+        "workspace": reconciliation_scope.get("workspace"),
+        "sender": candidate.get("sender_digest"),
+    }
+    value = values.get(scope_kind)
+    if value in {None, ""}:
+        return None
+    return policy_scope_digest(scope_kind, str(value))
+
+
+def _matching_learned_rule(
+    conn: sqlcipher3.Connection, row: dict[str, Any]
+) -> dict[str, Any] | None:
+    priority_basis = set(json.loads(row.get("priority_basis_json") or "[]"))
+    if (
+        priority_basis.intersection(
+            {"explicit_member_instruction", "exact_member_commitment"}
+        )
+        or row.get("admission_decision") == "alert_only"
+    ):
+        return None
+    rules = conn.execute(
+        """SELECT * FROM triage_learned_policy_rules
+             WHERE tenant_id=? AND member_id=? AND status IN ('active','trial')
+             ORDER BY rule_id""",
+        (row["tenant_id"], row["owner_member_id"]),
+    ).fetchall()
+    matching: list[dict[str, Any]] = []
+    for rule_value in rules:
+        rule = dict(rule_value)
+        if rule["status"] == "trial" and row["proposal_id"] not in set(
+            json.loads(rule["trial_proposal_ids_json"] or "[]")
+        ):
+            continue
+        digest = _learned_scope_digest(row, str(rule["scope_kind"]))
+        if digest == rule["scope_value_digest"]:
+            matching.append(rule)
+    if not matching:
+        return None
+    return max(
+        matching,
+        key=lambda value: (
+            _LEARNED_INSTRUCTION_ORDER[str(value["instruction"])],
+            str(value["rule_id"]),
+        ),
+    )
+
+
+def _apply_learned_policy_to_row(
+    conn: sqlcipher3.Connection, row: dict[str, Any]
+) -> None:
+    rule = _matching_learned_rule(conn, row)
+    instruction = str(rule["instruction"]) if rule is not None else "always"
+    policy_state = {
+        "always": "none",
+        "usually": "low_confidence_review",
+        "ask": "clarification_required",
+        "never": "context_only",
+    }[instruction]
+    lane = (
+        "low_confidence_review"
+        if instruction == "usually"
+        else "clarification_conflict"
+        if instruction == "ask"
+        else human_triage_lane(row)
+    )
+    conn.execute(
+        """UPDATE triage_items
+              SET learned_policy_state=?, learned_rule_id=?, human_lane=?
+            WHERE tenant_id=? AND proposal_id=?""",
+        (
+            policy_state,
+            rule["rule_id"] if rule is not None else None,
+            lane,
+            row["tenant_id"],
+            row["proposal_id"],
+        ),
+    )
+
+
+def _recompute_learned_policy_for_proposal(
+    conn: sqlcipher3.Connection,
+    *,
+    tenant_id: str,
+    proposal_id: str,
+) -> None:
+    row = conn.execute(
+        "SELECT * FROM triage_items WHERE tenant_id=? AND proposal_id=?",
+        (tenant_id, proposal_id),
+    ).fetchone()
+    if row is not None:
+        _apply_learned_policy_to_row(conn, dict(row))
+
+
+def _recompute_learned_policy_for_member(
+    conn: sqlcipher3.Connection,
+    *,
+    tenant_id: str,
+    member_id: str,
+) -> None:
+    rows = conn.execute(
+        """SELECT * FROM triage_items
+             WHERE tenant_id=? AND owner_member_id=?
+               AND owner_scope=? AND visibility_scope=?
+             ORDER BY proposal_id""",
+        (tenant_id, member_id, f"private:{member_id}", f"private:{member_id}"),
+    ).fetchall()
+    for row in rows:
+        _apply_learned_policy_to_row(conn, dict(row))
+
+
+def _record_learned_policy(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    expected_scope = f"private:{payload['member_id']}"
+    if (
+        envelope.get("owner_scope") != expected_scope
+        or envelope.get("visibility_scope") != expected_scope
+    ):
+        return
+    if envelope["type"] == "triage.source_policy_rule.decided":
+        if payload["decision"] not in {"approve", "trial"}:
+            return
+        conn.execute(
+            """INSERT INTO triage_learned_policy_rules (
+                   tenant_id, rule_id, policy_proposal_id, member_id,
+                   scope_kind, scope_value_digest, outcome_kind, instruction,
+                   activation_mode, trial_proposal_ids_json, status, last_event_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id, rule_id) DO NOTHING""",
+            (
+                envelope["tenant_id"],
+                payload["rule_id"],
+                payload["policy_proposal_id"],
+                payload["member_id"],
+                payload["scope_kind"],
+                payload["scope_value_digest"],
+                payload["outcome_kind"],
+                payload["instruction"],
+                "approved" if payload["decision"] == "approve" else "trial",
+                _json(payload.get("trial_proposal_ids") or []),
+                "active" if payload["decision"] == "approve" else "trial",
+                envelope["event_id"],
+            ),
+        )
+    else:
+        rule = conn.execute(
+            """SELECT * FROM triage_learned_policy_rules
+                 WHERE tenant_id=? AND rule_id=? AND member_id=?""",
+            (envelope["tenant_id"], payload["rule_id"], payload["member_id"]),
+        ).fetchone()
+        if rule is None or rule["instruction"] != payload["previous_instruction"]:
+            return
+        status = {
+            "retain": rule["status"],
+            "narrow": rule["status"],
+            "suspend": "suspended",
+            "revoke": "revoked",
+        }[payload["decision"]]
+        conn.execute(
+            """UPDATE triage_learned_policy_rules
+                  SET instruction=?, status=?, last_event_id=?
+                WHERE tenant_id=? AND rule_id=? AND member_id=?
+                  AND last_event_id < ?""",
+            (
+                payload.get("replacement_instruction") or rule["instruction"],
+                status,
+                envelope["event_id"],
+                envelope["tenant_id"],
+                payload["rule_id"],
+                payload["member_id"],
+                envelope["event_id"],
+            ),
+        )
+    _recompute_learned_policy_for_member(
+        conn,
+        tenant_id=str(envelope["tenant_id"]),
+        member_id=str(payload["member_id"]),
+    )
 
 
 def _parsed_time(value: str) -> datetime:
@@ -319,6 +512,20 @@ def _insert(
             envelope["sensitivity"],
             envelope["event_id"],
         ),
+    )
+    conn.execute(
+        """UPDATE triage_items SET human_lane=?
+             WHERE tenant_id=? AND proposal_id=?""",
+        (
+            human_triage_lane(proposal_payload),
+            envelope["tenant_id"],
+            proposal_id,
+        ),
+    )
+    _recompute_learned_policy_for_proposal(
+        conn,
+        tenant_id=str(envelope["tenant_id"]),
+        proposal_id=proposal_id,
     )
 
 
@@ -820,6 +1027,165 @@ def _apply_reconciliation(
             ),
         )
 
+    current = conn.execute(
+        "SELECT * FROM triage_items WHERE tenant_id=? AND proposal_id=?",
+        (envelope["tenant_id"], payload["proposal_id"]),
+    ).fetchone()
+    if current is not None:
+        conn.execute(
+            """UPDATE triage_items SET human_lane=?
+                 WHERE tenant_id=? AND proposal_id=?""",
+            (
+                human_triage_lane(
+                    dict(current),
+                    {
+                        "decision": payload["decision"],
+                        "priority_basis": payload["priority_basis"],
+                    },
+                ),
+                envelope["tenant_id"],
+                payload["proposal_id"],
+            ),
+        )
+        _recompute_learned_policy_for_proposal(
+            conn,
+            tenant_id=str(envelope["tenant_id"]),
+            proposal_id=str(payload["proposal_id"]),
+        )
+
+
+_MANAGEMENT_STATES = {
+    "link_existing": "linked_existing",
+    "mark_handled": "handled",
+    "mark_duplicate": "duplicate",
+    "keep_context": "context",
+    "route_alert": "alert",
+    "dismiss_not_useful": "dismissed_not_useful",
+    "propose_suppression": "suppression_proposed",
+    "ask_clarification": "clarification",
+    "snooze": "snoozed",
+    "reopen": "open",
+    "correct_extraction": "open",
+    "correct_ownership": "ownership_corrected",
+}
+
+
+def _apply_managed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    """Project one exact, member-private, provider-effect-free management action."""
+
+    payload = envelope["payload"]
+    expected_scope = f"private:{payload['member_id']}"
+    if (
+        envelope.get("owner_scope") != expected_scope
+        or envelope.get("visibility_scope") != expected_scope
+    ):
+        return
+    current = conn.execute(
+        """SELECT * FROM triage_items
+             WHERE tenant_id=? AND proposal_id=? AND owner_member_id=?
+               AND owner_scope=? AND visibility_scope=?""",
+        (
+            envelope["tenant_id"],
+            payload["proposal_id"],
+            payload["member_id"],
+            expected_scope,
+            expected_scope,
+        ),
+    ).fetchone()
+    if current is None:
+        return
+    row = dict(current)
+    if row["last_event_id"] != payload["expected_last_event_id"]:
+        return
+    if int(row.get("management_revision") or 0) + 1 != payload["action_revision"]:
+        return
+    if payload["action"] == "reopen" and row["state"] in {
+        "approved",
+        "confirmed",
+        "failed",
+    }:
+        return
+    if payload.get("supersedes_action_id") != row.get("management_action_id"):
+        if row.get("management_action_id") is not None:
+            return
+    conn.execute(
+        """INSERT INTO triage_management_actions (
+               tenant_id, action_id, proposal_id, member_id, action,
+               action_revision, supersedes_action_id, reason_codes_json,
+               evidence_event_ids_json, linked_object_kind, linked_object_id,
+               duplicate_of_proposal_id, snoozed_until, policy_proposal_id,
+               reversible, provider_effects, managed_at, owner_scope,
+               visibility_scope, sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            payload["action_id"],
+            payload["proposal_id"],
+            payload["member_id"],
+            payload["action"],
+            payload["action_revision"],
+            payload.get("supersedes_action_id"),
+            _json(payload.get("reason_codes") or []),
+            _json(payload.get("evidence_event_ids") or []),
+            payload.get("linked_object_kind"),
+            payload.get("linked_object_id"),
+            payload.get("duplicate_of_proposal_id"),
+            payload.get("snoozed_until"),
+            payload.get("policy_proposal_id"),
+            payload["managed_at"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+    title = payload.get("corrected_title") or row["title"]
+    target_kind = payload.get("corrected_target_kind") or row["target_kind"]
+    state = _MANAGEMENT_STATES[payload["action"]]
+    if payload["action"] == "reopen":
+        existing_object_kind = None
+        existing_object_id = None
+        duplicate_of_proposal_id = None
+    else:
+        existing_object_kind = payload.get("linked_object_kind") or row.get(
+            "existing_object_kind"
+        )
+        existing_object_id = payload.get("linked_object_id") or row.get(
+            "existing_object_id"
+        )
+        duplicate_of_proposal_id = payload.get("duplicate_of_proposal_id") or row.get(
+            "duplicate_of_proposal_id"
+        )
+    conn.execute(
+        """UPDATE triage_items
+              SET title=?, target_kind=?, management_state=?,
+                  management_action=?, management_action_id=?,
+                  management_revision=?, management_event_id=?,
+                  management_reason_codes_json=?, snoozed_until=?,
+                  existing_object_kind=?, existing_object_id=?,
+                  duplicate_of_proposal_id=?,
+                  last_event_id=?
+            WHERE tenant_id=? AND proposal_id=? AND last_event_id=?""",
+        (
+            title,
+            target_kind,
+            state,
+            payload["action"],
+            payload["action_id"],
+            payload["action_revision"],
+            envelope["event_id"],
+            _json(payload.get("reason_codes") or []),
+            payload.get("snoozed_until"),
+            existing_object_kind,
+            existing_object_id,
+            duplicate_of_proposal_id,
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["proposal_id"],
+            payload["expected_last_event_id"],
+        ),
+    )
+
 
 _CANONICAL_EVENT_FIELDS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "task.created": (("task",), "task_id", "title"),
@@ -901,6 +1267,13 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _index_canonical(envelope, conn)
     elif event_type == "triage.item.proposed":
         _apply_triage_proposed(envelope, conn)
+    elif event_type == "triage.item.managed":
+        _apply_managed(envelope, conn)
+    elif event_type in {
+        "triage.source_policy_rule.decided",
+        "triage.source_policy_rule.reviewed",
+    }:
+        _record_learned_policy(envelope, conn)
     elif event_type == "triage.reconciliation.decided":
         _apply_reconciliation(envelope, conn)
     elif event_type == "triage.intent.submitted":

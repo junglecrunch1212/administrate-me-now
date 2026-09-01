@@ -104,6 +104,8 @@ from adminme.projections.triage.queries import (
 from adminme.projections.context_fabric.queries import (
     feedback_pattern_counts,
     policy_rules_for_member,
+    source_policy_proposals_for_member,
+    source_policy_rules_for_member,
 )
 from adminme.surface_contracts import surface_freshness, surface_link
 from adminme.settings_control import (
@@ -755,6 +757,7 @@ def build_surface(
                 target_kind=triage_kind,
                 cursor=triage_cursor,
                 limit=triage_limit,
+                human_centered=runtime.settings.human_triage_management_enabled,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -855,6 +858,16 @@ def build_surface(
             session,
             member_id=member,
         )
+        source_policy_proposals = source_policy_proposals_for_member(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=member,
+        )
+        source_policy_rules = source_policy_rules_for_member(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=member,
+        )
         _annotate_triage_shadow_rules(items, policy_rules)
         if triage_lens == "learned_rules":
             matched_matters: list[dict[str, Any]] = []
@@ -917,6 +930,15 @@ def build_surface(
                 }
             )
         base["triage"]["policy_rules"] = policy_rules
+        base["triage"]["source_policy_proposals"] = source_policy_proposals
+        base["triage"]["source_policy_rules"] = source_policy_rules
+        base["human_triage_management"] = {
+            "active": runtime.settings.human_triage_management_enabled,
+            "default_off": True,
+            "backlog_preview_available": True,
+            "backlog_application_available": False,
+            "provider_effects": 0,
+        }
         base["contract"] = {
             "facts_are_not_queued": True,
             "human_gate_required": True,
@@ -1153,6 +1175,7 @@ def build_surface(
             session,
             member_id=member,
             source_event_ids=comms_source_ids,
+            human_centered=runtime.settings.human_triage_management_enabled,
         )
         party_labels = {
             str(party["party_id"]): str(party.get("display_name") or "Contact")
@@ -1170,7 +1193,15 @@ def build_surface(
             accounts=communication_accounts(runtime, member),
             triage_items=triage_items,
             now=now,
+            human_centered=runtime.settings.human_triage_management_enabled,
         )
+        base["human_triage_management"] = {
+            "active": runtime.settings.human_triage_management_enabled,
+            "focus_requires_admitted_matter": (
+                runtime.settings.human_triage_management_enabled
+            ),
+            "provider_effects": 0,
+        }
         base["connector_catalog"] = _connector_catalog()
         interactions_capability = runtime.capabilities.get("projection:interactions")
         interaction_details = (

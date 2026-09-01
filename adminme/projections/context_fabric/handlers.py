@@ -771,6 +771,164 @@ def _record_policy(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> 
         )
 
 
+def _record_source_policy(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Project the explicit propose/decide/review lifecycle for a narrow rule."""
+
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("member_id")):
+        return
+    event_type = envelope["type"]
+    if event_type == "triage.source_policy_rule.proposed":
+        conn.execute(
+            """INSERT INTO triage_source_policy_proposals (
+                   tenant_id, policy_proposal_id, member_id, scope_kind,
+                   scope_value_digest, instruction, outcome_kind,
+                   verified_feedback_event_ids_json,
+                   affected_proposal_ids_json, preview_digest,
+                   policy_diff_json, explanation, status, self_activates,
+                   provider_effects, proposed_at, owner_scope, visibility_scope,
+                   sensitivity, last_event_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', 0, 0,
+                         ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id, policy_proposal_id) DO NOTHING""",
+            (
+                envelope["tenant_id"],
+                payload["policy_proposal_id"],
+                payload["member_id"],
+                payload["scope_kind"],
+                payload["scope_value_digest"],
+                payload["instruction"],
+                payload["outcome_kind"],
+                _json(payload["verified_feedback_event_ids"]),
+                _json(payload.get("affected_proposal_ids") or []),
+                payload["preview_digest"],
+                _json(payload["policy_diff"]),
+                payload["explanation"],
+                payload["proposed_at"],
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
+                envelope["sensitivity"],
+                envelope["event_id"],
+            ),
+        )
+        return
+    if event_type == "triage.source_policy_rule.decided":
+        proposal = conn.execute(
+            """SELECT * FROM triage_source_policy_proposals
+                 WHERE tenant_id=? AND policy_proposal_id=? AND member_id=?
+                   AND owner_scope=? AND visibility_scope=?""",
+            (
+                envelope["tenant_id"],
+                payload["policy_proposal_id"],
+                payload["member_id"],
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
+            ),
+        ).fetchone()
+        if (
+            proposal is None
+            or proposal["status"] != "proposed"
+            or proposal["preview_digest"] != payload["preview_digest"]
+            or proposal["scope_kind"] != payload["scope_kind"]
+            or proposal["scope_value_digest"] != payload["scope_value_digest"]
+            or proposal["outcome_kind"] != payload["outcome_kind"]
+        ):
+            return
+        status = {
+            "approve": "approved",
+            "trial": "trial",
+            "reject": "rejected",
+            "suppress": "suppressed",
+            "edit": "proposed",
+        }[payload["decision"]]
+        conn.execute(
+            """UPDATE triage_source_policy_proposals
+                  SET status=?, last_event_id=?
+                WHERE tenant_id=? AND policy_proposal_id=?
+                  AND member_id=? AND last_event_id < ?""",
+            (
+                status,
+                envelope["event_id"],
+                envelope["tenant_id"],
+                payload["policy_proposal_id"],
+                payload["member_id"],
+                envelope["event_id"],
+            ),
+        )
+        if payload["decision"] not in {"approve", "trial"}:
+            return
+        conn.execute(
+            """INSERT INTO triage_source_policy_rules (
+                   tenant_id, rule_id, policy_proposal_id, member_id,
+                   scope_kind, scope_value_digest, instruction,
+                   activation_mode, trial_proposal_ids_json, status,
+                   activated_at, owner_scope, visibility_scope, sensitivity,
+                   provider_effects, last_event_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+               ON CONFLICT(tenant_id, rule_id) DO NOTHING""",
+            (
+                envelope["tenant_id"],
+                payload["rule_id"],
+                payload["policy_proposal_id"],
+                payload["member_id"],
+                proposal["scope_kind"],
+                proposal["scope_value_digest"],
+                payload["instruction"],
+                "approved" if payload["decision"] == "approve" else "trial",
+                _json(payload.get("trial_proposal_ids") or []),
+                "active" if payload["decision"] == "approve" else "trial",
+                payload["decided_at"],
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
+                envelope["sensitivity"],
+                envelope["event_id"],
+            ),
+        )
+        return
+    rule = conn.execute(
+        """SELECT * FROM triage_source_policy_rules
+             WHERE tenant_id=? AND rule_id=? AND member_id=?
+               AND owner_scope=? AND visibility_scope=?""",
+        (
+            envelope["tenant_id"],
+            payload["rule_id"],
+            payload["member_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+        ),
+    ).fetchone()
+    if rule is None or rule["instruction"] != payload["previous_instruction"]:
+        return
+    status = {
+        "retain": rule["status"],
+        "narrow": rule["status"],
+        "suspend": "suspended",
+        "revoke": "revoked",
+    }[payload["decision"]]
+    instruction = payload.get("replacement_instruction") or rule["instruction"]
+    conn.execute(
+        """UPDATE triage_source_policy_rules
+              SET instruction=?, status=?, last_review_decision=?,
+                  last_review_reason=?, reviewed_at=?, last_event_id=?
+            WHERE tenant_id=? AND rule_id=? AND member_id=?
+              AND last_event_id < ?""",
+        (
+            instruction,
+            status,
+            payload["decision"],
+            payload["reason"],
+            payload["reviewed_at"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["rule_id"],
+            payload["member_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
 def _record_relationship_decision(
     envelope: Mapping[str, Any], conn: sqlcipher3.Connection
 ) -> None:
@@ -1121,3 +1279,9 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _record_feedback(envelope, conn)
     elif event_type in {"triage.policy_rule.approved", "triage.policy_rule.revoked"}:
         _record_policy(envelope, conn)
+    elif event_type in {
+        "triage.source_policy_rule.proposed",
+        "triage.source_policy_rule.decided",
+        "triage.source_policy_rule.reviewed",
+    }:
+        _record_source_policy(envelope, conn)

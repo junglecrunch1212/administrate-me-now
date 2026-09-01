@@ -314,6 +314,45 @@ def feedback_scope_count(
     return int(row[0])
 
 
+def verified_feedback_for_scope(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    scope_kind: str,
+    scope_value: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Return exact projected member outcomes usable as learning evidence."""
+
+    columns = {
+        "context": "context_id",
+        "candidate_kind": "target_kind",
+        "account": "provider_account_id",
+        "workspace": "workspace",
+        "sender": "sender_digest",
+    }
+    column = columns.get(scope_kind)
+    if column is None:
+        raise ValueError("unsupported feedback policy scope")
+    rows = conn.execute(
+        f"""SELECT feedback_id, proposal_id, reason, last_event_id, recorded_at
+              FROM triage_feedback
+             WHERE tenant_id=? AND member_id=? AND owner_scope=?
+               AND visibility_scope=? AND {column}=?
+             ORDER BY recorded_at DESC, feedback_id LIMIT ?""",  # noqa: S608
+        (
+            session.tenant_id,
+            member_id,
+            f"private:{member_id}",
+            f"private:{member_id}",
+            scope_value,
+            max(1, min(limit, 100)),
+        ),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def policy_rules_for_member(
     conn: sqlcipher3.Connection,
     session: Session,
@@ -357,12 +396,101 @@ def get_policy_rule(
     return dict(row) if row is not None else None
 
 
+def source_policy_proposals_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT * FROM triage_source_policy_proposals
+             WHERE tenant_id=? AND member_id=? AND owner_scope=?
+               AND visibility_scope=?
+             ORDER BY proposed_at DESC, policy_proposal_id""",
+        (
+            session.tenant_id,
+            member_id,
+            f"private:{member_id}",
+            f"private:{member_id}",
+        ),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        for key in (
+            "verified_feedback_event_ids_json",
+            "affected_proposal_ids_json",
+            "policy_diff_json",
+        ):
+            value[key.removesuffix("_json")] = json.loads(value.pop(key))
+        result.append(value)
+    return result
+
+
+def get_source_policy_proposal(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    policy_proposal_id: str,
+) -> dict[str, Any] | None:
+    rows = source_policy_proposals_for_member(conn, session, member_id=member_id)
+    return next(
+        (value for value in rows if value["policy_proposal_id"] == policy_proposal_id),
+        None,
+    )
+
+
+def source_policy_rules_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT * FROM triage_source_policy_rules
+             WHERE tenant_id=? AND member_id=? AND owner_scope=?
+               AND visibility_scope=?
+             ORDER BY activated_at DESC, rule_id""",
+        (
+            session.tenant_id,
+            member_id,
+            f"private:{member_id}",
+            f"private:{member_id}",
+        ),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        value["trial_proposal_ids"] = json.loads(
+            value.pop("trial_proposal_ids_json") or "[]"
+        )
+        result.append(value)
+    return result
+
+
+def get_source_policy_rule(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    rule_id: str,
+) -> dict[str, Any] | None:
+    rows = source_policy_rules_for_member(conn, session, member_id=member_id)
+    return next((value for value in rows if value["rule_id"] == rule_id), None)
+
+
 __all__ = [
     "bounded_traversal",
     "context_summary",
     "feedback_pattern_counts",
     "feedback_scope_count",
+    "get_source_policy_proposal",
+    "get_source_policy_rule",
     "get_policy_rule",
     "policy_rules_for_member",
     "reconciliation_for_proposal",
+    "source_policy_proposals_for_member",
+    "source_policy_rules_for_member",
+    "verified_feedback_for_scope",
 ]
