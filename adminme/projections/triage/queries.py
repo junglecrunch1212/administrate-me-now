@@ -443,7 +443,18 @@ def triage_page_for_member(
     if target_kind is not None:
         filter_sql += " AND target_kind=?"
         filter_params.append(target_kind)
-    lane_case = "priority_rank"
+    # Reconciliation priority is the primary attention key once a decision is
+    # active.  Preserve the established deterministic lane order as its
+    # secondary key and as the complete fallback for Phase A/default-off rows,
+    # whose stored priority remains the neutral rank (60).  This keeps the
+    # pre-admission queue stable while allowing explicit instruction, promise,
+    # known-human, and deadline ranks to lead after activation.
+    legacy_lane_case = (
+        "CASE queue_lane "
+        + " ".join(f"WHEN '{lane}' THEN {rank}" for lane, rank in _LANE_ORDER.items())
+        + " ELSE 99 END"
+    )
+    lane_case = f"(priority_rank * 100 + {legacy_lane_case})"
     disposition_sql = (
         "" if lens == "all_candidates" else "AND decision_disposition='decision'"
     )
