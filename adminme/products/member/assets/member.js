@@ -172,6 +172,7 @@ function triageLanePresentation(lane) {
     financial: ["Money", "This proposal contains a reviewed bill or payment signal."],
     member_promise: ["Your promise", "This appears to describe something you agreed to do."],
     member_priority: ["Your priority", "You or a typed source marked this as a priority."],
+    known_human_request: ["Known person request", "A known correspondent with prior interaction made an actionable request."],
     recurring_exception: ["Recurring issue", "A recurrence appears missed, overdue, failed, or exceptional."],
     standard: ["Other review", "No explicit security, date, money, promise, priority, or recurring-exception fact was found."],
   }[lane] || ["Review", "This proposal is waiting for a human decision."];

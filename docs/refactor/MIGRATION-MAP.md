@@ -1,5 +1,18 @@
 # Migration map
 
+G03 cross-source reconciliation update (2026-09-01): Context Fabric advances
+additively to v3 and Triage to v10. New immutable
+`context.reconciliation.typed_fact_shared@v1` and
+`triage.reconciliation.decided@v1` events preserve exact policy, scope,
+freshness, lineage, relationship, priority, correction, and zero-effect
+evidence. No historical source, canonical object, member decision, credential,
+provider configuration, or checkpoint is rewritten. The production runtime
+emits receipts but the queue-mutation flag defaults off; live admission and
+historical-backlog mutation remain a separate Phase B owner decision. Older
+code can ignore the new event types, and both affected projections are
+disposable and rebuildable, so rollback selects the predecessor release without
+provider reconciliation.
+
 G02 exact-source policy V2 update (2026-08-31): candidate policy is
 **MODERNIZED IN SHADOW** without changing live admission. The secret-free
 Settings cache advances additively from schema v2 to v3 and accepts v1/v2

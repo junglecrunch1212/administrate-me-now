@@ -90,6 +90,7 @@ from adminme.products.openclaw.main import router as openclaw_router
 from adminme.projections.runner import ProjectionRunner, register_default_projections
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.reconciliation import ReconciliationAdmissionEvaluator
 from adminme.settings_control import SettingsControlStore
 from adminme.source_policy import source_policy_event_types
 from adminme.source_policy_shadow import SourcePolicyShadowEvaluator
@@ -138,6 +139,7 @@ class RuntimeSettings:
     host_topology: dict[str, Any] = field(default_factory=dict)
     deployment_evidence: dict[str, Any] = field(default_factory=dict)
     deployment_evidence_required: bool = False
+    reconciliation_admission_enabled: bool = False
     provider_bindings: tuple[ProviderBinding, ...] = field(
         default_factory=tuple, init=False
     )
@@ -488,6 +490,10 @@ class RuntimeSettings:
             == "1",
             member_chat_enabled_members=frozenset(chat_members),
             child_chat_enabled_members=frozenset(child_chat_members),
+            reconciliation_admission_enabled=os.environ.get(
+                "ADMINME_RECONCILIATION_ADMISSION_ENABLED", "0"
+            )
+            == "1",
         )
 
     @classmethod
@@ -517,6 +523,7 @@ class RuntimeSettings:
         host_topology: dict[str, Any] | None = None,
         deployment_evidence: dict[str, Any] | None = None,
         deployment_evidence_required: bool = False,
+        reconciliation_admission_enabled: bool = False,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -548,6 +555,7 @@ class RuntimeSettings:
             host_topology=dict(host_topology or {}),
             deployment_evidence=dict(deployment_evidence or {}),
             deployment_evidence_required=deployment_evidence_required,
+            reconciliation_admission_enabled=reconciliation_admission_enabled,
         )
 
 
@@ -623,6 +631,7 @@ class AdministrateMeRuntime:
             settings.instance.config_dir / "settings-control.json"
         )
         self.source_policy_shadow: SourcePolicyShadowEvaluator | None = None
+        self.reconciliation_admission: ReconciliationAdmissionEvaluator | None = None
         self.temporary_surfaces = TemporarySurfaceStore(
             settings.instance.config_dir / "temporary-surfaces.json"
         )
@@ -664,6 +673,13 @@ class AdministrateMeRuntime:
                 self.settings_control,
                 self.settings_control.effective_candidate_policy,
                 self.settings.provider_bindings,
+            )
+            self.reconciliation_admission = ReconciliationAdmissionEvaluator(
+                self.events,
+                self.event_log,
+                self.settings_control,
+                provider_bindings=self.settings.provider_bindings,
+                admission_active=self.settings.reconciliation_admission_enabled,
             )
             await self._hydrate_openclaw_state()
             set_default_event_sink(self.events)
@@ -809,6 +825,21 @@ class AdministrateMeRuntime:
                 source_policy_event_types(self.settings.repository_root),
                 self.source_policy_shadow.handle,
                 consumer_version=self.source_policy_shadow.CONSUMER_VERSION,
+                replay_on_version_change=True,
+            )
+            self.bus.subscribe(
+                "triage-reconciliation:admission",
+                list(
+                    dict.fromkeys(
+                        [
+                            *source_policy_event_types(self.settings.repository_root),
+                            "triage.item.proposed",
+                            "context.reconciliation.typed_fact_shared",
+                        ]
+                    )
+                ),
+                self.reconciliation_admission.handle,
+                consumer_version=self.reconciliation_admission.CONSUMER_VERSION,
                 replay_on_version_change=True,
             )
             self.bus.subscribe(

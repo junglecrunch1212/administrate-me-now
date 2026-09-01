@@ -888,6 +888,174 @@ def _record_source_text_decision(
     )
 
 
+def _record_shared_reconciliation_fact(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if (
+        envelope.get("owner_scope") != "shared:household"
+        or envelope.get("visibility_scope") != "shared:household"
+        or envelope.get("actor_identity") != payload.get("source_member_id")
+    ):
+        return
+    conn.execute(
+        """INSERT INTO shared_reconciliation_facts (
+               tenant_id, fact_id, source_member_id,
+               shared_with_member_ids_json, share_grant_id,
+               source_reference_digest, fact_kind, references_json,
+               current_state, occurred_at, expires_at, owner_scope,
+               visibility_scope, sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, fact_id) DO NOTHING""",
+        (
+            envelope["tenant_id"],
+            payload["fact_id"],
+            payload["source_member_id"],
+            _json(payload["shared_with_member_ids"]),
+            payload["share_grant_id"],
+            payload["source_reference_digest"],
+            payload["fact_kind"],
+            _json(payload["references"]),
+            payload["current_state"],
+            payload["occurred_at"],
+            payload.get("expires_at"),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def _record_reconciliation(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("owner_member_id")):
+        return
+    conn.execute(
+        """INSERT INTO reconciliation_decisions (
+               tenant_id, reconciliation_id, proposal_id, primary_proposal_id,
+               matter_id, owner_member_id, source_event_id,
+               evidence_source_event_ids_json, member_authored_text_digest,
+               decision, decision_revision,
+               supersedes_reconciliation_event_id, policy_json,
+               source_coordinate_json, freshness, priority_rank,
+               priority_basis_json, reason_codes_json, admission_active,
+               decided_at, owner_scope, visibility_scope, sensitivity,
+               last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, reconciliation_id) DO NOTHING""",
+        (
+            envelope["tenant_id"],
+            payload["reconciliation_id"],
+            payload["proposal_id"],
+            payload.get("primary_proposal_id"),
+            payload["matter_id"],
+            payload["owner_member_id"],
+            payload["source_event_id"],
+            _json(payload["evidence_source_event_ids"]),
+            payload.get("member_authored_text_digest"),
+            payload["decision"],
+            payload["decision_revision"],
+            payload.get("supersedes_reconciliation_event_id"),
+            _json(payload["policy"]),
+            _json(payload["source_coordinate"]),
+            payload["freshness"],
+            payload["priority_rank"],
+            _json(payload["priority_basis"]),
+            _json(payload["reason_codes"]),
+            int(bool(payload["admission_active"])),
+            payload["decided_at"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+    matter_id = str(payload["matter_id"])
+    proposal_node = f"triage:{payload['proposal_id']}"
+    _put_context(
+        envelope,
+        conn,
+        context_id=matter_id,
+        level="deterministic_matter",
+    )
+    _put_node(
+        envelope,
+        conn,
+        node_id=proposal_node,
+        node_kind="triage_candidate",
+        authority="deterministic_derived",
+    )
+    _put_edge(
+        envelope,
+        conn,
+        from_node_id=proposal_node,
+        to_node_id=matter_id,
+        edge_type="member_of_reconciled_matter",
+        authority="deterministic_derived",
+        reason_codes=["triage_reconciliation_decision"],
+        source_event_ids=list(payload["evidence_source_event_ids"]),
+    )
+    for relationship in payload.get("relationships") or []:
+        conn.execute(
+            """INSERT INTO reconciliation_relationships (
+                   tenant_id, relationship_id, reconciliation_id, proposal_id,
+                   source_event_id, related_source_event_id,
+                   relationship_type, authority, automatic_effect,
+                   reason_codes_json, owner_member_id, owner_scope,
+                   visibility_scope, sensitivity, last_event_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id, relationship_id, reconciliation_id)
+               DO NOTHING""",
+            (
+                envelope["tenant_id"],
+                relationship["relationship_id"],
+                payload["reconciliation_id"],
+                payload["proposal_id"],
+                payload["source_event_id"],
+                relationship["related_source_event_id"],
+                relationship["relationship_type"],
+                relationship["authority"],
+                int(bool(relationship["automatic_effect"])),
+                _json(relationship["reason_codes"]),
+                payload["owner_member_id"],
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
+                envelope["sensitivity"],
+                envelope["event_id"],
+            ),
+        )
+        if not relationship["automatic_effect"]:
+            continue
+        related_node = _event_node_id(str(relationship["related_source_event_id"]))
+        _put_node(
+            envelope,
+            conn,
+            node_id=related_node,
+            node_kind="source_event_reference",
+            authority="deterministic_derived",
+        )
+        _put_edge(
+            envelope,
+            conn,
+            from_node_id=proposal_node,
+            to_node_id=related_node,
+            edge_type=str(relationship["relationship_type"]),
+            authority=(
+                "member_confirmed"
+                if relationship["authority"]
+                in {"member_confirmed", "explicitly_shared_typed_fact"}
+                else "provider_exact"
+                if relationship["authority"] == "provider_exact"
+                else "deterministic_derived"
+            ),
+            reason_codes=list(relationship["reason_codes"]),
+            source_event_ids=list(payload["evidence_source_event_ids"]),
+        )
+
+
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     """Index one envelope without reading another projection or the network."""
 
@@ -945,6 +1113,10 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "context.source_text.reinstated",
     }:
         _record_source_text_decision(envelope, conn)
+    elif event_type == "context.reconciliation.typed_fact_shared":
+        _record_shared_reconciliation_fact(envelope, conn)
+    elif event_type == "triage.reconciliation.decided":
+        _record_reconciliation(envelope, conn)
     elif event_type == "triage.feedback.recorded":
         _record_feedback(envelope, conn)
     elif event_type in {"triage.policy_rule.approved", "triage.policy_rule.revoked"}:

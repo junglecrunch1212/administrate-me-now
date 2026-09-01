@@ -28,6 +28,33 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
     )
     interpretation = result.pop("interpretation_json", None)
     result["interpretation"] = json.loads(interpretation) if interpretation else None
+    result["reconciliation"] = {
+        "active": bool(result.pop("reconciliation_active", 0)),
+        "decision": result.get("admission_decision", "admit"),
+        "reconciliation_id": result.pop("reconciliation_id", None),
+        "event_id": result.pop("reconciliation_event_id", None),
+        "revision": result.pop("reconciliation_revision", 0),
+        "reasons": json.loads(result.pop("reconciliation_reasons_json", "[]") or "[]"),
+        "evidence": json.loads(
+            result.pop("reconciliation_evidence_json", "[]") or "[]"
+        ),
+        "member_authored_text_digest": result.pop(
+            "reconciliation_authored_text_digest", None
+        ),
+        "policy": (
+            json.loads(value)
+            if (value := result.pop("reconciliation_policy_json", None))
+            else None
+        ),
+        "scope": (
+            json.loads(value)
+            if (value := result.pop("reconciliation_scope_json", None))
+            else None
+        ),
+        "freshness": result.pop("reconciliation_freshness", "unknown"),
+        "priority_rank": result.get("priority_rank", 60),
+        "priority_basis": json.loads(result.pop("priority_basis_json", "[]") or "[]"),
+    }
     result["id"] = result["proposal_id"]
     result["kind"] = result["target_kind"]
     result["actions"] = (
@@ -141,8 +168,9 @@ _LANE_ORDER = {
     "financial": 2,
     "member_promise": 3,
     "member_priority": 4,
-    "recurring_exception": 5,
-    "standard": 6,
+    "known_human_request": 5,
+    "recurring_exception": 6,
+    "standard": 7,
 }
 
 
@@ -194,7 +222,7 @@ def matter_for_proposal(
     root = min(
         children,
         key=lambda item: (
-            _LANE_ORDER.get(str(item.get("queue_lane") or "standard"), 99),
+            int(item["priority_rank"] if item.get("priority_rank") is not None else 60),
             str(item.get("proposed_at") or ""),
             str(item.get("proposal_id") or ""),
         ),
@@ -229,7 +257,8 @@ def _queue_revision(
 
     private_scope = f"private:{member_id}"
     rows = conn.execute(
-        """SELECT proposal_id, context_id, queue_lane, proposed_at,
+        """SELECT proposal_id, context_id, queue_lane, priority_rank,
+                  admission_decision, proposed_at,
                   decision_disposition, state, last_event_id,
                   owner_scope, visibility_scope, sensitivity
              FROM triage_items
@@ -248,6 +277,8 @@ def _queue_revision(
                     row["proposal_id"],
                     row["context_id"],
                     row["queue_lane"],
+                    row["priority_rank"],
+                    row["admission_decision"],
                     row["proposed_at"],
                     row["decision_disposition"],
                     row["state"],
@@ -412,11 +443,7 @@ def triage_page_for_member(
     if target_kind is not None:
         filter_sql += " AND target_kind=?"
         filter_params.append(target_kind)
-    lane_case = (
-        "CASE queue_lane "
-        + " ".join(f"WHEN '{lane}' THEN {rank}" for lane, rank in _LANE_ORDER.items())
-        + " ELSE 99 END"
-    )
+    lane_case = "priority_rank"
     disposition_sql = (
         "" if lens == "all_candidates" else "AND decision_disposition='decision'"
     )
