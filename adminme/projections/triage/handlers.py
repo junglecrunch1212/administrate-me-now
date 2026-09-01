@@ -80,6 +80,52 @@ def _matching_learned_rule(
     )
 
 
+def _apply_learned_policy_to_row(
+    conn: sqlcipher3.Connection, row: dict[str, Any]
+) -> None:
+    rule = _matching_learned_rule(conn, row)
+    instruction = str(rule["instruction"]) if rule is not None else "always"
+    policy_state = {
+        "always": "none",
+        "usually": "low_confidence_review",
+        "ask": "clarification_required",
+        "never": "context_only",
+    }[instruction]
+    lane = (
+        "low_confidence_review"
+        if instruction == "usually"
+        else "clarification_conflict"
+        if instruction == "ask"
+        else human_triage_lane(row)
+    )
+    conn.execute(
+        """UPDATE triage_items
+              SET learned_policy_state=?, learned_rule_id=?, human_lane=?
+            WHERE tenant_id=? AND proposal_id=?""",
+        (
+            policy_state,
+            rule["rule_id"] if rule is not None else None,
+            lane,
+            row["tenant_id"],
+            row["proposal_id"],
+        ),
+    )
+
+
+def _recompute_learned_policy_for_proposal(
+    conn: sqlcipher3.Connection,
+    *,
+    tenant_id: str,
+    proposal_id: str,
+) -> None:
+    row = conn.execute(
+        "SELECT * FROM triage_items WHERE tenant_id=? AND proposal_id=?",
+        (tenant_id, proposal_id),
+    ).fetchone()
+    if row is not None:
+        _apply_learned_policy_to_row(conn, dict(row))
+
+
 def _recompute_learned_policy_for_member(
     conn: sqlcipher3.Connection,
     *,
@@ -93,35 +139,8 @@ def _recompute_learned_policy_for_member(
              ORDER BY proposal_id""",
         (tenant_id, member_id, f"private:{member_id}", f"private:{member_id}"),
     ).fetchall()
-    for row_value in rows:
-        row = dict(row_value)
-        rule = _matching_learned_rule(conn, row)
-        instruction = str(rule["instruction"]) if rule is not None else "always"
-        policy_state = {
-            "always": "none",
-            "usually": "low_confidence_review",
-            "ask": "clarification_required",
-            "never": "context_only",
-        }[instruction]
-        lane = (
-            "low_confidence_review"
-            if instruction == "usually"
-            else "clarification_conflict"
-            if instruction == "ask"
-            else human_triage_lane(row)
-        )
-        conn.execute(
-            """UPDATE triage_items
-                  SET learned_policy_state=?, learned_rule_id=?, human_lane=?
-                WHERE tenant_id=? AND proposal_id=?""",
-            (
-                policy_state,
-                rule["rule_id"] if rule is not None else None,
-                lane,
-                tenant_id,
-                row["proposal_id"],
-            ),
-        )
+    for row in rows:
+        _apply_learned_policy_to_row(conn, dict(row))
 
 
 def _record_learned_policy(
@@ -500,10 +519,10 @@ def _insert(
             proposal_id,
         ),
     )
-    _recompute_learned_policy_for_member(
+    _recompute_learned_policy_for_proposal(
         conn,
         tenant_id=str(envelope["tenant_id"]),
-        member_id=owner_member_id,
+        proposal_id=proposal_id,
     )
 
 
@@ -1025,10 +1044,10 @@ def _apply_reconciliation(
                 payload["proposal_id"],
             ),
         )
-        _recompute_learned_policy_for_member(
+        _recompute_learned_policy_for_proposal(
             conn,
             tenant_id=str(envelope["tenant_id"]),
-            member_id=str(payload["owner_member_id"]),
+            proposal_id=str(payload["proposal_id"]),
         )
 
 
