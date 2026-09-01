@@ -28,6 +28,11 @@ def _json(value: Any, default: Any) -> str:
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    # Service-owned observations remain service-private source facts. Member
+    # calendar capacity and policy projections must never treat the CoS as a
+    # household member or infer a grant from Workspace access.
+    if (envelope.get("payload") or {}).get("service_principal_id"):
+        return
     event_type = envelope["type"]
     if event_type == "calendar.event_added":
         apply_calendar_snapshot(envelope, conn)

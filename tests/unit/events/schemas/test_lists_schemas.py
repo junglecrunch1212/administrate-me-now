@@ -28,6 +28,7 @@ from adminme.events.schemas.lists import (
     ListItemDeletedV1,
     ListItemUpdatedV1,
     ListItemV3,
+    ListItemV4,
 )
 
 
@@ -99,9 +100,10 @@ def test_list_item_schemas_preserve_v1_and_publish_rich_v2() -> None:
         "list_item.updated",
         "list_item.completed",
     ):
-        assert registry.latest_version(name) == 3
+        assert registry.latest_version(name) == 4
         assert registry.get(name, 3) is ListItemV3
-    assert registry.latest_version("list_item.deleted") == 2
+        assert registry.get(name, 4) is ListItemV4
+    assert registry.latest_version("list_item.deleted") == 3
 
 
 # ---------------------------------------------------------------------------

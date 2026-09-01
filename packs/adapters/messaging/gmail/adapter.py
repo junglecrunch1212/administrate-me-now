@@ -67,6 +67,7 @@ from adminme.lib.adapters import (
     SendResult,
 )
 from adminme.lib.observation import outbound
+from adminme.provider_bindings import adapter_owner_coordinate_id
 
 _log = logging.getLogger(__name__)
 
@@ -318,18 +319,11 @@ class GmailAdapter(CommunicationAdapter):
             )
         self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
-        self._cursor_id = str(
-            getattr(self, "instance_name", None)
-            or self._config.get("id")
-            or ":".join(
-                (
-                    self.name,
-                    str(self._config.get("member_id") or "unbound"),
-                    str(self._config.get("user_email") or "gmail"),
-                )
+        self._cursor_id = adapter_owner_coordinate_id(self.name, self._config)
+        if ctx.cursor_store is not None and self._config.get("member_id"):
+            ctx.cursor_store.adopt_legacy_coordinate(
+                self._legacy_cursor_id(), self._cursor_id
             )
-        )
-        if ctx.cursor_store is not None:
             self._cursor = ctx.cursor_store.get(self._cursor_id).provider_watermark
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
@@ -591,6 +585,19 @@ class GmailAdapter(CommunicationAdapter):
             related_context_days=related_days,
         )
 
+    def _legacy_cursor_id(self) -> str:
+        return str(
+            getattr(self, "instance_name", None)
+            or self._config.get("id")
+            or ":".join(
+                (
+                    self.name,
+                    str(self._config.get("member_id") or "unbound"),
+                    str(self._config.get("user_email") or "gmail"),
+                )
+            )
+        )
+
     @staticmethod
     def _backfill_cursor_id(
         cursor_id: str, *, policy: GmailInitialBackfillPolicy
@@ -618,6 +625,11 @@ class GmailAdapter(CommunicationAdapter):
             }
             return 0, 0
         backfill_id = self._backfill_cursor_id(cursor_id, policy=policy)
+        if store is not None and self._config.get("member_id"):
+            store.adopt_legacy_coordinate(
+                self._backfill_cursor_id(self._legacy_cursor_id(), policy=policy),
+                backfill_id,
+            )
         if self._initial_backfill_complete or (
             store is not None
             and store.get(backfill_id).provider_watermark == "complete"
@@ -1515,6 +1527,13 @@ class GmailAdapter(CommunicationAdapter):
             if address
         ]
         labels = [str(value) for value in (message.get("labelIds") or [])]
+        service_principal_id = self._config.get("service_principal_id")
+        service_owned = isinstance(service_principal_id, str) and bool(
+            service_principal_id
+        )
+        trusted_route_key = (
+            self._trusted_route_key(headers.get("from")) if service_owned else None
+        )
         event_payload: dict[str, Any] = {
             "source_channel": "gmail",
             "from_identifier": headers.get("from") or "unknown@unknown",
@@ -1526,7 +1545,7 @@ class GmailAdapter(CommunicationAdapter):
             "received_at": received_iso,
             "attachments": self._attachment_metadata(payload_dict),
             "native_message_id": str(message.get("id") or "unknown"),
-            "member_id": str(self._config.get("member_id") or "unbound"),
+            "member_id": self._config.get("member_id"),
             "provider": "gmail",
             "provider_account_id": str(configured_to or "gmail"),
             "workspace": str(self._config.get("workspace") or "personal"),
@@ -1543,19 +1562,49 @@ class GmailAdapter(CommunicationAdapter):
             "starred": "STARRED" in labels,
             "important": "IMPORTANT" in labels,
         }
+        if service_owned:
+            event_payload.update(
+                {
+                    "service_principal_id": service_principal_id,
+                    "routing_scope": "unresolved",
+                    "routing_target_id": None,
+                    "channel_id": str(self._config["channel_id"]),
+                    "trusted_route_key": trusted_route_key,
+                    "route_source": "exact_authenticated_metadata",
+                }
+            )
         native_message_id = str(message.get("id") or "unknown")
         stable_fingerprint = fingerprint or self._message_fingerprint(message)
         return await self._append(
             ctx=ctx,
             event_type="messaging.received",
             payload=event_payload,
-            schema_version=4,
+            schema_version=6 if service_owned else 4,
             idempotency_key=(f"gmail-message:{native_message_id}:{stable_fingerprint}"),
             raw_ref=(
                 f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
             ),
             occurred_at_override=received_iso,
         )
+
+    def _trusted_route_key(self, from_header: Any) -> str | None:
+        """Match only the exact normalized RFC sender address from Gmail metadata."""
+
+        if not isinstance(from_header, str):
+            return None
+        addresses = {
+            address.strip().casefold()
+            for _, address in getaddresses([from_header])
+            if address.strip()
+        }
+        matches = {
+            str(route.get("route_key"))
+            for route in self._config.get("trusted_sender_routes") or []
+            if isinstance(route, dict)
+            and isinstance(route.get("exact_from_identifier"), str)
+            and route["exact_from_identifier"].strip().casefold() in addresses
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
 
     async def _emit_message_observation(
         self,
@@ -1577,31 +1626,49 @@ class GmailAdapter(CommunicationAdapter):
         native_message_id = str(message.get("id") or "unknown")
         configured_account = str(self._config.get("user_email") or "gmail")
         sent_iso = self._epoch_ms_to_iso(message.get("internalDate"))
+        service_principal_id = self._config.get("service_principal_id")
+        service_owned = isinstance(service_principal_id, str) and bool(
+            service_principal_id
+        )
+        sent_payload: dict[str, Any] = {
+            "source_channel": "gmail",
+            "to_identifier": headers.get("to") or "unknown@unknown",
+            "thread_id": message.get("threadId"),
+            "subject": headers.get("subject"),
+            "body_text": body_text,
+            "body_html": body_html,
+            "sent_at": sent_iso,
+            "delivery_status": "sent",
+            "member_id": self._config.get("member_id"),
+            "provider": "gmail",
+            "provider_account_id": str(
+                self._config.get("provider_account_id") or configured_account
+            ),
+            "workspace": str(self._config.get("workspace") or "personal"),
+            "native_message_id": native_message_id,
+            "in_reply_to_interaction_id": None,
+            "rfc_message_id": headers.get("message-id"),
+            "references": _bounded_rfc_references(headers.get("references")),
+            "in_reply_to": headers.get("in-reply-to"),
+        }
+        if service_owned:
+            sent_payload.update(
+                {
+                    "service_principal_id": service_principal_id,
+                    "send_as": "service_principal",
+                    "routing_scope": "unresolved",
+                    "routing_target_id": None,
+                    "channel_id": str(self._config["channel_id"]),
+                    "route_source": "exact_authenticated_metadata",
+                }
+            )
         return await self._append(
             ctx=ctx,
             event_type="messaging.sent",
-            schema_version=4,
+            schema_version=6 if service_owned else 4,
             idempotency_key=(f"gmail-sent-message:{native_message_id}:{fingerprint}"),
             raw_ref=(f"gmail://messages/{native_message_id}#sha256={fingerprint}"),
-            payload={
-                "source_channel": "gmail",
-                "to_identifier": headers.get("to") or "unknown@unknown",
-                "thread_id": message.get("threadId"),
-                "subject": headers.get("subject"),
-                "body_text": body_text,
-                "body_html": body_html,
-                "sent_at": sent_iso,
-                "delivery_status": "sent",
-                "member_id": str(self._config.get("member_id") or "unbound"),
-                "provider": "gmail",
-                "provider_account_id": configured_account,
-                "workspace": str(self._config.get("workspace") or "personal"),
-                "native_message_id": native_message_id,
-                "in_reply_to_interaction_id": None,
-                "rfc_message_id": headers.get("message-id"),
-                "references": _bounded_rfc_references(headers.get("references")),
-                "in_reply_to": headers.get("in-reply-to"),
-            },
+            payload=sent_payload,
             occurred_at_override=sent_iso,
         )
 

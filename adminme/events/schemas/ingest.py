@@ -117,6 +117,28 @@ class MessagingReceivedV5(MessagingReceivedV4):
         return self
 
 
+class MessagingReceivedV6(MessagingReceivedV5):
+    """Service-owned direct intake with an exact trusted-metadata route key."""
+
+    model_config = {"extra": "forbid"}
+    channel_id: str = Field(min_length=1, max_length=240)
+    trusted_route_key: str | None = Field(
+        default=None, pattern=r"^route:[0-9a-f]{32,64}$"
+    )
+    route_source: Literal["exact_authenticated_metadata"]
+
+    @model_validator(mode="after")
+    def _validate_direct_source(self) -> "MessagingReceivedV6":
+        if self.service_principal_id is None or self.member_id is not None:
+            raise ValueError("direct service intake requires service ownership")
+        if self.routing_scope != "unresolved" or self.routing_target_id is not None:
+            raise ValueError(
+                "source adapters preserve a pending opaque route; the central "
+                "trusted route table alone resolves member scope"
+            )
+        return self
+
+
 class InteractionParticipantResolvedV1(BaseModel):
     """Identity pipeline result linking an interaction role to a Party."""
 
@@ -210,6 +232,26 @@ class MessagingSentV5(MessagingSentV4):
             raise ValueError(
                 "member-owned sent-message route must remain member-private"
             )
+        return self
+
+
+class MessagingSentV6(MessagingSentV5):
+    """Read-only observation of service-owned sent mail, never a send command."""
+
+    routing_scope: Literal[  # type: ignore[assignment]
+        "member_private", "household_shared", "external_contact", "unresolved"
+    ]
+    channel_id: str = Field(min_length=1, max_length=240)
+    route_source: Literal["exact_authenticated_metadata"]
+
+    @model_validator(mode="after")
+    def _validate_service_observation(self) -> "MessagingSentV6":
+        if self.service_principal_id is None or self.member_id is not None:
+            raise ValueError("service sent observation requires service ownership")
+        if self.send_as != "service_principal":
+            raise ValueError("service sent observation cannot impersonate a member")
+        if self.routing_scope == "unresolved" and self.routing_target_id is not None:
+            raise ValueError("unresolved sent observation cannot name a target")
         return self
 
 
@@ -371,6 +413,46 @@ class CalendarEventDeletedV2(BaseModel):
     deleted_at: str = Field(min_length=1)
 
 
+class CalendarEventV3(CalendarEventV2):
+    """Current owner-aware calendar observation for member or CoS sources."""
+
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_calendar_owner(self) -> "CalendarEventV3":
+        if (self.member_id is None) == (self.service_principal_id is None):
+            raise ValueError("calendar observation requires exactly one owner")
+        if self.service_principal_id is not None and self.workspace != "service":
+            raise ValueError("service calendar observation requires service workspace")
+        if self.member_id is not None and self.workspace == "service":
+            raise ValueError("member calendar observation cannot use service workspace")
+        return self
+
+
+class CalendarEventDeletedV3(CalendarEventDeletedV2):
+    """Owner-aware deletion paired with :class:`CalendarEventV3`."""
+
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def _validate_calendar_owner(self) -> "CalendarEventDeletedV3":
+        if (self.member_id is None) == (self.service_principal_id is None):
+            raise ValueError("calendar deletion requires exactly one owner")
+        if self.service_principal_id is not None and self.workspace != "service":
+            raise ValueError("service calendar deletion requires service workspace")
+        if self.member_id is not None and self.workspace == "service":
+            raise ValueError("member calendar deletion cannot use service workspace")
+        return self
+
+
 class CalendarEventOutcomeRecordedV1(BaseModel):
     """Activity evidence, deliberately distinct from a task completion.
 
@@ -445,6 +527,7 @@ registry.register("messaging.received", 2, MessagingReceivedV2)
 registry.register("messaging.received", 3, MessagingReceivedV3)
 registry.register("messaging.received", 4, MessagingReceivedV4)
 registry.register("messaging.received", 5, MessagingReceivedV5)
+registry.register("messaging.received", 6, MessagingReceivedV6)
 registry.register(
     "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
 )
@@ -453,6 +536,7 @@ registry.register("messaging.sent", 2, MessagingSentV2)
 registry.register("messaging.sent", 3, MessagingSentV3)
 registry.register("messaging.sent", 4, MessagingSentV4)
 registry.register("messaging.sent", 5, MessagingSentV5)
+registry.register("messaging.sent", 6, MessagingSentV6)
 registry.register("communication.state_changed", 1, CommunicationStateChangedV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)
@@ -461,6 +545,9 @@ registry.register("calendar.event_deleted", 1, CalendarEventDeletedV1)
 registry.register("calendar.event_added", 2, CalendarEventV2)
 registry.register("calendar.event_updated", 2, CalendarEventV2)
 registry.register("calendar.event_deleted", 2, CalendarEventDeletedV2)
+registry.register("calendar.event_added", 3, CalendarEventV3)
+registry.register("calendar.event_updated", 3, CalendarEventV3)
+registry.register("calendar.event_deleted", 3, CalendarEventDeletedV3)
 registry.register("calendar.event_outcome_recorded", 1, CalendarEventOutcomeRecordedV1)
 registry.register("artifact.received", 1, ArtifactReceivedV1)
 registry.register("messaging.classified", 1, MessagingClassifiedV1)

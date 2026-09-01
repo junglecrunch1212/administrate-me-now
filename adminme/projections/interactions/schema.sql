@@ -78,6 +78,37 @@ CREATE TABLE IF NOT EXISTS interaction_participants (
 CREATE INDEX IF NOT EXISTS idx_iparts_tenant_party
     ON interaction_participants(tenant_id, party_id);
 
+CREATE TABLE IF NOT EXISTS service_interactions (
+    tenant_id            TEXT NOT NULL,
+    interaction_id       TEXT NOT NULL,
+    service_principal_id TEXT NOT NULL,
+    provider             TEXT NOT NULL,
+    provider_account_id  TEXT NOT NULL,
+    channel_id           TEXT NOT NULL,
+    native_message_id    TEXT,
+    subject              TEXT,
+    body_text            TEXT,
+    occurred_at          TEXT NOT NULL,
+    trusted_route_key    TEXT,
+    routing_scope        TEXT NOT NULL DEFAULT 'unresolved'
+                         CHECK (routing_scope IN (
+                             'member_private','household_shared',
+                             'external_contact','unresolved'
+                         )),
+    routing_target_id    TEXT,
+    owner_scope          TEXT NOT NULL,
+    visibility_scope     TEXT NOT NULL,
+    sensitivity          TEXT NOT NULL,
+    last_event_id        TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, interaction_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_interactions_native
+    ON service_interactions(
+        tenant_id, service_principal_id, provider,
+        provider_account_id, native_message_id
+    ) WHERE native_message_id IS NOT NULL;
+
 -- Artifact links stay empty in this projection for v1. Prompt 06 populates
 -- via the artifacts projection; the table is present now to avoid a schema
 -- migration when that wiring lands.

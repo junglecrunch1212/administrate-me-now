@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from adminme.events.envelope import EventEnvelope
+from adminme.service_identities import service_private_scope
 
 
 class EnvelopeInvariantError(ValueError):
@@ -30,7 +31,18 @@ def validate_envelope_invariants(envelope: EventEnvelope) -> None:
         return
     if envelope.schema_version < 5:
         return
-    expected_scope = _messaging_route_scope(envelope.payload)
+    service_id = envelope.payload.get("service_principal_id")
+    pending_service_route = (
+        envelope.schema_version >= 6
+        and isinstance(service_id, str)
+        and envelope.payload.get("routing_scope") == "unresolved"
+        and envelope.payload.get("routing_target_id") is None
+    )
+    if pending_service_route:
+        assert isinstance(service_id, str)
+        expected_scope = service_private_scope(service_id)
+    else:
+        expected_scope = _messaging_route_scope(envelope.payload)
     violations: list[str] = []
     if envelope.owner_scope != expected_scope:
         violations.append("owner_scope")

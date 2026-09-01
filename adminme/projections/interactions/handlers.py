@@ -155,6 +155,9 @@ def _handle_messaging(
     family: str,
 ) -> None:
     p = envelope["payload"]
+    if p.get("service_principal_id"):
+        _handle_service_messaging(envelope, conn, direction=direction)
+        return
     channel_specific = p["source_channel"]
     occurred_at = p.get("received_at") or p.get("sent_at") or envelope["occurred_at"]
     subject = p.get("subject")
@@ -281,6 +284,81 @@ def _handle_messaging(
                 "ON CONFLICT(tenant_id, interaction_id, party_id, role) DO NOTHING",
                 (envelope["tenant_id"], interaction_id, participant, role_key),
             )
+
+
+def _handle_service_messaging(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    direction: str,
+) -> None:
+    """Store CoS mailbox content only in its service-private projection."""
+
+    p = envelope["payload"]
+    provider = _provider(str(p.get("source_channel") or "messaging"), p)
+    account = str(
+        p.get("provider_account_id") or envelope.get("source_account_id") or provider
+    )
+    native_id = p.get("native_message_id")
+    existing = None
+    if isinstance(native_id, str) and native_id:
+        existing = conn.execute(
+            """SELECT interaction_id FROM service_interactions
+                 WHERE tenant_id=? AND service_principal_id=? AND provider=?
+                   AND provider_account_id=? AND native_message_id=?""",
+            (
+                envelope["tenant_id"],
+                p["service_principal_id"],
+                provider,
+                account,
+                native_id,
+            ),
+        ).fetchone()
+    interaction_id = (
+        str(existing[0]) if existing is not None else _interaction_id_for(envelope)
+    )
+    conn.execute(
+        """
+        INSERT INTO service_interactions (
+            tenant_id, interaction_id, service_principal_id, provider,
+            provider_account_id, channel_id, native_message_id, subject,
+            body_text, occurred_at, trusted_route_key, routing_scope,
+            routing_target_id, owner_scope, visibility_scope, sensitivity,
+            last_event_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(tenant_id, interaction_id) DO UPDATE SET
+            subject=excluded.subject,
+            body_text=excluded.body_text,
+            occurred_at=excluded.occurred_at,
+            trusted_route_key=excluded.trusted_route_key,
+            routing_scope=excluded.routing_scope,
+            routing_target_id=excluded.routing_target_id,
+            owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            sensitivity=excluded.sensitivity,
+            last_event_id=excluded.last_event_id
+        WHERE service_interactions.last_event_id < excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            interaction_id,
+            p["service_principal_id"],
+            provider,
+            account,
+            str(p.get("channel_id") or "service-channel"),
+            native_id,
+            p.get("subject"),
+            p.get("body_text"),
+            p.get("received_at") or p.get("sent_at") or envelope["occurred_at"],
+            p.get("trusted_route_key"),
+            p.get("routing_scope") or "unresolved",
+            p.get("routing_target_id"),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
 
 
 def _handle_sms(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:

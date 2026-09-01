@@ -32,6 +32,7 @@ from adminme.lib.adapters import (
     WriteResult,
 )
 from adminme.lib.observation import outbound as observation_outbound
+from adminme.provider_bindings import adapter_owner_coordinate_id
 
 _log = logging.getLogger(__name__)
 
@@ -247,10 +248,17 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             raise ValueError("tasklist_id must be a non-empty string")
         if not isinstance(user_email, str) or "@" not in user_email:
             raise ValueError("user_email must be a valid email address")
-        if not isinstance(member_id, str) or not member_id:
-            raise ValueError("member_id must be a non-empty string")
+        service_principal_id = self._config.get("service_principal_id")
+        if bool(isinstance(member_id, str) and member_id) == bool(
+            isinstance(service_principal_id, str) and service_principal_id
+        ):
+            raise ValueError("Google Tasks requires exactly one owner principal")
         creds_json = self._credentials_resolver(op_ref)
         if op_ref.startswith("keychain://"):
+            if not isinstance(member_id, str) or not member_id:
+                raise ValueError(
+                    "installed-user OAuth is not reviewed for service ownership"
+                )
             provider_account_id = self._config.get("provider_account_id")
             if not isinstance(provider_account_id, str):
                 raise ValueError(
@@ -263,6 +271,10 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             )
         self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
+        if ctx.cursor_store is not None and self._config.get("member_id"):
+            ctx.cursor_store.adopt_legacy_coordinate(
+                self._legacy_cursor_id(), self._cursor_id()
+            )
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
@@ -326,6 +338,8 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             )
         store = ctx.cursor_store
         cursor_id = self._cursor_id()
+        if store is not None and self._config.get("member_id"):
+            store.adopt_legacy_coordinate(self._legacy_cursor_id(), cursor_id)
         if store is not None and not store.claim(
             cursor_id,
             self._lease_owner,
@@ -503,9 +517,25 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         return emitted, f"complete:{digest}"
 
     def _cursor_id(self) -> str:
+        return adapter_owner_coordinate_id(self.name, self._config)
+
+    def _legacy_cursor_id(self) -> str:
         return str(
             getattr(self, "instance_name", None) or self._config.get("id") or self.name
         )
+
+    def _owner_payload(self) -> dict[str, Any]:
+        member_id = self._config.get("member_id")
+        if isinstance(member_id, str) and member_id:
+            return {"member_id": member_id}
+        return {
+            "member_id": None,
+            "service_principal_id": self._config.get("service_principal_id"),
+            "workspace": str(self._config.get("workspace") or "personal"),
+        }
+
+    def _service_owned(self) -> bool:
+        return bool(self._config.get("service_principal_id"))
 
     @staticmethod
     def _provider_fingerprint(value: dict[str, Any], *, state: str) -> str:
@@ -655,7 +685,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 )
         updated = task.get("updated") or ctx.now_factory().isoformat()
         return {
-            "member_id": str(self._config["member_id"]),
+            **self._owner_payload(),
             "provider": "google_tasks",
             "provider_account_id": str(
                 self._config.get("provider_account_id")
@@ -719,7 +749,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             ctx=ctx,
             event_type=event_type,
             payload=payload,
-            schema_version=3,
+            schema_version=4 if self._service_owned() else 3,
             idempotency_key=self._revision_idempotency_key(
                 event_type,
                 str(tasklist.get("id") or ""),
@@ -739,8 +769,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         return await self._append(
             ctx=ctx,
             event_type=event_type,
+            schema_version=2 if self._service_owned() else 1,
             payload={
-                "member_id": str(self._config["member_id"]),
+                **self._owner_payload(),
                 "provider": "google_tasks",
                 "provider_account_id": str(
                     self._config.get("provider_account_id")
@@ -769,9 +800,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         return await self._append(
             ctx=ctx,
             event_type="list_item.deleted",
-            schema_version=2,
+            schema_version=3 if self._service_owned() else 2,
             payload={
-                "member_id": str(self._config["member_id"]),
+                **self._owner_payload(),
                 "provider": "google_tasks",
                 "provider_account_id": str(
                     self._config.get("provider_account_id")
@@ -797,7 +828,11 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         seed = "\x1f".join(
             (
                 self._cursor_id(),
-                str(self._config.get("member_id") or ""),
+                str(
+                    self._config.get("member_id")
+                    or self._config.get("service_principal_id")
+                    or ""
+                ),
                 str(
                     self._config.get("provider_account_id")
                     or self._config.get("user_email")
@@ -817,8 +852,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         await self._append(
             ctx=ctx,
             event_type="list.deleted",
+            schema_version=2 if self._service_owned() else 1,
             payload={
-                "member_id": str(self._config["member_id"]),
+                **self._owner_payload(),
                 "provider": "google_tasks",
                 "provider_account_id": str(
                     self._config.get("provider_account_id")

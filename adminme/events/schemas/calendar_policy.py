@@ -54,6 +54,26 @@ class CalendarSourceObservedV1(BaseModel):
     observed_at: datetime
 
 
+class CalendarSourceObservedV2(CalendarSourceObservedV1):
+    """Owner-aware source capability fact for reviewed CoS calendars."""
+
+    member_id: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=1, max_length=240
+    )
+    service_principal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    workspace: Literal["personal", "work", "service"]
+
+    @model_validator(mode="after")
+    def exact_owner(self) -> "CalendarSourceObservedV2":
+        if (self.member_id is None) == (self.service_principal_id is None):
+            raise ValueError("calendar source requires exactly one owner")
+        if self.service_principal_id is not None and self.workspace != "service":
+            raise ValueError("service calendar source requires service workspace")
+        if self.member_id is not None and self.workspace == "service":
+            raise ValueError("member calendar source cannot use service workspace")
+        return self
+
+
 class CalendarRuleConfiguredV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -155,6 +175,7 @@ class CalendarSchedulePolicyConfiguredV1(BaseModel):
 
 
 registry.register("calendar.source_observed", 1, CalendarSourceObservedV1)
+registry.register("calendar.source_observed", 2, CalendarSourceObservedV2)
 registry.register("calendar.rule.configured", 1, CalendarRuleConfiguredV1)
 registry.register(
     "calendar.schedule_policy.configured", 1, CalendarSchedulePolicyConfiguredV1
@@ -167,5 +188,6 @@ __all__ = [
     "CalendarRuleConfiguredV1",
     "CalendarSchedulePolicyConfiguredV1",
     "CalendarSourceObservedV1",
+    "CalendarSourceObservedV2",
     "ScheduleWindowV1",
 ]

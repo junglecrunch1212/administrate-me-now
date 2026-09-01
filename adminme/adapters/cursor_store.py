@@ -72,6 +72,11 @@ class AdapterCursorStore:
             );
             CREATE INDEX IF NOT EXISTS idx_adapter_dedupe_seen
                 ON adapter_dedupe(adapter_id, seen_at_ms);
+            CREATE TABLE IF NOT EXISTS adapter_cursor_coordinate_migrations (
+                legacy_id TEXT PRIMARY KEY,
+                coordinate_id TEXT NOT NULL UNIQUE,
+                adopted_at_ms INTEGER NOT NULL
+            );
             """
         )
         columns = {
@@ -117,9 +122,191 @@ class AdapterCursorStore:
             (adapter_id, now_ms),
         )
 
+    def _resolve_coordinate(self, adapter_id: str) -> str:
+        row = self._conn.execute(
+            "SELECT coordinate_id FROM adapter_cursor_coordinate_migrations "
+            "WHERE legacy_id=?",
+            (adapter_id,),
+        ).fetchone()
+        return str(row[0]) if row is not None else adapter_id
+
+    def _mirror_coordinate(self, coordinate_id: str) -> None:
+        legacy_ids = [
+            str(row[0])
+            for row in self._conn.execute(
+                "SELECT legacy_id FROM adapter_cursor_coordinate_migrations "
+                "WHERE coordinate_id=?",
+                (coordinate_id,),
+            ).fetchall()
+        ]
+        for legacy_id in legacy_ids:
+            self._conn.execute(
+                """UPDATE adapter_cursors
+                      SET provider_watermark=(
+                              SELECT provider_watermark FROM adapter_cursors
+                               WHERE adapter_id=?),
+                          lease_owner=(
+                              SELECT lease_owner FROM adapter_cursors
+                               WHERE adapter_id=?),
+                          lease_until_ms=(
+                              SELECT lease_until_ms FROM adapter_cursors
+                               WHERE adapter_id=?),
+                          error_count=(
+                              SELECT error_count FROM adapter_cursors
+                               WHERE adapter_id=?),
+                          circuit_state=(
+                              SELECT circuit_state FROM adapter_cursors
+                               WHERE adapter_id=?),
+                          updated_at_ms=(
+                              SELECT updated_at_ms FROM adapter_cursors
+                               WHERE adapter_id=?)
+                    WHERE adapter_id=?""",
+                (
+                    coordinate_id,
+                    coordinate_id,
+                    coordinate_id,
+                    coordinate_id,
+                    coordinate_id,
+                    coordinate_id,
+                    legacy_id,
+                ),
+            )
+            self._conn.execute(
+                "DELETE FROM adapter_retry_state WHERE adapter_id=?", (legacy_id,)
+            )
+            self._conn.execute(
+                """INSERT INTO adapter_retry_state (
+                       adapter_id, retry_not_before_ms
+                   )
+                   SELECT ?, retry_not_before_ms FROM adapter_retry_state
+                    WHERE adapter_id=?""",
+                (legacy_id, coordinate_id),
+            )
+            self._conn.execute(
+                "DELETE FROM adapter_dedupe WHERE adapter_id=?", (legacy_id,)
+            )
+            self._conn.execute(
+                """INSERT INTO adapter_dedupe (
+                       adapter_id, external_id, fingerprint, event_id, seen_at_ms
+                   )
+                   SELECT ?, external_id, fingerprint, event_id, seen_at_ms
+                     FROM adapter_dedupe WHERE adapter_id=?""",
+                (legacy_id, coordinate_id),
+            )
+
+    def adopt_legacy_coordinate(self, legacy_id: str, coordinate_id: str) -> bool:
+        """Copy one predecessor namespace into its full owner coordinate.
+
+        The predecessor rows remain for rollback compatibility. A partially
+        occupied destination is a collision and fails closed; migration never
+        guesses which cursor, lease, retry, or dedupe state should win.
+        """
+
+        if not legacy_id or not coordinate_id:
+            raise ValueError("cursor coordinate ids must be non-empty")
+        if legacy_id == coordinate_id:
+            return False
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_mapping = self._conn.execute(
+                    "SELECT coordinate_id FROM adapter_cursor_coordinate_migrations "
+                    "WHERE legacy_id=?",
+                    (legacy_id,),
+                ).fetchone()
+                if existing_mapping is not None:
+                    if str(existing_mapping[0]) != coordinate_id:
+                        raise ValueError(
+                            "legacy cursor coordinate collision: already bound to "
+                            "another coordinate"
+                        )
+                    self._conn.execute("COMMIT")
+                    return False
+                reverse_mapping = self._conn.execute(
+                    "SELECT legacy_id FROM adapter_cursor_coordinate_migrations "
+                    "WHERE coordinate_id=?",
+                    (coordinate_id,),
+                ).fetchone()
+                if reverse_mapping is not None:
+                    raise ValueError(
+                        "cursor owner-coordinate collision requires explicit review"
+                    )
+                legacy = self._conn.execute(
+                    "SELECT provider_watermark, lease_owner, lease_until_ms, "
+                    "error_count, circuit_state, updated_at_ms "
+                    "FROM adapter_cursors WHERE adapter_id=?",
+                    (legacy_id,),
+                ).fetchone()
+                legacy_was_missing = legacy is None
+                if legacy is None:
+                    self._ensure(legacy_id, self._now_ms())
+                    legacy = self._conn.execute(
+                        "SELECT provider_watermark, lease_owner, lease_until_ms, "
+                        "error_count, circuit_state, updated_at_ms "
+                        "FROM adapter_cursors WHERE adapter_id=?",
+                        (legacy_id,),
+                    ).fetchone()
+                    assert legacy is not None
+                occupied = self._conn.execute(
+                    """SELECT
+                           EXISTS(SELECT 1 FROM adapter_cursors WHERE adapter_id=?)
+                         + EXISTS(SELECT 1 FROM adapter_retry_state WHERE adapter_id=?)
+                         + EXISTS(SELECT 1 FROM adapter_dedupe WHERE adapter_id=?)""",
+                    (coordinate_id, coordinate_id, coordinate_id),
+                ).fetchone()
+                assert occupied is not None
+                if int(occupied[0]) != 0:
+                    if not legacy_was_missing:
+                        raise ValueError(
+                            "cursor owner-coordinate collision requires explicit review"
+                        )
+                    self._conn.execute(
+                        "INSERT INTO adapter_cursor_coordinate_migrations "
+                        "(legacy_id, coordinate_id, adopted_at_ms) VALUES (?, ?, ?)",
+                        (legacy_id, coordinate_id, self._now_ms()),
+                    )
+                    self._mirror_coordinate(coordinate_id)
+                    self._conn.execute("COMMIT")
+                    return True
+                self._conn.execute(
+                    """INSERT INTO adapter_cursors (
+                           adapter_id, provider_watermark, lease_owner,
+                           lease_until_ms, error_count, circuit_state, updated_at_ms
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (coordinate_id, *tuple(legacy)),
+                )
+                self._conn.execute(
+                    """INSERT INTO adapter_retry_state (
+                           adapter_id, retry_not_before_ms
+                       )
+                       SELECT ?, retry_not_before_ms
+                         FROM adapter_retry_state WHERE adapter_id=?""",
+                    (coordinate_id, legacy_id),
+                )
+                self._conn.execute(
+                    """INSERT INTO adapter_dedupe (
+                           adapter_id, external_id, fingerprint, event_id, seen_at_ms
+                       )
+                       SELECT ?, external_id, fingerprint, event_id, seen_at_ms
+                         FROM adapter_dedupe WHERE adapter_id=?""",
+                    (coordinate_id, legacy_id),
+                )
+                self._conn.execute(
+                    "INSERT INTO adapter_cursor_coordinate_migrations "
+                    "(legacy_id, coordinate_id, adopted_at_ms) VALUES (?, ?, ?)",
+                    (legacy_id, coordinate_id, self._now_ms()),
+                )
+                self._mirror_coordinate(coordinate_id)
+                self._conn.execute("COMMIT")
+                return True
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+
     def get(self, adapter_id: str) -> AdapterCursor:
         now_ms = self._now_ms()
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             self._ensure(adapter_id, now_ms)
             row = self._conn.execute(
                 "SELECT c.adapter_id, c.provider_watermark, c.lease_owner, "
@@ -145,6 +332,7 @@ class AdapterCursorStore:
             raise ValueError("ttl_ms must be positive")
         now = self._now_ms() if now_ms is None else now_ms
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 self._ensure(adapter_id, now)
@@ -183,6 +371,7 @@ class AdapterCursorStore:
                             adapter_id,
                         ),
                     )
+                    self._mirror_coordinate(adapter_id)
                 self._conn.execute("COMMIT")
                 return available
             except BaseException:
@@ -192,17 +381,27 @@ class AdapterCursorStore:
     def release(self, adapter_id: str, lease_owner: str) -> bool:
         now = self._now_ms()
         with self._lock:
-            cur = self._conn.execute(
-                "UPDATE adapter_cursors SET lease_owner=NULL, lease_until_ms=NULL, "
-                "updated_at_ms=? WHERE adapter_id=? AND lease_owner=?",
-                (now, adapter_id, lease_owner),
-            )
-            return cur.rowcount == 1
+            adapter_id = self._resolve_coordinate(adapter_id)
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self._conn.execute(
+                    "UPDATE adapter_cursors SET lease_owner=NULL, lease_until_ms=NULL, "
+                    "updated_at_ms=? WHERE adapter_id=? AND lease_owner=?",
+                    (now, adapter_id, lease_owner),
+                )
+                if cur.rowcount == 1:
+                    self._mirror_coordinate(adapter_id)
+                self._conn.execute("COMMIT")
+                return cur.rowcount == 1
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def dedupe_event(
         self, adapter_id: str, external_id: str, fingerprint: str
     ) -> str | None:
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             row = self._conn.execute(
                 "SELECT event_id FROM adapter_dedupe WHERE adapter_id=? "
                 "AND external_id=? AND fingerprint=?",
@@ -214,6 +413,7 @@ class AdapterCursorStore:
         """Return the latest ``(fingerprint, event_id)`` for one provider id."""
 
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             row = self._conn.execute(
                 "SELECT fingerprint, event_id FROM adapter_dedupe "
                 "WHERE adapter_id=? AND external_id=? "
@@ -250,6 +450,7 @@ class AdapterCursorStore:
                 "external_id, fingerprint, and event_id must be supplied together"
             )
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 self._ensure(adapter_id, now)
@@ -292,6 +493,7 @@ class AdapterCursorStore:
                         "VALUES (?, ?, ?, ?, ?)",
                         (adapter_id, external_id, fingerprint, event_id, now),
                     )
+                self._mirror_coordinate(adapter_id)
                 self._conn.execute("COMMIT")
                 return True
             except BaseException:
@@ -309,12 +511,21 @@ class AdapterCursorStore:
 
         now = self._now_ms() if now_ms is None else now_ms
         with self._lock:
-            cur = self._conn.execute(
-                "UPDATE adapter_cursors SET provider_watermark=NULL, updated_at_ms=? "
-                "WHERE adapter_id=? AND lease_owner=? AND lease_until_ms>?",
-                (now, adapter_id, lease_owner, now),
-            )
-            return cur.rowcount == 1
+            adapter_id = self._resolve_coordinate(adapter_id)
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self._conn.execute(
+                    "UPDATE adapter_cursors SET provider_watermark=NULL, updated_at_ms=? "
+                    "WHERE adapter_id=? AND lease_owner=? AND lease_until_ms>?",
+                    (now, adapter_id, lease_owner, now),
+                )
+                if cur.rowcount == 1:
+                    self._mirror_coordinate(adapter_id)
+                self._conn.execute("COMMIT")
+                return cur.rowcount == 1
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     @overload
     def record_error(
@@ -353,6 +564,7 @@ class AdapterCursorStore:
             raise ValueError("recovery_after_ms must not be negative")
         now = self._now_ms() if now_ms is None else now_ms
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 self._ensure(adapter_id, now)
@@ -401,6 +613,7 @@ class AdapterCursorStore:
                         "DELETE FROM adapter_retry_state WHERE adapter_id=?",
                         (adapter_id,),
                     )
+                self._mirror_coordinate(adapter_id)
                 self._conn.execute("COMMIT")
             except BaseException:
                 self._conn.execute("ROLLBACK")
@@ -416,6 +629,7 @@ class AdapterCursorStore:
 
         now = self._now_ms()
         with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 self._ensure(adapter_id, now)
@@ -433,6 +647,7 @@ class AdapterCursorStore:
                     "retry_not_before_ms=excluded.retry_not_before_ms",
                     (now, adapter_id),
                 )
+                self._mirror_coordinate(adapter_id)
                 self._conn.execute("COMMIT")
             except BaseException:
                 self._conn.execute("ROLLBACK")

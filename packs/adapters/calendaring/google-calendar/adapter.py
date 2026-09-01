@@ -36,6 +36,7 @@ from adminme.lib.adapters import (
     WriteResult,
 )
 from adminme.lib.observation import outbound as observation_outbound
+from adminme.provider_bindings import adapter_owner_coordinate_id
 
 _log = logging.getLogger(__name__)
 
@@ -446,6 +447,10 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             )
         self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
+        if ctx.cursor_store is not None and self._config.get("member_id"):
+            ctx.cursor_store.adopt_legacy_coordinate(
+                self._legacy_cursor_id(), self._cursor_id()
+            )
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
@@ -510,7 +515,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         calendar_id = str(self._config.get("calendar_id") or "")
         # Compatibility for the v1 fixture suite. Production v2 configs are
         # member-bound and use durable incremental synchronization below.
-        if not self._config.get("member_id"):
+        if not (
+            self._config.get("member_id") or self._config.get("service_principal_id")
+        ):
             return await self._poll_once_v1(ctx=ctx, calendar_id=calendar_id)
         entries = (
             self._fetch_calendar_entries()
@@ -541,13 +548,33 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         return emitted
 
     def _cursor_id(self) -> str:
+        return adapter_owner_coordinate_id(self.name, self._config)
+
+    def _legacy_cursor_id(self) -> str:
         return str(
             getattr(self, "instance_name", None) or self._config.get("id") or self.name
         )
 
+    def _owner_payload(self) -> dict[str, Any]:
+        member_id = self._config.get("member_id")
+        if isinstance(member_id, str) and member_id:
+            return {"member_id": member_id}
+        return {
+            "member_id": None,
+            "service_principal_id": self._config.get("service_principal_id"),
+            "workspace": str(self._config.get("workspace") or "personal"),
+        }
+
+    def _service_owned(self) -> bool:
+        return bool(self._config.get("service_principal_id"))
+
     def _calendar_cursor_id(self, calendar_id: str) -> str:
         calendar_digest = hashlib.sha256(calendar_id.encode("utf-8")).hexdigest()
         return f"{self._cursor_id()}:calendar:{calendar_digest}"
+
+    def _legacy_calendar_cursor_id(self, calendar_id: str) -> str:
+        calendar_digest = hashlib.sha256(calendar_id.encode("utf-8")).hexdigest()
+        return f"{self._legacy_cursor_id()}:calendar:{calendar_digest}"
 
     def _lease_ttl_ms(self) -> int:
         return max(30_000, self._poll_interval_s * 2000)
@@ -625,9 +652,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         if self._seen_calendar_sources.get(calendar_id) == fingerprint:
             return
         cursor_store = ctx.cursor_store
-        cursor_id = str(
-            getattr(self, "instance_name", None) or self._config.get("id") or self.name
-        )
+        cursor_id = self._cursor_id()
         source_external_id = (
             "calendar-source:" + hashlib.sha256(calendar_id.encode("utf-8")).hexdigest()
         )
@@ -642,7 +667,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             self._seen_calendar_sources[calendar_id] = fingerprint
             return
         payload = {
-            "member_id": str(self._config["member_id"]),
+            **self._owner_payload(),
             "provider": "google_calendar",
             "provider_account_id": str(
                 self._config.get("provider_account_id")
@@ -652,12 +677,14 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             **observed,
             "read_details": role in {"reader", "writer", "owner"},
             "read_free_busy": role != "none",
-            "write_events": role in {"writer", "owner"},
+            "write_events": role in {"writer", "owner"}
+            and not bool(self._config.get("read_only")),
             "observed_at": ctx.now_factory().isoformat(),
         }
         event_id = await self._append(
             ctx=ctx,
             event_type="calendar.source_observed",
+            schema_version=2 if self._service_owned() else 1,
             idempotency_key=(
                 "google-calendar:calendar-source:"
                 + hashlib.sha256(
@@ -687,6 +714,10 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     ) -> int:
         store = ctx.cursor_store
         cursor_id = self._calendar_cursor_id(calendar_id)
+        if store is not None and self._config.get("member_id"):
+            store.adopt_legacy_coordinate(
+                self._legacy_calendar_cursor_id(calendar_id), cursor_id
+            )
         if store is not None and not store.claim(
             cursor_id,
             self._lease_owner,
@@ -791,10 +822,10 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 await self._append(
                     ctx=ctx,
                     event_type="calendar.event_deleted",
-                    schema_version=2,
+                    schema_version=3 if self._service_owned() else 2,
                     idempotency_key=deleted_key,
                     payload={
-                        "member_id": str(self._config["member_id"]),
+                        **self._owner_payload(),
                         "provider": "google_calendar",
                         "provider_account_id": str(
                             self._config.get("provider_account_id")
@@ -809,7 +840,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                         ),
                     },
                 )
-                if was_initial_sync_complete:
+                if was_initial_sync_complete and self._config.get("member_id"):
                     await self._emit_calendar_outcome(
                         ctx=ctx,
                         calendar_id=calendar_id,
@@ -856,7 +887,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 event.get("etag") or event.get("updated") or ""
             )
             emitted += 1
-        if was_initial_sync_complete:
+        if was_initial_sync_complete and self._config.get("member_id"):
             now = ctx.now_factory()
             for known_id, known in self._known_events.items():
                 if known.get("calendar_id") != calendar_id:
@@ -1102,10 +1133,10 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         await self._append(
             ctx=ctx,
             event_type=event_type,
-            schema_version=2,
+            schema_version=3 if self._service_owned() else 2,
             idempotency_key=idempotency_key,
             payload={
-                "member_id": str(self._config["member_id"]),
+                **self._owner_payload(),
                 "provider": "google_calendar",
                 "provider_account_id": str(
                     self._config.get("provider_account_id")
@@ -1188,7 +1219,11 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         )
         seed = "\x1f".join(
             (
-                str(self._config.get("member_id") or ""),
+                str(
+                    self._config.get("member_id")
+                    or self._config.get("service_principal_id")
+                    or ""
+                ),
                 provider_account_id,
                 calendar_id,
                 str(calendar_name or ""),

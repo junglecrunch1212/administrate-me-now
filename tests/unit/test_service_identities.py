@@ -196,6 +196,7 @@ def test_exact_channel_routes_never_infer_an_unknown_conversation_scope() -> Non
     assert resolve_service_channel_route(channel, "route:" + "1" * 64) == {
         "state": "resolved",
         "route_scope": "member_private",
+        "routing_target_id": "member-a",
         "owner_scope": "private:member-a",
         "visibility_scope": "private:member-a",
         "content_exposed": False,

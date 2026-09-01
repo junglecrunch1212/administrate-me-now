@@ -27,6 +27,10 @@ from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
+from adminme.direct_intake import (
+    DirectIntakeProcessor,
+    public_direct_channel_readiness,
+)
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog, new_correlation_id
@@ -64,7 +68,11 @@ from adminme.member_chat import (
 from adminme.openclaw_approvals import OpenClawApprovalStore
 from adminme.openclaw_topology import inspect_runtime_topology, member_agent_id
 from adminme.bridge_authorization import validate_bridge_record_set
-from adminme.provider_bindings import ProviderBinding, validate_provider_bindings
+from adminme.provider_bindings import (
+    ProviderBinding,
+    public_service_source_readiness,
+    validate_provider_bindings,
+)
 from adminme.service_identities import (
     COS_PARTY_ID,
     COS_SERVICE_PRINCIPAL_ID,
@@ -198,6 +206,53 @@ class RuntimeSettings:
             raise ValueError("service principals cannot resolve through member ingress")
         object.__setattr__(self, "service_principals", service_principals)
         object.__setattr__(self, "service_channel_accounts", service_channels)
+        channel_by_id = {channel.channel_id: channel for channel in service_channels}
+        for index, entry in enumerate(adapters):
+            if not isinstance(entry, dict):
+                continue
+            adapter_config = entry.get("config") or {}
+            if not isinstance(adapter_config, dict):
+                continue
+            routes = adapter_config.get("trusted_sender_routes") or []
+            if routes and not adapter_config.get("service_principal_id"):
+                raise ValueError("trusted direct routes require service ownership")
+            if not adapter_config.get("service_principal_id"):
+                continue
+            kind = str(entry.get("kind") or "").removeprefix("adapter:")
+            if kind != "messaging-gmail-api":
+                continue
+            channel = channel_by_id.get(str(adapter_config.get("channel_id") or ""))
+            if (
+                channel is None
+                or channel.provider != "gmail"
+                or channel.service_principal_id
+                != adapter_config.get("service_principal_id")
+            ):
+                raise ValueError(
+                    f"service Gmail adapter {index} requires its exact reviewed channel"
+                )
+            if not isinstance(routes, list):
+                raise ValueError("trusted_sender_routes must be a list")
+            reviewed_route_keys = {route.route_key for route in channel.routes}
+            exact_identifiers: set[str] = set()
+            route_keys: set[str] = set()
+            for route in routes:
+                if not isinstance(route, dict):
+                    raise ValueError("trusted sender route must be an object")
+                identifier = (
+                    str(route.get("exact_from_identifier") or "").strip().casefold()
+                )
+                route_key = str(route.get("route_key") or "")
+                if not identifier or identifier in exact_identifiers:
+                    raise ValueError(
+                        "trusted sender identifiers must be exact and unique"
+                    )
+                if route_key not in reviewed_route_keys or route_key in route_keys:
+                    raise ValueError(
+                        "trusted sender route must name one unique reviewed channel route"
+                    )
+                exact_identifiers.add(identifier)
+                route_keys.add(route_key)
         valid_bridge_states = {
             "package-created-not-live",
             "package-exported",
@@ -612,6 +667,7 @@ class AdministrateMeRuntime:
         self.adapter_cursor_store: AdapterCursorStore | None = None
         self.openclaw_approval_store: OpenClawApprovalStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
+        self.direct_intake: DirectIntakeProcessor | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
@@ -674,6 +730,10 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            self.direct_intake = DirectIntakeProcessor(
+                event_sink=self.events,
+                channels=self.settings.service_channel_accounts,
+            )
             await self.settings_control.replay_source_policy_v2_events(self.event_log)
             self.source_policy_shadow = SourcePolicyShadowEvaluator(
                 self.events,
@@ -853,6 +913,13 @@ class AdministrateMeRuntime:
                 "external-sync:central-providers",
                 ["external_sync.write_requested"],
                 self._dispatch_external_write,
+            )
+            self.bus.subscribe(
+                "direct-intake:routing",
+                ["messaging.received"],
+                self.direct_intake.handle,
+                consumer_version=self.direct_intake.CONSUMER_VERSION,
+                replay_on_version_change=True,
             )
 
             # All subscriptions are explicit before the one bus owner starts.
@@ -2249,6 +2316,15 @@ class AdministrateMeRuntime:
                 else round(openclaw_age, 3),
                 "max_stale_seconds": self.OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS,
             },
+            "direct_channel_readiness": public_direct_channel_readiness(
+                self.settings.service_channel_accounts
+            ),
+            "service_source_readiness": public_service_source_readiness(
+                self.settings.provider_bindings,
+                adapter_inventory=(
+                    self.adapters.inventory() if self.adapters is not None else {}
+                ),
+            ),
             "capabilities": {
                 key: value.public() for key, value in sorted(self.capabilities.items())
             },
