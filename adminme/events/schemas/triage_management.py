@@ -65,7 +65,10 @@ class TriageItemManagedV1(BaseModel):
             self.corrected_title or self.corrected_target_kind
         ):
             raise ValueError("correct_extraction requires an exact correction")
-        if self.action == "correct_ownership" and self.corrected_owner_member_id is None:
+        if (
+            self.action == "correct_ownership"
+            and self.corrected_owner_member_id is None
+        ):
             raise ValueError("correct_ownership requires an exact owner")
         if self.action == "propose_suppression" and self.policy_proposal_id is None:
             raise ValueError("propose_suppression requires a policy proposal")
@@ -206,9 +209,11 @@ class TriageSourcePolicyRuleReviewedV1(BaseModel):
         if self.decision != "narrow" and self.replacement_instruction is not None:
             raise ValueError("only narrow accepts a replacement instruction")
         narrowing_order = {"always": 0, "usually": 1, "ask": 2, "never": 3}
-        if self.replacement_instruction is not None and narrowing_order[
-            self.replacement_instruction
-        ] <= narrowing_order[self.previous_instruction]:
+        if (
+            self.replacement_instruction is not None
+            and narrowing_order[self.replacement_instruction]
+            <= narrowing_order[self.previous_instruction]
+        ):
             raise ValueError("replacement instruction must strictly narrow admission")
         return self
 
@@ -217,7 +222,9 @@ registry.register("triage.item.managed", 1, TriageItemManagedV1)
 registry.register(
     "triage.source_policy_rule.proposed", 1, TriageSourcePolicyRuleProposedV1
 )
-registry.register("triage.source_policy_rule.decided", 1, TriageSourcePolicyRuleDecidedV1)
+registry.register(
+    "triage.source_policy_rule.decided", 1, TriageSourcePolicyRuleDecidedV1
+)
 registry.register(
     "triage.source_policy_rule.reviewed", 1, TriageSourcePolicyRuleReviewedV1
 )

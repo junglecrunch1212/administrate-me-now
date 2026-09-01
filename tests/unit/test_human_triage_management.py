@@ -83,7 +83,9 @@ def _context() -> tuple[ContextFabricProjection, sqlcipher3.Connection]:
     return projection, conn
 
 
-def _proposal(event_id: str = "event-0001", proposal_id: str = "proposal-1") -> dict[str, Any]:
+def _proposal(
+    event_id: str = "event-0001", proposal_id: str = "proposal-1"
+) -> dict[str, Any]:
     return _event(
         event_id,
         "triage.item.proposed",
@@ -138,12 +140,30 @@ def _reconciliation(
 
 def test_required_human_lanes_are_deterministic() -> None:
     base = {"target_kind": "task", "candidate": {}, "interpretation": {}}
-    assert human_triage_lane(base, {"priority_basis": ["explicit_member_instruction"]}) == "direct_instruction"
-    assert human_triage_lane(base, {"priority_basis": ["exact_member_commitment"]}) == "member_promise"
-    assert human_triage_lane(base, {"priority_basis": ["known_human_actionable_request"]}) == "known_human_request"
-    assert human_triage_lane(base, {"priority_basis": ["verified_deadline"]}) == "scheduled_deadline"
-    assert human_triage_lane({**base, "candidate": {"waiting_for": "reply"}}) == "waiting_follow_up"
-    assert human_triage_lane(base, {"decision": "conflict_review"}) == "clarification_conflict"
+    assert (
+        human_triage_lane(base, {"priority_basis": ["explicit_member_instruction"]})
+        == "direct_instruction"
+    )
+    assert (
+        human_triage_lane(base, {"priority_basis": ["exact_member_commitment"]})
+        == "member_promise"
+    )
+    assert (
+        human_triage_lane(base, {"priority_basis": ["known_human_actionable_request"]})
+        == "known_human_request"
+    )
+    assert (
+        human_triage_lane(base, {"priority_basis": ["verified_deadline"]})
+        == "scheduled_deadline"
+    )
+    assert (
+        human_triage_lane({**base, "candidate": {"waiting_for": "reply"}})
+        == "waiting_follow_up"
+    )
+    assert (
+        human_triage_lane(base, {"decision": "conflict_review"})
+        == "clarification_conflict"
+    )
     assert human_triage_lane(base, {"decision": "alert_only"}) == "alerts_safety"
     assert human_triage_lane(base) == "low_confidence_review"
 
@@ -243,7 +263,10 @@ def test_management_actions_are_event_sourced_reversible_and_member_scoped() -> 
     )
     reopened = get_item(conn, session, proposal_id="proposal-1")
     assert reopened is not None and reopened["management"]["state"] == "open"
-    assert conn.execute("SELECT COUNT(*) FROM triage_management_actions").fetchone()[0] == 2
+    assert (
+        conn.execute("SELECT COUNT(*) FROM triage_management_actions").fetchone()[0]
+        == 2
+    )
 
     other_scope = _event(
         "event-0004",
@@ -391,10 +414,15 @@ def test_learning_never_self_activates_and_negative_feedback_deactivates() -> No
         ),
         conn,
     )
-    assert source_policy_rules_for_member(conn, session, member_id=MEMBER)[0]["status"] == "suspended"
+    assert (
+        source_policy_rules_for_member(conn, session, member_id=MEMBER)[0]["status"]
+        == "suspended"
+    )
 
 
-def test_policy_event_schemas_reject_cross_member_or_widening_and_retain_negative() -> None:
+def test_policy_event_schemas_reject_cross_member_or_widening_and_retain_negative() -> (
+    None
+):
     with pytest.raises(ValidationError):
         TriageSourcePolicyRuleProposedV1(
             policy_proposal_id="proposal",
@@ -468,13 +496,14 @@ def test_comms_focus_requires_an_admitted_matter_and_alerts_stay_separate() -> N
 def test_approved_rule_narrows_matching_admission_and_suspension_restores_it() -> None:
     projection, conn = _triage()
     projection.apply(_proposal("event-0001", "proposal-learned"), conn)
-    projection.apply(
-        _reconciliation("event-0002", "proposal-learned", "admit"), conn
-    )
+    projection.apply(_reconciliation("event-0002", "proposal-learned", "admit"), conn)
     session = build_internal_session(MEMBER, "principal", TENANT)
-    assert triage_page_for_member(
-        conn, session, member_id=MEMBER, human_centered=True
-    )["inventory"]["total_candidates"] == 1
+    assert (
+        triage_page_for_member(conn, session, member_id=MEMBER, human_centered=True)[
+            "inventory"
+        ]["total_candidates"]
+        == 1
+    )
     projection.apply(
         _event(
             "event-0003",
@@ -508,9 +537,12 @@ def test_approved_rule_narrows_matching_admission_and_suspension_restores_it() -
         "narrow_only": True,
         "provider_effects": 0,
     }
-    assert triage_page_for_member(
-        conn, session, member_id=MEMBER, human_centered=True
-    )["inventory"]["total_candidates"] == 0
+    assert (
+        triage_page_for_member(conn, session, member_id=MEMBER, human_centered=True)[
+            "inventory"
+        ]["total_candidates"]
+        == 0
+    )
     projection.apply(
         _event(
             "event-0004",
@@ -535,6 +567,9 @@ def test_approved_rule_narrows_matching_admission_and_suspension_restores_it() -
     )
     restored = get_item(conn, session, proposal_id="proposal-learned")
     assert restored is not None and restored["learned_policy"]["state"] == "none"
-    assert triage_page_for_member(
-        conn, session, member_id=MEMBER, human_centered=True
-    )["inventory"]["total_candidates"] == 1
+    assert (
+        triage_page_for_member(conn, session, member_id=MEMBER, human_centered=True)[
+            "inventory"
+        ]["total_candidates"]
+        == 1
+    )

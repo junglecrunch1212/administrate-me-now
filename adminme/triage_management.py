@@ -111,9 +111,7 @@ def human_triage_lane(
     decision = str(_reconciliation_value(item, reconciliation, "decision", "admit"))
     basis = {
         str(value)
-        for value in _reconciliation_value(
-            item, reconciliation, "priority_basis", []
-        )
+        for value in _reconciliation_value(item, reconciliation, "priority_basis", [])
     }
     if decision == "alert_only":
         return "alerts_safety"
@@ -183,9 +181,7 @@ def proposed_disposition(
         "admission_decision": decision,
         "reason_codes": [
             str(value)
-            for value in _reconciliation_value(
-                item, reconciliation, "reason_codes", []
-            )
+            for value in _reconciliation_value(item, reconciliation, "reason_codes", [])
         ],
         "evidence_event_ids": [
             str(value)
@@ -195,9 +191,7 @@ def proposed_disposition(
         ],
         "source_coordinate": dict(
             _mapping(
-                _reconciliation_value(
-                    item, reconciliation, "source_coordinate", {}
-                )
+                _reconciliation_value(item, reconciliation, "source_coordinate", {})
             )
         ),
     }
@@ -232,7 +226,9 @@ def current_disposition(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "disposition": disposition,
         "ordinary_queue": disposition == "ordinary_queue",
-        "lane": str(item.get("human_lane") or item.get("queue_lane") or "low_confidence_review"),
+        "lane": str(
+            item.get("human_lane") or item.get("queue_lane") or "low_confidence_review"
+        ),
         "admission_decision": str(item.get("admission_decision") or "admit"),
     }
 

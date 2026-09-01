@@ -3136,9 +3136,12 @@ async def manage_triage_item(
         await runtime.wait_for_projection("triage", prior["event_id"])
         return {"event_id": prior["event_id"], "duplicate": True}
     revision = int((item.get("management") or {}).get("revision") or 0) + 1
-    action_id = "triage_action_" + hashlib.sha256(
-        f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
-    ).hexdigest()[:32]
+    action_id = (
+        "triage_action_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:32]
+    )
     payload = {
         **body.model_dump(mode="json", exclude={"request_id"}),
         "action_id": action_id,
@@ -3202,9 +3205,12 @@ async def propose_triage_learning_rule(
         request_id=body.request_id,
         request_fingerprint=fingerprint,
     )
-    policy_proposal_id = "triage_policy_proposal_" + hashlib.sha256(
-        f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
-    ).hexdigest()[:28]
+    policy_proposal_id = (
+        "triage_policy_proposal_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:28]
+    )
     if prior is not None:
         await runtime.wait_for_projection("context_fabric", prior["event_id"])
         return {
@@ -3297,7 +3303,8 @@ async def decide_triage_learning_rule(
     )
     fingerprint = _triage_request_fingerprint(policy_proposal_id, body)
     payload = {
-        "decision_id": "triage_policy_decision_" + hashlib.sha256(
+        "decision_id": "triage_policy_decision_"
+        + hashlib.sha256(
             f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
         ).hexdigest()[:28],
         "policy_proposal_id": policy_proposal_id,
@@ -3363,14 +3370,17 @@ async def review_triage_learning_rule(
     if (body.decision == "narrow") != (body.replacement_instruction is not None):
         raise HTTPException(422, "narrow review requires one replacement instruction")
     narrowing_order = {"always": 0, "usually": 1, "ask": 2, "never": 3}
-    if body.replacement_instruction is not None and narrowing_order[
-        body.replacement_instruction
-    ] <= narrowing_order[str(rule["instruction"])]:
+    if (
+        body.replacement_instruction is not None
+        and narrowing_order[body.replacement_instruction]
+        <= narrowing_order[str(rule["instruction"])]
+    ):
         raise HTTPException(422, "replacement instruction must narrow admission")
     fingerprint = _triage_request_fingerprint(rule_id, body)
     payload = {
         **body.model_dump(mode="json", exclude={"request_id"}),
-        "review_id": "triage_policy_review_" + hashlib.sha256(
+        "review_id": "triage_policy_review_"
+        + hashlib.sha256(
             f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
         ).hexdigest()[:28],
         "rule_id": rule_id,

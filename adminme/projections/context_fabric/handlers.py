@@ -927,6 +927,8 @@ def _record_source_policy(
             envelope["event_id"],
         ),
     )
+
+
 def _record_relationship_decision(
     envelope: Mapping[str, Any], conn: sqlcipher3.Connection
 ) -> None:

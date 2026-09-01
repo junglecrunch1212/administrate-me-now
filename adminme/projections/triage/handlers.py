@@ -49,9 +49,12 @@ def _matching_learned_rule(
     conn: sqlcipher3.Connection, row: dict[str, Any]
 ) -> dict[str, Any] | None:
     priority_basis = set(json.loads(row.get("priority_basis_json") or "[]"))
-    if priority_basis.intersection(
-        {"explicit_member_instruction", "exact_member_commitment"}
-    ) or row.get("admission_decision") == "alert_only":
+    if (
+        priority_basis.intersection(
+            {"explicit_member_instruction", "exact_member_commitment"}
+        )
+        or row.get("admission_decision") == "alert_only"
+    ):
         return None
     rules = conn.execute(
         """SELECT * FROM triage_learned_policy_rules
@@ -1144,15 +1147,15 @@ def _apply_managed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> Non
         existing_object_id = None
         duplicate_of_proposal_id = None
     else:
-        existing_object_kind = (
-            payload.get("linked_object_kind") or row.get("existing_object_kind")
+        existing_object_kind = payload.get("linked_object_kind") or row.get(
+            "existing_object_kind"
         )
         existing_object_id = payload.get("linked_object_id") or row.get(
             "existing_object_id"
         )
-        duplicate_of_proposal_id = payload.get(
+        duplicate_of_proposal_id = payload.get("duplicate_of_proposal_id") or row.get(
             "duplicate_of_proposal_id"
-        ) or row.get("duplicate_of_proposal_id")
+        )
     conn.execute(
         """UPDATE triage_items
               SET title=?, target_kind=?, management_state=?,

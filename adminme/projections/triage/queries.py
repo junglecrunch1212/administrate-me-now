@@ -805,9 +805,12 @@ def triage_page_for_member(
             str(last["proposed_at"]),
             str(last["proposal_id"]),
         )
-    if _queue_revision(
-        conn, session, member_id=member_id, human_centered=human_centered
-    ) != queue_revision:
+    if (
+        _queue_revision(
+            conn, session, member_id=member_id, human_centered=human_centered
+        )
+        != queue_revision
+    ):
         raise ValueError("stale triage cursor")
     return {
         "lens": lens,

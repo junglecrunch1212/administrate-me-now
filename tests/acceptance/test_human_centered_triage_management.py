@@ -75,9 +75,7 @@ def _coordinate(tenant_id: str) -> SourceCoordinate:
     )
 
 
-def _proposal(
-    tenant_id: str, index: int, *, event_at_ms: int
-) -> EventEnvelope:
+def _proposal(tenant_id: str, index: int, *, event_at_ms: int) -> EventEnvelope:
     proposal_id = f"g04-proposal-{index:03d}"
     return EventEnvelope(
         event_at_ms=event_at_ms,
@@ -209,7 +207,9 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
             )
             events.extend(
                 (
-                    _proposal(tenant_id, index, event_at_ms=1_900_000_000_000 + index * 2),
+                    _proposal(
+                        tenant_id, index, event_at_ms=1_900_000_000_000 + index * 2
+                    ),
                     _decision(
                         tenant_id,
                         index,
@@ -247,8 +247,7 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
         ]
         assert page["triage"]["inventory"]["views"]["alerts"]["candidates"] == 1
         assert all(
-            candidate["disposition"]["disposition"]
-            in {"ordinary_queue", "alerts"}
+            candidate["disposition"]["disposition"] in {"ordinary_queue", "alerts"}
             for matter in matters
             for candidate in matter["candidates"]
         )
@@ -269,9 +268,7 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
         assert preview.json()["provider_effects"] == 0
         assert preview.json()["application_available_in_phase_a"] is False
         assert preview.json()["batch"]["total"] == 105
-        previewed = {
-            value["proposal_id"]: value for value in preview.json()["changes"]
-        }
+        previewed = {value["proposal_id"]: value for value in preview.json()["changes"]}
         assert previewed["g04-proposal-002"]["old"]["disposition"] == "handled"
         assert previewed["g04-proposal-002"]["proposed"]["disposition"] == "alerts"
         assert previewed["g04-proposal-003"]["old"]["disposition"] == "handled"
@@ -486,7 +483,9 @@ def test_g04_management_is_default_off(tmp_path: Path) -> None:
         runtime = client.app.state.runtime
         event_id = client.portal.call(
             runtime.events.write,
-            _proposal(runtime.settings.instance.tenant_id, 0, event_at_ms=1_910_000_000_000),
+            _proposal(
+                runtime.settings.instance.tenant_id, 0, event_at_ms=1_910_000_000_000
+            ),
         )
         client.portal.call(runtime.wait_for_projection, "triage", event_id)
         response = client.post(

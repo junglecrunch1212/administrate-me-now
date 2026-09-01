@@ -436,11 +436,7 @@ def get_source_policy_proposal(
 ) -> dict[str, Any] | None:
     rows = source_policy_proposals_for_member(conn, session, member_id=member_id)
     return next(
-        (
-            value
-            for value in rows
-            if value["policy_proposal_id"] == policy_proposal_id
-        ),
+        (value for value in rows if value["policy_proposal_id"] == policy_proposal_id),
         None,
     )
 
