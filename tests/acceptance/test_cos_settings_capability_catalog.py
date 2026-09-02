@@ -240,12 +240,15 @@ def test_g08_catalog_settings_openclaw_isolation_and_replay(tmp_path: Path) -> N
         a_after_request = client.get(
             "/api/member/v1/surfaces/settings", headers=A_HEADERS
         ).json()["control"]
-        assert a_after_request["admin_requests"]["items"][0][
-            "requesting_member_id"
-        ] == A
-        assert a_after_request["admin_requests"]["items"][0][
-            "admin_may_complete_private_consent"
-        ] is False
+        assert (
+            a_after_request["admin_requests"]["items"][0]["requesting_member_id"] == A
+        )
+        assert (
+            a_after_request["admin_requests"]["items"][0][
+                "admin_may_complete_private_consent"
+            ]
+            is False
+        )
         assert a_after_request["capability_request_revision"] == 1
         assert a_after_request["capability_requests"][0]["revision"] == 1
         assert (
@@ -565,9 +568,7 @@ def test_g08_encrypted_backup_restore_preserves_capability_requests(
             },
         )
         assert requested.status_code == 202, requested.text
-        assert client.portal.call(
-            _provider_effect_count, client.app.state.runtime
-        ) == 0
+        assert client.portal.call(_provider_effect_count, client.app.state.runtime) == 0
 
     ServiceManager(paths, test_mode=True).start()
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
@@ -589,6 +590,4 @@ def test_g08_encrypted_backup_restore_preserves_capability_requests(
         )
         assert saved["state"] == "requested"
         assert saved["catalog_version"] == "1.0.0"
-        assert client.portal.call(
-            _provider_effect_count, client.app.state.runtime
-        ) == 0
+        assert client.portal.call(_provider_effect_count, client.app.state.runtime) == 0

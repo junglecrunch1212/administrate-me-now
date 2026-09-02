@@ -429,10 +429,7 @@ def _central_definitions(repository_root: Path) -> list[dict[str, Any]]:
         runtime = manifest.get("runtime") or {}
         entrypoint = runtime.get("entrypoint") if isinstance(runtime, dict) else None
         implementation_present = bool(
-            (
-                isinstance(entrypoint, str)
-                and (path.parent / entrypoint).is_file()
-            )
+            (isinstance(entrypoint, str) and (path.parent / entrypoint).is_file())
             or (path.parent / "adapter.py").is_file()
         )
         capabilities = [
@@ -604,8 +601,7 @@ def load_catalog(repository_root: Path) -> dict[str, Any]:
     if (
         host_pin.get("version") != OPENCLAW_VERSION
         or host_pin.get("commit") != OPENCLAW_COMMIT
-        or plugin_pin.get("plugin_package_version")
-        != plugin_manifest.get("version")
+        or plugin_pin.get("plugin_package_version") != plugin_manifest.get("version")
     ):
         raise RuntimeError("capability catalog OpenClaw pins are inconsistent")
     definitions = [copy.deepcopy(value) for value in _DOMAIN_DEFINITIONS]
@@ -639,7 +635,9 @@ def load_catalog(repository_root: Path) -> dict[str, Any]:
             list(definition["prerequisites"])
         )
         if set(definition["prerequisite_classes"]) != set(_PREREQUISITE_CLASSES):
-            raise RuntimeError(f"capability {capability_id} has incomplete prerequisites")
+            raise RuntimeError(
+                f"capability {capability_id} has incomplete prerequisites"
+            )
         definition.setdefault("sensitivity", ["normal", "sensitive"])
         definition.setdefault("terminal_result_support", False)
         definition.setdefault("later_observation_support", False)
@@ -648,7 +646,10 @@ def load_catalog(repository_root: Path) -> dict[str, Any]:
             implementation_path = _DOMAIN_IMPLEMENTATION_PATHS.get(
                 str(definition.get("source") or "")
             )
-            if implementation_path is None or not (root / implementation_path).is_file():
+            if (
+                implementation_path is None
+                or not (root / implementation_path).is_file()
+            ):
                 raise RuntimeError(
                     f"domain capability {capability_id} lacks reviewed implementation"
                 )
@@ -1077,12 +1078,10 @@ def compose_member_catalog(
                 },
                 "required_actions": {
                     "member": "complete_consent_or_request"
-                    if row["source_kind"]
-                    in {"adapter_manifest", "bridge_manifest"}
+                    if row["source_kind"] in {"adapter_manifest", "bridge_manifest"}
                     else "none",
                     "admin": "make_reviewed_option_available"
-                    if row["source_kind"]
-                    in {"adapter_manifest", "bridge_manifest"}
+                    if row["source_kind"] in {"adapter_manifest", "bridge_manifest"}
                     and not read_available
                     else "none",
                     "household": "approve_if_household_shared"
@@ -1110,8 +1109,7 @@ def compose_member_catalog(
                     "This adapter implementation is available only through its reviewed member-bridge capability."
                     if row["source_kind"] == "adapter_manifest"
                     and row["runtime_location"] == "member_bridge"
-                    else
-                    "The compatible member-bridge package is not paired with verified local permission."
+                    else "The compatible member-bridge package is not paired with verified local permission."
                     if bridge_state is not None and not read_available
                     else "A reviewed provider adapter is present but this member has not completed setup."
                     if row["source_kind"] == "adapter_manifest" and configured is None
