@@ -1317,7 +1317,7 @@ async function run() {
         await screenshot(principal.page, "surface-scoreboard-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
-        record("Settings exposes all nine control areas", await principal.page.locator(".settings-nav button").count() === 9, await principal.page.locator(".settings-nav").textContent());
+        record("Settings exposes all twelve control areas", await principal.page.locator(".settings-nav button").count() === 12, await principal.page.locator(".settings-nav").textContent());
         record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
         await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
@@ -1480,7 +1480,7 @@ async function run() {
       } else if (surface === "notes") {
         record("Notes phone retains sources, search, and source evidence", await principalPhone.page.locator(".notes-source-button").count() === 3 && await principalPhone.page.locator(".notes-search input").count() === 1 && await principalPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "settings") {
-        record("Settings phone retains all control areas", await principalPhone.page.locator(".settings-nav button").count() === 9, await principalPhone.page.locator(".settings-nav").textContent());
+        record("Settings phone retains all twelve control areas", await principalPhone.page.locator(".settings-nav button").count() === 12, await principalPhone.page.locator(".settings-nav").textContent());
         await principalPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings phone retains connection truth", (await principalPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principalPhone.page.locator("#surface").textContent());
       }
