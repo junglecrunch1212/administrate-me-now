@@ -38,7 +38,7 @@ function fakeApi(
   const api = {
     id: "administrateme",
     name: "AdministrateMe",
-    version: "2.0.0-gate7",
+    version: "2.0.0-gate8",
     source: "fixture",
     registrationMode: registrationMode as OpenClawPluginApi["registrationMode"],
     pluginConfig: config,
@@ -136,7 +136,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(15);
+    expect([...runtime.tools]).toHaveLength(19);
     expect([...runtime.commands]).toHaveLength(8);
     expect([...runtime.gateways]).toHaveLength(14);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
@@ -220,7 +220,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(15);
+    expect([...runtime.tools]).toHaveLength(19);
     expect(runtime.services).toHaveLength(0);
   });
 
@@ -293,6 +293,57 @@ describe("native OpenClaw contract fixture", () => {
     });
   });
 
+  it("routes the catalog, compiled context, capability request, and policy proposal tools", async () => {
+    const runtime = fakeApi();
+    const catalog = runtime.tools.get("administrateme_capabilities")?.(
+      toolContext(),
+    ) as AnyAgentTool;
+    await catalog.execute("catalog-call", {
+      capability_id: "planned.apple_messages_reply",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/capabilities",
+    );
+    expect(requestBody(fetchMock)).toMatchObject({
+      capability_id: "planned.apple_messages_reply",
+      provenance: { call_kind: "tool", account_id: "account-a" },
+    });
+
+    const context = runtime.tools.get("administrateme_settings_context")?.(
+      toolContext(),
+    ) as AnyAgentTool;
+    await context.execute("context-call", {});
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/settings-context",
+    );
+
+    const capabilityRequest = runtime.tools.get("administrateme_capability_request")?.(
+      toolContext(),
+    ) as AnyAgentTool;
+    await capabilityRequest.execute("capability-request-call", {
+      request_id: "capability-request-a",
+      expected_revision: 0,
+      capability_id: "planned.apple_messages_observation",
+      action: "request",
+      requested_scope: "member_private",
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/capability-request",
+    );
+
+    const proposal = runtime.tools.get("administrateme_policy_proposal")?.(
+      toolContext(),
+    ) as AnyAgentTool;
+    await proposal.execute("proposal-call", { action: "inspect" });
+    expect(fetchMock.mock.calls[3]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/policy-proposal",
+    );
+    expect(requestBody(fetchMock, 3)).toMatchObject({
+      action: "inspect",
+      provenance: { actor_id: "actor-a", call_kind: "tool" },
+    });
+  });
+
   it("derives member-portal tool authority only from a valid signed isolated session", async () => {
     const peer = "0123456789abcdefabcd";
     const signature = createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!)
@@ -344,6 +395,40 @@ describe("native OpenClaw contract fixture", () => {
     expect(read).toBeUndefined();
     expect(write.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(write.requireApproval?.pluginId).toBe("administrateme");
+
+    const capabilityRequest = (await hook?.(
+      {
+        toolName: "administrateme_capability_request",
+        params: {
+          request_id: "capability-request-a",
+          expected_revision: 0,
+          capability_id: "planned.apple_messages_observation",
+          action: "request",
+        },
+      },
+      {},
+    )) as { requireApproval?: { allowedDecisions?: string[] } };
+    expect(capabilityRequest.requireApproval?.allowedDecisions).toEqual([
+      "allow-once",
+      "deny",
+    ]);
+
+    const inspect = await hook?.(
+      {
+        toolName: "administrateme_policy_proposal",
+        params: { action: "inspect" },
+      },
+      {},
+    );
+    expect(inspect).toBeUndefined();
+    const decide = (await hook?.(
+      {
+        toolName: "administrateme_policy_proposal",
+        params: { action: "decide" },
+      },
+      {},
+    )) as { requireApproval?: { allowedDecisions?: string[] } };
+    expect(decide.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
   it("reports notification delivery through the typed result seam", async () => {

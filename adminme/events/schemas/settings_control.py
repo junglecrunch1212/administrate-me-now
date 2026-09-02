@@ -52,6 +52,7 @@ class SettingsBridgeEnrollmentRequestedV1(BaseModel):
         Literal[
             "apple_calendar",
             "apple_reminders",
+            "apple_contacts",
             "apple_notes",
             "apple_voice_memos",
             "obsidian",
@@ -91,6 +92,54 @@ class SettingsCandidatePolicyChangedV1(BaseModel):
     routing_authority_changed: Literal[False] = False
 
 
+class SettingsCapabilityRequestedV1(BaseModel):
+    """An inert, secret-free request; every operational effect stays false."""
+
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1)
+    capability_id: str = Field(min_length=1, max_length=200)
+    catalog_version: str = Field(min_length=1, max_length=40)
+    desired_outcome: str = Field(min_length=1, max_length=500)
+    requested_scope: Literal["member_private", "household_shared"]
+    provider_option: str | None = Field(default=None, max_length=200)
+    state: Literal["requested"]
+    revision: int = Field(ge=1)
+    changed_by_member_id: str = Field(min_length=1)
+    changed_at: str = Field(min_length=1)
+    installs_software: Literal[False] = False
+    pairs_bridge: Literal[False] = False
+    enrolls_account: Literal[False] = False
+    changes_openclaw_configuration: Literal[False] = False
+    accesses_credentials: Literal[False] = False
+    grants_authority: Literal[False] = False
+    provider_effects: Literal[False] = False
+
+
+class SettingsCapabilityRequestCancelledV1(BaseModel):
+    """Terminal cancellation of one request, without revoking unrelated truth."""
+
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1)
+    capability_id: str = Field(min_length=1, max_length=200)
+    catalog_version: str = Field(min_length=1, max_length=40)
+    desired_outcome: str = Field(min_length=1, max_length=500)
+    requested_scope: Literal["member_private", "household_shared"]
+    provider_option: str | None = Field(default=None, max_length=200)
+    state: Literal["cancelled"]
+    revision: int = Field(ge=1)
+    changed_by_member_id: str = Field(min_length=1)
+    changed_at: str = Field(min_length=1)
+    installs_software: Literal[False] = False
+    pairs_bridge: Literal[False] = False
+    enrolls_account: Literal[False] = False
+    changes_openclaw_configuration: Literal[False] = False
+    accesses_credentials: Literal[False] = False
+    grants_authority: Literal[False] = False
+    provider_effects: Literal[False] = False
+
+
 registry.register("settings.profile_changed", 1, SettingsProfileChangedV1)
 registry.register("settings.preferences_changed", 1, SettingsPreferencesChangedV1)
 registry.register(
@@ -101,6 +150,12 @@ registry.register(
 )
 registry.register(
     "settings.candidate_policy_changed", 1, SettingsCandidatePolicyChangedV1
+)
+registry.register("settings.capability_requested", 1, SettingsCapabilityRequestedV1)
+registry.register(
+    "settings.capability_request_cancelled",
+    1,
+    SettingsCapabilityRequestCancelledV1,
 )
 
 

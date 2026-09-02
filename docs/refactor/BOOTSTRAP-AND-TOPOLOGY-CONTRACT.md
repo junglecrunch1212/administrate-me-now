@@ -158,6 +158,15 @@ transport state never substitutes for them. OAuth grants and scope expansion
 remain provider-specific secure activation steps. No password, token, provider
 account, or secure-reference path is returned to browser Settings.
 
+CO-026 adds a tenant-neutral reviewed capability catalog and secret-free member
+request/cancel events to this post-bootstrap boundary. A request is desired
+outcome only: it cannot install a helper, export or accept a bridge package,
+pair a device, open a browser consent flow, enroll a provider, change a scope,
+read a credential, enable a pack, alter OpenClaw, or grant authority. Admin may
+make a reviewed option available but cannot finish another adult's private
+consent. The catalog's local-helper, browser, partner, commercial-service, and
+human prerequisites are explanatory state, not bootstrap completion evidence.
+
 Personal Google read-only enrollment uses one independently consented,
 member-scoped installed-user grant for exactly Gmail read-only, Calendar
 read-only, and Tasks read-only. The local consent helper derives a stable

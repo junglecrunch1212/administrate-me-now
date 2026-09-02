@@ -1,8 +1,6 @@
 """Exact OpenClaw contract pinned by the Phase 4 seam."""
 
-OPENCLAW_VERSION = "2026.7.2"
-OPENCLAW_COMMIT = "ce67ffb70e83e5ebb56ea02e814e577153f84f61"
-PLUGIN_ID = "administrateme"
+from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION, PLUGIN_ID
 
 BRIDGE_EVENT_KINDS = frozenset(
     {"commitment_candidate", "household_action", "delivery_outcome"}

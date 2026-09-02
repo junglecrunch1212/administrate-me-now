@@ -17,7 +17,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from adminme.capability_catalog import compose_member_catalog
+from adminme.cos_compiled_context import (
+    compile_effective_cos_context,
+    plain_operating_agreement,
+)
+from adminme.openclaw_topology import member_agent_id
+from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
+from adminme.projections.context_fabric.queries import (
+    source_policy_proposals_for_member,
+    source_policy_rules_for_member,
+)
+from adminme.projections.parties.queries import (
+    effective_operating_agreements,
+    list_operating_agreements,
+    list_service_delegations,
+)
 from adminme.service_identities import public_service_identity_inventory
+from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 from adminme.candidate_policy import (
     SOURCE_CATALOG,
@@ -202,7 +219,7 @@ class SettingsMutation:
 class SettingsControlStore:
     """Atomic, secret-free desired-state journal for member controls."""
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -219,6 +236,8 @@ class SettingsControlStore:
             "source_policies_v2": {},
             "source_policy_v2_revisions": {},
             "source_policy_v2_migrations": {},
+            "capability_requests": {},
+            "capability_request_revisions": {},
         }
 
     def read(self) -> dict[str, Any]:
@@ -228,7 +247,12 @@ class SettingsControlStore:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("Settings control journal is unreadable") from exc
-        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2, 3}:
+        if not isinstance(value, dict) or value.get("schema_version") not in {
+            1,
+            2,
+            3,
+            4,
+        }:
             raise RuntimeError("Settings control journal has an unsupported schema")
         if value["schema_version"] == 1:
             value = copy.deepcopy(value)
@@ -236,12 +260,17 @@ class SettingsControlStore:
             value["candidate_policies"] = {}
         if value["schema_version"] == 2:
             value = copy.deepcopy(value)
-            value["schema_version"] = self.SCHEMA_VERSION
+            value["schema_version"] = 3
             value["source_policies_v2"] = {}
             value["source_policy_v2_revisions"] = {}
             value["source_policy_v2_migrations"] = self._candidate_policy_migrations(
                 value.get("candidate_policies") or {}
             )
+        if value["schema_version"] == 3:
+            value = copy.deepcopy(value)
+            value["schema_version"] = self.SCHEMA_VERSION
+            value["capability_requests"] = {}
+            value["capability_request_revisions"] = {}
         if not isinstance(value.get("revision"), int):
             raise RuntimeError("Settings control journal revision is invalid")
         for key in (
@@ -252,6 +281,8 @@ class SettingsControlStore:
             "source_policies_v2",
             "source_policy_v2_revisions",
             "source_policy_v2_migrations",
+            "capability_requests",
+            "capability_request_revisions",
         ):
             if not isinstance(value.get(key), dict):
                 raise RuntimeError(f"Settings control journal {key} is invalid")
@@ -314,6 +345,26 @@ class SettingsControlStore:
                 for record in migrations.values()
             ):
                 raise RuntimeError("Settings source policy migration state is invalid")
+        for member_id, rows in value["capability_requests"].items():
+            if not isinstance(member_id, str) or not isinstance(rows, dict):
+                raise RuntimeError("Settings capability requests are invalid")
+            revision = value["capability_request_revisions"].get(member_id)
+            if not isinstance(revision, int) or revision < 0:
+                raise RuntimeError("Settings capability request revision is invalid")
+            for capability_id, record in rows.items():
+                if (
+                    not isinstance(capability_id, str)
+                    or not capability_id
+                    or not isinstance(record, dict)
+                    or record.get("state") not in {"requested", "cancelled"}
+                    or not isinstance(record.get("revision"), int)
+                    or record["revision"] < 1
+                ):
+                    raise RuntimeError("Settings capability request is invalid")
+        if set(value["capability_request_revisions"]) - set(
+            value["capability_requests"]
+        ):
+            raise RuntimeError("Settings capability request owner revision is invalid")
         return value
 
     @staticmethod
@@ -394,6 +445,7 @@ class SettingsControlStore:
         allowed = {
             "apple_calendar",
             "apple_reminders",
+            "apple_contacts",
             "apple_notes",
             "apple_voice_memos",
             "obsidian",
@@ -560,6 +612,110 @@ class SettingsControlStore:
             count += 1
         _atomic_json(self.path, state)
         return count
+
+    def capability_request_revision(
+        self, member_id: str, *, state: dict[str, Any] | None = None
+    ) -> int:
+        current = state or self.read()
+        value = current["capability_request_revisions"].get(member_id, 0)
+        return int(value) if isinstance(value, int) and value >= 0 else 0
+
+    def prepare_capability_request_change(
+        self, member_id: str, *, expected_revision: int
+    ) -> int:
+        current = self.capability_request_revision(member_id)
+        if current != expected_revision:
+            raise ValueError("Capability requests changed; refresh before saving")
+        return current + 1
+
+    @staticmethod
+    def _apply_capability_request_payload(
+        state: dict[str, Any], payload: dict[str, Any]
+    ) -> SettingsMutation:
+        member_id = str(payload.get("member_id") or "")
+        capability_id = str(payload.get("capability_id") or "")
+        revision = payload.get("revision")
+        request_state = payload.get("state")
+        if not member_id or not capability_id:
+            raise ValueError("capability request requires member and capability")
+        if not isinstance(revision, int) or revision < 1:
+            raise ValueError("capability request revision is invalid")
+        if request_state not in {"requested", "cancelled"}:
+            raise ValueError("capability request state is invalid")
+        current_revision = int(state["capability_request_revisions"].get(member_id, 0))
+        if revision <= current_revision:
+            raise ValueError(
+                "capability request revision is duplicate or moved backwards"
+            )
+        if revision != current_revision + 1:
+            raise ValueError("capability request revision has a gap")
+        rows = state["capability_requests"].setdefault(member_id, {})
+        previous = copy.deepcopy(rows.get(capability_id) or {})
+        current = {
+            "member_id": member_id,
+            "capability_id": capability_id,
+            "catalog_version": str(payload.get("catalog_version") or ""),
+            "desired_outcome": str(payload.get("desired_outcome") or ""),
+            "requested_scope": str(payload.get("requested_scope") or ""),
+            "provider_option": payload.get("provider_option"),
+            "state": request_state,
+            "revision": revision,
+            "changed_by_member_id": str(payload.get("changed_by_member_id") or ""),
+            "changed_at": str(payload.get("changed_at") or ""),
+            "installs_software": False,
+            "pairs_bridge": False,
+            "enrolls_account": False,
+            "changes_openclaw_configuration": False,
+            "accesses_credentials": False,
+            "grants_authority": False,
+            "provider_effects": False,
+        }
+        rows[capability_id] = current
+        state["capability_request_revisions"][member_id] = revision
+        return SettingsMutation(previous, copy.deepcopy(current), revision)
+
+    def apply_capability_request_event(
+        self, payload: dict[str, Any]
+    ) -> SettingsMutation:
+        state = self.read()
+        mutation = self._apply_capability_request_payload(state, payload)
+        _atomic_json(self.path, state)
+        return mutation
+
+    async def replay_capability_request_events(self, event_log: Any) -> int:
+        """Rebuild inert capability requests from encrypted audit events."""
+
+        state = self.read()
+        state["capability_requests"] = {}
+        state["capability_request_revisions"] = {}
+        count = 0
+        async for event in event_log.read_since(
+            types=[
+                "settings.capability_requested",
+                "settings.capability_request_cancelled",
+            ]
+        ):
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                raise RuntimeError("capability request event payload is invalid")
+            try:
+                self._apply_capability_request_payload(state, payload)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("capability request replay failed closed") from exc
+            count += 1
+        _atomic_json(self.path, state)
+        return count
+
+    def capability_requests_for(
+        self, member_id: str, *, state: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        current = state or self.read()
+        rows = current["capability_requests"].get(member_id) or {}
+        return [
+            copy.deepcopy(record)
+            for _, record in sorted(rows.items())
+            if isinstance(record, dict)
+        ]
 
     def effective_source_policy_v2(
         self,
@@ -1013,9 +1169,10 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
     auth_id = session.auth_member_id
     view_id = session.view_member_id
     viewing_as = auth_id != view_id
+    private_owner_visible = not viewing_as
     auth_label = member_label(runtime, auth_id)
     view_label = member_label(runtime, view_id)
-    connections = compose_connections(runtime, view_id)
+    connections = compose_connections(runtime, view_id) if private_owner_visible else []
     needs_attention: list[dict[str, Any]] = []
     for connection in connections:
         if connection["setup"] == "binding_blocked":
@@ -1071,7 +1228,14 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
     bridges = []
     bridge_requests = state["bridge_requests"]
     for identity, record in sorted(runtime.settings.bridge_enrollments.items()):
-        if record.get("member_id") != view_id and session.auth_role != "principal":
+        record_member = str(record.get("member_id") or "")
+        record_member_role = runtime.settings.member_roles.get(record_member)
+        guardian_visible = (
+            session.auth_role == "principal" and record_member_role == "child"
+        )
+        if not private_owner_visible or (
+            record_member != view_id and not guardian_visible
+        ):
             continue
         bridges.append(
             {
@@ -1094,7 +1258,13 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
     for requested_member, record in sorted(bridge_requests.items()):
         if not isinstance(record, dict):
             continue
-        if requested_member != view_id and session.auth_role != "principal":
+        requested_member_role = runtime.settings.member_roles.get(requested_member)
+        guardian_visible = (
+            session.auth_role == "principal" and requested_member_role == "child"
+        )
+        if not private_owner_visible or (
+            requested_member != view_id and not guardian_visible
+        ):
             continue
         if any(item["member_id"] == requested_member for item in bridges):
             continue
@@ -1129,6 +1299,7 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         for entry in runtime.settings.adapter_config.get("adapters", [])
         if isinstance(entry, dict)
         and isinstance(entry.get("config"), dict)
+        and private_owner_visible
         and entry["config"].get("member_id") == view_id
     }
     candidate_sources: list[dict[str, Any]] = []
@@ -1164,6 +1335,98 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         if source_policy_owner_visible
         else []
     )
+    catalog = compose_member_catalog(runtime, session, settings_state=state)
+    agreements = effective_operating_agreements(
+        runtime.projections.connection("parties"),
+        session,
+        as_of_iso=datetime.now(timezone.utc).isoformat(),
+    )
+    if viewing_as:
+        agreements = [
+            value
+            for value in agreements
+            if value.get("authority_scope") == "household_shared"
+        ]
+    rendered_agreements = [plain_operating_agreement(value) for value in agreements]
+    delegations = (
+        list_service_delegations(
+            runtime.projections.connection("parties"),
+            session,
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        )
+        if private_owner_visible
+        else []
+    )
+    learning_proposals = (
+        source_policy_proposals_for_member(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=auth_id,
+        )
+        if private_owner_visible
+        else []
+    )
+    learning_rules = (
+        source_policy_rules_for_member(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=auth_id,
+        )
+        if private_owner_visible
+        else []
+    )
+    operating_agreement_rows = (
+        list_operating_agreements(
+            runtime.projections.connection("parties"),
+            session,
+            as_of_iso=datetime.now(timezone.utc).isoformat(),
+            include_inactive=True,
+        )
+        if private_owner_visible
+        else []
+    )
+    capability_requests = (
+        runtime.settings_control.capability_requests_for(view_id, state=state)
+        if private_owner_visible
+        else []
+    )
+    admin_request_rows: list[dict[str, Any]] = []
+    if session.auth_role == "principal" and not viewing_as:
+        for requesting_member, member_rows in (
+            (auth_id, state["capability_requests"].get(auth_id) or {}),
+        ):
+            if not isinstance(member_rows, dict):
+                continue
+            for capability_id, record in sorted(member_rows.items()):
+                if not isinstance(record, dict) or record.get("state") != "requested":
+                    continue
+                admin_request_rows.append(
+                    {
+                        "requesting_member_id": requesting_member,
+                        "requesting_member_label": member_label(
+                            runtime, requesting_member
+                        ),
+                        "capability_id": capability_id,
+                        "desired_outcome": record.get("desired_outcome"),
+                        "requested_scope": record.get("requested_scope"),
+                        "provider_option": record.get("provider_option"),
+                        "revision": record.get("revision"),
+                        "state": "requested",
+                        "contains_credentials": False,
+                        "contains_provider_content": False,
+                        "admin_may_complete_private_consent": False,
+                    }
+                )
+    compiled_context = (
+        compile_effective_cos_context(
+            runtime,
+            session,
+            settings_state=state,
+            as_of_iso=datetime.now(timezone.utc).isoformat(),
+        )
+        if private_owner_visible
+        else None
+    )
     return {
         "revision": state["revision"],
         "identity": {
@@ -1180,6 +1443,21 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             and session.auth_role not in {"child", "device", "ambient"},
             "actions_as": auth_id,
             "reads_as": view_id,
+            "active_cos_context_member_id": view_id,
+            "member_agent_id": member_agent_id(view_id),
+            "context_isolated": True,
+        },
+        "cos_identity": {
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            "party_id": COS_PARTY_ID,
+            "same_household_cos": True,
+            "active_member_context": view_id,
+            "on_behalf_of_member_id": view_id,
+            "openclaw_agent_id": member_agent_id(view_id),
+            "openclaw_version": OPENCLAW_VERSION,
+            "openclaw_commit": OPENCLAW_COMMIT,
+            "generic_member_memory_shared": False,
+            "raw_cross_member_context": False,
         },
         "needs_attention": needs_attention,
         "connections": connections,
@@ -1257,7 +1535,9 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             if isinstance(active_profile, dict)
             else None,
             "profiles": profiles,
-            "preferences": runtime.settings_control.preferences_for(view_id),
+            "preferences": runtime.settings_control.preferences_for(view_id)
+            if private_owner_visible
+            else {},
             "persona": {
                 "id": persona.get("id"),
                 "label": persona.get("label"),
@@ -1267,6 +1547,64 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             },
         },
         "bridges": bridges,
+        "capabilities": catalog,
+        "capability_request_revision": runtime.settings_control.capability_request_revision(
+            view_id, state=state
+        )
+        if private_owner_visible
+        else None,
+        "capability_requests": capability_requests,
+        "how_my_cos_works": {
+            "contract": "household-cos-operating-agreement-v1",
+            "private_owner_visible": private_owner_visible,
+            "agreements": rendered_agreements,
+            "delegations": delegations,
+            "source_policy_contract": "separate",
+            "global_trust_score": None,
+            "preferences_grant_authority": False,
+            "compiled_context": compiled_context,
+        },
+        "learning_and_trust": {
+            "proposals": learning_proposals,
+            "operating_agreement_proposals": [
+                plain_operating_agreement(value)
+                for value in operating_agreement_rows
+                if value.get("effective_state") == "proposed"
+            ],
+            "rules": learning_rules,
+            "trials": [
+                value
+                for value in learning_rules
+                if value.get("state") == "trial" or value.get("trial_proposal_ids")
+            ],
+            "suspended_or_revoked": [
+                value
+                for value in learning_rules
+                if value.get("state") in {"suspended", "revoked", "expired"}
+            ],
+            "inactive_operating_agreements": [
+                plain_operating_agreement(value)
+                for value in operating_agreement_rows
+                if value.get("effective_state")
+                in {"suspended", "revoked", "expired", "rejected", "superseded"}
+            ],
+            "trust_is_capability_specific": True,
+            "silent_cross_domain_promotion": False,
+        },
+        "household_privacy": {
+            "private_sources_owner_only": True,
+            "busy_only_is_separate_policy": True,
+            "other_adult_approval_required_for_shared_authority": True,
+            "professional_data_excluded_without_exact_grant": True,
+            "surprise_planning_remains_private": True,
+            "admin_may_complete_other_adult_consent": False,
+        },
+        "admin_requests": {
+            "visible": session.auth_role == "principal" and not viewing_as,
+            "items": admin_request_rows,
+            "secret_free": True,
+            "other_adult_consent_controls": False,
+        },
         "bridge_candidates": [
             member
             for member in household

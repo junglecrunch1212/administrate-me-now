@@ -2,7 +2,7 @@
 
 Status: Accepted, 2026-08-07
 
-Scope: CO-004
+Scope: CO-004, CO-026
 
 ## Decision
 
@@ -13,9 +13,18 @@ runtime evidence.
 
 Operational desired state is not household truth and is not a projection. A
 secret-free, atomic, revisioned journal may retain pause state, bounded member
-preferences, and bridge enrollment requests. Typed append-only events record
-accepted transitions. Member experience overrides feed existing authorized
-surface composition; adapter pause/resume feeds the existing supervisor.
+preferences, bridge enrollment requests, and inert capability requests. Typed
+append-only events record accepted transitions. Member experience overrides
+feed existing authorized surface composition; adapter pause/resume feeds the
+existing supervisor.
+
+Settings owns a versioned, tenant-neutral capability catalog derived only from
+reviewed domain products, adapter and member-bridge manifests with present
+entrypoints, the exact pinned OpenClaw plugin manifest, and explicit reviewed
+planned descriptors. Catalog knowledge, implementation, installation, setup,
+provider permission, AdministrateMe authority, OpenClaw exposure/approval,
+health, freshness, trust, verification, consent, effective availability, and
+required actions remain separate. Catalog presence grants nothing.
 
 Connection status is a product contract with four axes—setup, runtime,
 permission, and safety. A manifest, config row, credential reference, provider
@@ -55,3 +64,7 @@ consent is self-owned; principals may govern child bridges only.
   and the non-authoritative Context Fabric) and the one-runtime topology remain
   unchanged.
 - AC-31 owns process, isolation, redaction, reconciliation, and browser proof.
+- CO-026/AC-56 add the twelve-section adult Settings information architecture,
+  member-effective capability composition, secret-free request/cancel replay,
+  minimum typed CoS context, and exact-pinned OpenClaw tools. Admin availability
+  cannot substitute for another adult's consent; view-as remains read-only.

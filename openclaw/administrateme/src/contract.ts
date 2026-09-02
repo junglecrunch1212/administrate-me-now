@@ -46,6 +46,10 @@ export type IntegrationState = "healthy" | "degraded" | "unavailable" | "incompa
 export const TOOL_NAMES = [
   "administrateme_state",
   "administrateme_what_now",
+  "administrateme_capabilities",
+  "administrateme_settings_context",
+  "administrateme_capability_request",
+  "administrateme_policy_proposal",
   "administrateme_add_for_review",
   "administrateme_review",
   "administrateme_lifecycle",
@@ -64,6 +68,8 @@ export const TOOL_NAMES = [
 export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([
   "administrateme_add_for_review",
   "administrateme_review",
+  "administrateme_capability_request",
+  "administrateme_policy_proposal",
   "administrateme_lifecycle",
   "administrateme_correct",
   "administrateme_service_work",

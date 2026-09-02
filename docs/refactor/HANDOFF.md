@@ -16,6 +16,41 @@ next_phase: continue_observation_until_separately_authorized_change
 ---
 # Release handoff
 
+## 2026-09-02 G08 CoS Settings capability catalog candidate
+
+G08 is a Phase A **PRESERVE/HARDEN** candidate built from protected `main`.
+It adds tenant-neutral capability catalog contract v1.0.0, derives implemented
+capabilities from reviewed product code and adapter/member-bridge manifests,
+and keeps planned Apple Messages observation and reply visibly unavailable
+until G10 and G11. Static support is kept separate from installation, setup,
+provider permission, AdministrateMe authority, OpenClaw exposure and approval,
+runtime health and freshness, member consent, trust, verification, terminal
+results, later observation, and reconciliation.
+
+Member Settings now exposes the twelve contracted sections, per-adult private
+catalog state, exact member-bridge axes, source-policy explanations, effective
+agreements, CoS behavior, and secret-free request/cancel records. View-as is
+read-only, adult private connection and bridge state is not shared, and unknown
+or incomplete state fails closed. The one pinned OpenClaw Gateway remains at
+2026.7.2 commit `ce67ffb70e83e5ebb56ea02e814e577153f84f61`;
+the plugin exposes typed member-scoped catalog, settings-context, capability
+request, and policy-proposal tools through the existing approval hook and
+isolated per-member agents, workspaces, and account-aware peer sessions.
+
+The settings v4 migration and event replay preserve existing settings,
+connections, source policies, profiles, bridge records, delegation, agreements,
+and candidate policy state while adding revisioned capability requests. The
+bounded CoS context omits credentials, secure references, raw private evidence,
+other-member rules, provider bodies, shared raw inboxes, generic memory,
+conversation transcripts, and infrastructure administration.
+
+No software was installed, bridge paired, provider enrolled, permission or
+credential changed, OpenClaw runtime reconfigured, domain authority granted,
+provider effect performed, or live release activated. Phase B, provider
+enrollment, and all operational changes remain separate owner authorization
+boundaries. G09 must not start until this candidate is accepted through its
+protected pull request.
+
 ## 2026-08-26 Phase B live closure
 
 Recovery-terminality PR #349 passed both required hosted checks at exact head
