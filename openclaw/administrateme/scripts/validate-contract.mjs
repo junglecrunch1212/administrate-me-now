@@ -14,6 +14,10 @@ const expectedNode = ">=24.15.0 <25";
 const expectedTools = [
   "administrateme_state",
   "administrateme_what_now",
+  "administrateme_capabilities",
+  "administrateme_settings_context",
+  "administrateme_capability_request",
+  "administrateme_policy_proposal",
   "administrateme_add_for_review",
   "administrateme_review",
   "administrateme_lifecycle",

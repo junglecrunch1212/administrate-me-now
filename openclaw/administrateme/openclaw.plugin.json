@@ -2,7 +2,7 @@
   "id": "administrateme",
   "name": "AdministrateMe",
   "description": "Authorized household state and action seam for AdministrateMe v2.",
-  "version": "2.0.0-gate7",
+  "version": "2.0.0-gate8",
   "activation": {
     "onStartup": true,
     "onCommands": [
@@ -30,6 +30,10 @@
     "tools": [
       "administrateme_state",
       "administrateme_what_now",
+      "administrateme_capabilities",
+      "administrateme_settings_context",
+      "administrateme_capability_request",
+      "administrateme_policy_proposal",
       "administrateme_add_for_review",
       "administrateme_review",
       "administrateme_lifecycle",
@@ -46,6 +50,10 @@
     ]
   },
   "toolMetadata": {
+    "administrateme_capabilities": { "optional": true },
+    "administrateme_settings_context": { "optional": true },
+    "administrateme_capability_request": { "optional": true },
+    "administrateme_policy_proposal": { "optional": true },
     "administrateme_add_for_review": { "optional": true },
     "administrateme_review": { "optional": true },
     "administrateme_lifecycle": { "optional": true },

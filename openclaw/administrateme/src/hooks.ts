@@ -22,6 +22,9 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
     async (event) => {
       if (!SIDE_EFFECT_TOOL_NAMES.has(event.toolName)) return;
       if (event.toolName === "administrateme_review" && event.params.action === "inspect") return;
+      if (event.toolName === "administrateme_policy_proposal" && event.params.action === "inspect") {
+        return;
+      }
       const approval = prepareApproval(runtime, event.toolName, event.params);
       return {
         params: approval.params,

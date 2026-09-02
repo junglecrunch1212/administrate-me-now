@@ -122,6 +122,7 @@ from adminme.projections.context_fabric.queries import (
 from adminme.projections.tasks.queries import get_task
 from adminme.projections.money.queries import get_finance_goal
 from adminme.candidate_policy import validate_policy_override
+from adminme.capability_catalog import catalog_item, compose_member_catalog
 from adminme.settings_control import (
     compose_connections,
     member_label,
@@ -242,11 +243,21 @@ class SettingsBridgeRequest(BaseModel):
         Literal[
             "apple_calendar",
             "apple_reminders",
+            "apple_contacts",
             "apple_notes",
             "apple_voice_memos",
             "obsidian",
         ]
-    ] = Field(min_length=1, max_length=5)
+    ] = Field(min_length=1, max_length=6)
+
+
+class SettingsCapabilityRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    action: Literal["request", "cancel"]
+    requested_scope: Literal["member_private", "household_shared"] = "member_private"
+    provider_option: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class PromotionRequest(BaseModel):
@@ -5250,10 +5261,21 @@ async def surface(
     if surface == "settings":
         diagnostics = await runtime.diagnostics()
         result["system"]["runtime"] = {
+            **result["system"]["runtime"],
             **diagnostics,
             "projection_count": len(runtime.projections.projection_names()),
         }
         readiness = diagnostics.get("deployment_readiness") or {}
+        readiness_dimensions = readiness.get("dimensions") or {}
+        result["system"]["runtime"]["release_state"] = (
+            "ready" if diagnostics.get("release_ready") is True else "not_ready"
+        )
+        backup_dimension = readiness_dimensions.get("backup_rollback") or {}
+        result["system"]["runtime"]["backup_state"] = (
+            backup_dimension.get("state") or "unknown"
+        )
+        if diagnostics.get("openclaw") == "incompatible":
+            result["system"]["runtime"]["compatibility"] = "incompatible"
         result["control"]["readiness"] = readiness
         for dimension_name in readiness.get("blocking_dimensions") or []:
             dimension = (readiness.get("dimensions") or {}).get(dimension_name) or {}
@@ -5263,7 +5285,7 @@ async def surface(
                     "title": f"Resolve {dimension_name.replace('_', ' ')} readiness",
                     "detail": dimension.get("reason")
                     or "Required deployment evidence is unresolved.",
-                    "section": "safety-system",
+                    "section": "system",
                 }
             )
     if surface in {"today", "triage"}:
@@ -5983,6 +6005,136 @@ async def change_settings_source_policy_v2(
             **effective,
             "live_admission_changed": False,
             "provider_effects": False,
+        }
+
+
+@router.post("/api/member/v1/settings/capabilities/{capability_id}", status_code=202)
+async def change_settings_capability_request(
+    capability_id: str,
+    body: SettingsCapabilityRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Record or cancel one inert capability request without an operational effect."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    state = runtime.settings_control.read()
+    effective_catalog = compose_member_catalog(runtime, session, settings_state=state)
+    capability = catalog_item(effective_catalog, capability_id)
+    if capability is None:
+        raise HTTPException(404, "capability is not in the reviewed catalog")
+    provider_options = set(capability.get("provider_options") or [])
+    provider_option = body.provider_option
+    if provider_option is not None and provider_option not in provider_options:
+        raise HTTPException(422, "provider option is not reviewed for this capability")
+    if provider_option is None and len(provider_options) == 1:
+        provider_option = next(iter(provider_options))
+    values = {
+        "capability_id": capability_id,
+        "expected_revision": body.expected_revision,
+        "action": body.action,
+        "requested_scope": body.requested_scope,
+        "provider_option": provider_option,
+    }
+    event_type = (
+        "settings.capability_requested"
+        if body.action == "request"
+        else "settings.capability_request_cancelled"
+    )
+    fingerprint = _settings_request_fingerprint(event_type, values)
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        try:
+            await runtime.settings_control.replay_capability_request_events(
+                runtime.event_log
+            )
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(
+                503, "capability requests could not be replayed"
+            ) from exc
+        prior = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type=event_type,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior is not None:
+            return {
+                "accepted": True,
+                "idempotent": True,
+                "event_id": prior["event_id"],
+                "request": prior["payload"],
+                "provider_effect_count": 0,
+                "operational_effects": False,
+            }
+        current_rows = {
+            value["capability_id"]: value
+            for value in runtime.settings_control.capability_requests_for(
+                session.auth_member_id
+            )
+        }
+        current = current_rows.get(capability_id)
+        if body.action == "cancel" and (
+            current is None or current.get("state") != "requested"
+        ):
+            raise HTTPException(409, "capability request is not active")
+        if (
+            body.action == "request"
+            and current is not None
+            and current.get("state") == "requested"
+        ):
+            raise HTTPException(409, "capability is already requested")
+        try:
+            revision = runtime.settings_control.prepare_capability_request_change(
+                session.auth_member_id, expected_revision=body.expected_revision
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        payload = {
+            "member_id": session.auth_member_id,
+            "capability_id": capability_id,
+            "catalog_version": effective_catalog["catalog_version"],
+            "desired_outcome": capability["outcome"],
+            "requested_scope": body.requested_scope,
+            "provider_option": provider_option,
+            "state": "requested" if body.action == "request" else "cancelled",
+            "revision": revision,
+            "changed_by_member_id": session.auth_member_id,
+            "changed_at": changed_at,
+            "installs_software": False,
+            "pairs_bridge": False,
+            "enrolls_account": False,
+            "changes_openclaw_configuration": False,
+            "accesses_credentials": False,
+            "grants_authority": False,
+            "provider_effects": False,
+        }
+        await _guard_member_write(runtime, session, event_type, payload)
+        event_id = await _write_settings_receipt(
+            runtime,
+            session,
+            event_type=event_type,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            owner_member_id=session.auth_member_id,
+            payload=payload,
+        )
+        try:
+            mutation = runtime.settings_control.apply_capability_request_event(payload)
+        except Exception as exc:
+            raise HTTPException(
+                503,
+                "capability request audit was saved but its local view needs replay",
+            ) from exc
+        return {
+            "accepted": True,
+            "event_id": event_id,
+            "request": mutation.current,
+            "provider_effect_count": 0,
+            "operational_effects": False,
         }
 
 

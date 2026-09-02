@@ -8,6 +8,7 @@ data access.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -19,6 +20,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
+from adminme.capability_catalog import catalog_item, compose_member_catalog
+from adminme.cos_compiled_context import compile_effective_cos_context
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.delegated_execution import (
@@ -60,6 +63,10 @@ from adminme.projections.tasks.queries import (
 from adminme.projections.commitments.queries import get_commitment
 from adminme.projections.calendars.queries import get_calendar_event
 from adminme.projections.lists.queries import get_item as get_list_item
+from adminme.projections.context_fabric.queries import (
+    source_policy_proposals_for_member,
+    source_policy_rules_for_member,
+)
 from adminme.projections.parties.queries import (
     ServiceDelegationResolutionError,
     effective_operating_agreements,
@@ -117,6 +124,52 @@ class ContextRequest(BaseModel):
     openclaw_approval_receipt_id: str | None = Field(
         default=None, min_length=1, max_length=240
     )
+
+
+class CapabilityToolRequest(ContextRequest):
+    capability_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+
+class CapabilityChangeRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_revision: int = Field(ge=0)
+    capability_id: str = Field(min_length=1, max_length=240)
+    action: Literal["request", "cancel"]
+    requested_scope: Literal["member_private", "household_shared"] = "member_private"
+    provider_option: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class PolicyProposalToolRequest(ContextRequest):
+    action: Literal["inspect", "decide"]
+    policy_proposal_id: str | None = Field(default=None, min_length=1, max_length=240)
+    request_id: str | None = Field(default=None, min_length=8, max_length=120)
+    decision: Literal["approve", "edit", "trial", "reject", "suppress"] | None = None
+    instruction: Literal["always", "usually", "ask", "never"] | None = None
+    preview_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    trial_proposal_ids: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_action_shape(self) -> "PolicyProposalToolRequest":
+        decision_fields = (
+            self.request_id,
+            self.decision,
+            self.instruction,
+            self.preview_digest,
+        )
+        if self.action == "inspect":
+            if (
+                any(value is not None for value in decision_fields)
+                or self.trial_proposal_ids
+            ):
+                raise ValueError("inspect cannot include decision fields")
+            return self
+        if not self.policy_proposal_id or any(
+            value is None for value in decision_fields
+        ):
+            raise ValueError(
+                "decide requires the proposal, request, decision, and preview"
+            )
+        return self
 
 
 class ApprovalResolutionRequest(BaseModel):
@@ -957,6 +1010,254 @@ async def inspect_state(body: ContextRequest, request: Request) -> dict[str, Any
         "provider_effect_count": 0,
     }
     await _record_tool_call(request, session, body.provenance, operation="tools.state")
+    return result
+
+
+@router.post("/tools/capabilities")
+async def inspect_capabilities(
+    body: CapabilityToolRequest, request: Request
+) -> dict[str, Any]:
+    """Return the reviewed catalog and member-effective state without secrets."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    runtime = _runtime(request)
+    result = compose_member_catalog(
+        runtime, session, settings_state=runtime.settings_control.read()
+    )
+    if body.capability_id is not None:
+        item = catalog_item(result, body.capability_id)
+        if item is None:
+            raise HTTPException(404, "capability is not in the reviewed catalog")
+        result = {
+            "contract": result["contract"],
+            "catalog_version": result["catalog_version"],
+            "item": item,
+            "provider_effect_count": 0,
+        }
+    await _record_tool_call(
+        request, session, body.provenance, operation="tools.capabilities"
+    )
+    return result
+
+
+@router.post("/tools/settings-context")
+async def inspect_settings_context(
+    body: ContextRequest, request: Request
+) -> dict[str, Any]:
+    """Compile minimum effective CoS context from typed authoritative state."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    result = compile_effective_cos_context(_runtime(request), session)
+    await _record_tool_call(
+        request, session, body.provenance, operation="tools.settings-context"
+    )
+    return result
+
+
+@router.post("/tools/capability-request", status_code=202)
+async def change_capability_request(
+    body: CapabilityChangeRequest, request: Request
+) -> dict[str, Any]:
+    """Record an inert, secret-free capability request or cancellation."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    runtime = _runtime(request)
+    state = runtime.settings_control.read()
+    catalog = compose_member_catalog(runtime, session, settings_state=state)
+    capability = catalog_item(catalog, body.capability_id)
+    if capability is None:
+        raise HTTPException(404, "capability is not in the reviewed catalog")
+    provider_options = set(capability.get("provider_options") or [])
+    provider_option = body.provider_option
+    if provider_option is not None and provider_option not in provider_options:
+        raise HTTPException(422, "provider option is not reviewed for this capability")
+    if provider_option is None and len(provider_options) == 1:
+        provider_option = next(iter(provider_options))
+    event_type = (
+        "settings.capability_requested"
+        if body.action == "request"
+        else "settings.capability_request_cancelled"
+    )
+    request_values = body.model_dump(
+        mode="json",
+        exclude={"provenance", "openclaw_approval_receipt_id"},
+        exclude_unset=True,
+    )
+    request_fingerprint = _fingerprint(request_values)
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        try:
+            await runtime.settings_control.replay_capability_request_events(
+                runtime.event_log
+            )
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(
+                503, "capability requests could not be replayed"
+            ) from exc
+        prior_event_id = await _prior_append(
+            runtime,
+            session,
+            event_type=event_type,
+            request_id=body.request_id,
+            request_fingerprint=request_fingerprint,
+        )
+        if prior_event_id is not None:
+            result = {
+                "accepted": True,
+                "event_id": prior_event_id,
+                "idempotent": True,
+                "provider_effect_count": 0,
+                "operational_effects": False,
+            }
+        else:
+            rows = {
+                value["capability_id"]: value
+                for value in runtime.settings_control.capability_requests_for(
+                    session.auth_member_id
+                )
+            }
+            current = rows.get(body.capability_id)
+            if (
+                body.action == "request"
+                and current is not None
+                and current.get("state") == "requested"
+            ):
+                raise HTTPException(409, "capability is already requested")
+            if body.action == "cancel" and (
+                current is None or current.get("state") != "requested"
+            ):
+                raise HTTPException(409, "capability request is not active")
+            try:
+                revision = runtime.settings_control.prepare_capability_request_change(
+                    session.auth_member_id,
+                    expected_revision=body.expected_revision,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            approval_event_id = await _consume_openclaw_approval(
+                request,
+                session,
+                body.provenance,
+                body,
+                tool_name="administrateme_capability_request",
+                action=f"settings.capability.{body.action}",
+            )
+            payload = {
+                "member_id": session.auth_member_id,
+                "capability_id": body.capability_id,
+                "catalog_version": catalog["catalog_version"],
+                "desired_outcome": capability["outcome"],
+                "requested_scope": body.requested_scope,
+                "provider_option": provider_option,
+                "state": "requested" if body.action == "request" else "cancelled",
+                "revision": revision,
+                "changed_by_member_id": session.auth_member_id,
+                "changed_at": EventEnvelope.now_utc_iso(),
+                "installs_software": False,
+                "pairs_bridge": False,
+                "enrolls_account": False,
+                "changes_openclaw_configuration": False,
+                "accesses_credentials": False,
+                "grants_authority": False,
+                "provider_effects": False,
+            }
+            await _guard(runtime, session, event_type, payload)
+            event_id, duplicate = await _append(
+                runtime,
+                session,
+                event_type=event_type,
+                source_account_id=body.provenance.account_id
+                or body.provenance.channel_id,
+                owner_scope=f"private:{session.auth_member_id}",
+                visibility_scope=f"private:{session.auth_member_id}",
+                payload=payload,
+                request_id=body.request_id,
+                causation_id=approval_event_id,
+                request_fingerprint=request_fingerprint,
+            )
+            runtime.settings_control.apply_capability_request_event(payload)
+            result = {
+                "accepted": True,
+                "event_id": event_id,
+                "idempotent": duplicate,
+                "request": payload,
+                "provider_effect_count": 0,
+                "operational_effects": False,
+            }
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation=f"tools.capability-request.{body.action}",
+        result_event_ids=[str(result["event_id"])],
+    )
+    return result
+
+
+@router.post("/tools/policy-proposal")
+async def policy_proposal(
+    body: PolicyProposalToolRequest, request: Request
+) -> dict[str, Any]:
+    """Inspect or decide member-owned Triage learning proposals."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    connection = runtime.projections.connection("context_fabric")
+    if body.action == "inspect":
+        proposals = source_policy_proposals_for_member(
+            connection, session, member_id=session.auth_member_id
+        )
+        if body.policy_proposal_id is not None:
+            proposals = [
+                value
+                for value in proposals
+                if value["policy_proposal_id"] == body.policy_proposal_id
+            ]
+            if not proposals:
+                raise HTTPException(404, "source policy proposal not found")
+        result = {
+            "proposals": proposals,
+            "rules": source_policy_rules_for_member(
+                connection, session, member_id=session.auth_member_id
+            ),
+            "provider_effect_count": 0,
+        }
+    else:
+        await _consume_openclaw_approval(
+            request,
+            session,
+            body.provenance,
+            body,
+            tool_name="administrateme_policy_proposal",
+            action="triage.source_policy_rule.decided",
+        )
+        from adminme.products.member import main as member_portal
+
+        result = await member_portal.decide_triage_learning_rule(
+            cast(str, body.policy_proposal_id),
+            member_portal.TriageLearningDecisionRequest(
+                request_id=cast(str, body.request_id),
+                decision=cast(Any, body.decision),
+                instruction=cast(Any, body.instruction),
+                preview_digest=cast(str, body.preview_digest),
+                trial_proposal_ids=body.trial_proposal_ids,
+            ),
+            request,
+            session,
+        )
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation=f"tools.policy-proposal.{body.action}",
+        result_event_ids=_result_event_ids(result),
+    )
     return result
 
 

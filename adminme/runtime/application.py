@@ -738,6 +738,7 @@ class AdministrateMeRuntime:
                 channels=self.settings.service_channel_accounts,
             )
             await self.settings_control.replay_source_policy_v2_events(self.event_log)
+            await self.settings_control.replay_capability_request_events(self.event_log)
             self.source_policy_shadow = SourcePolicyShadowEvaluator(
                 self.events,
                 self.settings_control,

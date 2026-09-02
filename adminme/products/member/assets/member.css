@@ -626,6 +626,14 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .settings-safety { border-left: 4px solid var(--teal); }
 .settings-advanced { padding: 1.15rem; }
 .advanced-capability-list { max-height: 32rem; overflow: auto; }
+.capability-group { border: 1px solid var(--line); border-radius: var(--radius-lg); background: rgb(255 253 248 / .72); }
+.capability-group > summary { cursor: pointer; padding: .9rem 1rem; font-weight: 800; }
+.capability-group > .settings-card-grid { padding: 0 1rem 1rem; }
+.capability-card { display: grid; gap: .8rem; box-shadow: none; }
+.capability-axes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .42rem; }
+.settings-contract-list { list-style: none; display: grid; gap: .7rem; margin: .8rem 0 0; padding: 0; }
+.settings-contract-list li { display: grid; gap: .2rem; padding: .75rem 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.settings-contract-list li:first-child { border-top: 0; }
 
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
@@ -774,6 +782,7 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   .evidence-grid dd { margin-bottom: .5rem; }
   .member-chip { max-width: 9.5rem; padding: .34rem .6rem; }
   .settings-overview-grid, .settings-summary-grid, .settings-card-grid { grid-template-columns: 1fr; }
+  .capability-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .candidate-policy-grid { grid-template-columns: 1fr; }
   .connection-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .permission-grid, .preference-grid { grid-template-columns: 1fr; }

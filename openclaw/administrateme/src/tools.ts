@@ -151,6 +151,77 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: "/api/openclaw/v1/tools/what-now",
     },
     {
+      name: "administrateme_capabilities",
+      description:
+        "Read the reviewed capability catalog and the authorized member's effective status.",
+      parameters: Type.Object(
+        {
+          capability_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/capabilities",
+    },
+    {
+      name: "administrateme_settings_context",
+      description:
+        "Read the minimum typed CoS context compiled from agreements, source policy, and exact grants.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/settings-context",
+    },
+    {
+      name: "administrateme_capability_request",
+      description:
+        "Record or cancel one inert, secret-free member capability request; never install or enroll anything.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          expected_revision: Type.Integer({ minimum: 0 }),
+          capability_id: Type.String({ minLength: 1, maxLength: 240 }),
+          action: Type.Union([Type.Literal("request"), Type.Literal("cancel")]),
+          requested_scope: Type.Optional(ServiceContextScope),
+          provider_option: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/capability-request",
+    },
+    {
+      name: "administrateme_policy_proposal",
+      description:
+        "Inspect or decide one member-owned Triage learning proposal; inspection is read-only.",
+      parameters: Type.Object(
+        {
+          action: Type.Union([Type.Literal("inspect"), Type.Literal("decide")]),
+          policy_proposal_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+          request_id: Type.Optional(Type.String({ minLength: 8, maxLength: 120 })),
+          decision: Type.Optional(
+            Type.Union([
+              Type.Literal("approve"),
+              Type.Literal("edit"),
+              Type.Literal("trial"),
+              Type.Literal("reject"),
+              Type.Literal("suppress"),
+            ]),
+          ),
+          instruction: Type.Optional(
+            Type.Union([
+              Type.Literal("always"),
+              Type.Literal("usually"),
+              Type.Literal("ask"),
+              Type.Literal("never"),
+            ]),
+          ),
+          preview_digest: Type.Optional(Type.String({ pattern: "^[0-9a-f]{64}$" })),
+          trial_proposal_ids: Type.Optional(
+            Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 100 }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/policy-proposal",
+    },
+    {
       name: "administrateme_add_for_review",
       description:
         "Save exact member text in Triage for deterministic interpretation and human confirmation.",

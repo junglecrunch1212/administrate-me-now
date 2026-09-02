@@ -429,6 +429,19 @@ and request a member-scoped bridge. Secrets and raw secure-reference paths
 never enter the response. AC-31 owns process, isolation, status, receipt, and
 browser proof.
 
+CoS Settings amendment (2026-09-03): CO-026 replaces the seven-section Settings
+rail with exactly Overview, My identity, CoS behavior, Source intake & context,
+How my CoS works, Capabilities, Connections, Devices & bridges, Learning &
+trust, Household & privacy, Safety & system, and Admin requests. Each section is
+URL-backed and keyboard reachable. Capability cards use semantic headings and
+buttons, visible text for all state rather than color alone, calm density,
+reduced-motion behavior, and the established 390-pixel single-column reflow.
+They expose catalog, installation, setup, permission, authority, OpenClaw,
+health, freshness, trust, verification, consent, action, prerequisite,
+unavailable, prohibited, and effective states without an enabled/disabled
+collapse. View-as is read-only and omits adult-private settings. Admin request
+rows are secret-free availability work, never another adult's consent.
+
 Triage extraction-health amendment (2026-08-08): UX-25, UX-29, UX-39, and
 UX-40 apply to the durable source-to-candidate worker, not only its projection.
 An empty queue may be called healthy-empty only when every required extraction

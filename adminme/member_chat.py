@@ -173,7 +173,7 @@ class OpenClawGatewayChatTransport:
                     "client": {
                         "id": "gateway-client",
                         "displayName": "AdministrateMe member relay",
-                        "version": "2.0.0-gate7",
+                        "version": "2.0.0-gate8",
                         "platform": "python",
                         "mode": "backend",
                     },

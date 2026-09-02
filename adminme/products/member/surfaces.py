@@ -34,6 +34,7 @@ from adminme.products.member.navigation import (
     experience_semantics,
     navigation,
 )
+from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.products.core import main as core
 from adminme.today import compose_daily_brief
 from adminme.triage_contract import TRIAGE_ENRICHMENT_CONTRACT, triage_destination
@@ -1744,6 +1745,15 @@ def build_surface(
                 "state": "ready" if runtime.started else "starting",
                 "openclaw": runtime.openclaw_state,
                 "projection_count": len(runtime.projections.projection_names()),
+                "architecture": "one-python-runtime-one-openclaw-gateway",
+                "openclaw_version": OPENCLAW_VERSION,
+                "openclaw_commit": OPENCLAW_COMMIT,
+                "member_agent_id": base["control"]["identity"]["member_agent_id"],
+                "isolated_workspace": True,
+                "peer_session_scope": "per_account_channel_peer",
+                "compatibility": "exact_pin",
+                "release_state": "candidate_not_deployed",
+                "backup_state": "deployment_gate_not_run",
             },
         }
         base["registry"] = registry_items(

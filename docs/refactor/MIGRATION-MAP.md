@@ -1,5 +1,22 @@
 # Migration map
 
+G08 CoS Settings capability-catalog update (2026-09-03): no projection is
+added and the governed count remains fifteen. The Settings desired-state
+journal migrates additively from schema v3 to v4 while preserving preferences,
+candidate/source policies, profiles, connection lifecycle, bridge requests,
+and prior receipts. Private `settings.capability_requested@v1` and
+`settings.capability_request_cancelled@v1` events add revisioned, idempotent
+request state and replay at startup. Existing service delegations and operating
+agreements remain in Parties. The catalog itself is rebuilt from reviewed
+repository artifacts and has no tenant content. Encrypted backup/restore
+rebuilds projections and restores request state without a provider call. Older
+code may ignore the additive events. Rollback selects the protected G07/CO-025
+predecessor and rebuilds disposable projections/caches; it rewrites no source
+fact, settings transition, agreement, delegation, credential, provider state,
+configuration, or checkpoint. G09, installation, enrollment, permission or
+credential changes, write enablement, deployment, and provider effects remain
+separate owner decisions.
+
 G07 delegated execution and reconciliation update (2026-09-02): no projection
 is added and the governed count remains fifteen. Tasks advances additively from
 v6 to v7 with separate standing-envelope, desired-action, approval, command,
