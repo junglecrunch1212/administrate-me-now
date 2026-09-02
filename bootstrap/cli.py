@@ -454,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
                         raise RuntimeError(
                             "the macOS helper requires a signed self-service package"
                         )
-                    from adminme_bridge.enrollment_helper import (  # pyright: ignore[reportMissingImports]
+                    from adminme_bridge.enrollment_helper import (  # type: ignore[import-untyped]
                         MemberBridgeEnrollmentHelper,
                     )
 
@@ -485,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         _print(dataclasses.asdict(preview))
                 elif is_wizard:
-                    from adminme_bridge.enrollment_helper import (  # pyright: ignore[reportMissingImports]
+                    from adminme_bridge.enrollment_helper import (  # type: ignore[import-untyped]
                         MemberBridgeEnrollmentHelper,
                     )
 
@@ -504,10 +504,10 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "bridge-enable-pack":
                 _print(installer.enable_pack(args.pack))
             elif args.command == "bridge-complete":
-                from adminme_bridge.enrollment_helper import (  # pyright: ignore[reportMissingImports]
+                from adminme_bridge.enrollment_helper import (  # type: ignore[import-untyped]
                     MemberBridgeEnrollmentHelper,
                 )
-                from adminme_bridge.enrollment_ui import run_macos_enrollment_wizard  # pyright: ignore[reportMissingImports]
+                from adminme_bridge.enrollment_ui import run_macos_enrollment_wizard  # type: ignore[import-untyped]
 
                 helper = MemberBridgeEnrollmentHelper.resume(
                     bridge_paths,
