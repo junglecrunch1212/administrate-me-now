@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from adminme.bridge_enrollment import CAPABILITIES
-from bootstrap.bridge_enrollment import BridgeEnrollmentError
+from bootstrap.bridge_enrollment import BridgeEnrollmentError  # type: ignore[import-untyped]
 
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
 

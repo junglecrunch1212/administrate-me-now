@@ -29,13 +29,13 @@ from adminme.bridge_enrollment import (
     reviewed_release,
 )
 from adminme.bridge_authorization import BRIDGE_PACK_POLICIES
-from bootstrap.bridge_enrollment import (
+from bootstrap.bridge_enrollment import (  # type: ignore[import-untyped]
     BridgeEnrollmentError,
     MemberBridgeInstaller,
     MemberBridgePaths,
     _decode_transfer_code,
 )
-from bootstrap.contracts import atomic_write
+from bootstrap.contracts import atomic_write  # type: ignore[import-untyped]
 
 
 class ProgressReporter(Protocol):
