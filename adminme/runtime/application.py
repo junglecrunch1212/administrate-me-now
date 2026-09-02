@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from adminme.adapters.base import AdapterContext
 from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
+from adminme.adapters.fixture_delegated_actions import FixtureDelegatedActionAdapter
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
@@ -668,6 +669,7 @@ class AdministrateMeRuntime:
         self.adapter_cursor_store: AdapterCursorStore | None = None
         self.openclaw_approval_store: OpenClawApprovalStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
+        self.fixture_action_adapter: FixtureDelegatedActionAdapter | None = None
         self.direct_intake: DirectIntakeProcessor | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
@@ -781,6 +783,10 @@ class AdministrateMeRuntime:
                         "principal",
                         self.settings.instance.tenant_id,
                     ),
+                )
+                self.fixture_action_adapter = FixtureDelegatedActionAdapter(
+                    event_sink=self.events,
+                    observation_manager=self.observation,
                 )
             policy_root = self.settings.repository_root / "bootstrap" / "policy"
             governance_path = self.settings.instance.config_dir / "governance.yaml"
@@ -1422,7 +1428,42 @@ class AdministrateMeRuntime:
                     raise DeploymentReadinessBlocked(
                         "provider command has no exact reviewed member/account binding"
                     )
-            if provider in communication_providers:
+            fixture_delegated = (
+                provider == "fixture"
+                and isinstance(payload.get("payload"), dict)
+                and payload["payload"].get("delegated_action") is True
+            )
+            result_provider_revision: str | None = None
+            if fixture_delegated:
+                if self.fixture_action_adapter is None:
+                    raise LookupError("fixture delegated-action adapter is unavailable")
+                command_body = dict(payload)
+                fixture_result = await self.fixture_action_adapter.apply(
+                    session=build_internal_session(
+                        str(payload["member_id"]),
+                        "principal",
+                        str(event["tenant_id"]),
+                    ),
+                    command=command_body,
+                )
+                # This adapter mutates only credential-free in-memory fixture
+                # state.  Record the exact fixture effect in its result while
+                # keeping provider-effect accounting at zero.
+                provider_called = False
+                applied = fixture_result.applied
+                suppressed = fixture_result.suppressed
+                external_id = fixture_result.external_id
+                result_provider_revision = fixture_result.provider_revision
+                result_body = {
+                    "applied": applied,
+                    "state": fixture_result.state,
+                    "fixture_only": True,
+                }
+                action_id = str(payload["payload"]["action_id"])
+                if action_id in self.fixture_action_adapter.suppress_terminal_for:
+                    self.fixture_action_adapter.suppress_terminal_for.remove(action_id)
+                    return
+            elif provider in communication_providers:
                 command_body = {
                     **dict(payload.get("payload") or {}),
                     "target_external_id": payload.get("target_external_id"),
@@ -1502,7 +1543,7 @@ class AdministrateMeRuntime:
                 "provider": payload["provider"],
                 "operation": payload["operation"],
                 "external_id": external_id,
-                "provider_revision": None,
+                "provider_revision": result_provider_revision,
                 "result": result_body,
                 "completed_at": now,
                 "suppressed": suppressed,

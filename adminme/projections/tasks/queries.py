@@ -441,3 +441,185 @@ def coordination_conflicts(
         )
     conflicts.sort(key=lambda item: (item["start_at"], item["coordination_id"]))
     return conflicts
+
+
+def _decode_execution_row(row: sqlcipher3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    item = dict(row)
+    for source, target, default in (
+        ("audience_ids_json", "audience_ids", []),
+        ("desired_payload_json", "desired_payload", {}),
+        ("desired_state_json", "desired_state", {}),
+        ("fact_event_ids_json", "fact_event_ids", []),
+        ("result_json", "result", {}),
+        ("observed_state_json", "observed_state", {}),
+    ):
+        if source not in item:
+            continue
+        try:
+            item[target] = json.loads(str(item.pop(source)))
+        except (TypeError, json.JSONDecodeError):
+            item[target] = default
+    for key in (
+        "provider_called",
+        "suppressed",
+        "retryable",
+        "direct_provider_edit_detected",
+    ):
+        if key in item:
+            item[key] = bool(item[key])
+    return item
+
+
+def get_delegated_action(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    action_id: str,
+) -> dict[str, Any] | None:
+    """Return one execution object with its separate evidence objects."""
+
+    action = _decode_execution_row(
+        conn.execute(
+            "SELECT * FROM cos_delegated_actions WHERE tenant_id=? AND action_id=?",
+            (session.tenant_id, action_id),
+        ).fetchone()
+    )
+    visible = filter_one(session, action)
+    if visible is None:
+        return None
+    visible["approvals"] = [
+        _decode_execution_row(row)
+        for row in conn.execute(
+            "SELECT * FROM cos_delegated_action_approvals "
+            "WHERE tenant_id=? AND action_id=? ORDER BY approved_at, approval_event_id",
+            (session.tenant_id, action_id),
+        ).fetchall()
+    ]
+    visible["commands"] = [
+        _decode_execution_row(row)
+        for row in conn.execute(
+            "SELECT * FROM cos_delegated_action_commands "
+            "WHERE tenant_id=? AND action_id=? ORDER BY requested_at, command_event_id",
+            (session.tenant_id, action_id),
+        ).fetchall()
+    ]
+    visible["results"] = [
+        _decode_execution_row(row)
+        for row in conn.execute(
+            "SELECT * FROM cos_delegated_action_results "
+            "WHERE tenant_id=? AND action_id=? ORDER BY terminal_at, result_event_id",
+            (session.tenant_id, action_id),
+        ).fetchall()
+    ]
+    visible["observations"] = [
+        _decode_execution_row(row)
+        for row in conn.execute(
+            "SELECT * FROM cos_delegated_action_observations "
+            "WHERE tenant_id=? AND action_id=? ORDER BY observed_at, observation_id",
+            (session.tenant_id, action_id),
+        ).fetchall()
+    ]
+    visible["reconciliations"] = [
+        _decode_execution_row(row)
+        for row in conn.execute(
+            "SELECT * FROM cos_delegated_action_reconciliations "
+            "WHERE tenant_id=? AND action_id=? ORDER BY reconciled_at, reconciliation_id",
+            (session.tenant_id, action_id),
+        ).fetchall()
+    ]
+    visible["state_history"] = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT state, source_event_id, changed_at "
+            "FROM cos_delegated_action_state_history "
+            "WHERE tenant_id=? AND action_id=? ORDER BY changed_at, source_event_id, state",
+            (session.tenant_id, action_id),
+        ).fetchall()
+    ]
+    return visible
+
+
+def list_delegated_actions(
+    conn: sqlcipher3.Connection,
+    session: Session,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT action_id FROM cos_delegated_actions WHERE tenant_id=? "
+        "ORDER BY prepared_at DESC, action_id",
+        (session.tenant_id,),
+    ).fetchall()
+    return [
+        item
+        for row in rows
+        if (
+            item := get_delegated_action(conn, session, action_id=str(row["action_id"]))
+        )
+        is not None
+    ]
+
+
+def list_execution_envelopes(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    include_revoked: bool = True,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM cos_execution_envelopes WHERE tenant_id=? "
+        "ORDER BY granted_at DESC, envelope_id",
+        (session.tenant_id,),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        item = _decode_execution_row(raw)
+        visible = filter_one(session, item)
+        if visible is not None and (include_revoked or not visible.get("revoked_at")):
+            result.append(visible)
+    return result
+
+
+def matching_execution_envelopes(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    action: dict[str, Any],
+    as_of_iso: str,
+) -> list[dict[str, Any]]:
+    """Return only exact, current standing envelopes for an action."""
+
+    as_of = _as_utc(as_of_iso)
+    matches: list[dict[str, Any]] = []
+    for envelope in list_execution_envelopes(conn, session, include_revoked=False):
+        try:
+            expires_at = _as_utc(str(envelope["expires_at"]))
+        except (KeyError, ValueError):
+            continue
+        if expires_at <= as_of:
+            continue
+        exact = {
+            "authority_grant_id": action.get("authority_grant_id"),
+            "action_class": action.get("action_class"),
+            "canonical_object_kind": action.get("canonical_object_kind"),
+            "canonical_object_id": action.get("canonical_object_id"),
+            "occurrence_id": action.get("occurrence_id"),
+            "series_id": action.get("series_id"),
+            "recurrence_strategy": action.get("recurrence_strategy"),
+            "desired_representation_id": action.get("desired_representation_id"),
+            "provider_family": action.get("provider_family"),
+            "provider_account_id": action.get("provider_account_id"),
+            "provider_account_owner_principal_id": action.get(
+                "provider_account_owner_principal_id"
+            ),
+            "destination_id": action.get("destination_id"),
+            "representation_kind": action.get("representation_kind"),
+            "target_external_id": action.get("target_external_id"),
+            "expected_provider_revision": action.get("expected_provider_revision"),
+            "desired_payload_digest": action.get("desired_payload_digest"),
+        }
+        if all(envelope.get(key) == value for key, value in exact.items()) and set(
+            envelope.get("audience_ids") or []
+        ) == set(action.get("audience_ids") or []):
+            matches.append(envelope)
+    return matches

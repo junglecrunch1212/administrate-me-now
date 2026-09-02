@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
@@ -18,6 +18,13 @@ from adminme.events.schemas.operating_agreement import (
     AgreementAuthorityScope,
     AgreementLayer,
     OperatingRuleV1,
+)
+from adminme.delegated_execution import (
+    ACTION_SPECS,
+    ActionClass,
+    RecurrenceStrategy,
+    RepresentationKind,
+    action_fingerprint,
 )
 from adminme.lib.session import Session
 from adminme.products.auth import require_principal, session_from_request
@@ -28,7 +35,10 @@ from adminme.projections.parties.queries import (
 )
 from adminme.projections.tasks.queries import (
     coordination_conflicts,
+    get_delegated_action,
     get_coordination_record,
+    list_delegated_actions,
+    list_execution_envelopes,
     list_coordination_records,
 )
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
@@ -52,8 +62,10 @@ class DelegationRequest(BaseModel):
             "manage_internal_work",
             "manage_member_obligations",
             "coordinate_household_work",
+            "prepare_external_actions",
+            "execute_fixture_actions",
         ]
-    ] = Field(min_length=1, max_length=5)
+    ] = Field(min_length=1, max_length=7)
     expires_at: AwareDatetime | None = None
 
 
@@ -146,6 +158,71 @@ class CoordinationRevocationRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1, max_length=240)
     reason_code: Literal["withdrawn", "resolved_elsewhere", "privacy", "other"]
+
+
+class ExecutionEnvelopeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    request_id: str = Field(min_length=8, max_length=120)
+    envelope_id: str = Field(min_length=1, max_length=200)
+    authority_grant_id: str = Field(min_length=1, max_length=200)
+    action_class: ActionClass
+    canonical_object_kind: str = Field(min_length=1, max_length=80)
+    canonical_object_id: str = Field(min_length=1, max_length=240)
+    occurrence_id: str | None = Field(default=None, min_length=1, max_length=240)
+    series_id: str | None = Field(default=None, min_length=1, max_length=240)
+    recurrence_strategy: RecurrenceStrategy = "none"
+    desired_representation_id: str = Field(min_length=1, max_length=240)
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    provider_account_owner_principal_id: str = Field(min_length=1, max_length=200)
+    destination_id: str = Field(min_length=1, max_length=500)
+    audience_ids: list[str] = Field(min_length=1, max_length=20)
+    representation_kind: RepresentationKind = "member_delegated"
+    target_external_id: str | None = Field(default=None, max_length=500)
+    expected_provider_revision: str | None = Field(default=None, max_length=500)
+    desired_payload: dict[str, Any]
+    expires_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_exact_shape(self) -> "ExecutionEnvelopeRequest":
+        if len(self.audience_ids) != len(set(self.audience_ids)):
+            raise ValueError("execution envelope audience must be unique")
+        if self.recurrence_strategy == "provider_series" and not self.series_id:
+            raise ValueError("provider recurrence requires exact series identity")
+        if (
+            self.recurrence_strategy == "individual_occurrence"
+            and not self.occurrence_id
+        ):
+            raise ValueError("variable recurrence requires exact occurrence identity")
+        if self.recurrence_strategy == "none" and (
+            self.series_id or self.occurrence_id
+        ):
+            raise ValueError("non-recurring envelope cannot carry recurrence identity")
+        return self
+
+
+class DelegatedActionApprovalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    expected_action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expires_at: AwareDatetime | None = None
+
+
+class ExecutionEnvelopeRevocationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    request_id: str = Field(min_length=8, max_length=120)
+    reason_code: Literal["member_request", "policy_change", "scope_change", "other"]
+
+
+class DelegatedActionWithdrawalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    reason_code: Literal["member_request", "superseded", "no_longer_needed", "other"]
 
 
 def _runtime(request: Request) -> Any:
@@ -1188,6 +1265,342 @@ async def revoke_coordination(
     )
     await runtime.wait_for_projection("tasks", event_id)
     return {"event_id": event_id, "revoked": True, "provider_effect_count": 0}
+
+
+def _member_execution_grant(
+    runtime: Any,
+    session: Session,
+    *,
+    grant_id: str,
+    permission: str,
+) -> dict[str, Any]:
+    if runtime.projections is None:
+        raise HTTPException(503, "CoS execution authority is unavailable")
+    grants = list_service_delegations(
+        runtime.projections.connection("parties"),
+        session,
+        service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+    )
+    matches = [
+        grant
+        for grant in grants
+        if grant["grant_id"] == grant_id
+        and grant.get("active") is True
+        and grant.get("context_scope") == "member_private"
+        and grant.get("context_member_id") == session.auth_member_id
+        and permission in set(grant.get("permissions") or [])
+    ]
+    if len(matches) != 1:
+        raise HTTPException(403, "one exact active CoS execution grant is required")
+    return matches[0]
+
+
+def _validate_fixture_owner_destination(
+    session: Session,
+    *,
+    provider_account_owner_principal_id: str,
+    provider_account_id: str,
+    destination_id: str,
+    representation_kind: RepresentationKind,
+) -> None:
+    member = session.auth_member_id
+    if representation_kind == "cos_operational":
+        if (
+            provider_account_owner_principal_id != COS_SERVICE_PRINCIPAL_ID
+            or provider_account_id != "fixture-account:service:chief-of-staff"
+            or not destination_id.startswith("fixture:service:chief-of-staff:")
+        ):
+            raise HTTPException(403, "CoS operational destination is not service-owned")
+        return
+    if (
+        provider_account_owner_principal_id != member
+        or provider_account_id != f"fixture-account:member:{member}"
+        or not destination_id.startswith(f"fixture:member:{member}:")
+    ):
+        raise HTTPException(403, "member fixture destination is not self-owned")
+
+
+@router.get("/execution-envelopes")
+async def execution_envelopes(request: Request, session: SessionDep) -> dict[str, Any]:
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "CoS execution projection is unavailable")
+    return {
+        "contract": "cos-delegated-execution-v1",
+        "items": list_execution_envelopes(
+            runtime.projections.connection("tasks"), session
+        ),
+        "openclaw_permission_included": False,
+        "provider_execution_scope": "fixture_only",
+    }
+
+
+@router.post("/execution-envelopes", status_code=201)
+async def grant_execution_envelope(
+    body: ExecutionEnvelopeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Grant exact standing domain authority; never OpenClaw permission."""
+
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "CoS execution authority is unavailable")
+    _member_execution_grant(
+        runtime,
+        session,
+        grant_id=body.authority_grant_id,
+        permission="execute_fixture_actions",
+    )
+    spec = ACTION_SPECS[body.action_class]
+    if not spec.fixture_executable:
+        raise HTTPException(
+            422, "standing authority is unavailable for this action class"
+        )
+    if body.canonical_object_kind not in spec.canonical_object_kinds:
+        raise HTTPException(
+            422, "canonical object kind does not match the action class"
+        )
+    if spec.requires_target and not body.target_external_id:
+        raise HTTPException(422, "this action class requires an exact provider object")
+    _validate_fixture_owner_destination(
+        session,
+        provider_account_owner_principal_id=body.provider_account_owner_principal_id,
+        provider_account_id=body.provider_account_id,
+        destination_id=body.destination_id,
+        representation_kind=body.representation_kind,
+    )
+    if sorted(body.audience_ids) != [session.auth_member_id]:
+        raise HTTPException(
+            403, "member-private standing authority has one exact audience"
+        )
+    now = datetime.now(timezone.utc)
+    if body.expires_at <= now or body.expires_at > now + timedelta(days=31):
+        raise HTTPException(422, "standing authority must expire within 31 days")
+    desired_digest = action_fingerprint(body.desired_payload)
+    payload = {
+        "envelope_id": body.envelope_id,
+        "authority_grant_id": body.authority_grant_id,
+        "granted_by_member_id": session.auth_member_id,
+        "represented_service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "action_class": body.action_class,
+        "canonical_object_kind": body.canonical_object_kind,
+        "canonical_object_id": body.canonical_object_id,
+        "occurrence_id": body.occurrence_id,
+        "series_id": body.series_id,
+        "recurrence_strategy": body.recurrence_strategy,
+        "desired_representation_id": body.desired_representation_id,
+        "provider_family": spec.provider_family,
+        "provider_account_id": body.provider_account_id,
+        "provider_account_owner_principal_id": body.provider_account_owner_principal_id,
+        "destination_id": body.destination_id,
+        "audience_ids": sorted(body.audience_ids),
+        "representation_kind": body.representation_kind,
+        "target_external_id": body.target_external_id,
+        "expected_provider_revision": body.expected_provider_revision,
+        "desired_payload_digest": desired_digest,
+        "granted_at": now.isoformat(),
+        "expires_at": body.expires_at.isoformat(),
+        "provider_execution_scope": "fixture_only",
+        "openclaw_permission_included": False,
+        "provider_effect_count": 0,
+    }
+    try:
+        event_id = await runtime.events.write(
+            _envelope(
+                session,
+                event_type="cos.execution_envelope.granted",
+                payload=payload,
+                request_id=body.request_id,
+                owner_scope=f"private:{session.auth_member_id}",
+            )
+        )
+    except IdempotencyConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await runtime.wait_for_projection("tasks", event_id)
+    item = next(
+        (
+            entry
+            for entry in list_execution_envelopes(
+                runtime.projections.connection("tasks"), session
+            )
+            if entry["envelope_id"] == body.envelope_id
+        ),
+        None,
+    )
+    return {"event_id": event_id, "item": item, "provider_effect_count": 0}
+
+
+@router.post("/execution-envelopes/{envelope_id}/revoke")
+async def revoke_execution_envelope(
+    envelope_id: str,
+    body: ExecutionEnvelopeRevocationRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "CoS execution authority is unavailable")
+    item = next(
+        (
+            entry
+            for entry in list_execution_envelopes(
+                runtime.projections.connection("tasks"), session
+            )
+            if entry["envelope_id"] == envelope_id
+        ),
+        None,
+    )
+    if item is None or item["granted_by_member_id"] != session.auth_member_id:
+        raise HTTPException(404, "execution envelope not found")
+    event_id = await runtime.events.write(
+        _envelope(
+            session,
+            event_type="cos.execution_envelope.revoked",
+            payload={
+                "envelope_id": envelope_id,
+                "revoked_by_member_id": session.auth_member_id,
+                "revoked_at": EventEnvelope.now_utc_iso(),
+                "reason_code": body.reason_code,
+            },
+            request_id=body.request_id,
+            owner_scope=f"private:{session.auth_member_id}",
+        )
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    return {"event_id": event_id, "revoked": True}
+
+
+@router.get("/delegated-actions")
+async def delegated_actions(request: Request, session: SessionDep) -> dict[str, Any]:
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "CoS execution projection is unavailable")
+    return {
+        "contract": "cos-delegated-execution-v1",
+        "items": list_delegated_actions(
+            runtime.projections.connection("tasks"), session
+        ),
+        "provider_effect_count": 0,
+    }
+
+
+@router.post("/delegated-actions/{action_id}/approve")
+async def approve_delegated_action(
+    action_id: str,
+    body: DelegatedActionApprovalRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Give one-off domain authority for one immutable desired representation."""
+
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "CoS execution authority is unavailable")
+    action = get_delegated_action(
+        runtime.projections.connection("tasks"), session, action_id=action_id
+    )
+    if (
+        action is None
+        or action.get("active_context_member_id") != session.auth_member_id
+    ):
+        raise HTTPException(404, "delegated action not found")
+    if action["state"] != "awaiting_member_approval":
+        raise HTTPException(409, "delegated action is not awaiting member approval")
+    if action["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "delegated action changed")
+    if action["action_fingerprint"] != body.expected_action_fingerprint:
+        raise HTTPException(409, "delegated action content changed")
+    _member_execution_grant(
+        runtime,
+        session,
+        grant_id=str(action["authority_grant_id"]),
+        permission="execute_fixture_actions",
+    )
+    now = datetime.now(timezone.utc)
+    action_expiry = datetime.fromisoformat(
+        str(action["expires_at"]).replace("Z", "+00:00")
+    )
+    approval_expiry = body.expires_at or min(action_expiry, now + timedelta(minutes=10))
+    if approval_expiry <= now or approval_expiry > action_expiry:
+        raise HTTPException(422, "one-off approval expiry is outside the action window")
+    event_id = await runtime.events.write(
+        _envelope(
+            session,
+            event_type="cos.delegated_action.domain_approved",
+            payload={
+                "action_id": action_id,
+                "action_revision": action["action_revision"],
+                "action_fingerprint": action["action_fingerprint"],
+                "approval_kind": "one_off",
+                "approved_by_member_id": session.auth_member_id,
+                "approval_event_id": None,
+                "execution_envelope_id": None,
+                "approved_at": now.isoformat(),
+                "expires_at": approval_expiry.isoformat(),
+                "openclaw_permission_included": False,
+            },
+            request_id=body.request_id,
+            owner_scope=f"private:{session.auth_member_id}",
+        )
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    return {
+        "event_id": event_id,
+        "state": "awaiting_openclaw_approval",
+        "openclaw_permission_included": False,
+    }
+
+
+@router.post("/delegated-actions/{action_id}/withdraw")
+async def withdraw_delegated_action(
+    action_id: str,
+    body: DelegatedActionWithdrawalRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "CoS execution authority is unavailable")
+    action = get_delegated_action(
+        runtime.projections.connection("tasks"), session, action_id=action_id
+    )
+    if (
+        action is None
+        or action.get("active_context_member_id") != session.auth_member_id
+    ):
+        raise HTTPException(404, "delegated action not found")
+    if action["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "delegated action changed")
+    if action["state"] in {
+        "awaiting_result",
+        "awaiting_observation",
+        "active",
+        "reconciled",
+    }:
+        raise HTTPException(409, "a dispatched action cannot be withdrawn as intent")
+    event_id = await runtime.events.write(
+        _envelope(
+            session,
+            event_type="cos.delegated_action.withdrawn",
+            payload={
+                "action_id": action_id,
+                "withdrawn_by_member_id": session.auth_member_id,
+                "withdrawn_at": EventEnvelope.now_utc_iso(),
+                "reason_code": body.reason_code,
+            },
+            request_id=body.request_id,
+            owner_scope=f"private:{session.auth_member_id}",
+        )
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    return {"event_id": event_id, "state": "withdrawn"}
 
 
 __all__ = ["router"]

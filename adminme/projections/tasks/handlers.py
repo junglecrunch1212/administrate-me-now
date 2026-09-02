@@ -79,11 +79,546 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "coordination.waiting_cleared": apply_coordination_waiting_cleared,
         "coordination.conversation_linked": apply_coordination_conversation_linked,
         "coordination.revoked": apply_coordination_revoked,
+        "cos.execution_envelope.granted": apply_execution_envelope_granted,
+        "cos.execution_envelope.revoked": apply_execution_envelope_revoked,
+        "cos.delegated_action.prepared": apply_delegated_action_prepared,
+        "cos.delegated_action.domain_approved": apply_delegated_action_domain_approved,
+        "cos.delegated_action.dispatch_authorized": apply_delegated_action_dispatch_authorized,
+        "external_sync.write_requested": apply_delegated_action_command,
+        "external_sync.write_completed": apply_delegated_action_result,
+        "external_sync.write_failed": apply_delegated_action_result,
+        "cos.delegated_action.observed": apply_delegated_action_observed,
+        "cos.delegated_action.canonical_outcome_returned": apply_delegated_action_canonical_outcome_returned,
+        "cos.delegated_action.reconciled": apply_delegated_action_reconciled,
+        "cos.delegated_action.withdrawn": apply_delegated_action_withdrawn,
     }
     handler = dispatch.get(event_type)
     if handler is None:
         return
     handler(envelope, conn)
+
+
+def _delegated_state(
+    conn: sqlcipher3.Connection,
+    envelope: dict[str, Any],
+    *,
+    action_id: str,
+    state: str,
+    changed_at: str | None = None,
+) -> None:
+    conn.execute(
+        """UPDATE cos_delegated_actions SET state=?, last_event_id=?
+             WHERE tenant_id=? AND action_id=? AND last_event_id <= ?""",
+        (
+            state,
+            envelope["event_id"],
+            envelope["tenant_id"],
+            action_id,
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_action_state_history (
+               tenant_id, action_id, state, source_event_id, changed_at
+           ) VALUES (?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            action_id,
+            state,
+            envelope["event_id"],
+            changed_at or envelope["occurred_at"],
+        ),
+    )
+
+
+def apply_execution_envelope_granted(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_execution_envelopes (
+               tenant_id, envelope_id, authority_grant_id,
+               granted_by_member_id, represented_service_principal_id,
+               action_class, canonical_object_kind, canonical_object_id,
+               occurrence_id, series_id, recurrence_strategy,
+               desired_representation_id, provider_family,
+               provider_account_id, provider_account_owner_principal_id,
+               destination_id, audience_ids_json, representation_kind,
+               target_external_id, expected_provider_revision,
+               desired_payload_digest, provider_execution_scope,
+               openclaw_permission_included, provider_effect_count,
+               granted_at, expires_at, owner_scope,
+               visibility_scope, sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            p["envelope_id"],
+            p["authority_grant_id"],
+            p["granted_by_member_id"],
+            p["represented_service_principal_id"],
+            p["action_class"],
+            p["canonical_object_kind"],
+            p["canonical_object_id"],
+            p.get("occurrence_id"),
+            p.get("series_id"),
+            p["recurrence_strategy"],
+            p["desired_representation_id"],
+            p["provider_family"],
+            p["provider_account_id"],
+            p["provider_account_owner_principal_id"],
+            p["destination_id"],
+            json.dumps(p["audience_ids"], separators=(",", ":"), sort_keys=True),
+            p["representation_kind"],
+            p.get("target_external_id"),
+            p.get("expected_provider_revision"),
+            p["desired_payload_digest"],
+            p["provider_execution_scope"],
+            int(bool(p["openclaw_permission_included"])),
+            p["provider_effect_count"],
+            p["granted_at"],
+            p["expires_at"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_execution_envelope_revoked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """UPDATE cos_execution_envelopes
+              SET revoked_at=?, revoked_by_member_id=?,
+                  revocation_reason_code=?, last_event_id=?
+            WHERE tenant_id=? AND envelope_id=? AND last_event_id < ?""",
+        (
+            p["revoked_at"],
+            p["revoked_by_member_id"],
+            p["reason_code"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["envelope_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_delegated_action_prepared(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_actions (
+               tenant_id, action_id, action_revision, state,
+               canonical_object_kind, canonical_object_id, occurrence_id,
+               series_id, recurrence_strategy, coordination_id,
+               desired_representation_id, actor_principal_id, actor_party_id,
+               operator_principal_id, operator_kind,
+               represented_service_principal_id, active_context_scope,
+               active_context_member_id, on_behalf_of_member_id,
+               authority_grant_id, authority_grant_event_id,
+               resource_owner_principal_id,
+               provider_account_owner_principal_id, provider, provider_family,
+               provider_account_id, production_adapter, adapter_architecture,
+               destination_id, audience_ids_json, action_class, operation,
+               representation_kind, expected_provider_revision,
+               target_external_id, desired_payload_json, desired_state_json,
+               desired_payload_digest, action_fingerprint, command_id,
+               command_idempotency_key, fact_event_ids_json, facts_observed_at,
+               facts_valid_until, policy_version, policy_digest,
+               privacy_guard_version, content_guard_digest, risk_class,
+               execution_mode, prepared_at, expires_at, owner_scope,
+               visibility_scope, sensitivity, last_event_id
+           ) VALUES (
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           )""",
+        (
+            envelope["tenant_id"],
+            p["action_id"],
+            p["action_revision"],
+            p["initial_state"],
+            p["canonical_object_kind"],
+            p["canonical_object_id"],
+            p.get("occurrence_id"),
+            p.get("series_id"),
+            p["recurrence_strategy"],
+            p.get("coordination_id"),
+            p["desired_representation_id"],
+            p["actor_principal_id"],
+            p["actor_party_id"],
+            p["operator_principal_id"],
+            p["operator_kind"],
+            p["represented_service_principal_id"],
+            p["active_context_scope"],
+            p.get("active_context_member_id"),
+            p.get("on_behalf_of_member_id"),
+            p["authority_grant_id"],
+            p["authority_grant_event_id"],
+            p["resource_owner_principal_id"],
+            p["provider_account_owner_principal_id"],
+            p["provider"],
+            p["provider_family"],
+            p["provider_account_id"],
+            p.get("production_adapter"),
+            p["adapter_architecture"],
+            p["destination_id"],
+            json.dumps(p["audience_ids"], separators=(",", ":"), sort_keys=True),
+            p["action_class"],
+            p["operation"],
+            p["representation_kind"],
+            p.get("expected_provider_revision"),
+            p.get("target_external_id"),
+            json.dumps(p["desired_payload"], separators=(",", ":"), sort_keys=True),
+            json.dumps(p["desired_state"], separators=(",", ":"), sort_keys=True),
+            p["desired_payload_digest"],
+            p["action_fingerprint"],
+            p["command_id"],
+            p["command_idempotency_key"],
+            json.dumps(p["fact_event_ids"], separators=(",", ":"), sort_keys=True),
+            p["facts_observed_at"],
+            p["facts_valid_until"],
+            p["policy_version"],
+            p["policy_digest"],
+            p["privacy_guard_version"],
+            p["content_guard_digest"],
+            p["risk_class"],
+            p["execution_mode"],
+            p["prepared_at"],
+            p["expires_at"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=p["action_id"],
+        state=p["initial_state"],
+        changed_at=p["prepared_at"],
+    )
+
+
+def apply_delegated_action_domain_approved(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_action_approvals (
+               tenant_id, action_id, approval_event_id, approval_kind,
+               approved_by_member_id, execution_envelope_id,
+               action_fingerprint, approved_at, expires_at, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            p["action_id"],
+            envelope["event_id"],
+            p["approval_kind"],
+            p["approved_by_member_id"],
+            p.get("execution_envelope_id"),
+            p["action_fingerprint"],
+            p["approved_at"],
+            p["expires_at"],
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """UPDATE cos_delegated_actions
+              SET domain_approval_event_id=?, execution_envelope_id=?
+            WHERE tenant_id=? AND action_id=? AND action_fingerprint=?""",
+        (
+            envelope["event_id"],
+            p.get("execution_envelope_id"),
+            envelope["tenant_id"],
+            p["action_id"],
+            p["action_fingerprint"],
+        ),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=p["action_id"],
+        state="awaiting_openclaw_approval",
+        changed_at=p["approved_at"],
+    )
+
+
+def apply_delegated_action_dispatch_authorized(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """UPDATE cos_delegated_actions
+              SET openclaw_approval_event_id=?, dispatch_authorization_event_id=?,
+                  operator_principal_id=?, last_event_id=?
+            WHERE tenant_id=? AND action_id=? AND action_fingerprint=?""",
+        (
+            p["openclaw_approval_event_id"],
+            envelope["event_id"],
+            p["operator_principal_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["action_id"],
+            p["action_fingerprint"],
+        ),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=p["action_id"],
+        state="dispatched",
+        changed_at=p["authorized_at"],
+    )
+
+
+def apply_delegated_action_command(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    action_id = p.get("origin_proposal_id")
+    command_payload = p.get("payload") or {}
+    if not isinstance(action_id, str) or not command_payload.get("delegated_action"):
+        return
+    destination_id = command_payload.get("destination_id")
+    if not isinstance(destination_id, str):
+        return
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_action_commands (
+               tenant_id, action_id, command_id, command_event_id,
+               domain_approval_event_id, openclaw_approval_event_id,
+               request_fingerprint, provider, provider_account_id,
+               destination_id, operation, requested_at, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            action_id,
+            p["command_id"],
+            envelope["event_id"],
+            p["domain_approval_event_id"],
+            p["openclaw_approval_event_id"],
+            p["request_fingerprint"],
+            p["provider"],
+            p["provider_account_id"],
+            destination_id,
+            p["operation"],
+            p["requested_at"],
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """UPDATE cos_delegated_actions SET command_event_id=?
+             WHERE tenant_id=? AND action_id=?""",
+        (envelope["event_id"], envelope["tenant_id"], action_id),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=action_id,
+        state="awaiting_result",
+        changed_at=p["requested_at"],
+    )
+
+
+def apply_delegated_action_result(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    command = conn.execute(
+        "SELECT action_id FROM cos_delegated_action_commands "
+        "WHERE tenant_id=? AND command_id=?",
+        (envelope["tenant_id"], p["command_id"]),
+    ).fetchone()
+    if command is None:
+        return
+    action_id = str(command["action_id"])
+    completed = envelope["type"] == "external_sync.write_completed"
+    suppressed = bool(p.get("suppressed")) if completed else False
+    state = (
+        "suppressed"
+        if suppressed
+        else "awaiting_observation"
+        if completed
+        else "conflicted"
+        if p.get("error_kind") == "conflict"
+        else "failed"
+    )
+    terminal_at = p.get("completed_at") or p.get("failed_at") or envelope["occurred_at"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_action_results (
+               tenant_id, action_id, command_id, result_event_id, result_type,
+               provider_called, suppressed, external_id, provider_revision,
+               result_json, error_kind, retryable, terminal_at, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            action_id,
+            p["command_id"],
+            envelope["event_id"],
+            envelope["type"],
+            int(bool(p.get("provider_called"))),
+            int(suppressed),
+            p.get("external_id"),
+            p.get("provider_revision"),
+            json.dumps(p.get("result") or {}, separators=(",", ":"), sort_keys=True),
+            p.get("error_kind"),
+            int(bool(p.get("retryable"))),
+            terminal_at,
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """UPDATE cos_delegated_actions SET terminal_result_event_id=?
+             WHERE tenant_id=? AND action_id=?""",
+        (envelope["event_id"], envelope["tenant_id"], action_id),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=action_id,
+        state=state,
+        changed_at=str(terminal_at),
+    )
+
+
+def apply_delegated_action_observed(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_action_observations (
+               tenant_id, observation_id, action_id, command_id,
+               result_event_id, provider, provider_family, provider_account_id,
+               destination_id, external_id, provider_revision,
+               observed_state_json, observation_fingerprint,
+               direct_provider_edit_detected, observed_at, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            p["observation_id"],
+            p["action_id"],
+            p["command_id"],
+            p["result_event_id"],
+            p["provider"],
+            p["provider_family"],
+            p["provider_account_id"],
+            p["destination_id"],
+            p["external_id"],
+            p["provider_revision"],
+            json.dumps(p["observed_state"], separators=(",", ":"), sort_keys=True),
+            p["observation_fingerprint"],
+            int(bool(p["direct_provider_edit_detected"])),
+            p["observed_at"],
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """UPDATE cos_delegated_actions SET observation_event_id=?
+             WHERE tenant_id=? AND action_id=?""",
+        (envelope["event_id"], envelope["tenant_id"], p["action_id"]),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=p["action_id"],
+        state="conflicted" if p["direct_provider_edit_detected"] else "active",
+        changed_at=p["observed_at"],
+    )
+
+
+def apply_delegated_action_reconciled(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_delegated_action_reconciliations (
+               tenant_id, reconciliation_id, action_id, observation_event_id,
+               result_event_id, desired_state_digest, observed_state_digest,
+               outcome, canonical_outcome, canonical_outcome_event_id,
+               reason_code, reconciled_at, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            p["reconciliation_id"],
+            p["action_id"],
+            p["observation_event_id"],
+            p["result_event_id"],
+            p["desired_state_digest"],
+            p["observed_state_digest"],
+            p["outcome"],
+            p["canonical_outcome"],
+            p.get("canonical_outcome_event_id"),
+            p["reason_code"],
+            p["reconciled_at"],
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """UPDATE cos_delegated_actions SET reconciliation_event_id=?
+             WHERE tenant_id=? AND action_id=?""",
+        (envelope["event_id"], envelope["tenant_id"], p["action_id"]),
+    )
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=p["action_id"],
+        state=p["outcome"],
+        changed_at=p["reconciled_at"],
+    )
+
+
+def apply_delegated_action_canonical_outcome_returned(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Reflect an observed fixture completion/reopening in canonical Task truth."""
+
+    p = envelope["payload"]
+    completed = p["outcome"] == "completed"
+    conn.execute(
+        """UPDATE tasks
+              SET status=?, completed_at=?, completed_by=?,
+                  completed_by_party_id=?, lifecycle_action=?, lifecycle_at=?,
+                  lifecycle_reason=?, lifecycle_actor_principal_id=?,
+                  lifecycle_actor_party_id=?, lifecycle_authority_grant_id=?,
+                  last_event_id=?
+            WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
+        (
+            "done" if completed else "next",
+            p["returned_at"] if completed else None,
+            p["on_behalf_of_member_id"] if completed else None,
+            p["represented_service_party_id"] if completed else None,
+            "complete_from_delegated_provider"
+            if completed
+            else "reopen_from_delegated_provider",
+            p["returned_at"],
+            f"delegated provider outcome:{p['action_id']}",
+            p["operator_principal_id"],
+            p["represented_service_party_id"],
+            p["authority_grant_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["canonical_object_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_delegated_action_withdrawn(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    _delegated_state(
+        conn,
+        envelope,
+        action_id=p["action_id"],
+        state="withdrawn",
+        changed_at=p["withdrawn_at"],
+    )
 
 
 def apply_calendar_completion(

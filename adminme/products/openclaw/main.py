@@ -12,7 +12,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -21,6 +21,20 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
+from adminme.delegated_execution import (
+    ACTION_SPECS,
+    EXECUTION_FACT_MAX_AGE_SECONDS,
+    EXECUTION_POLICY_VERSION,
+    HARD_CEILING_RISKS,
+    ActionClass,
+    ExecutionMode,
+    RecurrenceStrategy,
+    RepresentationKind,
+    RiskClass,
+    action_fingerprint,
+    desired_state_for,
+    execution_policy_digest,
+)
 from adminme.lib.scope import filter_rows
 from adminme.lib.session import Session, Source
 from adminme.lib.skill_runner.wrapper import SkillContext
@@ -37,10 +51,15 @@ from adminme.products.openclaw.constants import (
     PLUGIN_ID,
 )
 from adminme.projections.tasks.queries import (
+    get_delegated_action,
     get_task,
     list_coordination_records,
+    matching_execution_envelopes,
     service_work_for_context,
 )
+from adminme.projections.commitments.queries import get_commitment
+from adminme.projections.calendars.queries import get_calendar_event
+from adminme.projections.lists.queries import get_item as get_list_item
 from adminme.projections.parties.queries import (
     ServiceDelegationResolutionError,
     effective_operating_agreements,
@@ -369,6 +388,77 @@ class NotificationResultRequest(ContextRequest):
 
 class ExecutePendingProviderActionRequest(ContextRequest):
     domain_approval_event_id: str = Field(min_length=1, max_length=240)
+
+
+class DelegatedActionPrepareRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    action_class: ActionClass
+    canonical_object_kind: str = Field(min_length=1, max_length=80)
+    canonical_object_id: str = Field(min_length=1, max_length=240)
+    occurrence_id: str | None = Field(default=None, min_length=1, max_length=240)
+    series_id: str | None = Field(default=None, min_length=1, max_length=240)
+    recurrence_strategy: RecurrenceStrategy = "none"
+    coordination_id: str | None = Field(default=None, min_length=1, max_length=240)
+    desired_representation_id: str = Field(min_length=1, max_length=240)
+    operator_kind: Literal["openclaw_automation", "simulated_human"] = (
+        "openclaw_automation"
+    )
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    provider_account_owner_principal_id: str = Field(min_length=1, max_length=200)
+    destination_id: str = Field(min_length=1, max_length=500)
+    audience_ids: list[str] = Field(min_length=1, max_length=20)
+    representation_kind: RepresentationKind = "member_delegated"
+    target_external_id: str | None = Field(default=None, max_length=500)
+    expected_provider_revision: str | None = Field(default=None, max_length=500)
+    desired_payload: dict[str, Any]
+    fact_event_ids: list[str] = Field(min_length=1, max_length=100)
+    facts_observed_at: AwareDatetime
+    facts_valid_until: AwareDatetime
+    risk_class: RiskClass = "ordinary"
+    execution_mode: ExecutionMode = "execute"
+    expires_at: AwareDatetime
+    expected_policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_recurrence(self) -> "DelegatedActionPrepareRequest":
+        if len(self.audience_ids) != len(set(self.audience_ids)):
+            raise ValueError("delegated action audience must be unique")
+        if len(self.fact_event_ids) != len(set(self.fact_event_ids)):
+            raise ValueError("delegated action fact lineage must be unique")
+        if self.recurrence_strategy == "provider_series" and not self.series_id:
+            raise ValueError("stable recurrence requires an exact series")
+        if (
+            self.recurrence_strategy == "individual_occurrence"
+            and not self.occurrence_id
+        ):
+            raise ValueError("variable recurrence requires an exact occurrence")
+        if self.recurrence_strategy == "none" and (
+            self.series_id or self.occurrence_id
+        ):
+            raise ValueError("non-recurring action cannot carry recurrence identity")
+        if self.facts_valid_until <= self.facts_observed_at:
+            raise ValueError("fact validity must follow observation")
+        return self
+
+
+class DelegatedActionExecuteRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    action_id: str = Field(min_length=1, max_length=240)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    expected_action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operator_kind: Literal["openclaw_automation", "simulated_human"] = (
+        "openclaw_automation"
+    )
+
+
+class DelegatedActionObserveRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    action_id: str = Field(min_length=1, max_length=240)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
 
 
 class HealthReport(BaseModel):
@@ -1176,6 +1266,891 @@ async def transition_service_work(
         "actor_service_principal_id": COS_SERVICE_PRINCIPAL_ID,
         "completed_by_member_id": None,
         "provider_effect_count": 0,
+    }
+
+
+_CALENDAR_PAYLOAD_FIELDS = frozenset(
+    {
+        "summary",
+        "start",
+        "end",
+        "timezone",
+        "location",
+        "description",
+        "recurrence",
+        "destination_calendar_id",
+        "send_updates",
+    }
+)
+_TASK_PAYLOAD_FIELDS = frozenset(
+    {
+        "title",
+        "notes",
+        "due",
+        "status",
+        "completed",
+        "tasklist_id",
+        "parent",
+        "previous",
+        "destinationTasklist",
+        "destination_list_external_id",
+    }
+)
+
+
+def _guard_delegated_payload(provider_family: str, payload: dict[str, Any]) -> str:
+    allowed = (
+        _CALENDAR_PAYLOAD_FIELDS
+        if provider_family in {"google_calendar", "apple_calendar"}
+        else _TASK_PAYLOAD_FIELDS
+        if provider_family in {"google_tasks", "apple_reminders"}
+        else frozenset({"subject", "body", "recipient"})
+    )
+    unknown = set(payload) - allowed
+    if unknown:
+        raise HTTPException(
+            422, f"desired provider fields are not allowlisted: {sorted(unknown)}"
+        )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    if len(encoded.encode("utf-8")) > 16_384:
+        raise HTTPException(422, "desired provider representation is too large")
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _require_fixture_coordinates(
+    session: Session, body: DelegatedActionPrepareRequest
+) -> None:
+    member_id = session.auth_member_id
+    if body.representation_kind == "cos_operational":
+        if (
+            body.provider_account_owner_principal_id != COS_SERVICE_PRINCIPAL_ID
+            or body.provider_account_id != "fixture-account:service:chief-of-staff"
+            or not body.destination_id.startswith("fixture:service:chief-of-staff:")
+        ):
+            raise HTTPException(403, "CoS operational destination is not service-owned")
+    elif (
+        body.provider_account_owner_principal_id != member_id
+        or body.provider_account_id != f"fixture-account:member:{member_id}"
+        or not body.destination_id.startswith(f"fixture:member:{member_id}:")
+    ):
+        raise HTTPException(403, "member fixture destination is not self-owned")
+    if sorted(body.audience_ids) != [member_id]:
+        raise HTTPException(
+            403, "member-private delegated action has one exact audience"
+        )
+
+
+def _canonical_execution_object(
+    runtime: Any,
+    session: Session,
+    *,
+    kind: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    if runtime.projections is None:
+        return None
+    if kind == "task":
+        return get_task(
+            runtime.projections.connection("tasks"), session, task_id=object_id
+        )
+    if kind == "commitment":
+        return get_commitment(
+            runtime.projections.connection("commitments"),
+            session,
+            commitment_id=object_id,
+        )
+    if kind == "calendar_event":
+        return get_calendar_event(
+            runtime.projections.connection("calendars"),
+            session,
+            calendar_event_id=object_id,
+        )
+    if kind == "coordination":
+        from adminme.projections.tasks.queries import get_coordination_record
+
+        return get_coordination_record(
+            runtime.projections.connection("tasks"),
+            session,
+            coordination_id=object_id,
+            as_of_iso=EventEnvelope.now_utc_iso(),
+        )
+    if kind == "list_item" and "::" in object_id:
+        list_id, item_id = object_id.split("::", 1)
+        return get_list_item(
+            runtime.projections.connection("lists"),
+            session,
+            list_external_id=list_id,
+            item_external_id=item_id,
+        )
+    return None
+
+
+async def _execution_fact_events(
+    runtime: Any,
+    session: Session,
+    event_ids: list[str],
+) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    for event_id in event_ids:
+        event = await runtime.event_log.get(event_id)
+        if (
+            event is None
+            or event.get("tenant_id") != session.tenant_id
+            or event.get("visibility_scope") not in session.allowed_scopes
+        ):
+            raise HTTPException(403, "delegated action fact lineage is unavailable")
+        facts.append(event)
+    return facts
+
+
+def _operator_id(kind: str) -> str:
+    return (
+        COS_AUTOMATION_OPERATOR_ID
+        if kind == "openclaw_automation"
+        else "operator:fixture:individual-human"
+    )
+
+
+@router.post("/tools/delegated-actions/prepare", status_code=201)
+async def prepare_delegated_action(
+    body: DelegatedActionPrepareRequest, request: Request
+) -> dict[str, Any]:
+    """Prepare or hold one desired fixture representation under an exact grant."""
+
+    session = _session(
+        request,
+        body.provenance,
+        required_permission="prepare_external_actions",
+        context_scope=body.context_scope,
+    )
+    _require_adult(session)
+    context = session.service_context
+    runtime = _runtime(request)
+    if context is None or runtime.projections is None:
+        raise HTTPException(503, "CoS execution context is unavailable")
+    if context.context_scope != "member_private" or not context.context_member_id:
+        raise HTTPException(
+            403, "G07 fixture execution requires one member-private context"
+        )
+    if body.expected_policy_digest != execution_policy_digest():
+        raise HTTPException(409, "delegated execution policy changed")
+    spec = ACTION_SPECS[body.action_class]
+    if body.canonical_object_kind not in spec.canonical_object_kinds:
+        raise HTTPException(
+            422, "canonical object kind does not match the action class"
+        )
+    if spec.requires_target and not body.target_external_id:
+        raise HTTPException(422, "this action class requires an exact provider object")
+    if spec.recurrence and body.recurrence_strategy != "provider_series":
+        raise HTTPException(
+            422, "stable provider recurrence requires provider-series identity"
+        )
+    if not spec.recurrence and body.recurrence_strategy == "provider_series":
+        raise HTTPException(
+            422, "provider-series identity requires a stable recurrence action"
+        )
+    _require_fixture_coordinates(session, body)
+    canonical = _canonical_execution_object(
+        runtime,
+        session,
+        kind=body.canonical_object_kind,
+        object_id=body.canonical_object_id,
+    )
+    if canonical is None:
+        raise HTTPException(404, "canonical action object not found")
+    fact_events = await _execution_fact_events(runtime, session, body.fact_event_ids)
+    now = datetime.now(timezone.utc)
+    if body.facts_observed_at > now + timedelta(seconds=30):
+        raise HTTPException(422, "fact observation cannot be in the future")
+    if body.facts_valid_until <= now:
+        raise HTTPException(409, "delegated action facts are stale")
+    canonical_last_event_id = str(canonical.get("last_event_id") or "")
+    if (
+        not canonical_last_event_id
+        or canonical_last_event_id not in body.fact_event_ids
+    ):
+        raise HTTPException(
+            409, "canonical object revision is absent from fact lineage"
+        )
+    authoritative_fact_at = max(
+        datetime.fromisoformat(str(event["occurred_at"]).replace("Z", "+00:00"))
+        for event in fact_events
+    )
+    if (
+        abs((body.facts_observed_at - authoritative_fact_at).total_seconds()) > 5
+        or (now - authoritative_fact_at).total_seconds()
+        > EXECUTION_FACT_MAX_AGE_SECONDS
+        or body.facts_valid_until
+        > authoritative_fact_at + timedelta(seconds=EXECUTION_FACT_MAX_AGE_SECONDS)
+    ):
+        raise HTTPException(409, "delegated action fact lineage is stale or misdated")
+    if body.expires_at <= now or body.expires_at > now + timedelta(days=31):
+        raise HTTPException(422, "delegated action must expire within 31 days")
+    grant_row = (
+        runtime.projections.connection("parties")
+        .execute(
+            "SELECT * FROM service_delegation_grants WHERE tenant_id=? AND grant_id=?",
+            (session.tenant_id, context.authority_grant_id),
+        )
+        .fetchone()
+    )
+    if grant_row is None:
+        raise HTTPException(403, "delegated execution grant disappeared")
+    content_guard_digest = _guard_delegated_payload(
+        spec.provider_family, body.desired_payload
+    )
+    desired_digest = action_fingerprint(body.desired_payload)
+    desired_state = desired_state_for(
+        spec,
+        desired_payload=body.desired_payload,
+        destination_id=body.destination_id,
+    )
+    material = {
+        "canonical_object_kind": body.canonical_object_kind,
+        "canonical_object_id": body.canonical_object_id,
+        "occurrence_id": body.occurrence_id,
+        "series_id": body.series_id,
+        "recurrence_strategy": body.recurrence_strategy,
+        "coordination_id": body.coordination_id,
+        "desired_representation_id": body.desired_representation_id,
+        "authority_grant_id": context.authority_grant_id,
+        "resource_owner_principal_id": context.resource_owner_principal_id,
+        "provider_account_owner_principal_id": body.provider_account_owner_principal_id,
+        "provider_account_id": body.provider_account_id,
+        "provider_family": spec.provider_family,
+        "destination_id": body.destination_id,
+        "audience_ids": sorted(body.audience_ids),
+        "action_class": body.action_class,
+        "operation": spec.operation,
+        "representation_kind": body.representation_kind,
+        "expected_provider_revision": body.expected_provider_revision,
+        "target_external_id": body.target_external_id,
+        "desired_payload_digest": desired_digest,
+        "operator_principal_id": _operator_id(body.operator_kind),
+        "operator_kind": body.operator_kind,
+        "represented_service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "active_context_scope": context.context_scope,
+        "active_context_member_id": context.context_member_id,
+        "on_behalf_of_member_id": context.on_behalf_of_member_id,
+        "authority_grant_event_id": str(grant_row["last_event_id"]),
+        "provider": "fixture",
+        "production_adapter": spec.production_adapter,
+        "adapter_architecture": spec.architecture,
+        "fact_event_ids": sorted(body.fact_event_ids),
+        "facts_observed_at": authoritative_fact_at.isoformat(),
+        "facts_valid_until": body.facts_valid_until.isoformat(),
+        "policy_version": EXECUTION_POLICY_VERSION,
+        "policy_digest": execution_policy_digest(),
+        "privacy_guard_version": "cos-delegated-content-guard-v1",
+        "content_guard_digest": content_guard_digest,
+        "risk_class": body.risk_class,
+        "execution_mode": body.execution_mode,
+        "expires_at": body.expires_at.isoformat(),
+    }
+    immutable_fingerprint = action_fingerprint(material)
+    action_digest = hashlib.sha256(
+        f"{session.tenant_id}|{context.authority_grant_id}|{body.request_id}".encode()
+    ).hexdigest()[:32]
+    action_id = f"cos-action:{action_digest}"
+    command_id = f"cos-command:{action_digest}"
+    initial_state = (
+        "prohibited"
+        if body.risk_class in HARD_CEILING_RISKS
+        else "shadow"
+        if body.execution_mode == "shadow"
+        else "desired"
+        if body.execution_mode == "desired_only"
+        else "dashboard_only"
+        if not spec.fixture_executable
+        else "awaiting_member_approval"
+    )
+    owner_scope = f"private:{context.context_member_id}"
+    payload = {
+        "action_id": action_id,
+        "action_revision": 1,
+        "canonical_object_kind": body.canonical_object_kind,
+        "canonical_object_id": body.canonical_object_id,
+        "occurrence_id": body.occurrence_id,
+        "series_id": body.series_id,
+        "recurrence_strategy": body.recurrence_strategy,
+        "coordination_id": body.coordination_id,
+        "desired_representation_id": body.desired_representation_id,
+        "actor_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "actor_party_id": COS_PARTY_ID,
+        "operator_principal_id": _operator_id(body.operator_kind),
+        "operator_kind": body.operator_kind,
+        "represented_service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "active_context_scope": context.context_scope,
+        "active_context_member_id": context.context_member_id,
+        "on_behalf_of_member_id": context.on_behalf_of_member_id,
+        "authority_grant_id": context.authority_grant_id,
+        "authority_grant_event_id": str(grant_row["last_event_id"]),
+        "resource_owner_principal_id": str(context.resource_owner_principal_id),
+        "provider_account_owner_principal_id": body.provider_account_owner_principal_id,
+        "provider": "fixture",
+        "provider_family": spec.provider_family,
+        "provider_account_id": body.provider_account_id,
+        "production_adapter": spec.production_adapter,
+        "adapter_architecture": spec.architecture,
+        "destination_id": body.destination_id,
+        "audience_ids": sorted(body.audience_ids),
+        "action_class": body.action_class,
+        "operation": spec.operation,
+        "representation_kind": body.representation_kind,
+        "expected_provider_revision": body.expected_provider_revision,
+        "target_external_id": body.target_external_id,
+        "desired_payload": body.desired_payload,
+        "desired_state": desired_state,
+        "desired_payload_digest": desired_digest,
+        "action_fingerprint": immutable_fingerprint,
+        "command_id": command_id,
+        "command_idempotency_key": f"cos-delegated-command:{action_id}",
+        "fact_event_ids": body.fact_event_ids,
+        "facts_observed_at": authoritative_fact_at.isoformat(),
+        "facts_valid_until": body.facts_valid_until.isoformat(),
+        "policy_version": EXECUTION_POLICY_VERSION,
+        "policy_digest": execution_policy_digest(),
+        "privacy_guard_version": "cos-delegated-content-guard-v1",
+        "content_guard_digest": content_guard_digest,
+        "risk_class": body.risk_class,
+        "execution_mode": body.execution_mode,
+        "initial_state": initial_state,
+        "prepared_at": now.isoformat(),
+        "expires_at": body.expires_at.isoformat(),
+        "provider_effect_count": 0,
+    }
+    request_fingerprint = _fingerprint(
+        body.model_dump(
+            mode="json",
+            exclude={"provenance", "openclaw_approval_receipt_id"},
+        )
+    )
+    event_id, duplicate = await _append(
+        runtime,
+        session,
+        event_type="cos.delegated_action.prepared",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=owner_scope,
+        visibility_scope=owner_scope,
+        payload=payload,
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    action = get_delegated_action(
+        runtime.projections.connection("tasks"), session, action_id=action_id
+    )
+    approval_event_id: str | None = None
+    standing_matches: list[dict[str, Any]] = []
+    if action is not None and initial_state == "awaiting_member_approval":
+        standing_matches = matching_execution_envelopes(
+            runtime.projections.connection("tasks"),
+            session,
+            action=action,
+            as_of_iso=now.isoformat(),
+        )
+        if len(standing_matches) == 1:
+            envelope = standing_matches[0]
+            approval_expiry = min(
+                body.expires_at,
+                datetime.fromisoformat(
+                    str(envelope["expires_at"]).replace("Z", "+00:00")
+                ),
+            )
+            approval_event_id, _ = await _append(
+                runtime,
+                session,
+                event_type="cos.delegated_action.domain_approved",
+                source_account_id=body.provenance.account_id
+                or body.provenance.channel_id,
+                owner_scope=owner_scope,
+                visibility_scope=owner_scope,
+                payload={
+                    "action_id": action_id,
+                    "action_revision": 1,
+                    "action_fingerprint": immutable_fingerprint,
+                    "approval_kind": "standing_envelope",
+                    "approved_by_member_id": envelope["granted_by_member_id"],
+                    "approval_event_id": envelope["last_event_id"],
+                    "execution_envelope_id": envelope["envelope_id"],
+                    "approved_at": now.isoformat(),
+                    "expires_at": approval_expiry.isoformat(),
+                    "openclaw_permission_included": False,
+                },
+                request_id=f"{body.request_id}:standing-approval",
+                causation_id=event_id,
+                request_fingerprint=immutable_fingerprint,
+            )
+            await runtime.wait_for_projection("tasks", approval_event_id)
+            initial_state = "awaiting_openclaw_approval"
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.delegated-actions.prepare",
+        result_event_ids=[
+            event_id,
+            *([approval_event_id] if approval_event_id else []),
+        ],
+    )
+    return {
+        "action_id": action_id,
+        "event_id": event_id,
+        "domain_approval_event_id": approval_event_id,
+        "duplicate": duplicate,
+        "state": initial_state,
+        "action_fingerprint": immutable_fingerprint,
+        "policy_digest": execution_policy_digest(),
+        "standing_match_count": len(standing_matches),
+        "provider_execution_scope": "fixture_only",
+        "provider_effect_count": 0,
+    }
+
+
+@router.post("/tools/delegated-actions/execute", status_code=202)
+async def execute_delegated_action(
+    body: DelegatedActionExecuteRequest, request: Request
+) -> dict[str, Any]:
+    """Create one provider command after both independent approvals."""
+
+    session = _session(
+        request,
+        body.provenance,
+        required_permission="execute_fixture_actions",
+        context_scope=body.context_scope,
+    )
+    _require_adult(session)
+    runtime = _runtime(request)
+    context = session.service_context
+    if context is None or runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "CoS execution context is unavailable")
+    action = get_delegated_action(
+        runtime.projections.connection("tasks"), session, action_id=body.action_id
+    )
+    if action is None:
+        raise HTTPException(404, "delegated action not found")
+    prior_command = action.get("command_event_id")
+    if prior_command:
+        if (
+            action["action_fingerprint"] != body.expected_action_fingerprint
+            or body.expected_policy_digest != execution_policy_digest()
+            or action["policy_digest"] != execution_policy_digest()
+            or action["operator_kind"] != body.operator_kind
+        ):
+            raise HTTPException(409, "duplicate execution does not match the command")
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "event_id": prior_command,
+            "action_id": body.action_id,
+            "state": action["state"],
+        }
+    now = datetime.now(timezone.utc)
+    domain_approvals = [
+        approval
+        for approval in action.get("approvals") or []
+        if datetime.fromisoformat(str(approval["expires_at"]).replace("Z", "+00:00"))
+        > now
+        and approval.get("action_fingerprint") == action.get("action_fingerprint")
+    ]
+    domain_valid = len(domain_approvals) == 1
+    domain_reason = "exact_domain_approval_required"
+    if action["state"] != "awaiting_openclaw_approval":
+        domain_valid = False
+        domain_reason = f"invalid_action_state:{action['state']}"
+    if action["last_event_id"] != body.expected_last_event_id:
+        domain_valid = False
+        domain_reason = "action_changed"
+    if action["action_fingerprint"] != body.expected_action_fingerprint:
+        domain_valid = False
+        domain_reason = "action_content_changed"
+    if (
+        body.expected_policy_digest != execution_policy_digest()
+        or action["policy_digest"] != execution_policy_digest()
+    ):
+        domain_valid = False
+        domain_reason = "execution_policy_changed"
+    if (
+        datetime.fromisoformat(str(action["facts_valid_until"]).replace("Z", "+00:00"))
+        <= now
+    ):
+        domain_valid = False
+        domain_reason = "facts_stale"
+    current_canonical = _canonical_execution_object(
+        runtime,
+        session,
+        kind=str(action["canonical_object_kind"]),
+        object_id=str(action["canonical_object_id"]),
+    )
+    if current_canonical is None or current_canonical.get("last_event_id") not in set(
+        action.get("fact_event_ids") or []
+    ):
+        domain_valid = False
+        domain_reason = "canonical_object_changed"
+    if datetime.fromisoformat(str(action["expires_at"]).replace("Z", "+00:00")) <= now:
+        domain_valid = False
+        domain_reason = "action_expired"
+    if action["operator_kind"] != body.operator_kind:
+        domain_valid = False
+        domain_reason = "operator_changed"
+    if action["authority_grant_id"] != context.authority_grant_id:
+        domain_valid = False
+        domain_reason = "authority_grant_changed"
+    grant = (
+        runtime.projections.connection("parties")
+        .execute(
+            "SELECT last_event_id, revoked_at, expires_at FROM service_delegation_grants "
+            "WHERE tenant_id=? AND grant_id=?",
+            (session.tenant_id, action["authority_grant_id"]),
+        )
+        .fetchone()
+    )
+    if (
+        grant is None
+        or grant["revoked_at"] is not None
+        or grant["last_event_id"] != action["authority_grant_event_id"]
+        or (
+            grant["expires_at"]
+            and datetime.fromisoformat(str(grant["expires_at"]).replace("Z", "+00:00"))
+            <= now
+        )
+    ):
+        domain_valid = False
+        domain_reason = "authority_grant_stale_or_revoked"
+    approval = domain_approvals[0] if domain_valid else None
+    if approval and approval.get("approval_kind") == "standing_envelope":
+        matches = matching_execution_envelopes(
+            runtime.projections.connection("tasks"),
+            session,
+            action=action,
+            as_of_iso=now.isoformat(),
+        )
+        if len(matches) != 1 or matches[0]["envelope_id"] != approval.get(
+            "execution_envelope_id"
+        ):
+            domain_valid = False
+            domain_reason = "standing_envelope_missing_revoked_or_ambiguous"
+    if runtime.effective_openclaw_state() != "healthy":
+        domain_valid = False
+        domain_reason = "openclaw_degraded"
+    command_payload = {
+        "command_id": action["command_id"],
+        "member_id": context.context_member_id,
+        "provider": "fixture",
+        "provider_account_id": action["provider_account_id"],
+        "operation": action["operation"],
+        "target_external_id": action.get("target_external_id"),
+        "expected_provider_revision": action.get("expected_provider_revision"),
+        "payload": {
+            "delegated_action": True,
+            "action_id": action["action_id"],
+            "action_class": action["action_class"],
+            "provider_family": action["provider_family"],
+            "provider_account_owner_principal_id": action[
+                "provider_account_owner_principal_id"
+            ],
+            "destination_id": action["destination_id"],
+            "desired_state": action["desired_state"],
+            "occurrence_id": action.get("occurrence_id"),
+            "series_id": action.get("series_id"),
+            "recurrence_strategy": action["recurrence_strategy"],
+            "action_fingerprint": action["action_fingerprint"],
+        },
+        "requested_at": now.isoformat(),
+    }
+    if runtime.guarded_write is None:
+        raise HTTPException(503, "write authorization unavailable")
+    decision = await runtime.guarded_write.check(
+        session,
+        "external_sync.write_requested",
+        command_payload,
+        domain_governance=(domain_valid, domain_reason),
+    )
+    if not decision.pass_:
+        raise HTTPException(
+            403,
+            {
+                "code": "write_denied",
+                "layer": decision.layer_failed,
+                "reason": decision.reason,
+            },
+        )
+    assert approval is not None
+    openclaw_approval_event_id = await _consume_openclaw_approval(
+        request,
+        session,
+        body.provenance,
+        body,
+        tool_name="administrateme_execute_delegated_action",
+        action=str(action["operation"]),
+        causation_id=str(approval["approval_event_id"]),
+    )
+    guard_digest = _guard_delegated_payload(
+        str(action["provider_family"]), dict(action["desired_payload"])
+    )
+    if guard_digest != action["content_guard_digest"]:
+        raise HTTPException(
+            403, "delegated action failed its final content/privacy guard"
+        )
+    dispatch_event_id, _ = await _append(
+        runtime,
+        session,
+        event_type="cos.delegated_action.dispatch_authorized",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=action["owner_scope"],
+        visibility_scope=action["visibility_scope"],
+        sensitivity=cast(Sensitivity, action["sensitivity"]),
+        payload={
+            "action_id": action["action_id"],
+            "action_revision": action["action_revision"],
+            "action_fingerprint": action["action_fingerprint"],
+            "domain_approval_event_id": approval["approval_event_id"],
+            "openclaw_approval_event_id": openclaw_approval_event_id,
+            "command_id": action["command_id"],
+            "command_idempotency_key": action["command_idempotency_key"],
+            "operator_principal_id": _operator_id(body.operator_kind),
+            "authorized_at": now.isoformat(),
+        },
+        request_id=f"{body.action_id}:dispatch",
+        causation_id=openclaw_approval_event_id,
+        request_fingerprint=action["action_fingerprint"],
+    )
+    command_payload.update(
+        {
+            "domain_approval_event_id": approval["approval_event_id"],
+            "openclaw_approval_event_id": openclaw_approval_event_id,
+            "request_fingerprint": action["action_fingerprint"],
+            "privacy_guard_version": action["privacy_guard_version"],
+            "origin_proposal_id": action["action_id"],
+        }
+    )
+    command_key = str(action["command_idempotency_key"])
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, command_key)
+    if prior is None:
+        command_event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=session.tenant_id,
+                type="external_sync.write_requested",
+                schema_version=2,
+                occurred_at=now.isoformat(),
+                source_adapter="openclaw-plugin",
+                source_account_id=body.provenance.account_id
+                or body.provenance.channel_id,
+                owner_scope=action["owner_scope"],
+                visibility_scope=action["visibility_scope"],
+                sensitivity=cast(Sensitivity, action["sensitivity"]),
+                correlation_id=session.correlation_id,
+                causation_id=dispatch_event_id,
+                actor_identity=COS_SERVICE_PRINCIPAL_ID,
+                idempotency_key=command_key,
+                raw_ref=f"request-sha256:{action['action_fingerprint']}",
+                payload=command_payload,
+            )
+        )
+        duplicate = False
+    else:
+        command_event_id = str(prior["event_id"])
+        duplicate = True
+    await runtime.wait_for_projection("tasks", command_event_id)
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.delegated-actions.execute",
+        result_event_ids=[dispatch_event_id, command_event_id],
+    )
+    return {
+        "accepted": True,
+        "duplicate": duplicate,
+        "action_id": body.action_id,
+        "event_id": command_event_id,
+        "dispatch_authorization_event_id": dispatch_event_id,
+        "domain_approval_event_id": approval["approval_event_id"],
+        "openclaw_approval_event_id": openclaw_approval_event_id,
+        "state": "awaiting_result",
+        "provider_execution_scope": "fixture_only",
+    }
+
+
+@router.post("/tools/delegated-actions/observe")
+async def observe_delegated_action(
+    body: DelegatedActionObserveRequest, request: Request
+) -> dict[str, Any]:
+    """Append later fixture observation and reconcile it to desired state."""
+
+    session = _session(
+        request,
+        body.provenance,
+        required_permission="execute_fixture_actions",
+        context_scope=body.context_scope,
+    )
+    _require_adult(session)
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "CoS execution context is unavailable")
+    action = get_delegated_action(
+        runtime.projections.connection("tasks"), session, action_id=body.action_id
+    )
+    if action is None:
+        raise HTTPException(404, "delegated action not found")
+    if action["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "delegated action changed")
+    if (
+        action["state"] != "awaiting_observation"
+        or len(action.get("results") or []) != 1
+    ):
+        raise HTTPException(409, "delegated action has no unambiguous terminal result")
+    result = action["results"][0]
+    if result.get("suppressed") or not result.get("external_id"):
+        raise HTTPException(
+            409, "suppressed action cannot be observed as a provider effect"
+        )
+    if runtime.fixture_action_adapter is None:
+        raise HTTPException(503, "fixture observation adapter is unavailable")
+    observation = runtime.fixture_action_adapter.observation(body.action_id)
+    if observation is None:
+        raise HTTPException(409, "fixture provider observation is missing")
+    now = EventEnvelope.now_utc_iso()
+    observed_state = dict(observation["state"])
+    observation_digest = action_fingerprint(observed_state)
+    observation_id = (
+        f"observation:{hashlib.sha256(body.action_id.encode()).hexdigest()[:32]}"
+    )
+    observation_event_id, _ = await _append(
+        runtime,
+        session,
+        event_type="cos.delegated_action.observed",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=action["owner_scope"],
+        visibility_scope=action["visibility_scope"],
+        sensitivity=cast(Sensitivity, action["sensitivity"]),
+        payload={
+            "observation_id": observation_id,
+            "action_id": body.action_id,
+            "command_id": action["command_id"],
+            "result_event_id": result["result_event_id"],
+            "provider": "fixture",
+            "provider_family": action["provider_family"],
+            "provider_account_id": action["provider_account_id"],
+            "destination_id": action["destination_id"],
+            "external_id": observation["external_id"],
+            "provider_revision": observation["provider_revision"],
+            "observed_state": observed_state,
+            "observation_fingerprint": observation_digest,
+            "observed_at": now,
+            "direct_provider_edit_detected": observation[
+                "direct_provider_edit_detected"
+            ],
+        },
+        request_id=f"{body.request_id}:observation",
+        causation_id=result["result_event_id"],
+    )
+    await runtime.wait_for_projection("tasks", observation_event_id)
+    desired_digest = action_fingerprint(action["desired_state"])
+    direct_edit = bool(observation["direct_provider_edit_detected"])
+    exact = desired_digest == observation_digest
+    outcome = "conflicted" if direct_edit else "reconciled" if exact else "drifted"
+    reason = (
+        "direct_provider_edit"
+        if direct_edit
+        else "exact_match"
+        if exact
+        else "provider_state_drift"
+    )
+    canonical_outcome = (
+        "completed"
+        if exact and action["operation"] in {"complete_task", "complete_reminder"}
+        else "reopened"
+        if exact and action["operation"] in {"uncomplete_task", "uncomplete_reminder"}
+        else "withdrawn"
+        if exact
+        and action["operation"]
+        in {"delete_event", "delete_task", "delete_list", "delete_reminder"}
+        else "active"
+        if exact
+        else "none"
+    )
+    reconciliation_id = (
+        f"reconciliation:{hashlib.sha256(body.action_id.encode()).hexdigest()[:32]}"
+    )
+    canonical_outcome_event_id: str | None = None
+    if (
+        outcome == "reconciled"
+        and action["canonical_object_kind"] == "task"
+        and canonical_outcome in {"completed", "reopened"}
+    ):
+        canonical_outcome_event_id, _ = await _append(
+            runtime,
+            session,
+            event_type="cos.delegated_action.canonical_outcome_returned",
+            source_account_id=body.provenance.account_id or body.provenance.channel_id,
+            owner_scope=action["owner_scope"],
+            visibility_scope=action["visibility_scope"],
+            sensitivity=cast(Sensitivity, action["sensitivity"]),
+            payload={
+                "action_id": body.action_id,
+                "canonical_object_kind": "task",
+                "canonical_object_id": action["canonical_object_id"],
+                "outcome": canonical_outcome,
+                "observation_event_id": observation_event_id,
+                "represented_service_principal_id": action[
+                    "represented_service_principal_id"
+                ],
+                "represented_service_party_id": action["actor_party_id"],
+                "operator_principal_id": action["operator_principal_id"],
+                "operator_kind": action["operator_kind"],
+                "on_behalf_of_member_id": action["on_behalf_of_member_id"],
+                "authority_grant_id": action["authority_grant_id"],
+                "returned_at": now,
+            },
+            request_id=f"{body.request_id}:canonical-outcome",
+            causation_id=observation_event_id,
+        )
+        await runtime.wait_for_projection("tasks", canonical_outcome_event_id)
+    reconciliation_event_id, _ = await _append(
+        runtime,
+        session,
+        event_type="cos.delegated_action.reconciled",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=action["owner_scope"],
+        visibility_scope=action["visibility_scope"],
+        sensitivity=cast(Sensitivity, action["sensitivity"]),
+        payload={
+            "reconciliation_id": reconciliation_id,
+            "action_id": body.action_id,
+            "observation_event_id": observation_event_id,
+            "result_event_id": result["result_event_id"],
+            "desired_state_digest": desired_digest,
+            "observed_state_digest": observation_digest,
+            "outcome": outcome,
+            "canonical_outcome": canonical_outcome,
+            "canonical_outcome_event_id": canonical_outcome_event_id,
+            "reason_code": reason,
+            "reconciled_at": now,
+        },
+        request_id=f"{body.request_id}:reconciliation",
+        causation_id=observation_event_id,
+    )
+    await runtime.wait_for_projection("tasks", reconciliation_event_id)
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.delegated-actions.observe-reconcile",
+        result_event_ids=[
+            observation_event_id,
+            *([canonical_outcome_event_id] if canonical_outcome_event_id else []),
+            reconciliation_event_id,
+        ],
+    )
+    return {
+        "action_id": body.action_id,
+        "observation_event_id": observation_event_id,
+        "reconciliation_event_id": reconciliation_event_id,
+        "state": outcome,
+        "canonical_outcome": canonical_outcome,
+        "canonical_outcome_event_id": canonical_outcome_event_id,
     }
 
 

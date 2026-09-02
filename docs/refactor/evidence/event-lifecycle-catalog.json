@@ -489,6 +489,10 @@
     "calendar_event": "provider_calendar_event",
     "commitment": "commitment",
     "context_signal": "context_signal",
+    "coordination": "coordination",
+    "cos_work": "cos_work",
+    "delegated_action": "delegated_action",
+    "execution_envelope": "execution_envelope",
     "finance_goal": "finance_goal",
     "finance_plan": "finance_plan",
     "interaction": "interaction",
@@ -497,6 +501,7 @@
     "money_flow": "money_flow",
     "note": "note",
     "notification": "notification",
+    "operating_agreement": "operating_agreement",
     "party": "party",
     "party_candidate": "party",
     "party_identifier": "party",
@@ -653,6 +658,530 @@
           "process_test": "tests/acceptance/test_gate7_household_experience.py::test_today_is_one_deterministic_brief_with_typed_member_actions",
           "terminal": false,
           "to_state": "open"
+        }
+      ]
+    },
+    {
+      "authority": "administrateme_event_log_under_exact_service_delegation",
+      "first_surfaces": [
+        "openclaw",
+        "member-cos"
+      ],
+      "history_surfaces": [
+        "openclaw",
+        "activity"
+      ],
+      "management_surfaces": [
+        "openclaw",
+        "member-cos"
+      ],
+      "object_kind": "cos_work",
+      "projection": "tasks",
+      "transitions": [
+        {
+          "action": "create_or_accept_assignment",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "task.created",
+          "from_states": [],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "open"
+        },
+        {
+          "action": "start",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.work.state_changed",
+          "from_states": [
+            "open",
+            "held",
+            "waiting"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "in_progress"
+        },
+        {
+          "action": "wait",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.work.state_changed",
+          "from_states": [
+            "open",
+            "in_progress"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "waiting"
+        },
+        {
+          "action": "follow_up_or_hold",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.work.state_changed",
+          "from_states": [
+            "open",
+            "in_progress",
+            "waiting"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "held"
+        },
+        {
+          "action": "complete",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.work.state_changed",
+          "from_states": [
+            "open",
+            "in_progress",
+            "waiting",
+            "held"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": true,
+          "to_state": "completed"
+        },
+        {
+          "action": "cancel",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.work.state_changed",
+          "from_states": [
+            "open",
+            "in_progress",
+            "waiting",
+            "held"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": true,
+          "to_state": "cancelled"
+        }
+      ]
+    },
+    {
+      "authority": "administrateme_event_log_exact_member_domain_authority",
+      "first_surfaces": [
+        "member-cos"
+      ],
+      "history_surfaces": [
+        "member-cos",
+        "activity"
+      ],
+      "management_surfaces": [
+        "member-cos"
+      ],
+      "object_kind": "execution_envelope",
+      "projection": "tasks",
+      "transitions": [
+        {
+          "action": "grant_exact_standing_envelope",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "cos.execution_envelope.granted",
+          "from_states": [],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_exact_authority_and_failure_states_fail_closed",
+          "terminal": false,
+          "to_state": "active"
+        },
+        {
+          "action": "revoke",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "cos.execution_envelope.revoked",
+          "from_states": [
+            "active"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_exact_authority_and_failure_states_fail_closed",
+          "terminal": true,
+          "to_state": "revoked"
+        }
+      ]
+    },
+    {
+      "authority": "administrateme_domain_authority_plus_independent_openclaw_permission",
+      "first_surfaces": [
+        "openclaw",
+        "member-cos"
+      ],
+      "history_surfaces": [
+        "member-cos",
+        "activity"
+      ],
+      "management_surfaces": [
+        "openclaw",
+        "member-cos"
+      ],
+      "object_kind": "delegated_action",
+      "projection": "tasks",
+      "transitions": [
+        {
+          "action": "prepare_or_hold",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.prepared",
+          "from_states": [],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "prohibited_or_dashboard_or_shadow_or_desired_or_awaiting_member_approval"
+        },
+        {
+          "action": "approve_domain_authority",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.domain_approved",
+          "from_states": [
+            "awaiting_member_approval"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "awaiting_openclaw_approval"
+        },
+        {
+          "action": "authorize_dispatch",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.dispatch_authorized",
+          "from_states": [
+            "awaiting_openclaw_approval"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "dispatched"
+        },
+        {
+          "action": "request_exact_provider_command",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "external_sync.write_requested",
+          "from_states": [
+            "dispatched"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "awaiting_result"
+        },
+        {
+          "action": "record_terminal_result",
+          "command_surface": "runtime",
+          "defect_id": null,
+          "event_type": "external_sync.write_completed",
+          "from_states": [
+            "awaiting_result"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "awaiting_observation_or_suppressed_or_failed_or_conflicted"
+        },
+        {
+          "action": "record_terminal_failure",
+          "command_surface": "runtime",
+          "defect_id": null,
+          "event_type": "external_sync.write_failed",
+          "from_states": [
+            "awaiting_result"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "failed_or_conflicted"
+        },
+        {
+          "action": "observe_later_provider_state",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.observed",
+          "from_states": [
+            "awaiting_observation"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "active_or_conflicted"
+        },
+        {
+          "action": "return_canonical_outcome",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.canonical_outcome_returned",
+          "from_states": [
+            "active"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": false,
+          "to_state": "active"
+        },
+        {
+          "action": "reconcile",
+          "command_surface": "openclaw",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.reconciled",
+          "from_states": [
+            "active",
+            "conflicted"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": true,
+          "to_state": "reconciled_or_drifted_or_conflicted"
+        },
+        {
+          "action": "withdraw_intent",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "cos.delegated_action.withdrawn",
+          "from_states": [
+            "dashboard_only",
+            "shadow",
+            "desired",
+            "awaiting_member_approval",
+            "awaiting_openclaw_approval",
+            "failed",
+            "conflicted",
+            "suppressed"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_delegated_execution_reconciliation.py::test_g07_supported_fixture_actions_close_exactly_through_observation",
+          "terminal": true,
+          "to_state": "withdrawn"
+        }
+      ]
+    },
+    {
+      "authority": "administrateme_event_log_member_authority",
+      "first_surfaces": [
+        "member-cos"
+      ],
+      "history_surfaces": [
+        "member-cos",
+        "activity"
+      ],
+      "management_surfaces": [
+        "member-cos"
+      ],
+      "object_kind": "coordination",
+      "projection": "tasks",
+      "transitions": [
+        {
+          "action": "create",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.created",
+          "from_states": [],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "open"
+        },
+        {
+          "action": "propose_handoff",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.handoff_proposed",
+          "from_states": [
+            "open",
+            "active",
+            "rejected"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "handoff_proposed"
+        },
+        {
+          "action": "accept_or_reject_handoff",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.handoff_decided",
+          "from_states": [
+            "handoff_proposed"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "active_or_rejected"
+        },
+        {
+          "action": "withdraw_handoff",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.handoff_withdrawn",
+          "from_states": [
+            "handoff_proposed"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "open_or_active"
+        },
+        {
+          "action": "reassign_handoff",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.handoff_reassigned",
+          "from_states": [
+            "open",
+            "active",
+            "handoff_proposed",
+            "handoff_rejected"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "handoff_proposed"
+        },
+        {
+          "action": "wait_on_member",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.waiting_set",
+          "from_states": [
+            "open",
+            "active"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "waiting"
+        },
+        {
+          "action": "revoke",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "coordination.revoked",
+          "from_states": [
+            "open",
+            "active",
+            "waiting",
+            "handoff_proposed",
+            "rejected"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": true,
+          "to_state": "revoked"
+        }
+      ]
+    },
+    {
+      "authority": "administrateme_event_log_member_quorum_or_release_constitution",
+      "first_surfaces": [
+        "member-cos"
+      ],
+      "history_surfaces": [
+        "member-cos",
+        "activity"
+      ],
+      "management_surfaces": [
+        "member-cos"
+      ],
+      "object_kind": "operating_agreement",
+      "projection": "parties",
+      "transitions": [
+        {
+          "action": "register_constitution",
+          "command_surface": "runtime",
+          "defect_id": null,
+          "event_type": "operating_agreement.constitution_registered",
+          "from_states": [],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "active"
+        },
+        {
+          "action": "propose",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "operating_agreement.proposed",
+          "from_states": [],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "proposed"
+        },
+        {
+          "action": "approve_exact_quorum",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "operating_agreement.approved",
+          "from_states": [
+            "proposed"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "active"
+        },
+        {
+          "action": "reject",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "operating_agreement.rejected",
+          "from_states": [
+            "proposed"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": true,
+          "to_state": "rejected"
+        },
+        {
+          "action": "suspend",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "operating_agreement.suspended",
+          "from_states": [
+            "active"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": false,
+          "to_state": "suspended"
+        },
+        {
+          "action": "revoke",
+          "command_surface": "member-cos",
+          "defect_id": null,
+          "event_type": "operating_agreement.revoked",
+          "from_states": [
+            "proposed",
+            "active",
+            "suspended"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": true,
+          "to_state": "revoked"
+        },
+        {
+          "action": "consume_one_time_exception",
+          "command_surface": "governed-consumer",
+          "defect_id": null,
+          "event_type": "operating_agreement.exception_consumed",
+          "from_states": [
+            "active"
+          ],
+          "implementation": "exact",
+          "process_test": "tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_g06_work_coordination_agreements_replay_and_restart",
+          "terminal": true,
+          "to_state": "consumed"
         }
       ]
     },
@@ -3252,10 +3781,10 @@
     "life_patterns": 15,
     "missing_lifecycle_transitions": [],
     "missing_source_candidate_cells": [],
-    "object_lifecycles": 23,
+    "object_lifecycles": 28,
     "source_candidate_cells": 132,
-    "technical_event_schemas": 266,
-    "technical_event_types": 210,
+    "technical_event_schemas": 294,
+    "technical_event_types": 237,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -8460,6 +8989,2022 @@
         "object_ids",
         "split_by_member_id",
         "split_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.conversation_linked",
+      "family": "coordination",
+      "properties": {
+        "conversation_reference": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Conversation Reference",
+          "type": "string"
+        },
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "linked_at": {
+          "format": "date-time",
+          "title": "Linked At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "transcript_included": {
+          "const": false,
+          "default": false,
+          "title": "Transcript Included",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "member_id",
+        "conversation_reference",
+        "linked_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.created",
+      "family": "coordination",
+      "properties": {
+        "beneficiary_party_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Beneficiary Party Id"
+        },
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "coordination_kind": {
+          "enum": [
+            "household_obligation",
+            "household_deadline",
+            "handoff",
+            "busy_availability",
+            "joint_schedule",
+            "resource_conflict"
+          ],
+          "title": "Coordination Kind",
+          "type": "string"
+        },
+        "cos_assignment_task_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cos Assignment Task Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/CoordinationFieldV1"
+          },
+          "maxItems": 20,
+          "title": "Fields",
+          "type": "array"
+        },
+        "linked_commitment_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Commitment Id"
+        },
+        "linked_task_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Task Id"
+        },
+        "obligation_owner_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Obligation Owner Id"
+        },
+        "obligation_owner_kind": {
+          "enum": [
+            "member",
+            "household",
+            "none"
+          ],
+          "title": "Obligation Owner Kind",
+          "type": "string"
+        },
+        "originator_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Originator Member Id",
+          "type": "string"
+        },
+        "participant_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Participant Member Ids",
+          "type": "array"
+        },
+        "private_evidence_included": {
+          "const": false,
+          "default": false,
+          "title": "Private Evidence Included",
+          "type": "boolean"
+        },
+        "provider_projection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Projection Authorized",
+          "type": "boolean"
+        },
+        "responsible_party_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Responsible Party Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "coordination_kind",
+        "originator_member_id",
+        "participant_member_ids",
+        "obligation_owner_kind",
+        "responsible_party_id",
+        "created_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.handoff_decided",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "accepted",
+            "rejected"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "destination_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Destination Member Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "capacity",
+                "ownership",
+                "timing",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason Code"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "destination_member_id",
+        "decision",
+        "decided_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.handoff_proposed",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "destination_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Destination Member Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "proposed_at": {
+          "format": "date-time",
+          "title": "Proposed At",
+          "type": "string"
+        },
+        "proposed_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Proposed By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "proposed_by_member_id",
+        "destination_member_id",
+        "proposed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.handoff_reassigned",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "destination_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Destination Member Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "previous_destination_member_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Destination Member Id"
+        },
+        "reassigned_at": {
+          "format": "date-time",
+          "title": "Reassigned At",
+          "type": "string"
+        },
+        "reassigned_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Reassigned By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "reassigned_by_member_id",
+        "destination_member_id",
+        "reassigned_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.handoff_withdrawn",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "withdrawn_at": {
+          "format": "date-time",
+          "title": "Withdrawn At",
+          "type": "string"
+        },
+        "withdrawn_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Withdrawn By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "withdrawn_by_member_id",
+        "withdrawn_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.originator_receipt_recorded",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "originator_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Originator Member Id",
+          "type": "string"
+        },
+        "private_evidence_included": {
+          "const": false,
+          "default": false,
+          "title": "Private Evidence Included",
+          "type": "boolean"
+        },
+        "receipt_status": {
+          "const": "recorded",
+          "default": "recorded",
+          "title": "Receipt Status",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "originator_member_id",
+        "recorded_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.revoked",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "enum": [
+            "withdrawn",
+            "resolved_elsewhere",
+            "privacy",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "revoked_at": {
+          "format": "date-time",
+          "title": "Revoked At",
+          "type": "string"
+        },
+        "revoked_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Revoked By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "revoked_by_member_id",
+        "revoked_at",
+        "reason_code"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.waiting_cleared",
+      "family": "coordination",
+      "properties": {
+        "cleared_at": {
+          "format": "date-time",
+          "title": "Cleared At",
+          "type": "string"
+        },
+        "cleared_by_party_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Cleared By Party Id",
+          "type": "string"
+        },
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "cleared_by_party_id",
+        "cleared_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "coordination.waiting_set",
+      "family": "coordination",
+      "properties": {
+        "coordination_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Coordination Id",
+          "type": "string"
+        },
+        "follow_up_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Follow Up At"
+        },
+        "set_by_party_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Set By Party Id",
+          "type": "string"
+        },
+        "waiting_on_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Waiting On Member Id",
+          "type": "string"
+        },
+        "waiting_since": {
+          "format": "date-time",
+          "title": "Waiting Since",
+          "type": "string"
+        }
+      },
+      "required": [
+        "coordination_id",
+        "waiting_on_member_id",
+        "set_by_party_id",
+        "waiting_since"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.canonical_outcome_returned",
+      "family": "delegated_execution",
+      "properties": {
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "authority_grant_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Authority Grant Id",
+          "type": "string"
+        },
+        "canonical_object_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Canonical Object Id",
+          "type": "string"
+        },
+        "canonical_object_kind": {
+          "const": "task",
+          "title": "Canonical Object Kind",
+          "type": "string"
+        },
+        "observation_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Observation Event Id",
+          "type": "string"
+        },
+        "on_behalf_of_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "On Behalf Of Member Id",
+          "type": "string"
+        },
+        "operator_kind": {
+          "enum": [
+            "openclaw_automation",
+            "simulated_human"
+          ],
+          "title": "Operator Kind",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "reopened"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "represented_service_party_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Represented Service Party Id",
+          "type": "string"
+        },
+        "represented_service_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Represented Service Principal Id",
+          "type": "string"
+        },
+        "returned_at": {
+          "format": "date-time",
+          "title": "Returned At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "canonical_object_kind",
+        "canonical_object_id",
+        "outcome",
+        "observation_event_id",
+        "represented_service_principal_id",
+        "represented_service_party_id",
+        "operator_principal_id",
+        "operator_kind",
+        "on_behalf_of_member_id",
+        "authority_grant_id",
+        "returned_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.dispatch_authorized",
+      "family": "delegated_execution",
+      "properties": {
+        "action_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Action Fingerprint",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "action_revision": {
+          "minimum": 1,
+          "title": "Action Revision",
+          "type": "integer"
+        },
+        "authorized_at": {
+          "format": "date-time",
+          "title": "Authorized At",
+          "type": "string"
+        },
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "command_idempotency_key": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Idempotency Key",
+          "type": "string"
+        },
+        "domain_approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Domain Approval Event Id",
+          "type": "string"
+        },
+        "openclaw_approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Openclaw Approval Event Id",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Operator Principal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "action_revision",
+        "action_fingerprint",
+        "domain_approval_event_id",
+        "openclaw_approval_event_id",
+        "command_id",
+        "command_idempotency_key",
+        "operator_principal_id",
+        "authorized_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.domain_approved",
+      "family": "delegated_execution",
+      "properties": {
+        "action_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Action Fingerprint",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "action_revision": {
+          "minimum": 1,
+          "title": "Action Revision",
+          "type": "integer"
+        },
+        "approval_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Event Id"
+        },
+        "approval_kind": {
+          "enum": [
+            "one_off",
+            "standing_envelope"
+          ],
+          "title": "Approval Kind",
+          "type": "string"
+        },
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Approved By Member Id",
+          "type": "string"
+        },
+        "execution_envelope_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Envelope Id"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "openclaw_permission_included": {
+          "const": false,
+          "default": false,
+          "title": "Openclaw Permission Included",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action_id",
+        "action_revision",
+        "action_fingerprint",
+        "approval_kind",
+        "approved_by_member_id",
+        "approved_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.observed",
+      "family": "delegated_execution",
+      "properties": {
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "destination_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Destination Id",
+          "type": "string"
+        },
+        "direct_provider_edit_detected": {
+          "default": false,
+          "title": "Direct Provider Edit Detected",
+          "type": "boolean"
+        },
+        "external_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "External Id",
+          "type": "string"
+        },
+        "observation_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Fingerprint",
+          "type": "string"
+        },
+        "observation_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observed_state": {
+          "additionalProperties": true,
+          "title": "Observed State",
+          "type": "object"
+        },
+        "provider": {
+          "const": "fixture",
+          "default": "fixture",
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_family": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Provider Family",
+          "type": "string"
+        },
+        "provider_revision": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Revision",
+          "type": "string"
+        },
+        "result_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Result Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "action_id",
+        "command_id",
+        "result_event_id",
+        "provider_family",
+        "provider_account_id",
+        "destination_id",
+        "external_id",
+        "provider_revision",
+        "observed_state",
+        "observation_fingerprint",
+        "observed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.prepared",
+      "family": "delegated_execution",
+      "properties": {
+        "action_class": {
+          "enum": [
+            "google_calendar_create",
+            "google_calendar_update",
+            "google_calendar_move",
+            "google_calendar_withdraw",
+            "google_calendar_recurrence",
+            "google_tasks_create",
+            "google_tasks_update",
+            "google_tasks_complete",
+            "google_tasks_reopen",
+            "google_tasks_withdraw",
+            "google_tasks_list_create",
+            "google_tasks_list_update",
+            "google_tasks_list_withdraw",
+            "google_tasks_reminder_create",
+            "google_tasks_reminder_update",
+            "google_tasks_reminder_complete",
+            "google_tasks_reminder_reopen",
+            "google_tasks_reminder_withdraw",
+            "apple_calendar_create",
+            "apple_calendar_update",
+            "apple_calendar_move",
+            "apple_calendar_withdraw",
+            "apple_calendar_recurrence",
+            "apple_reminders_create",
+            "apple_reminders_update",
+            "apple_reminders_complete",
+            "apple_reminders_reopen",
+            "apple_reminders_withdraw",
+            "communication_draft",
+            "communication_hold"
+          ],
+          "title": "Action Class",
+          "type": "string"
+        },
+        "action_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Action Fingerprint",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "action_revision": {
+          "minimum": 1,
+          "title": "Action Revision",
+          "type": "integer"
+        },
+        "active_context_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Context Member Id"
+        },
+        "active_context_scope": {
+          "enum": [
+            "member_private",
+            "household_shared"
+          ],
+          "title": "Active Context Scope",
+          "type": "string"
+        },
+        "actor_party_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Actor Party Id",
+          "type": "string"
+        },
+        "actor_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Actor Principal Id",
+          "type": "string"
+        },
+        "adapter_architecture": {
+          "enum": [
+            "central_cat_b",
+            "member_bridge",
+            "held_only"
+          ],
+          "title": "Adapter Architecture",
+          "type": "string"
+        },
+        "audience_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Audience Ids",
+          "type": "array"
+        },
+        "authority_grant_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Authority Grant Event Id",
+          "type": "string"
+        },
+        "authority_grant_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Authority Grant Id",
+          "type": "string"
+        },
+        "canonical_object_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Canonical Object Id",
+          "type": "string"
+        },
+        "canonical_object_kind": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Canonical Object Kind",
+          "type": "string"
+        },
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "command_idempotency_key": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Idempotency Key",
+          "type": "string"
+        },
+        "content_guard_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Guard Digest",
+          "type": "string"
+        },
+        "coordination_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coordination Id"
+        },
+        "desired_payload": {
+          "additionalProperties": true,
+          "title": "Desired Payload",
+          "type": "object"
+        },
+        "desired_payload_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Desired Payload Digest",
+          "type": "string"
+        },
+        "desired_representation_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Desired Representation Id",
+          "type": "string"
+        },
+        "desired_state": {
+          "additionalProperties": true,
+          "title": "Desired State",
+          "type": "object"
+        },
+        "destination_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Destination Id",
+          "type": "string"
+        },
+        "execution_mode": {
+          "enum": [
+            "execute",
+            "desired_only",
+            "shadow"
+          ],
+          "title": "Execution Mode",
+          "type": "string"
+        },
+        "expected_provider_revision": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Provider Revision"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fact_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Fact Event Ids",
+          "type": "array"
+        },
+        "facts_observed_at": {
+          "format": "date-time",
+          "title": "Facts Observed At",
+          "type": "string"
+        },
+        "facts_valid_until": {
+          "format": "date-time",
+          "title": "Facts Valid Until",
+          "type": "string"
+        },
+        "initial_state": {
+          "enum": [
+            "prohibited",
+            "dashboard_only",
+            "shadow",
+            "desired",
+            "awaiting_member_approval"
+          ],
+          "title": "Initial State",
+          "type": "string"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurrence Id"
+        },
+        "on_behalf_of_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On Behalf Of Member Id"
+        },
+        "operation": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Operation",
+          "type": "string"
+        },
+        "operator_kind": {
+          "enum": [
+            "openclaw_automation",
+            "simulated_human"
+          ],
+          "title": "Operator Kind",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "policy_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Digest",
+          "type": "string"
+        },
+        "policy_version": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "prepared_at": {
+          "format": "date-time",
+          "title": "Prepared At",
+          "type": "string"
+        },
+        "privacy_guard_version": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Privacy Guard Version",
+          "type": "string"
+        },
+        "production_adapter": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Production Adapter"
+        },
+        "provider": {
+          "const": "fixture",
+          "default": "fixture",
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_account_owner_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Account Owner Principal Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "provider_family": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Provider Family",
+          "type": "string"
+        },
+        "recurrence_strategy": {
+          "enum": [
+            "none",
+            "provider_series",
+            "individual_occurrence"
+          ],
+          "title": "Recurrence Strategy",
+          "type": "string"
+        },
+        "representation_kind": {
+          "enum": [
+            "provider_object",
+            "cos_operational",
+            "member_delegated"
+          ],
+          "title": "Representation Kind",
+          "type": "string"
+        },
+        "represented_service_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Represented Service Principal Id",
+          "type": "string"
+        },
+        "resource_owner_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Resource Owner Principal Id",
+          "type": "string"
+        },
+        "risk_class": {
+          "enum": [
+            "ordinary",
+            "money",
+            "nonrefundable_travel",
+            "legal_signature",
+            "clinical_decision",
+            "child_consent",
+            "life_safety_system",
+            "public_statement",
+            "another_adult_source",
+            "infrastructure_administration"
+          ],
+          "title": "Risk Class",
+          "type": "string"
+        },
+        "series_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Series Id"
+        },
+        "target_external_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target External Id"
+        }
+      },
+      "required": [
+        "action_id",
+        "action_revision",
+        "canonical_object_kind",
+        "canonical_object_id",
+        "recurrence_strategy",
+        "desired_representation_id",
+        "actor_principal_id",
+        "actor_party_id",
+        "operator_principal_id",
+        "operator_kind",
+        "represented_service_principal_id",
+        "active_context_scope",
+        "authority_grant_id",
+        "authority_grant_event_id",
+        "resource_owner_principal_id",
+        "provider_account_owner_principal_id",
+        "provider_family",
+        "provider_account_id",
+        "adapter_architecture",
+        "destination_id",
+        "audience_ids",
+        "action_class",
+        "operation",
+        "representation_kind",
+        "desired_payload",
+        "desired_state",
+        "desired_payload_digest",
+        "action_fingerprint",
+        "command_id",
+        "command_idempotency_key",
+        "fact_event_ids",
+        "facts_observed_at",
+        "facts_valid_until",
+        "policy_version",
+        "policy_digest",
+        "privacy_guard_version",
+        "content_guard_digest",
+        "risk_class",
+        "execution_mode",
+        "initial_state",
+        "prepared_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.reconciled",
+      "family": "delegated_execution",
+      "properties": {
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "canonical_outcome": {
+          "enum": [
+            "none",
+            "completed",
+            "reopened",
+            "withdrawn",
+            "active"
+          ],
+          "title": "Canonical Outcome",
+          "type": "string"
+        },
+        "canonical_outcome_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Outcome Event Id"
+        },
+        "desired_state_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Desired State Digest",
+          "type": "string"
+        },
+        "observation_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Observation Event Id",
+          "type": "string"
+        },
+        "observed_state_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observed State Digest",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "reconciled",
+            "drifted",
+            "conflicted"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason_code": {
+          "enum": [
+            "exact_match",
+            "provider_state_drift",
+            "direct_provider_edit",
+            "provider_revision_conflict"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "reconciled_at": {
+          "format": "date-time",
+          "title": "Reconciled At",
+          "type": "string"
+        },
+        "reconciliation_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reconciliation Id",
+          "type": "string"
+        },
+        "result_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Result Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reconciliation_id",
+        "action_id",
+        "observation_event_id",
+        "result_event_id",
+        "desired_state_digest",
+        "observed_state_digest",
+        "outcome",
+        "canonical_outcome",
+        "reason_code",
+        "reconciled_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.delegated_action.withdrawn",
+      "family": "delegated_execution",
+      "properties": {
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "enum": [
+            "member_request",
+            "superseded",
+            "no_longer_needed",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "withdrawn_at": {
+          "format": "date-time",
+          "title": "Withdrawn At",
+          "type": "string"
+        },
+        "withdrawn_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Withdrawn By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "withdrawn_by_member_id",
+        "withdrawn_at",
+        "reason_code"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.execution_envelope.granted",
+      "family": "delegated_execution",
+      "properties": {
+        "action_class": {
+          "enum": [
+            "google_calendar_create",
+            "google_calendar_update",
+            "google_calendar_move",
+            "google_calendar_withdraw",
+            "google_calendar_recurrence",
+            "google_tasks_create",
+            "google_tasks_update",
+            "google_tasks_complete",
+            "google_tasks_reopen",
+            "google_tasks_withdraw",
+            "google_tasks_list_create",
+            "google_tasks_list_update",
+            "google_tasks_list_withdraw",
+            "google_tasks_reminder_create",
+            "google_tasks_reminder_update",
+            "google_tasks_reminder_complete",
+            "google_tasks_reminder_reopen",
+            "google_tasks_reminder_withdraw",
+            "apple_calendar_create",
+            "apple_calendar_update",
+            "apple_calendar_move",
+            "apple_calendar_withdraw",
+            "apple_calendar_recurrence",
+            "apple_reminders_create",
+            "apple_reminders_update",
+            "apple_reminders_complete",
+            "apple_reminders_reopen",
+            "apple_reminders_withdraw",
+            "communication_draft",
+            "communication_hold"
+          ],
+          "title": "Action Class",
+          "type": "string"
+        },
+        "audience_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Audience Ids",
+          "type": "array"
+        },
+        "authority_grant_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Authority Grant Id",
+          "type": "string"
+        },
+        "canonical_object_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Canonical Object Id",
+          "type": "string"
+        },
+        "canonical_object_kind": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Canonical Object Kind",
+          "type": "string"
+        },
+        "desired_payload_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Desired Payload Digest",
+          "type": "string"
+        },
+        "desired_representation_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Desired Representation Id",
+          "type": "string"
+        },
+        "destination_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Destination Id",
+          "type": "string"
+        },
+        "envelope_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Envelope Id",
+          "type": "string"
+        },
+        "expected_provider_revision": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Provider Revision"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "granted_at": {
+          "format": "date-time",
+          "title": "Granted At",
+          "type": "string"
+        },
+        "granted_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Granted By Member Id",
+          "type": "string"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurrence Id"
+        },
+        "openclaw_permission_included": {
+          "const": false,
+          "default": false,
+          "title": "Openclaw Permission Included",
+          "type": "boolean"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_account_owner_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Account Owner Principal Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "provider_execution_scope": {
+          "const": "fixture_only",
+          "default": "fixture_only",
+          "title": "Provider Execution Scope",
+          "type": "string"
+        },
+        "provider_family": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Provider Family",
+          "type": "string"
+        },
+        "recurrence_strategy": {
+          "default": "none",
+          "enum": [
+            "none",
+            "provider_series",
+            "individual_occurrence"
+          ],
+          "title": "Recurrence Strategy",
+          "type": "string"
+        },
+        "representation_kind": {
+          "enum": [
+            "provider_object",
+            "cos_operational",
+            "member_delegated"
+          ],
+          "title": "Representation Kind",
+          "type": "string"
+        },
+        "represented_service_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Represented Service Principal Id",
+          "type": "string"
+        },
+        "series_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Series Id"
+        },
+        "target_external_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target External Id"
+        }
+      },
+      "required": [
+        "envelope_id",
+        "authority_grant_id",
+        "granted_by_member_id",
+        "represented_service_principal_id",
+        "action_class",
+        "canonical_object_kind",
+        "canonical_object_id",
+        "desired_representation_id",
+        "provider_family",
+        "provider_account_id",
+        "provider_account_owner_principal_id",
+        "destination_id",
+        "audience_ids",
+        "representation_kind",
+        "desired_payload_digest",
+        "granted_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.execution_envelope.revoked",
+      "family": "delegated_execution",
+      "properties": {
+        "envelope_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Envelope Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "enum": [
+            "member_request",
+            "policy_change",
+            "scope_change",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "revoked_at": {
+          "format": "date-time",
+          "title": "Revoked At",
+          "type": "string"
+        },
+        "revoked_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Revoked By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "envelope_id",
+        "revoked_by_member_id",
+        "revoked_at",
+        "reason_code"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.work.state_changed",
+      "family": "cos_work",
+      "properties": {
+        "action": {
+          "enum": [
+            "start",
+            "wait_on_member",
+            "wait_on_other",
+            "follow_up",
+            "hold",
+            "resume",
+            "complete",
+            "cancel"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "active_member_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Member Id"
+        },
+        "actor_service_party_id": {
+          "minLength": 1,
+          "title": "Actor Service Party Id",
+          "type": "string"
+        },
+        "actor_service_principal_id": {
+          "minLength": 1,
+          "title": "Actor Service Principal Id",
+          "type": "string"
+        },
+        "authority_grant_id": {
+          "minLength": 1,
+          "title": "Authority Grant Id",
+          "type": "string"
+        },
+        "changed_at": {
+          "format": "date-time",
+          "title": "Changed At",
+          "type": "string"
+        },
+        "expected_last_event_id": {
+          "minLength": 1,
+          "title": "Expected Last Event Id",
+          "type": "string"
+        },
+        "follow_up_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Follow Up At"
+        },
+        "on_behalf_of_member_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On Behalf Of Member Id"
+        },
+        "operator_principal_id": {
+          "minLength": 1,
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "reason_code": {
+          "enum": [
+            "member_input",
+            "external_dependency",
+            "clarification",
+            "provider_failure",
+            "reconciliation",
+            "scheduled_hold",
+            "completed",
+            "cancelled",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "resulting_status": {
+          "enum": [
+            "next",
+            "in_progress",
+            "waiting_on",
+            "deferred",
+            "done",
+            "cancelled"
+          ],
+          "title": "Resulting Status",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "waiting_on_member_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting On Member Id"
+        },
+        "waiting_on_party_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting On Party Id"
+        }
+      },
+      "required": [
+        "task_id",
+        "action",
+        "resulting_status",
+        "changed_at",
+        "actor_service_principal_id",
+        "actor_service_party_id",
+        "operator_principal_id",
+        "authority_grant_id",
+        "reason_code",
+        "expected_last_event_id"
       ],
       "schema_version": 1
     },
@@ -22480,7 +25025,11 @@
             "enum": [
               "read_context",
               "create_internal_work",
-              "manage_internal_work"
+              "manage_internal_work",
+              "manage_member_obligations",
+              "coordinate_household_work",
+              "prepare_external_actions",
+              "execute_fixture_actions"
             ],
             "type": "string"
           },
@@ -22606,6 +25155,587 @@
         "openclaw_commit"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.approved",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Approved By Member Id",
+          "type": "string"
+        },
+        "authority_scope": {
+          "enum": [
+            "household_shared",
+            "member_private"
+          ],
+          "title": "Authority Scope",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "principal_set_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Principal Set Digest",
+          "type": "string"
+        },
+        "proposal_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Event Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "authority_scope",
+        "approved_by_member_id",
+        "approved_at",
+        "proposal_event_id",
+        "principal_set_digest"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.constitution_registered",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "definition_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Definition Digest",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "release_commit": {
+          "pattern": "^[0-9a-f]{7,64}$",
+          "title": "Release Commit",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "rule": {
+          "$ref": "#/$defs/OperatingRuleV1"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "rule",
+        "registered_at",
+        "release_commit",
+        "definition_digest"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.exception_consumed",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "authority_scope": {
+          "enum": [
+            "household_shared",
+            "member_private"
+          ],
+          "title": "Authority Scope",
+          "type": "string"
+        },
+        "consumed_at": {
+          "format": "date-time",
+          "title": "Consumed At",
+          "type": "string"
+        },
+        "consumed_by_principal_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Consumed By Principal Id",
+          "type": "string"
+        },
+        "outcome_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Outcome Event Id",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "authority_scope",
+        "consumed_at",
+        "consumed_by_principal_id",
+        "outcome_event_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.proposed",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "approval_quorum": {
+          "enum": [
+            "member_owner",
+            "all_adult_principals"
+          ],
+          "title": "Approval Quorum",
+          "type": "string"
+        },
+        "authority_scope": {
+          "enum": [
+            "household_shared",
+            "member_private"
+          ],
+          "title": "Authority Scope",
+          "type": "string"
+        },
+        "effective_from": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective From"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "layer": {
+          "enum": [
+            "shared_household",
+            "member_private",
+            "exception"
+          ],
+          "title": "Layer",
+          "type": "string"
+        },
+        "one_time_use_limit": {
+          "anyOf": [
+            {
+              "const": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "One Time Use Limit"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "principal_set_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Principal Set Digest",
+          "type": "string"
+        },
+        "proposed_at": {
+          "format": "date-time",
+          "title": "Proposed At",
+          "type": "string"
+        },
+        "proposed_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Proposed By Member Id",
+          "type": "string"
+        },
+        "provenance_digests": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Provenance Digests",
+          "type": "array"
+        },
+        "provenance_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Provenance Event Ids",
+          "type": "array"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "required_approving_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Required Approving Member Ids",
+          "type": "array"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "rule": {
+          "$ref": "#/$defs/OperatingRuleV1"
+        },
+        "self_activates": {
+          "const": false,
+          "default": false,
+          "title": "Self Activates",
+          "type": "boolean"
+        },
+        "supersedes_revision": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Revision"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "layer",
+        "authority_scope",
+        "proposed_by_member_id",
+        "proposed_at",
+        "required_approving_member_ids",
+        "approval_quorum",
+        "principal_set_digest",
+        "rule"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.rejected",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "authority_scope": {
+          "enum": [
+            "household_shared",
+            "member_private"
+          ],
+          "title": "Authority Scope",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "reason_code": {
+          "enum": [
+            "scope",
+            "privacy",
+            "burden",
+            "timing",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "rejected_at": {
+          "format": "date-time",
+          "title": "Rejected At",
+          "type": "string"
+        },
+        "rejected_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Rejected By Member Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "authority_scope",
+        "rejected_by_member_id",
+        "rejected_at",
+        "reason_code"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.revoked",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "authority_scope": {
+          "enum": [
+            "household_shared",
+            "member_private"
+          ],
+          "title": "Authority Scope",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "reason_code": {
+          "enum": [
+            "member_request",
+            "scope_violation",
+            "superseded",
+            "no_longer_needed",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "revoked_at": {
+          "format": "date-time",
+          "title": "Revoked At",
+          "type": "string"
+        },
+        "revoked_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Revoked By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "authority_scope",
+        "revoked_by_member_id",
+        "revoked_at",
+        "reason_code"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "operating_agreement.suspended",
+      "family": "operating_agreement",
+      "properties": {
+        "agreement_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Agreement Id",
+          "type": "string"
+        },
+        "authority_scope": {
+          "enum": [
+            "household_shared",
+            "member_private"
+          ],
+          "title": "Authority Scope",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "reason_code": {
+          "enum": [
+            "privacy",
+            "scope_violation",
+            "verification_failure",
+            "reconciliation_failure",
+            "runtime_degradation",
+            "member_request"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "suspended_at": {
+          "format": "date-time",
+          "title": "Suspended At",
+          "type": "string"
+        },
+        "suspended_by_member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Suspended By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agreement_id",
+        "revision",
+        "authority_scope",
+        "suspended_by_member_id",
+        "suspended_at",
+        "reason_code"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
@@ -24707,7 +27837,11 @@
             "enum": [
               "read_context",
               "create_internal_work",
-              "manage_internal_work"
+              "manage_internal_work",
+              "manage_member_obligations",
+              "coordinate_household_work",
+              "prepare_external_actions",
+              "execute_fixture_actions"
             ],
             "type": "string"
           },
@@ -26329,6 +29463,572 @@
         "work_kind"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "task.created",
+      "family": "task",
+      "properties": {
+        "assignee_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assignee Party Id"
+        },
+        "authority_grant_id": {
+          "minLength": 1,
+          "title": "Authority Grant Id",
+          "type": "string"
+        },
+        "available_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available From"
+        },
+        "beneficiary_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Beneficiary Party Id"
+        },
+        "coordination_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coordination Id"
+        },
+        "created_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created By"
+        },
+        "delegated_by_member_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delegated By Member Id"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due"
+        },
+        "due_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due Date"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "tiny",
+                "small",
+                "medium",
+                "large"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "effort_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort Min"
+        },
+        "energy": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy"
+        },
+        "follow_up_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Follow Up At"
+        },
+        "item_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "purchase",
+                "appointment",
+                "research",
+                "decision",
+                "chore",
+                "maintenance"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Type"
+        },
+        "linked_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Id"
+        },
+        "linked_item_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment",
+                "calendar_event",
+                "list_item",
+                "provider_failure",
+                "coordination"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linked Item Kind"
+        },
+        "micro_script": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Micro Script"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "on_behalf_of_member_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On Behalf Of Member Id"
+        },
+        "owner_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Member Id"
+        },
+        "owner_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Party Id"
+        },
+        "provider_account_reference": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Account Reference"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "provider_external_reference_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider External Reference Digest"
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Id"
+        },
+        "provider_representation_owner_kind": {
+          "default": "none",
+          "enum": [
+            "none",
+            "member",
+            "service"
+          ],
+          "title": "Provider Representation Owner Kind",
+          "type": "string"
+        },
+        "provider_representation_owner_principal_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Representation Owner Principal Id"
+        },
+        "provider_workspace_reference": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Workspace Reference"
+        },
+        "recurring_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recurring Id"
+        },
+        "responsible_party_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Responsible Party Id"
+        },
+        "scheduled_end_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheduled End At"
+        },
+        "scheduled_start_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheduled Start At"
+        },
+        "service_assignment_role": {
+          "enum": [
+            "manages_member_obligation",
+            "manages_household_obligation",
+            "delegatee",
+            "internal"
+          ],
+          "title": "Service Assignment Role",
+          "type": "string"
+        },
+        "service_party_id": {
+          "minLength": 1,
+          "title": "Service Party Id",
+          "type": "string"
+        },
+        "service_work_type": {
+          "enum": [
+            "operational_task",
+            "waiting_for",
+            "follow_up",
+            "clarification",
+            "exception",
+            "preparation",
+            "held_action",
+            "provider_failure",
+            "reconciliation",
+            "operational_calendar",
+            "reminder_like"
+          ],
+          "title": "Service Work Type",
+          "type": "string"
+        },
+        "source_commitment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Commitment Id"
+        },
+        "source_event_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Event Id"
+        },
+        "source_invocation_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Invocation Id"
+        },
+        "source_system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source System"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "waiting_on_party_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting On Party Id"
+        },
+        "work_kind": {
+          "enum": [
+            "member_obligation",
+            "household_work",
+            "service_operational"
+          ],
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "work_kind",
+        "service_assignment_role",
+        "service_party_id",
+        "authority_grant_id",
+        "service_work_type"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,
