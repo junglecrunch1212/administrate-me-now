@@ -175,6 +175,152 @@ def resolve_service_delegation(
     )
 
 
+def _parse_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _agreement_view_member(session: Session) -> str:
+    context = session.service_context
+    if context is not None:
+        if (
+            context.context_member_id is None
+            or "read_context" not in context.permissions
+        ):
+            raise ValueError("service context cannot read member operating agreements")
+        return context.context_member_id
+    return session.auth_member_id
+
+
+def _agreement_visible(session: Session, row: dict[str, Any]) -> bool:
+    if row["layer"] == "constitutional":
+        return True
+    if row["authority_scope"] == "household_shared":
+        context = session.service_context
+        if context is not None:
+            return (
+                context.context_scope == "household_shared"
+                and "read_context" in context.permissions
+            )
+        return session.auth_role == "principal"
+    member_id = _agreement_view_member(session)
+    return row["owner_member_id"] == member_id
+
+
+def _agreement_effective_state(row: dict[str, Any], *, as_of: datetime) -> str:
+    state = str(row["state"])
+    if state != "active":
+        return state
+    effective_from = row.get("effective_from") or row.get("approved_at")
+    if effective_from and _parse_time(str(effective_from)) > as_of:
+        return "pending_effective"
+    if row.get("expires_at") and _parse_time(str(row["expires_at"])) <= as_of:
+        return "expired"
+    if row.get("one_time_use_limit") is not None and int(
+        row.get("consumed_count") or 0
+    ) >= int(row["one_time_use_limit"]):
+        return "consumed"
+    return "active"
+
+
+def list_operating_agreements(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    as_of_iso: str,
+    include_inactive: bool = True,
+) -> list[dict[str, Any]]:
+    """Render structured authority visible to one member or CoS context."""
+
+    as_of = _parse_time(as_of_iso)
+    rows = conn.execute(
+        "SELECT * FROM operating_agreements WHERE tenant_id=? "
+        "ORDER BY agreement_id, revision DESC",
+        (session.tenant_id,),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        if not _agreement_visible(session, row):
+            continue
+        for source, target, default in (
+            ("rule_json", "rule", {}),
+            ("required_approvals_json", "required_approving_member_ids", []),
+            ("provenance_event_ids_json", "provenance_event_ids", []),
+            ("provenance_digests_json", "provenance_digests", []),
+        ):
+            try:
+                row[target] = json.loads(str(row.pop(source)))
+            except (TypeError, json.JSONDecodeError):
+                row[target] = default
+        approvals = conn.execute(
+            "SELECT approved_by_member_id, approved_at FROM "
+            "operating_agreement_approvals WHERE tenant_id=? AND agreement_id=? "
+            "AND revision=? ORDER BY approved_by_member_id",
+            (session.tenant_id, row["agreement_id"], row["revision"]),
+        ).fetchall()
+        row["approvals"] = [
+            {
+                "member_id": str(approval["approved_by_member_id"]),
+                "approved_at": str(approval["approved_at"]),
+            }
+            for approval in approvals
+        ]
+        row["effective_state"] = _agreement_effective_state(row, as_of=as_of)
+        row["provider_execution_permitted"] = False
+        row["source_policy_contract"] = "separate"
+        if include_inactive or row["effective_state"] == "active":
+            result.append(row)
+    return result
+
+
+def get_operating_agreement(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    agreement_id: str,
+    revision: int,
+    as_of_iso: str,
+) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in list_operating_agreements(
+                conn, session, as_of_iso=as_of_iso, include_inactive=True
+            )
+            if item["agreement_id"] == agreement_id
+            and int(item["revision"]) == revision
+        ),
+        None,
+    )
+
+
+def effective_operating_agreements(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    as_of_iso: str,
+) -> list[dict[str, Any]]:
+    """Return the strict constitutional floor plus latest applicable revisions."""
+
+    active = list_operating_agreements(
+        conn, session, as_of_iso=as_of_iso, include_inactive=False
+    )
+    latest: dict[str, dict[str, Any]] = {}
+    constitutional: list[dict[str, Any]] = []
+    for item in active:
+        if item["layer"] == "constitutional":
+            constitutional.append(item)
+            continue
+        current = latest.get(str(item["agreement_id"]))
+        if current is None or int(item["revision"]) > int(current["revision"]):
+            latest[str(item["agreement_id"])] = item
+    constitutional.sort(key=lambda item: (item["agreement_id"], item["revision"]))
+    return constitutional + [latest[key] for key in sorted(latest)]
+
+
 def get_party(
     conn: sqlcipher3.Connection,
     session: Session,
@@ -741,11 +887,14 @@ __all__ = [
     "all_parties",
     "contact_records_for_person",
     "find_party_by_identifier",
+    "effective_operating_agreements",
+    "get_operating_agreement",
     "get_party",
     "get_visible_person",
     "identifiers_of",
     "identifiers_for_person",
     "list_household_members",
+    "list_operating_agreements",
     "list_visible_people",
     "memberships_of",
     "member_relationship_profile",

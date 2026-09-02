@@ -10,6 +10,7 @@ rows whose ``tags`` overlap ``CHILD_FORBIDDEN_TAGS``
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,26 @@ import sqlcipher3
 
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
+
+
+def _as_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _coordination_member_id(session: Session) -> str:
+    context = session.service_context
+    if context is not None:
+        if "read_context" not in context.permissions:
+            raise ValueError("service context cannot read member coordination")
+        if context.context_scope == "household_shared":
+            return session.auth_member_id
+        if context.context_member_id is None:
+            raise ValueError("service context cannot read member coordination")
+        return context.context_member_id
+    return session.auth_member_id
 
 
 def get_task(
@@ -205,3 +226,218 @@ def sub_tasks_of(
         (session.tenant_id, goal_ref_task_id),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])
+
+
+def service_work_for_context(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    service_party_id: str,
+) -> list[dict[str, Any]]:
+    """Return CoS work only for its exact member context plus service-private work."""
+
+    context = session.service_context
+    if context is None:
+        return []
+    rows = conn.execute(
+        """
+        SELECT * FROM tasks
+         WHERE tenant_id=? AND service_party_id=? AND assignee_party=?
+           AND status NOT IN ('done','cancelled','dismissed')
+         ORDER BY follow_up_at ASC, due_date ASC, created_at ASC
+        """,
+        (session.tenant_id, service_party_id, service_party_id),
+    ).fetchall()
+    visible = filter_rows(session, [dict(row) for row in rows])
+    member_id = context.context_member_id
+    return [
+        row
+        for row in visible
+        if row.get("beneficiary_party_id") in {None, member_id}
+        and row.get("on_behalf_of_member_id") in {None, member_id}
+    ]
+
+
+def get_coordination_record(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    coordination_id: str,
+    as_of_iso: str,
+) -> dict[str, Any] | None:
+    """Shape one record to the active member's exact field audiences."""
+
+    member_id = _coordination_member_id(session)
+    participant = conn.execute(
+        "SELECT 1 FROM coordination_participants "
+        "WHERE tenant_id=? AND coordination_id=? AND member_id=?",
+        (session.tenant_id, coordination_id, member_id),
+    ).fetchone()
+    if participant is None:
+        return None
+    raw = conn.execute(
+        "SELECT * FROM coordination_records WHERE tenant_id=? AND coordination_id=?",
+        (session.tenant_id, coordination_id),
+    ).fetchone()
+    if raw is None:
+        return None
+    record = dict(raw)
+    as_of = _as_utc(as_of_iso)
+    if record.get("revoked_at"):
+        record["effective_status"] = "revoked"
+    elif record.get("expires_at") and _as_utc(str(record["expires_at"])) <= as_of:
+        record["effective_status"] = "expired"
+    elif (
+        record.get("status") == "handoff_proposed"
+        and record.get("handoff_expires_at")
+        and _as_utc(str(record["handoff_expires_at"])) <= as_of
+    ):
+        record["effective_status"] = "handoff_expired"
+    else:
+        record["effective_status"] = record["status"]
+    fields: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT field_name, field_value, audience_member_ids_json "
+        "FROM coordination_fields WHERE tenant_id=? AND coordination_id=? "
+        "ORDER BY field_name",
+        (session.tenant_id, coordination_id),
+    ).fetchall():
+        try:
+            audience = set(json.loads(str(row["audience_member_ids_json"])))
+        except (TypeError, json.JSONDecodeError):
+            audience = set()
+        if member_id in audience:
+            fields[str(row["field_name"])] = str(row["field_value"])
+    record["fields"] = fields
+    conversation = conn.execute(
+        "SELECT conversation_reference FROM coordination_conversations "
+        "WHERE tenant_id=? AND coordination_id=? AND member_id=?",
+        (session.tenant_id, coordination_id, member_id),
+    ).fetchone()
+    record["conversation_reference"] = (
+        str(conversation["conversation_reference"]) if conversation else None
+    )
+    receipt = conn.execute(
+        "SELECT receipt_status, recorded_at FROM coordination_originator_receipts "
+        "WHERE tenant_id=? AND coordination_id=? AND originator_member_id=?",
+        (session.tenant_id, coordination_id, member_id),
+    ).fetchone()
+    record["originator_receipt"] = (
+        {
+            "status": str(receipt["receipt_status"]),
+            "recorded_at": receipt["recorded_at"],
+        }
+        if receipt
+        else None
+    )
+    for private_column in (
+        "deadline_at",
+        "start_at",
+        "end_at",
+        "resource_id",
+        "owner_scope",
+        "visibility_scope",
+        "sensitivity",
+    ):
+        record.pop(private_column, None)
+    return record
+
+
+def list_coordination_records(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    as_of_iso: str,
+) -> list[dict[str, Any]]:
+    member_id = _coordination_member_id(session)
+    rows = conn.execute(
+        """
+        SELECT r.coordination_id
+          FROM coordination_records r
+          JOIN coordination_participants p
+            ON p.tenant_id=r.tenant_id AND p.coordination_id=r.coordination_id
+         WHERE r.tenant_id=? AND p.member_id=?
+         ORDER BY r.created_at DESC, r.coordination_id
+        """,
+        (session.tenant_id, member_id),
+    ).fetchall()
+    return [
+        result
+        for row in rows
+        if (
+            result := get_coordination_record(
+                conn,
+                session,
+                coordination_id=str(row["coordination_id"]),
+                as_of_iso=as_of_iso,
+            )
+        )
+        is not None
+    ]
+
+
+def coordination_conflicts(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    coordination_id: str,
+    as_of_iso: str,
+) -> list[dict[str, Any]]:
+    """Return content-free interval conflicts for a visible coordination record."""
+
+    current = get_coordination_record(
+        conn, session, coordination_id=coordination_id, as_of_iso=as_of_iso
+    )
+    if current is None or current["effective_status"] in {"revoked", "expired"}:
+        return []
+    row = conn.execute(
+        "SELECT start_at, end_at, resource_id FROM coordination_records "
+        "WHERE tenant_id=? AND coordination_id=?",
+        (session.tenant_id, coordination_id),
+    ).fetchone()
+    if row is None or not row["start_at"] or not row["end_at"]:
+        return []
+    member_id = _coordination_member_id(session)
+    candidates = conn.execute(
+        """
+        SELECT DISTINCT r.coordination_id, r.start_at, r.end_at, r.resource_id,
+                        r.expires_at, r.revoked_at
+          FROM coordination_records r
+          JOIN coordination_participants p
+            ON p.tenant_id=r.tenant_id AND p.coordination_id=r.coordination_id
+         WHERE r.tenant_id=? AND r.coordination_id<>?
+           AND r.start_at IS NOT NULL AND r.end_at IS NOT NULL
+           AND datetime(r.start_at) < datetime(?)
+           AND datetime(r.end_at) > datetime(?)
+           AND (p.member_id=? OR (r.resource_id IS NOT NULL AND r.resource_id=?))
+        """,
+        (
+            session.tenant_id,
+            coordination_id,
+            row["end_at"],
+            row["start_at"],
+            member_id,
+            row["resource_id"],
+        ),
+    ).fetchall()
+    as_of = _as_utc(as_of_iso)
+    conflicts: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if candidate["revoked_at"]:
+            continue
+        if candidate["expires_at"] and _as_utc(str(candidate["expires_at"])) <= as_of:
+            continue
+        conflicts.append(
+            {
+                "coordination_id": str(candidate["coordination_id"]),
+                "start_at": str(candidate["start_at"]),
+                "end_at": str(candidate["end_at"]),
+                "availability": "busy",
+                "resource_conflict": bool(
+                    row["resource_id"]
+                    and row["resource_id"] == candidate["resource_id"]
+                ),
+            }
+        )
+    conflicts.sort(key=lambda item: (item["start_at"], item["coordination_id"]))
+    return conflicts

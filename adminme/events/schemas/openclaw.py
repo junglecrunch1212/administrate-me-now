@@ -121,7 +121,13 @@ class OpenClawToolCallRecordedV2(BaseModel):
     approving_member_ids: list[str] = Field(default_factory=list)
     approval_quorum: Literal["service_self", "member_owner", "all_adult_principals"]
     permissions: list[
-        Literal["read_context", "create_internal_work", "manage_internal_work"]
+        Literal[
+            "read_context",
+            "create_internal_work",
+            "manage_internal_work",
+            "manage_member_obligations",
+            "coordinate_household_work",
+        ]
     ] = Field(default_factory=list)
     openclaw_actor_id: str = Field(min_length=1)
     agent_id: str | None = None

@@ -15,7 +15,7 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 5
+    version = 6
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "task.created",
@@ -31,6 +31,17 @@ class TasksProjection(Projection):
         "list_item.completed",
         "list_item.uncompleted",
         "calendar.event_outcome_recorded",
+        "cos.work.state_changed",
+        "coordination.created",
+        "coordination.originator_receipt_recorded",
+        "coordination.handoff_proposed",
+        "coordination.handoff_decided",
+        "coordination.handoff_withdrawn",
+        "coordination.handoff_reassigned",
+        "coordination.waiting_set",
+        "coordination.waiting_cleared",
+        "coordination.conversation_linked",
+        "coordination.revoked",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -60,6 +71,43 @@ class TasksProjection(Projection):
             conn.execute("ALTER TABLE tasks ADD COLUMN responsible_party_id TEXT")
         if "beneficiary_party_id" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN beneficiary_party_id TEXT")
+        additions = {
+            "service_assignment_role": "TEXT",
+            "service_party_id": "TEXT",
+            "authority_grant_id": "TEXT",
+            "on_behalf_of_member_id": "TEXT",
+            "delegated_by_member_id": "TEXT",
+            "service_work_type": "TEXT",
+            "coordination_id": "TEXT",
+            "source_event_id": "TEXT",
+            "source_invocation_id": "TEXT",
+            "scheduled_start_at": "TEXT",
+            "scheduled_end_at": "TEXT",
+            "follow_up_at": "TEXT",
+            "waiting_on_party_id": "TEXT",
+            "waiting_on_member_id": "TEXT",
+            "provider_representation_owner_kind": "TEXT NOT NULL DEFAULT 'none'",
+            "provider_representation_owner_principal_id": "TEXT",
+            "provider_id": "TEXT",
+            "provider_account_reference": "TEXT",
+            "provider_workspace_reference": "TEXT",
+            "provider_external_reference_digest": "TEXT",
+            "completed_by_party_id": "TEXT",
+            "lifecycle_actor_principal_id": "TEXT",
+            "lifecycle_actor_party_id": "TEXT",
+            "lifecycle_authority_grant_id": "TEXT",
+        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+        for name, declaration in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
+        coordination_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(coordination_records)")
+        }
+        if coordination_columns and "handoff_expires_at" not in coordination_columns:
+            conn.execute(
+                "ALTER TABLE coordination_records ADD COLUMN handoff_expires_at TEXT"
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_available "
             "ON tasks(tenant_id, available_from)"
@@ -67,6 +115,14 @@ class TasksProjection(Projection):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_owner_party "
             "ON tasks(tenant_id, owner_party_id, work_kind)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_service_work "
+            "ON tasks(tenant_id, service_party_id, beneficiary_party_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_coordination "
+            "ON tasks(tenant_id, coordination_id)"
         )
 
 

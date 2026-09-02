@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -120,6 +120,210 @@ class TaskCreatedV2(TaskCreatedV1):
                 raise ValueError("service work requires explicit Party ownership")
         elif self.owner_member_id or not self.owner_party_id:
             raise ValueError("household work requires a Party owner")
+        return self
+
+
+class TaskCreatedV3(TaskCreatedV2):
+    """Orthogonal CoS assignment, provenance, schedule, and representation axes."""
+
+    service_assignment_role: Literal[
+        "manages_member_obligation",
+        "manages_household_obligation",
+        "delegatee",
+        "internal",
+    ]
+    service_party_id: str = Field(min_length=1)
+    authority_grant_id: str = Field(min_length=1)
+    on_behalf_of_member_id: str | None = Field(default=None, min_length=1)
+    delegated_by_member_id: str | None = Field(default=None, min_length=1)
+    service_work_type: Literal[
+        "operational_task",
+        "waiting_for",
+        "follow_up",
+        "clarification",
+        "exception",
+        "preparation",
+        "held_action",
+        "provider_failure",
+        "reconciliation",
+        "operational_calendar",
+        "reminder_like",
+    ]
+    linked_item_kind: (
+        Literal[
+            "task",
+            "commitment",
+            "calendar_event",
+            "list_item",
+            "provider_failure",
+            "coordination",
+        ]
+        | None
+    ) = None
+    linked_item_id: str | None = Field(default=None, min_length=1)
+    recurring_id: str | None = Field(default=None, min_length=1)
+    scheduled_start_at: AwareDatetime | None = None
+    scheduled_end_at: AwareDatetime | None = None
+    follow_up_at: AwareDatetime | None = None
+    waiting_on_party_id: str | None = Field(default=None, min_length=1)
+    coordination_id: str | None = Field(default=None, min_length=1)
+    source_event_id: str | None = Field(default=None, min_length=1)
+    source_invocation_id: str | None = Field(default=None, min_length=1)
+    provider_representation_owner_kind: Literal["none", "member", "service"] = "none"
+    provider_representation_owner_principal_id: str | None = Field(
+        default=None, min_length=1
+    )
+    provider_id: str | None = Field(default=None, min_length=1)
+    provider_account_reference: str | None = Field(default=None, min_length=1)
+    provider_workspace_reference: str | None = Field(default=None, min_length=1)
+    provider_external_reference_digest: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    provider_effect_count: Literal[0] = 0
+
+    @model_validator(mode="after")
+    def validate_service_assignment(self) -> TaskCreatedV3:
+        service = self.service_party_id
+        if self.responsible_party_id != service or self.assignee_party_id != service:
+            raise ValueError("CoS assignment requires the exact service Party")
+        if self.service_assignment_role == "manages_member_obligation":
+            if (
+                self.work_kind != "member_obligation"
+                or not self.owner_member_id
+                or self.on_behalf_of_member_id != self.owner_member_id
+            ):
+                raise ValueError("managed member obligation retains its member owner")
+        elif self.service_assignment_role == "manages_household_obligation":
+            if self.work_kind != "household_work" or not self.owner_party_id:
+                raise ValueError(
+                    "managed household obligation retains household ownership"
+                )
+            if self.on_behalf_of_member_id is not None:
+                raise ValueError("household obligation cannot impersonate a member")
+        else:
+            if (
+                self.work_kind != "service_operational"
+                or self.owner_party_id != service
+            ):
+                raise ValueError("delegated/internal CoS work is service-owned")
+            if self.service_assignment_role == "delegatee":
+                if not self.delegated_by_member_id or not self.on_behalf_of_member_id:
+                    raise ValueError("delegated CoS work requires member provenance")
+            elif self.delegated_by_member_id is not None:
+                raise ValueError("CoS-internal work is not member-delegated")
+        if (self.linked_item_kind is None) != (self.linked_item_id is None):
+            raise ValueError("linked item kind and id must be supplied together")
+        if (self.scheduled_start_at is None) != (self.scheduled_end_at is None):
+            raise ValueError("scheduled work requires both start and end")
+        if (
+            self.scheduled_start_at is not None
+            and self.scheduled_end_at is not None
+            and self.scheduled_end_at <= self.scheduled_start_at
+        ):
+            raise ValueError("scheduled work must end after it starts")
+        representation_fields = (
+            self.provider_representation_owner_principal_id,
+            self.provider_id,
+            self.provider_account_reference,
+            self.provider_workspace_reference,
+            self.provider_external_reference_digest,
+        )
+        if self.provider_representation_owner_kind == "none":
+            if any(representation_fields):
+                raise ValueError("unrepresented work cannot carry provider coordinates")
+        elif not all(representation_fields[:3]):
+            raise ValueError("provider representation requires owner/provider/account")
+        if (
+            self.provider_representation_owner_kind == "member"
+            and self.provider_representation_owner_principal_id
+            != self.on_behalf_of_member_id
+        ):
+            raise ValueError("member provider representation requires the exact member")
+        return self
+
+
+class CoSWorkStateChangedV1(BaseModel):
+    """Service-authored lifecycle without fabricating a human member actor."""
+
+    model_config = {"extra": "forbid"}
+
+    task_id: str = Field(min_length=1)
+    action: Literal[
+        "start",
+        "wait_on_member",
+        "wait_on_other",
+        "follow_up",
+        "hold",
+        "resume",
+        "complete",
+        "cancel",
+    ]
+    resulting_status: Literal[
+        "next", "in_progress", "waiting_on", "deferred", "done", "cancelled"
+    ]
+    changed_at: AwareDatetime
+    actor_service_principal_id: str = Field(min_length=1)
+    actor_service_party_id: str = Field(min_length=1)
+    operator_principal_id: str = Field(min_length=1)
+    authority_grant_id: str = Field(min_length=1)
+    active_member_id: str | None = Field(default=None, min_length=1)
+    on_behalf_of_member_id: str | None = Field(default=None, min_length=1)
+    waiting_on_party_id: str | None = Field(default=None, min_length=1)
+    waiting_on_member_id: str | None = Field(default=None, min_length=1)
+    follow_up_at: AwareDatetime | None = None
+    reason_code: Literal[
+        "member_input",
+        "external_dependency",
+        "clarification",
+        "provider_failure",
+        "reconciliation",
+        "scheduled_hold",
+        "completed",
+        "cancelled",
+        "other",
+    ]
+    expected_last_event_id: str = Field(min_length=1)
+    provider_effect_count: Literal[0] = 0
+
+    @model_validator(mode="after")
+    def validate_transition(self) -> CoSWorkStateChangedV1:
+        if (self.active_member_id is None) != (self.on_behalf_of_member_id is None):
+            raise ValueError("active and on-behalf-of member must travel together")
+        if self.active_member_id != self.on_behalf_of_member_id:
+            raise ValueError("active and on-behalf-of member must agree")
+        expected_status = {
+            "start": "in_progress",
+            "wait_on_member": "waiting_on",
+            "wait_on_other": "waiting_on",
+            "follow_up": "deferred",
+            "hold": "deferred",
+            "resume": "next",
+            "complete": "done",
+            "cancel": "cancelled",
+        }[self.action]
+        if self.resulting_status != expected_status:
+            raise ValueError("CoS work action has an invalid resulting status")
+        if self.action == "wait_on_member":
+            if not self.waiting_on_member_id or self.waiting_on_party_id:
+                raise ValueError("member wait requires exactly one member dependency")
+        elif self.action == "wait_on_other":
+            if not self.waiting_on_party_id or self.waiting_on_member_id:
+                raise ValueError("external wait requires exactly one Party dependency")
+        elif self.action in {"follow_up", "hold"}:
+            if self.follow_up_at is None:
+                raise ValueError("follow-up/hold requires a future activation")
+            if self.waiting_on_member_id or self.waiting_on_party_id:
+                raise ValueError("follow-up/hold cannot name a waiting dependency")
+        elif (
+            self.waiting_on_member_id
+            or self.waiting_on_party_id
+            or self.follow_up_at is not None
+        ):
+            raise ValueError(
+                "this action cannot carry waiting or follow-up coordinates"
+            )
+        if self.follow_up_at is not None and self.follow_up_at <= self.changed_at:
+            raise ValueError("follow-up activation must be after the state change")
         return self
 
 
@@ -493,6 +697,8 @@ registry.register("commitment.delegated", 1, CommitmentDelegatedV1)
 registry.register("commitment.expired", 1, CommitmentExpiredV1)
 registry.register("task.created", 1, TaskCreatedV1)
 registry.register("task.created", 2, TaskCreatedV2)
+registry.register("task.created", 3, TaskCreatedV3)
+registry.register("cos.work.state_changed", 1, CoSWorkStateChangedV1)
 registry.register("task.completed", 1, TaskCompletedV1)
 registry.register("task.deferred", 1, TaskDeferredV1)
 registry.register("task.snoozed", 1, TaskSnoozedV1)

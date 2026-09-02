@@ -136,7 +136,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(10);
+    expect([...runtime.tools]).toHaveLength(12);
     expect([...runtime.commands]).toHaveLength(8);
     expect([...runtime.gateways]).toHaveLength(14);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
@@ -220,7 +220,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(10);
+    expect([...runtime.tools]).toHaveLength(12);
     expect(runtime.services).toHaveLength(0);
   });
 
@@ -250,6 +250,47 @@ describe("native OpenClaw contract fixture", () => {
     });
     expect(JSON.stringify(body)).not.toContain("fixture-secret");
     expect(result.details).toEqual({ state: "pending_review", intent_event_id: "evt-1" });
+  });
+
+  it("routes typed CoS work creation and lifecycle through the native plugin seam", async () => {
+    const runtime = fakeApi();
+    const createFactory = runtime.tools.get("administrateme_service_work");
+    const createTool = createFactory?.(toolContext()) as AnyAgentTool;
+    await createTool.execute("work-call", {
+      request_id: "fixture-work-request",
+      service_assignment_role: "internal",
+      service_work_type: "reconciliation",
+      title: "Prepare fixture reconciliation",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/service-work",
+    );
+    expect(requestBody(fetchMock)).toMatchObject({
+      request_id: "fixture-work-request",
+      service_assignment_role: "internal",
+      service_work_type: "reconciliation",
+    });
+
+    const stateFactory = runtime.tools.get("administrateme_service_work_state");
+    const stateTool = stateFactory?.(toolContext()) as AnyAgentTool;
+    await stateTool.execute("state-call", {
+      task_id: "cos-task:fixture/value",
+      request_id: "fixture-state-request",
+      expected_last_event_id: "ev_fixture",
+      action: "complete",
+      reason_code: "completed",
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/service-work/cos-task%3Afixture%2Fvalue/state",
+    );
+    const stateBody = requestBody(fetchMock, 1);
+    expect(stateBody.task_id).toBeUndefined();
+    expect(stateBody).toMatchObject({
+      request_id: "fixture-state-request",
+      expected_last_event_id: "ev_fixture",
+      action: "complete",
+      reason_code: "completed",
+    });
   });
 
   it("derives member-portal tool authority only from a valid signed isolated session", async () => {
