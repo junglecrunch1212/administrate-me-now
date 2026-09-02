@@ -6239,7 +6239,10 @@ async def request_settings_bridge(
     if role is None or role in {"device", "ambient"}:
         raise HTTPException(422, "bridge target must be an enrolled household member")
     if body.member_id != session.auth_member_id:
-        raise HTTPException(403, "an adult must enroll their own private bridge")
+        if session.auth_role != "principal" or role != "child":
+            raise HTTPException(403, "an adult must enroll their own private bridge")
+    if role == "child" and "obsidian" in body.capabilities:
+        raise HTTPException(403, "Obsidian is unavailable on a child bridge")
     lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
     fingerprint = _settings_request_fingerprint(
         "settings.bridge_enrollment_started",

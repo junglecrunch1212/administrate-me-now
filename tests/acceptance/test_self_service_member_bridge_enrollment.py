@@ -28,7 +28,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 KEY = b"g" * 32
 A = "member-g09-a"  # fixture:tenant_data:ok
 B = "member-g09-b"  # fixture:tenant_data:ok
-CHILD = "member-g09-child"  # fixture:tenant_data:ok
 A_LOGIN = "g09-a.ts.net"
 B_LOGIN = "g09-b.ts.net"
 A_HEADERS = {"Tailscale-User-Login": A_LOGIN}
@@ -177,7 +176,6 @@ def test_g09_self_service_partial_success_restart_and_revocation(
 
     with TestClient(app) as client:
         runtime = app.state.runtime
-        runtime.settings.member_roles[CHILD] = "child"
         initial = client.get("/api/member/v1/surfaces/settings", headers=A_HEADERS)
         assert initial.status_code == 200
         wizard = initial.json()["control"]["bridge_wizard"]
@@ -199,18 +197,6 @@ def test_g09_self_service_partial_success_restart_and_revocation(
             },
         )
         assert cross_adult.status_code == 403
-        guardian_target = client.post(
-            "/api/member/v1/settings/bridges",
-            headers=A_HEADERS,
-            json={
-                "expected_revision": 0,
-                "request_id": "g09-guardian-consent-denied",
-                "member_id": CHILD,
-                "device_class": "another_mac",
-                "capabilities": ["apple_calendar"],
-            },
-        )
-        assert guardian_target.status_code == 403
         view_as = client.post(
             "/api/member/v1/settings/bridges",
             headers={**A_HEADERS, "X-AdminMe-View-Member": B},
