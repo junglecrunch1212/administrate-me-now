@@ -15,7 +15,7 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 6
+    version = 7
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "task.created",
@@ -42,6 +42,18 @@ class TasksProjection(Projection):
         "coordination.waiting_cleared",
         "coordination.conversation_linked",
         "coordination.revoked",
+        "cos.execution_envelope.granted",
+        "cos.execution_envelope.revoked",
+        "cos.delegated_action.prepared",
+        "cos.delegated_action.domain_approved",
+        "cos.delegated_action.dispatch_authorized",
+        "external_sync.write_requested",
+        "external_sync.write_completed",
+        "external_sync.write_failed",
+        "cos.delegated_action.observed",
+        "cos.delegated_action.canonical_outcome_returned",
+        "cos.delegated_action.reconciled",
+        "cos.delegated_action.withdrawn",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

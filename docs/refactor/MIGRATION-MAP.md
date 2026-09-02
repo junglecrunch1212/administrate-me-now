@@ -1,5 +1,22 @@
 # Migration map
 
+G07 delegated execution and reconciliation update (2026-09-02): no projection
+is added and the governed count remains fifteen. Tasks advances additively from
+v6 to v7 with separate standing-envelope, desired-action, approval, command,
+result, observation, reconciliation, and state-history tables. New
+`cos.execution_envelope.*@v1` and `cos.delegated_action.*@v1` events bind exact
+domain lineage around the retained `external_sync@v2` command/result spine.
+Rebuild preserves recurrence occurrence/series identity, approvals,
+idempotency, result uncertainty, later observation, drift/conflict, and
+canonical Task completion/reopening. Older code may ignore the additive event
+family. Rollback selects the protected G06/CO-024 predecessor and rebuilds the
+disposable Tasks projection; no immutable event, source fact, member decision,
+provider object, credential, provider configuration, or checkpoint is
+rewritten. G07 enables only credential-free in-memory fixture effects. Live
+writes, provider/bridge enrollment, scope/credential/permission change,
+deployment, and runtime migration remain separate owner-authorized Phase B
+decisions.
+
 G06 CoS work, coordination, and operating-agreement update (2026-09-01): no
 projection is added and the governed count remains fifteen. Tasks advances
 additively from v5 to v6 with orthogonal service assignment/provenance fields,

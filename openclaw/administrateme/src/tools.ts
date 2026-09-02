@@ -39,6 +39,60 @@ const ServiceWorkType = Type.Union([
   Type.Literal("operational_calendar"),
   Type.Literal("reminder_like"),
 ]);
+const DelegatedActionClass = Type.Union([
+  Type.Literal("google_calendar_create"),
+  Type.Literal("google_calendar_update"),
+  Type.Literal("google_calendar_move"),
+  Type.Literal("google_calendar_withdraw"),
+  Type.Literal("google_calendar_recurrence"),
+  Type.Literal("google_tasks_create"),
+  Type.Literal("google_tasks_update"),
+  Type.Literal("google_tasks_complete"),
+  Type.Literal("google_tasks_reopen"),
+  Type.Literal("google_tasks_withdraw"),
+  Type.Literal("google_tasks_list_create"),
+  Type.Literal("google_tasks_list_update"),
+  Type.Literal("google_tasks_list_withdraw"),
+  Type.Literal("google_tasks_reminder_create"),
+  Type.Literal("google_tasks_reminder_update"),
+  Type.Literal("google_tasks_reminder_complete"),
+  Type.Literal("google_tasks_reminder_reopen"),
+  Type.Literal("google_tasks_reminder_withdraw"),
+  Type.Literal("apple_calendar_create"),
+  Type.Literal("apple_calendar_update"),
+  Type.Literal("apple_calendar_move"),
+  Type.Literal("apple_calendar_withdraw"),
+  Type.Literal("apple_calendar_recurrence"),
+  Type.Literal("apple_reminders_create"),
+  Type.Literal("apple_reminders_update"),
+  Type.Literal("apple_reminders_complete"),
+  Type.Literal("apple_reminders_reopen"),
+  Type.Literal("apple_reminders_withdraw"),
+  Type.Literal("communication_draft"),
+  Type.Literal("communication_hold"),
+]);
+const DelegatedRiskClass = Type.Union([
+  Type.Literal("ordinary"),
+  Type.Literal("money"),
+  Type.Literal("nonrefundable_travel"),
+  Type.Literal("legal_signature"),
+  Type.Literal("clinical_decision"),
+  Type.Literal("child_consent"),
+  Type.Literal("life_safety_system"),
+  Type.Literal("public_statement"),
+  Type.Literal("another_adult_source"),
+  Type.Literal("infrastructure_administration"),
+]);
+const RecurrenceStrategy = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("provider_series"),
+  Type.Literal("individual_occurrence"),
+]);
+const RepresentationKind = Type.Union([
+  Type.Literal("provider_object"),
+  Type.Literal("cos_operational"),
+  Type.Literal("member_delegated"),
+]);
 
 function makeTool(
   context: OpenClawPluginToolContext,
@@ -278,6 +332,98 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: (params: Record<string, unknown>) =>
         `/api/openclaw/v1/tools/service-work/${encodeURIComponent(String(params.task_id))}/state`,
       pathParam: "task_id",
+    },
+    {
+      name: "administrateme_prepare_delegated_action",
+      description:
+        "Prepare or hold one exact fixture-only provider representation under the active CoS grant.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          action_class: DelegatedActionClass,
+          canonical_object_kind: Type.String({ minLength: 1, maxLength: 80 }),
+          canonical_object_id: Type.String({ minLength: 1, maxLength: 240 }),
+          occurrence_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+          series_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+          recurrence_strategy: Type.Optional(RecurrenceStrategy),
+          coordination_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+          desired_representation_id: Type.String({ minLength: 1, maxLength: 240 }),
+          operator_kind: Type.Optional(
+            Type.Union([
+              Type.Literal("openclaw_automation"),
+              Type.Literal("simulated_human"),
+            ]),
+          ),
+          provider_account_id: Type.String({ minLength: 1, maxLength: 500 }),
+          provider_account_owner_principal_id: Type.String({ minLength: 1, maxLength: 200 }),
+          destination_id: Type.String({ minLength: 1, maxLength: 500 }),
+          audience_ids: Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+            minItems: 1,
+            maxItems: 20,
+          }),
+          representation_kind: Type.Optional(RepresentationKind),
+          target_external_id: Type.Optional(Type.String({ maxLength: 500 })),
+          expected_provider_revision: Type.Optional(Type.String({ maxLength: 500 })),
+          desired_payload: Type.Record(Type.String(), Type.Unknown()),
+          fact_event_ids: Type.Array(Type.String({ minLength: 1, maxLength: 240 }), {
+            minItems: 1,
+            maxItems: 100,
+          }),
+          facts_observed_at: Type.String({ minLength: 1 }),
+          facts_valid_until: Type.String({ minLength: 1 }),
+          risk_class: Type.Optional(DelegatedRiskClass),
+          execution_mode: Type.Optional(
+            Type.Union([
+              Type.Literal("execute"),
+              Type.Literal("desired_only"),
+              Type.Literal("shadow"),
+            ]),
+          ),
+          expires_at: Type.String({ minLength: 1 }),
+          expected_policy_digest: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/delegated-actions/prepare",
+    },
+    {
+      name: "administrateme_execute_delegated_action",
+      description:
+        "Execute one exact domain-approved fixture action after a separate OpenClaw allow-once approval.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          action_id: Type.String({ minLength: 1, maxLength: 240 }),
+          expected_last_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+          expected_action_fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+          expected_policy_digest: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+          operator_kind: Type.Optional(
+            Type.Union([
+              Type.Literal("openclaw_automation"),
+              Type.Literal("simulated_human"),
+            ]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/delegated-actions/execute",
+    },
+    {
+      name: "administrateme_observe_delegated_action",
+      description:
+        "Record a later fixture-provider observation and reconcile it to the exact desired representation.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          action_id: Type.String({ minLength: 1, maxLength: 240 }),
+          expected_last_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/delegated-actions/observe",
     },
     {
       name: "administrateme_execute_pending_provider_action",

@@ -20,6 +20,8 @@ DelegationPermission = Literal[
     "manage_internal_work",
     "manage_member_obligations",
     "coordinate_household_work",
+    "prepare_external_actions",
+    "execute_fixture_actions",
 ]
 ApprovalQuorum = Literal["member_owner", "all_adult_principals"]
 

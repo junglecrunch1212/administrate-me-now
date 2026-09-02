@@ -127,6 +127,8 @@ class OpenClawToolCallRecordedV2(BaseModel):
             "manage_internal_work",
             "manage_member_obligations",
             "coordinate_household_work",
+            "prepare_external_actions",
+            "execute_fixture_actions",
         ]
     ] = Field(default_factory=list)
     openclaw_actor_id: str = Field(min_length=1)

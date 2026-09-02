@@ -395,6 +395,8 @@ class GuardedWrite:
         session: "Session",
         action: str,
         payload: dict[str, Any],
+        *,
+        domain_governance: tuple[bool, str] | None = None,
     ) -> GuardedWriteResult:
         agent_id = derive_agent_id(session)
         correlation = session.correlation_id or _correlation_id()
@@ -468,6 +470,28 @@ class GuardedWrite:
                 layer_failed="governance",
                 reason="held_for_review",
                 review_id=review_id,
+                correlation_id=correlation,
+            )
+
+        # Optional domain authorization is evaluated after the tenant-neutral
+        # governance rule and before the rate limiter.  This keeps the required
+        # allowlist -> domain governance -> rate-limit ordering without making
+        # generic GuardedWrite understand household object semantics.
+        if domain_governance is not None and not domain_governance[0]:
+            reason = domain_governance[1]
+            await self._emit_denied(
+                session,
+                agent_id=agent_id,
+                action=action,
+                payload=payload,
+                layer="governance",
+                reason=reason,
+                correlation=correlation,
+            )
+            return GuardedWriteResult(
+                pass_=False,
+                layer_failed="governance",
+                reason=reason,
                 correlation_id=correlation,
             )
 
