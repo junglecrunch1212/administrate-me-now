@@ -102,6 +102,7 @@ from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.reconciliation import ReconciliationAdmissionEvaluator
 from adminme.settings_control import SettingsControlStore
+from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from adminme.source_policy import source_policy_event_types
 from adminme.source_policy_shadow import SourcePolicyShadowEvaluator
 from adminme.source_assurance import audit_source_assurance
@@ -259,6 +260,7 @@ class RuntimeSettings:
             "package-created-not-live",
             "package-exported",
             "active",
+            "paused",
             "revoked",
         }
         if not all(
@@ -696,6 +698,15 @@ class AdministrateMeRuntime:
         self.settings_control = SettingsControlStore(
             settings.instance.config_dir / "settings-control.json"
         )
+        self.bridge_enrollment = BridgeEnrollmentCoordinator(
+            instance_dir=settings.instance.instance_dir,
+            encryption_key=settings.encryption_key,
+            repository_root=settings.repository_root,
+            tenant_id=settings.instance.tenant_id,
+            member_identities=settings.member_identities,
+            member_roles=settings.member_roles,
+            bridge_enrollments=settings.bridge_enrollments,
+        )
         self.source_policy_shadow: SourcePolicyShadowEvaluator | None = None
         self.reconciliation_admission: ReconciliationAdmissionEvaluator | None = None
         self.temporary_surfaces = TemporarySurfaceStore(
@@ -739,6 +750,7 @@ class AdministrateMeRuntime:
             )
             await self.settings_control.replay_source_policy_v2_events(self.event_log)
             await self.settings_control.replay_capability_request_events(self.event_log)
+            await self.settings_control.replay_bridge_enrollment_events(self.event_log)
             self.source_policy_shadow = SourcePolicyShadowEvaluator(
                 self.events,
                 self.settings_control,

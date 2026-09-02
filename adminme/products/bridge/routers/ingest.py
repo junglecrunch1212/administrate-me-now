@@ -14,9 +14,10 @@ one code path.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 import time
 
@@ -31,10 +32,20 @@ from adminme.bridge_authorization import (
     configuration_from_record,
     provider_capability_summary,
 )
+from adminme.bridge_enrollment import (
+    CAPABILITIES,
+    CAPABILITY_STATES,
+    ENROLLMENT_STATES,
+    BridgeEnrollmentError,
+    canonical_bytes,
+    validate_capability_transition,
+    validate_enrollment_transition,
+)
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import AppendValidationError
 from adminme.events.writer import EventSink
 from adminme.products.bridge.auth import (
+    EnrollmentMemberIdResolver,
     MemberIdResolver,
     resolve_member_id,
     resolve_tailscale_identity,
@@ -48,6 +59,33 @@ ENROLLMENT_HEADER = "X-AdministrateMe-Bridge-Enrollment"
 class BatchIngestRequest(BaseModel):
     model_config = {"extra": "forbid"}
     envelopes: list[dict[str, Any]] = Field(min_length=1)
+
+
+class EnrollmentProgressRequest(BaseModel):
+    """Signed content-free progress from the reviewed target-Mac helper."""
+
+    model_config = {"extra": "forbid"}
+
+    contract: Literal["administrateme-member-bridge-progress-v1"]
+    request_id: str = Field(min_length=8, max_length=120)
+    enrollment_id: str = Field(min_length=1, max_length=160)
+    member_id: str = Field(min_length=1, max_length=240)
+    instance_id: str = Field(min_length=1, max_length=240)
+    release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    capability_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    previous_state: str
+    state: str
+    nonce: str = Field(min_length=16, max_length=160)
+    reported_at: str = Field(min_length=1, max_length=80)
+    device_node_id: str = Field(min_length=1, max_length=240)
+    enrollment_event_id: str | None = Field(default=None, max_length=240)
+    capability_id: str | None = Field(default=None, max_length=80)
+    capability_state: str | None = Field(default=None, max_length=80)
+    reason: str | None = Field(default=None, max_length=240)
+    last_successful_observation: str | None = Field(default=None, max_length=80)
+    pack_config: dict[str, Any] | None = None
+    capability_event_id: str | None = Field(default=None, max_length=240)
+    signature: str = Field(min_length=40, max_length=120)
 
 
 def _get_event_sink(request: Request) -> EventSink:
@@ -532,6 +570,151 @@ async def _enforce_active_bridge_contract(
     return _promote_reviewed_sharing(envelope, authorization, policy)
 
 
+def _capability_for_observation(envelope: EventEnvelope) -> str | None:
+    if envelope.type in {
+        "adapter.authenticated",
+        "adapter.error",
+        "external_sync.write_completed",
+        "external_sync.write_failed",
+    }:
+        return None
+    matches = [
+        capability_id
+        for capability_id, descriptor in CAPABILITIES.items()
+        if descriptor.get("implementation") == "available"
+        and BRIDGE_PACK_POLICIES[str(descriptor["pack"])].source_adapter
+        == envelope.source_adapter
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+async def _settle_bridge_capability_from_observation(
+    request: Request,
+    *,
+    tailscale_identity: str,
+    member_id: str,
+    envelope: EventEnvelope,
+    observation_event_id: str,
+) -> None:
+    """Advance Settings from the first admitted source observation.
+
+    The central runtime has already authenticated, authorized, validated, and
+    durably appended this exact observation.  It can therefore settle the
+    corresponding capability without requiring a second device-side token or
+    leaking provider content into wizard state.
+    """
+
+    capability_id = _capability_for_observation(envelope)
+    runtime = getattr(request.app.state, "runtime", None)
+    if capability_id is None or runtime is None or runtime.events is None:
+        return
+    record = _bridge_record(request, tailscale_identity)
+    request_id = record.get("request_id")
+    enrollment_id = record.get("enrollment_id")
+    if not isinstance(request_id, str) or not isinstance(enrollment_id, str):
+        return
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        current = runtime.settings_control.bridge_request_for(member_id)
+        if (
+            not isinstance(current, dict)
+            or current.get("request_id") != request_id
+            or not isinstance(current.get("capability_states"), dict)
+        ):
+            return
+        capability_row = current["capability_states"].get(capability_id)
+        if (
+            not isinstance(capability_row, dict)
+            or capability_row.get("state") != "observing"
+        ):
+            return
+        evidence_sha256 = hashlib.sha256(
+            canonical_bytes(envelope.model_dump(mode="json"))
+        ).hexdigest()
+        for next_capability_state in ("settling", "settled"):
+            current = runtime.settings_control.bridge_request_for(member_id)
+            if not isinstance(current, dict):
+                return
+            previous_state = str(current["state"])
+            next_state = previous_state
+            if next_capability_state == "settling" and previous_state in {
+                "capabilities_testing",
+                "degraded",
+                "partially_active",
+            }:
+                next_state = "settling"
+            elif next_capability_state == "settled":
+                predicted = {
+                    key: str(value.get("state") or "")
+                    for key, value in current["capability_states"].items()
+                    if isinstance(value, dict)
+                }
+                predicted[capability_id] = "settled"
+                terminal_outcomes = {
+                    "settled",
+                    "permission_denied",
+                    "prerequisite_missing",
+                    "degraded",
+                    "unsupported",
+                    "revoked",
+                }
+                if predicted and set(predicted.values()) == {"settled"}:
+                    next_state = "active_observation"
+                elif (
+                    "settled" in predicted.values()
+                    and set(predicted.values()) <= terminal_outcomes
+                ):
+                    next_state = "partially_active"
+            revision = runtime.settings_control.prepare_bridge_progress(
+                member_id, request_id=request_id
+            )
+            progress_at = EventEnvelope.now_utc_iso()
+            payload = {
+                "request_id": request_id,
+                "enrollment_id": enrollment_id,
+                "member_id": member_id,
+                "previous_state": previous_state,
+                "state": next_state,
+                "revision": revision,
+                "progress_at": progress_at,
+                "reported_by": "central_runtime",
+                "signature_verified": False,
+                "device_identity_sha256": current.get("device_identity_sha256"),
+                "capability_id": capability_id,
+                "capability_state": next_capability_state,
+                "evidence_sha256": evidence_sha256,
+                "reason": None,
+                "last_successful_observation": (
+                    envelope.occurred_at if next_capability_state == "settled" else None
+                ),
+                "content_exposed": False,
+                "writes_authorized": False,
+                "provider_effects": False,
+            }
+            await runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=runtime.settings.instance.tenant_id,
+                    type="bridge.enrollment_progressed",
+                    schema_version=1,
+                    occurred_at=progress_at,
+                    source_adapter="member-bridge-enrollment-runtime",
+                    source_account_id=enrollment_id,
+                    owner_scope=f"private:{member_id}",
+                    visibility_scope=f"private:{member_id}",
+                    sensitivity="normal",
+                    actor_identity="service:member-bridge-ingest",
+                    idempotency_key=(
+                        f"bridge-observation:{request_id}:{capability_id}:"
+                        f"{observation_event_id}:{next_capability_state}"
+                    ),
+                    raw_ref=f"event:{observation_event_id}",
+                    payload=payload,
+                )
+            )
+            runtime.settings_control.apply_bridge_enrollment_event(payload)
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, str]:
     tailscale_identity = resolve_tailscale_identity(request)
@@ -555,6 +738,13 @@ async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, 
             detail={"error": "append_validation_failed", "message": str(exc)},
         ) from exc
     request.app.state.ingest_count += 1
+    await _settle_bridge_capability_from_observation(
+        request,
+        tailscale_identity=tailscale_identity,
+        member_id=member_id,
+        envelope=envelope,
+        observation_event_id=event_id,
+    )
     return {"event_id": event_id, "owner_scope": envelope.owner_scope}
 
 
@@ -598,7 +788,287 @@ async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, 
             detail={"error": "append_validation_failed", "message": str(exc)},
         ) from exc
     request.app.state.ingest_count += len(event_ids)
+    for envelope, event_id in zip(stamped, event_ids, strict=True):
+        await _settle_bridge_capability_from_observation(
+            request,
+            tailscale_identity=tailscale_identity,
+            member_id=member_id,
+            envelope=envelope,
+            observation_event_id=event_id,
+        )
     return {"event_ids": event_ids, "count": len(event_ids)}
+
+
+@router.post("/enrollment/progress", status_code=status.HTTP_202_ACCEPTED)
+async def enrollment_progress(
+    request: Request, body: EnrollmentProgressRequest
+) -> dict[str, Any]:
+    """Accept signed, replay-resistant, content-free target-helper progress."""
+
+    tailscale_identity = resolve_tailscale_identity(request)
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None or runtime.events is None or runtime.event_log is None:
+        raise HTTPException(503, detail="bridge_enrollment_runtime_unavailable")
+    if (
+        body.state not in ENROLLMENT_STATES
+        or body.previous_state not in ENROLLMENT_STATES
+    ):
+        raise HTTPException(422, detail="unknown_bridge_enrollment_state")
+    if (
+        body.capability_state is not None
+        and body.capability_state not in CAPABILITY_STATES
+    ):
+        raise HTTPException(422, detail="unknown_bridge_capability_state")
+    if (body.capability_id is None) != (body.capability_state is None):
+        raise HTTPException(422, detail="incomplete_bridge_capability_progress")
+    transport_record = _bridge_record(request, tailscale_identity)
+    if (
+        transport_record.get("request_id") != body.request_id
+        or transport_record.get("member_id") != body.member_id
+    ):
+        raise HTTPException(403, detail="bridge_progress_coordinate_mismatch")
+    wizard = runtime.settings_control.bridge_request_for(body.member_id)
+    if not isinstance(wizard, dict) or wizard.get("request_id") != body.request_id:
+        raise HTTPException(403, detail="bridge_wizard_missing_or_ambiguous")
+    if wizard.get("state") != body.previous_state:
+        raise HTTPException(409, detail="bridge_progress_previous_state_mismatch")
+    try:
+        if body.state != body.previous_state or body.capability_id is None:
+            validate_enrollment_transition(body.previous_state, body.state)
+        if body.capability_id is not None:
+            capability_rows = wizard.get("capability_states") or {}
+            capability_row = capability_rows.get(body.capability_id)
+            if not isinstance(capability_row, dict):
+                raise BridgeEnrollmentError(
+                    "capability_not_selected", "Capability was not selected"
+                )
+            validate_capability_transition(
+                str(capability_row.get("state") or ""),
+                str(body.capability_state or ""),
+            )
+    except BridgeEnrollmentError as exc:
+        raise HTTPException(
+            409, detail={"error": exc.code, "message": str(exc)}
+        ) from exc
+
+    unsigned = body.model_dump(mode="json", exclude={"signature"})
+    try:
+        runtime.bridge_enrollment.verify_progress(
+            request_id=body.request_id,
+            enrollment_id=body.enrollment_id,
+            member_id=body.member_id,
+            tailscale_identity=tailscale_identity,
+            payload=unsigned,
+            signature=body.signature,
+        )
+    except BridgeEnrollmentError as exc:
+        if exc.code == "expired":
+            try:
+                runtime.bridge_enrollment.expire(
+                    request_id=body.request_id, member_id=body.member_id
+                )
+            except BridgeEnrollmentError:
+                pass
+        code = (
+            status.HTTP_410_GONE if exc.code == "expired" else status.HTTP_403_FORBIDDEN
+        )
+        raise HTTPException(
+            code, detail={"error": exc.code, "message": str(exc)}
+        ) from exc
+
+    device_digest = hashlib.sha256(body.device_node_id.encode("utf-8")).hexdigest()
+    try:
+        runtime.bridge_enrollment.bind_device(
+            request_id=body.request_id,
+            member_id=body.member_id,
+            node_id=body.device_node_id,
+        )
+    except BridgeEnrollmentError as exc:
+        raise HTTPException(
+            403, detail={"error": exc.code, "message": str(exc)}
+        ) from exc
+
+    evidence_event: dict[str, Any] | None = None
+    evidence_sha256: str | None = None
+    if body.state == "bridge_paired":
+        if not body.enrollment_event_id:
+            raise HTTPException(422, detail="bridge_enrollment_event_required")
+        evidence_event = await runtime.event_log.get(body.enrollment_event_id)
+        payload = evidence_event.get("payload") if evidence_event else None
+        if (
+            not evidence_event
+            or evidence_event.get("type") != "bridge.enrolled"
+            or evidence_event.get("source_account_id") != body.enrollment_id
+            or evidence_event.get("owner_scope") != f"private:{body.member_id}"
+            or not isinstance(payload, dict)
+            or payload.get("member_id") != body.member_id
+            or payload.get("bridge_node_id") != body.device_node_id
+            or str(payload.get("tailscale_identity", "")).casefold()
+            != tailscale_identity.casefold()
+        ):
+            raise HTTPException(403, detail="bridge_enrollment_event_mismatch")
+        try:
+            runtime.bridge_enrollment.activate_transport(
+                request_id=body.request_id,
+                member_id=body.member_id,
+                bridge_node_id=body.device_node_id,
+                event_id=body.enrollment_event_id,
+            )
+        except BridgeEnrollmentError as exc:
+            raise HTTPException(
+                409, detail={"error": exc.code, "message": str(exc)}
+            ) from exc
+        resolver = EnrollmentMemberIdResolver(runtime.settings.bridge_enrollments)
+        runtime.member_id_resolver = resolver
+        request.app.state.member_id_resolver = resolver
+
+    if body.capability_id is not None:
+        capability = CAPABILITIES.get(body.capability_id)
+        if capability is None or capability.get("implementation") != "available":
+            raise HTTPException(422, detail="bridge_capability_unavailable")
+        if body.capability_state == "permission_verified":
+            if not isinstance(body.pack_config, dict):
+                raise HTTPException(422, detail="exact_source_coordinate_required")
+            try:
+                evidence_sha256 = runtime.bridge_enrollment.configure_capability(
+                    request_id=body.request_id,
+                    member_id=body.member_id,
+                    capability_id=body.capability_id,
+                    pack_config=body.pack_config,
+                )
+            except BridgeEnrollmentError as exc:
+                raise HTTPException(
+                    422, detail={"error": exc.code, "message": str(exc)}
+                ) from exc
+        elif body.pack_config is not None:
+            raise HTTPException(422, detail="source_coordinate_not_expected")
+        if body.capability_state == "adapter_authenticated":
+            if body.capability_event_id:
+                evidence_event = await runtime.event_log.get(body.capability_event_id)
+                if evidence_event is not None:
+                    evidence_sha256 = hashlib.sha256(
+                        canonical_bytes(evidence_event)
+                    ).hexdigest()
+            try:
+                runtime.bridge_enrollment.attest_capability(
+                    request_id=body.request_id,
+                    member_id=body.member_id,
+                    capability_id=body.capability_id,
+                    evidence_event=evidence_event,
+                )
+            except BridgeEnrollmentError as exc:
+                raise HTTPException(
+                    409, detail={"error": exc.code, "message": str(exc)}
+                ) from exc
+        if body.capability_state == "observation_starting":
+            try:
+                runtime.bridge_enrollment.mark_observation_started(
+                    request_id=body.request_id,
+                    member_id=body.member_id,
+                    capability_id=body.capability_id,
+                )
+            except BridgeEnrollmentError as exc:
+                raise HTTPException(
+                    409, detail={"error": exc.code, "message": str(exc)}
+                ) from exc
+        if body.capability_state == "settled":
+            if not body.capability_event_id or not body.last_successful_observation:
+                raise HTTPException(
+                    422, detail="settlement_observation_evidence_required"
+                )
+            observed = await runtime.event_log.get(body.capability_event_id)
+            policy = BRIDGE_PACK_POLICIES[str(capability["pack"])]
+            if (
+                observed is None
+                or observed.get("source_adapter") != policy.source_adapter
+                or observed.get("owner_scope") != f"private:{body.member_id}"
+            ):
+                raise HTTPException(
+                    403, detail="settlement_observation_evidence_mismatch"
+                )
+            evidence_sha256 = hashlib.sha256(canonical_bytes(observed)).hexdigest()
+
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        try:
+            revision = runtime.settings_control.prepare_bridge_progress(
+                body.member_id, request_id=body.request_id
+            )
+        except ValueError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        progress_at = EventEnvelope.now_utc_iso()
+        event_payload = {
+            "request_id": body.request_id,
+            "enrollment_id": body.enrollment_id,
+            "member_id": body.member_id,
+            "previous_state": body.previous_state,
+            "state": body.state,
+            "revision": revision,
+            "progress_at": progress_at,
+            "reported_by": "target_helper",
+            "signature_verified": True,
+            "device_identity_sha256": device_digest,
+            "capability_id": body.capability_id,
+            "capability_state": body.capability_state,
+            "evidence_sha256": evidence_sha256,
+            "reason": body.reason,
+            "last_successful_observation": body.last_successful_observation,
+            "content_exposed": False,
+            "writes_authorized": False,
+            "provider_effects": False,
+        }
+        nonce_digest = hashlib.sha256(body.nonce.encode("utf-8")).hexdigest()
+        event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="bridge.enrollment_progressed",
+                schema_version=1,
+                occurred_at=progress_at,
+                source_adapter="member-bridge-enrollment-helper",
+                source_account_id=body.enrollment_id,
+                owner_scope=f"private:{body.member_id}",
+                visibility_scope=f"private:{body.member_id}",
+                sensitivity="normal",
+                actor_identity=f"bridge-device:{device_digest}",
+                idempotency_key=f"bridge-progress:{body.request_id}:{nonce_digest}",
+                raw_ref="signature-sha256:"
+                + hashlib.sha256(body.signature.encode("ascii")).hexdigest(),
+                payload=event_payload,
+            )
+        )
+        try:
+            mutation = runtime.settings_control.apply_bridge_enrollment_event(
+                event_payload
+            )
+        except ValueError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+    return {
+        "accepted": True,
+        "event_id": event_id,
+        "request_id": body.request_id,
+        "state": mutation.current["state"],
+        "capability_id": body.capability_id,
+        "capability_state": body.capability_state,
+        "central_attested": body.capability_state
+        in {
+            "adapter_authenticated",
+            "observation_starting",
+            "observing",
+            "settling",
+            "settled",
+        },
+        "may_start_connector": body.capability_state
+        in {
+            "adapter_authenticated",
+            "observation_starting",
+            "observing",
+            "settling",
+            "settled",
+        },
+        "content_exposed": False,
+        "provider_effect_count": 0,
+    }
 
 
 @router.get("/health")

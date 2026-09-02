@@ -35,6 +35,22 @@ unexpired `bridge.enrolled@v1` bootstrap proof bound to its member, enrollment
 ID, identity, private scopes, bootstrap adapter, and idempotency key. It cannot
 submit a batch or any ordinary fact. Ordinary ingest requires active status.
 
+CO-027 retains this transport and packages its target ceremony as the reviewed
+`.adminmebridge` document helper. The package is short-lived, encrypted, signed,
+and bound to instance, member, request, enrollment, Tailscale identity, device
+class, release commit, capability-set digest, and expiry. The helper verifies
+the embedded exact Git-archived release and installer checksum, accepts a code
+only through protected local input, obtains explicit member acceptance, and
+stores only a derived device proof key and secret-free receipt. Its native
+document workflow opens the relevant macOS Settings locations, records the
+member's grant or denial, selects local content-free source coordinates, tests
+locally, submits signed content-free evidence, and starts only a centrally
+attested connector. It has no updater, remote shell, arbitrary central-code
+path, TCC automation, browser/model credential exposure, or write authority.
+Target restart resumes from that receipt; revocation and uninstall remove only
+bridge-owned material. The first admitted observation settles the matching
+Settings capability centrally.
+
 ### Communication, service identity, and OpenClaw isolation
 
 Every enabled central provider account is bound explicitly to exactly one
@@ -157,6 +173,16 @@ permission and central capability attestation are later, separate operations;
 transport state never substitutes for them. OAuth grants and scope expansion
 remain provider-specific secure activation steps. No password, token, provider
 account, or secure-reference path is returned to browser Settings.
+
+CO-027 moves the existing bridge ceremony behind that member portal without
+moving its authority. Exact self-member Settings requests may prepare and
+download the established package, while the reviewed target helper performs
+local verification and acceptance. Signed progress records independent
+permission, adapter-authentication, central-attestation, observation, and
+settlement state. Transport pairing enables zero packs. A connector starts only
+after exact source configuration and central attestation; enrollment always has
+a zero provider-write ceiling. View-as, Admin completion of adult consent,
+duplicates, replay, expiry, and mismatched bindings fail closed.
 
 CO-026 adds a tenant-neutral reviewed capability catalog and secret-free member
 request/cancel events to this post-bootstrap boundary. A request is desired

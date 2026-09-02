@@ -8,6 +8,11 @@ BRIDGE_ROOT="${ADMINME_BRIDGE_ROOT:-$HOME/Library/Application Support/Administra
 EXPECTED_COMMIT=""
 PACKAGE=""
 RELEASE_STAGING=""
+TRANSFER_CODE_FILE=""
+PREVIEW_ONLY="false"
+RELEASE_ARCHIVE=""
+RELEASE_ARCHIVE_SHA256=""
+COMPLETE_WIZARD="false"
 
 while (($#)); do
   case "$1" in
@@ -20,6 +25,29 @@ while (($#)); do
       (($# >= 2)) || { echo "--bridge-root requires a value" >&2; exit 2; }
       BRIDGE_ROOT="$2"
       shift 2
+      ;;
+    --transfer-code-file)
+      (($# >= 2)) || { echo "--transfer-code-file requires a value" >&2; exit 2; }
+      TRANSFER_CODE_FILE="$2"
+      shift 2
+      ;;
+    --preview-only)
+      PREVIEW_ONLY="true"
+      shift
+      ;;
+    --release-archive)
+      (($# >= 2)) || { echo "--release-archive requires a value" >&2; exit 2; }
+      RELEASE_ARCHIVE="$2"
+      shift 2
+      ;;
+    --release-sha256)
+      (($# >= 2)) || { echo "--release-sha256 requires a value" >&2; exit 2; }
+      RELEASE_ARCHIVE_SHA256="$2"
+      shift 2
+      ;;
+    --complete-wizard)
+      COMPLETE_WIZARD="true"
+      shift
       ;;
     *)
       [[ -z "$PACKAGE" ]] || { echo "only one bridge package is allowed" >&2; exit 2; }
@@ -59,15 +87,26 @@ free_kib="$(df -Pk "$(dirname "$BRIDGE_ROOT")" | awk 'NR==2 {print $4}')"
 [[ "$free_kib" =~ ^[0-9]+$ ]] || fail "could not determine free disk space"
 ((free_kib >= 5242880)) || fail "at least 5 GiB free space is required"
 
-git -C "$REPOSITORY_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  || fail "run from the reviewed Git checkout"
-[[ -z "$(git -C "$REPOSITORY_ROOT" status --porcelain --untracked-files=all)" ]] \
-  || fail "the reviewed bridge checkout has local changes"
-commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
   || fail "--expected-commit must be the full reviewed Git SHA"
-[[ "$commit" == "$EXPECTED_COMMIT" ]] \
-  || fail "checked-out commit does not match the reviewed bridge release"
+if [[ -n "$RELEASE_ARCHIVE" || -n "$RELEASE_ARCHIVE_SHA256" ]]; then
+  [[ -n "$RELEASE_ARCHIVE" && -f "$RELEASE_ARCHIVE" && ! -L "$RELEASE_ARCHIVE" ]] \
+    || fail "the reviewed release archive is missing or unsafe"
+  [[ "$RELEASE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "the reviewed release archive checksum is invalid"
+  archive_sha256="$(shasum -a 256 "$RELEASE_ARCHIVE" | awk '{print $1}')"
+  [[ "$archive_sha256" == "$RELEASE_ARCHIVE_SHA256" ]] \
+    || fail "the reviewed release archive checksum does not match"
+  commit="$EXPECTED_COMMIT"
+else
+  git -C "$REPOSITORY_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || fail "run from the reviewed Git checkout or packaged helper app"
+  [[ -z "$(git -C "$REPOSITORY_ROOT" status --porcelain --untracked-files=all)" ]] \
+    || fail "the reviewed bridge checkout has local changes"
+  commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+  [[ "$commit" == "$EXPECTED_COMMIT" ]] \
+    || fail "checked-out commit does not match the reviewed bridge release"
+fi
 
 if ! brew list --versions python@3.14 >/dev/null 2>&1; then
   brew install python@3.14
@@ -78,7 +117,18 @@ release_parent="$BRIDGE_ROOT/app/releases"
 mkdir -p "$release_parent"
 if [[ ! -d "$release_dir" ]]; then
   RELEASE_STAGING="$(mktemp -d "$release_parent/.staging.XXXXXX")"
-  git -C "$REPOSITORY_ROOT" archive --format=tar HEAD | tar -xf - -C "$RELEASE_STAGING"
+  if [[ -n "$RELEASE_ARCHIVE" ]]; then
+    while IFS= read -r archive_entry; do
+      case "$archive_entry" in
+        /*|..|../*|*/../*) fail "the reviewed release archive contains an unsafe path" ;;
+      esac
+    done < <(tar -tf "$RELEASE_ARCHIVE")
+    tar -xf "$RELEASE_ARCHIVE" -C "$RELEASE_STAGING"
+    [[ -z "$(find "$RELEASE_STAGING" -type l -print -quit)" ]] \
+      || fail "the reviewed release archive contains a symbolic link"
+  else
+    git -C "$REPOSITORY_ROOT" archive --format=tar HEAD | tar -xf - -C "$RELEASE_STAGING"
+  fi
   printf '%s\n' "$commit" >"$RELEASE_STAGING/.administrateme-source-commit"
   mv "$RELEASE_STAGING" "$release_dir"
   RELEASE_STAGING=""
@@ -111,5 +161,20 @@ fi
 export ADMINME_REPOSITORY_ROOT="$release_dir"
 export ADMINME_REVIEWED_COMMIT="$commit"
 cd "$release_dir"
-exec "$release_dir/.venv/bin/python" -m bootstrap.cli \
-  bridge-accept "$PACKAGE" --bridge-root "$BRIDGE_ROOT"
+bridge_command="bridge-accept"
+if [[ "$PREVIEW_ONLY" == "true" ]]; then
+  bridge_command="bridge-preview"
+fi
+accept_args=("$bridge_command" "$PACKAGE" --bridge-root "$BRIDGE_ROOT")
+if [[ -n "$TRANSFER_CODE_FILE" ]]; then
+  accept_args+=(--transfer-code-file "$TRANSFER_CODE_FILE")
+fi
+if [[ "$PREVIEW_ONLY" == "true" ]]; then
+  accept_args+=(--text)
+fi
+if [[ "$COMPLETE_WIZARD" == "true" && "$PREVIEW_ONLY" == "false" ]]; then
+  "$release_dir/.venv/bin/python" -m bootstrap.cli "${accept_args[@]}"
+  exec "$release_dir/.venv/bin/python" -m bootstrap.cli \
+    bridge-complete --bridge-root "$BRIDGE_ROOT"
+fi
+exec "$release_dir/.venv/bin/python" -m bootstrap.cli "${accept_args[@]}"

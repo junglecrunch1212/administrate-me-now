@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import getpass
 import json
 import os
@@ -60,6 +61,24 @@ def _private_bridge_configuration(path: Path) -> dict[str, Any]:
     value = yaml.safe_load(candidate.read_text("utf-8"))
     if not isinstance(value, dict):
         raise RuntimeError("bridge configuration must contain one mapping")
+    return value
+
+
+def _private_transfer_code(path: Path) -> str:
+    """Read a helper-provided code without placing the secret in argv."""
+
+    candidate = path.expanduser()
+    info = candidate.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_uid != int(getattr(os, "getuid", lambda: 0)())
+        or stat.S_IMODE(info.st_mode) & 0o077
+    ):
+        raise RuntimeError("bridge transfer code must be an owner-only regular file")
+    value = candidate.read_text("utf-8").strip()
+    if not value or len(value) > 240 or any(character.isspace() for character in value):
+        raise RuntimeError("bridge transfer code file is invalid")
     return value
 
 
@@ -150,8 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
         "bridge-finalize",
         "bridge-revoke",
         "bridge-status",
+        "bridge-preview",
         "bridge-accept",
+        "bridge-complete",
         "bridge-disable",
+        "bridge-uninstall",
         "bridge-local-status",
         "bridge-enable-pack",
     ):
@@ -203,13 +225,25 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--pack", action="append", dest="packs")
         elif name in {"bridge-finalize", "bridge-revoke"}:
             child.add_argument("member_id")
-        elif name == "bridge-accept":
+        elif name in {"bridge-preview", "bridge-accept"}:
             child.add_argument("package", type=Path)
             child.add_argument("--bridge-root", type=Path)
+            child.add_argument(
+                "--transfer-code-file",
+                type=Path,
+                help="Owner-only file used by the reviewed macOS helper app",
+            )
+            if name == "bridge-preview":
+                child.add_argument("--text", action="store_true")
         elif name == "bridge-enable-pack":
             child.add_argument("pack")
             child.add_argument("--bridge-root", type=Path)
-        elif name in {"bridge-disable", "bridge-local-status"}:
+        elif name in {
+            "bridge-complete",
+            "bridge-disable",
+            "bridge-uninstall",
+            "bridge-local-status",
+        }:
             child.add_argument("--bridge-root", type=Path)
     return parser
 
@@ -381,8 +415,11 @@ def main(argv: list[str] | None = None) -> int:
                 _print(enrollments.status())
             return 0
         if args.command in {
+            "bridge-preview",
             "bridge-accept",
+            "bridge-complete",
             "bridge-disable",
+            "bridge-uninstall",
             "bridge-local-status",
             "bridge-enable-pack",
         }:
@@ -399,13 +436,88 @@ def main(argv: list[str] | None = None) -> int:
                 root=root,
                 test_mode=test_mode,
             )
-            if args.command == "bridge-accept":
-                code = getpass.getpass(
-                    "Paste the one-time bridge transfer code (it will not display): "
+            if args.command in {"bridge-preview", "bridge-accept"}:
+                code = (
+                    _private_transfer_code(args.transfer_code_file)
+                    if args.transfer_code_file
+                    else getpass.getpass(
+                        "Paste the one-time bridge transfer code (it will not display): "
+                    )
                 )
-                _print(installer.accept(args.package, code))
+                try:
+                    envelope = json.loads(args.package.read_text("utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    envelope = {}
+                is_wizard = isinstance(envelope.get("signature"), str)
+                if args.command == "bridge-preview":
+                    if not is_wizard:
+                        raise RuntimeError(
+                            "the macOS helper requires a signed self-service package"
+                        )
+                    from adminme_bridge.enrollment_helper import (  # pyright: ignore[reportMissingImports]
+                        MemberBridgeEnrollmentHelper,
+                    )
+
+                    helper = MemberBridgeEnrollmentHelper(
+                        bridge_paths,
+                        repository_root=root,
+                        package_path=args.package,
+                        transfer_code=code,
+                        test_mode=test_mode,
+                        installer=installer,
+                    )
+                    preview = helper.inspect()
+                    if args.text:
+                        print(
+                            "\n".join(
+                                (
+                                    f"Instance: {preview.central_url}",
+                                    f"Member: {preview.member_id}",
+                                    f"Device: {preview.device_class.replace('_', ' ')}",
+                                    "Read-only sources: "
+                                    + ", ".join(preview.capability_labels),
+                                    f"Reviewed release: {preview.release_commit[:12]}",
+                                    f"Expires: {preview.expires_at}",
+                                    "Provider writes: none",
+                                )
+                            )
+                        )
+                    else:
+                        _print(dataclasses.asdict(preview))
+                elif is_wizard:
+                    from adminme_bridge.enrollment_helper import (  # pyright: ignore[reportMissingImports]
+                        MemberBridgeEnrollmentHelper,
+                    )
+
+                    helper = MemberBridgeEnrollmentHelper(
+                        bridge_paths,
+                        repository_root=root,
+                        package_path=args.package,
+                        transfer_code=code,
+                        test_mode=test_mode,
+                        installer=installer,
+                    )
+                    helper.open_and_verify()
+                    _print(helper.accept_locally(member_confirmed=True))
+                else:
+                    _print(installer.accept(args.package, code))
             elif args.command == "bridge-enable-pack":
                 _print(installer.enable_pack(args.pack))
+            elif args.command == "bridge-complete":
+                from adminme_bridge.enrollment_helper import (  # pyright: ignore[reportMissingImports]
+                    MemberBridgeEnrollmentHelper,
+                )
+                from adminme_bridge.enrollment_ui import run_macos_enrollment_wizard  # pyright: ignore[reportMissingImports]
+
+                helper = MemberBridgeEnrollmentHelper.resume(
+                    bridge_paths,
+                    repository_root=root,
+                    test_mode=test_mode,
+                    installer=installer,
+                )
+                _print(run_macos_enrollment_wizard(helper))
+            elif args.command == "bridge-uninstall":
+                _print(installer.revoke_and_uninstall())
             elif args.command == "bridge-disable":
                 _print(installer.disable())
             else:

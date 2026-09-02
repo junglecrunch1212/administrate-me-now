@@ -24,6 +24,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from adminme.comms import validate_outbound_communication
 from adminme.bridge_authorization import authorization_from_record
+from adminme.bridge_enrollment import (
+    BridgeEnrollmentError,
+    validate_enrollment_transition,
+)
 from adminme.context_fabric import policy_scope_digest
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
@@ -63,6 +67,7 @@ from adminme.lib.skill_runner import (
 )
 from adminme.member_chat import MemberChatError
 from adminme.products.auth import require_principal, session_from_request
+from adminme.products.bridge.auth import EnrollmentMemberIdResolver
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import (
@@ -239,6 +244,7 @@ class SettingsBridgeRequest(BaseModel):
     expected_revision: int = Field(ge=0)
     request_id: str = Field(min_length=8, max_length=120)
     member_id: str = Field(min_length=1, max_length=240)
+    device_class: Literal["this_mac", "another_mac"] = "another_mac"
     capabilities: list[
         Literal[
             "apple_calendar",
@@ -249,6 +255,12 @@ class SettingsBridgeRequest(BaseModel):
             "obsidian",
         ]
     ] = Field(min_length=1, max_length=6)
+
+
+class SettingsBridgeControlRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    command_id: str = Field(min_length=8, max_length=120)
+    action: Literal["pause", "resume", "repair", "retry", "revoke"]
 
 
 class SettingsCapabilityRequest(BaseModel):
@@ -844,6 +856,81 @@ def _require_self_settings(session: Session) -> None:
         raise HTTPException(403, "Settings changes require an authenticated adult")
     if session.auth_member_id != session.view_member_id:
         raise HTTPException(403, "Settings are read-only while viewing another member")
+
+
+def _refresh_bridge_ingress(request: Request) -> None:
+    runtime = _runtime(request)
+    resolver = EnrollmentMemberIdResolver(runtime.settings.bridge_enrollments)
+    runtime.member_id_resolver = resolver
+    request.app.state.member_id_resolver = resolver
+    request.app.state.bridge_enrollments = runtime.settings.bridge_enrollments
+
+
+def _bridge_http_error(exc: BridgeEnrollmentError) -> HTTPException:
+    status_code = 410 if exc.code == "expired" else 409
+    return HTTPException(status_code, {"error": exc.code, "message": str(exc)})
+
+
+def _settings_central_url(request: Request, *, allow_testserver: bool) -> str:
+    host = request.headers.get("host", "").strip()
+    if not host:
+        raise HTTPException(400, "request host is missing")
+    hostname = host.rsplit(":", 1)[0]
+    if allow_testserver and hostname in {"testserver", "localhost"}:
+        return "https://fixture-central.ts.net"
+    if not allow_testserver and not hostname.endswith(".ts.net"):
+        raise HTTPException(
+            403, "bridge handoff requires the private Tailscale Serve origin"
+        )
+    return f"https://{host}"
+
+
+async def _record_central_bridge_progress(
+    runtime: Any,
+    session: Session,
+    *,
+    request_id: str,
+    member_id: str,
+    previous_state: str,
+    state: str,
+    suffix: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    revision = runtime.settings_control.prepare_bridge_progress(
+        member_id, request_id=request_id
+    )
+    payload = {
+        "request_id": request_id,
+        "enrollment_id": None,
+        "member_id": member_id,
+        "previous_state": previous_state,
+        "state": state,
+        "revision": revision,
+        "progress_at": EventEnvelope.now_utc_iso(),
+        "reported_by": "central_runtime",
+        "signature_verified": True,
+        "device_identity_sha256": None,
+        "capability_id": None,
+        "capability_state": None,
+        "reason": None,
+        "last_successful_observation": None,
+        "content_exposed": False,
+        "writes_authorized": False,
+        "provider_effects": False,
+        **(extra or {}),
+    }
+    fingerprint = _settings_request_fingerprint("bridge.enrollment_progressed", payload)
+    await _write_settings_receipt(
+        runtime,
+        session,
+        event_type="bridge.enrollment_progressed",
+        request_id=f"{request_id}:{suffix}",
+        request_fingerprint=fingerprint,
+        owner_member_id=member_id,
+        payload=payload,
+    )
+    mutation = runtime.settings_control.apply_bridge_enrollment_event(payload)
+    return mutation.current
 
 
 def _require_owned_source_coordinate(
@@ -6144,7 +6231,7 @@ async def request_settings_bridge(
     request: Request,
     session: SessionDep,
 ) -> dict[str, Any]:
-    """Create a scoped, resumable bridge-enrollment request without a token."""
+    """Prepare one scoped self-service handoff without returning its secret."""
 
     _require_self_settings(session)
     runtime = _runtime(request)
@@ -6152,16 +6239,14 @@ async def request_settings_bridge(
     if role is None or role in {"device", "ambient"}:
         raise HTTPException(422, "bridge target must be an enrolled household member")
     if body.member_id != session.auth_member_id:
-        if session.auth_role != "principal" or role != "child":
-            raise HTTPException(403, "an adult must enroll their own private bridge")
-    if role == "child" and "obsidian" in body.capabilities:
-        raise HTTPException(403, "Obsidian is unavailable on a child bridge")
+        raise HTTPException(403, "an adult must enroll their own private bridge")
     lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
     fingerprint = _settings_request_fingerprint(
-        "settings.bridge_enrollment_requested",
+        "settings.bridge_enrollment_started",
         {
             "expected_revision": body.expected_revision,
             "member_id": body.member_id,
+            "device_class": body.device_class,
             "capabilities": sorted(set(body.capabilities)),
         },
     )
@@ -6169,74 +6254,400 @@ async def request_settings_bridge(
         prior_receipt = await _prior_settings_receipt(
             runtime,
             session,
-            event_type="settings.bridge_enrollment_requested",
+            event_type="settings.bridge_enrollment_started",
             request_id=body.request_id,
             request_fingerprint=fingerprint,
         )
-        if prior_receipt is not None:
-            return {
-                "accepted": True,
-                "member_id": body.member_id,
-                "state": prior_receipt["payload"]["state"],
-                "revision": prior_receipt["payload"]["revision"],
-                "event_id": prior_receipt["event_id"],
-                "idempotent": True,
-                "next_step": (
-                    "Verify this member's Tailscale identity, then export the "
-                    "short-lived reviewed bridge package on the central Mac."
-                ),
-            }
-        previous_state = runtime.settings_control.read()
-        await _guard_member_write(
-            runtime,
-            session,
-            "settings.bridge_enrollment_requested",
-            {
+        current = runtime.settings_control.bridge_request_for(body.member_id)
+        if prior_receipt is None:
+            try:
+                revision = runtime.settings_control.prepare_bridge_start(
+                    body.member_id, expected_revision=body.expected_revision
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            if (
+                isinstance(current, dict)
+                and current.get("state") in {"revoked", "expired", "failed"}
+                and current.get("request_id") != body.request_id
+            ):
+                try:
+                    runtime.bridge_enrollment.revoke(
+                        request_id=str(current["request_id"]),
+                        member_id=body.member_id,
+                    )
+                except BridgeEnrollmentError as exc:
+                    if exc.code != "enrollment_missing_or_ambiguous":
+                        raise _bridge_http_error(exc) from exc
+                _refresh_bridge_ingress(request)
+            requested_at = EventEnvelope.now_utc_iso()
+            payload = {
+                "request_id": body.request_id,
                 "member_id": body.member_id,
                 "requested_by_member_id": session.auth_member_id,
+                "device_class": body.device_class,
                 "capabilities": sorted(set(body.capabilities)),
-                "expected_revision": body.expected_revision,
-            },
-        )
-        try:
-            mutation = runtime.settings_control.request_bridge(
-                body.member_id,
-                body.capabilities,
-                expected_revision=body.expected_revision,
-                requested_by_member_id=session.auth_member_id,
+                "state": "requested",
+                "revision": revision,
+                "requested_at": requested_at,
+                "observation_only": True,
+                "writes_authorized": False,
+                "provider_effects": False,
+            }
+            await _guard_member_write(
+                runtime, session, "settings.bridge_enrollment_started", payload
             )
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        try:
             event_id = await _write_settings_receipt(
                 runtime,
                 session,
-                event_type="settings.bridge_enrollment_requested",
+                event_type="settings.bridge_enrollment_started",
                 request_id=body.request_id,
                 request_fingerprint=fingerprint,
                 owner_member_id=body.member_id,
-                payload={
-                    "member_id": body.member_id,
-                    "requested_by_member_id": session.auth_member_id,
-                    "capabilities": mutation.current["capabilities"],
-                    "state": "enrollment_preparation_required",
-                    "revision": mutation.revision,
-                    "requested_at": mutation.current["requested_at"],
-                },
+                payload=payload,
             )
-        except Exception:
-            runtime.settings_control.save_candidate(previous_state)
-            raise
+            current = runtime.settings_control.apply_bridge_enrollment_event(
+                payload
+            ).current
+            compatibility_payload = {
+                "member_id": body.member_id,
+                "requested_by_member_id": session.auth_member_id,
+                "capabilities": sorted(set(body.capabilities)),
+                "state": "enrollment_preparation_required",
+                "revision": runtime.settings_control.read()["revision"],
+                "requested_at": requested_at,
+            }
+            await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.bridge_enrollment_requested",
+                request_id=f"{body.request_id}:compat",
+                request_fingerprint=_settings_request_fingerprint(
+                    "settings.bridge_enrollment_requested", compatibility_payload
+                ),
+                owner_member_id=body.member_id,
+                payload=compatibility_payload,
+            )
+        else:
+            event_id = str(prior_receipt["event_id"])
+        if (
+            not isinstance(current, dict)
+            or current.get("request_id") != body.request_id
+        ):
+            raise HTTPException(
+                409, "bridge enrollment request conflicts with current state"
+            )
+        if prior_receipt is not None and current.get("state") in {
+            "revoked",
+            "expired",
+            "failed",
+        }:
+            raise HTTPException(
+                409, "start a new bridge request to regenerate enrollment"
+            )
+        if current.get("state") in {
+            "package_ready",
+            "awaiting_transfer",
+            "package_opened",
+            "instance_verified",
+            "member_confirmed",
+            "device_identity_verified",
+            "bridge_paired",
+            "awaiting_permissions",
+            "capabilities_testing",
+            "settling",
+            "active_observation",
+            "partially_active",
+            "degraded",
+            "paused",
+        }:
+            return {
+                "accepted": True,
+                "member_id": body.member_id,
+                "state": current["state"],
+                "revision": runtime.settings_control.read()["revision"],
+                "bridge_revision": current["revision"],
+                "event_id": event_id,
+                "idempotent": True,
+                "handoff_url": f"/api/member/v1/settings/bridges/{body.request_id}/package",
+                "next_step": "Transfer the short-lived package to the selected Mac.",
+                "provider_effect_count": 0,
+            }
+        if current.get("state") == "requested":
+            current = await _record_central_bridge_progress(
+                runtime,
+                session,
+                request_id=body.request_id,
+                member_id=body.member_id,
+                previous_state="requested",
+                state="package_preparing",
+                suffix="package-preparing",
+            )
+        try:
+            prepared = runtime.bridge_enrollment.prepare(
+                request_id=body.request_id,
+                member_id=body.member_id,
+                device_class=body.device_class,
+                capabilities=sorted(set(body.capabilities)),
+                central_url=_settings_central_url(
+                    request,
+                    allow_testserver=not runtime.settings.deployment_evidence_required,
+                ),
+                allow_testserver=not runtime.settings.deployment_evidence_required,
+            )
+            _refresh_bridge_ingress(request)
+        except BridgeEnrollmentError as exc:
+            if current.get("state") == "package_preparing":
+                await _record_central_bridge_progress(
+                    runtime,
+                    session,
+                    request_id=body.request_id,
+                    member_id=body.member_id,
+                    previous_state="package_preparing",
+                    state="failed",
+                    suffix="package-failed",
+                    extra={"reason": exc.code},
+                )
+            raise _bridge_http_error(exc) from exc
+        current = await _record_central_bridge_progress(
+            runtime,
+            session,
+            request_id=body.request_id,
+            member_id=body.member_id,
+            previous_state="package_preparing",
+            state="package_ready",
+            suffix="package-ready",
+            extra={
+                "enrollment_id": prepared.enrollment_id,
+                "expires_at": prepared.expires_at,
+                "release_commit": prepared.release_commit,
+                "package_sha256": prepared.package_sha256,
+                "capability_set_sha256": prepared.capability_set_sha256,
+            },
+        )
         return {
             "accepted": True,
             "member_id": body.member_id,
-            "state": mutation.current["state"],
-            "revision": mutation.revision,
+            "request_id": body.request_id,
+            "state": current["state"],
+            "revision": runtime.settings_control.read()["revision"],
+            "bridge_revision": current["revision"],
             "event_id": event_id,
-            "next_step": (
-                "Verify this member's Tailscale identity, then export the "
-                "short-lived reviewed bridge package on the central Mac."
-            ),
+            "expires_at": prepared.expires_at,
+            "handoff_url": f"/api/member/v1/settings/bridges/{body.request_id}/package",
+            "next_step": "Download and transfer the short-lived package to the selected Mac.",
+            "contains_transfer_secret": False,
+            "provider_effect_count": 0,
+        }
+
+
+@router.post("/api/member/v1/settings/bridges/{wizard_request_id}/package")
+async def download_settings_bridge_package(
+    wizard_request_id: str,
+    request: Request,
+    session: SessionDep,
+) -> Response:
+    """Return package bytes and a no-store clipboard code outside ordinary JSON."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    record = runtime.settings_control.bridge_request_for(session.auth_member_id)
+    if not isinstance(record, dict) or record.get("request_id") != wizard_request_id:
+        raise HTTPException(404, "bridge enrollment request was not found")
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        if record.get("state") == "package_ready":
+            record = await _record_central_bridge_progress(
+                runtime,
+                session,
+                request_id=wizard_request_id,
+                member_id=session.auth_member_id,
+                previous_state="package_ready",
+                state="awaiting_transfer",
+                suffix="awaiting-transfer",
+            )
+        if record.get("state") not in {"awaiting_transfer", "package_opened"}:
+            raise HTTPException(409, "bridge package is not available in this state")
+        try:
+            package, transfer_code = runtime.bridge_enrollment.download(
+                request_id=wizard_request_id,
+                member_id=session.auth_member_id,
+            )
+        except BridgeEnrollmentError as exc:
+            if exc.code == "expired":
+                await _record_central_bridge_progress(
+                    runtime,
+                    session,
+                    request_id=wizard_request_id,
+                    member_id=session.auth_member_id,
+                    previous_state=str(record["state"]),
+                    state="expired",
+                    suffix="package-expired",
+                    extra={"reason": "package_expired"},
+                )
+                _refresh_bridge_ingress(request)
+            raise _bridge_http_error(exc) from exc
+    return Response(
+        package,
+        media_type="application/vnd.administrateme.bridge-enrollment",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Content-Disposition": 'attachment; filename="AdministrateMe Bridge Enrollment.adminmebridge"',
+            "X-AdministrateMe-Transfer-Code": transfer_code,
+            "Access-Control-Expose-Headers": "X-AdministrateMe-Transfer-Code",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/api/member/v1/settings/bridges/{wizard_request_id}/control")
+async def control_settings_bridge(
+    wizard_request_id: str,
+    body: SettingsBridgeControlRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Apply an exact owner-only pause, resume, repair, retry, or revoke."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        record = runtime.settings_control.bridge_request_for(session.auth_member_id)
+        if (
+            not isinstance(record, dict)
+            or record.get("request_id") != wizard_request_id
+        ):
+            raise HTTPException(404, "bridge enrollment request was not found")
+        previous = str(record["state"])
+        retry_preparation = False
+        if body.action == "pause":
+            next_state = "paused"
+        elif body.action == "resume":
+            next_state = str(record.get("paused_from_state") or "awaiting_permissions")
+        elif body.action in {"repair", "retry"}:
+            if previous == "failed":
+                next_state = "package_preparing"
+                retry_preparation = True
+            elif previous in {"awaiting_permissions", "partially_active", "degraded"}:
+                next_state = "capabilities_testing"
+            elif previous == "bridge_paired":
+                next_state = "awaiting_permissions"
+            else:
+                raise HTTPException(
+                    409, "repair or retry is unavailable in this bridge state"
+                )
+        else:
+            next_state = "revoked"
+        try:
+            validate_enrollment_transition(previous, next_state)
+        except BridgeEnrollmentError as exc:
+            raise _bridge_http_error(exc) from exc
+
+        if body.action == "pause":
+            try:
+                runtime.bridge_enrollment.pause(
+                    request_id=wizard_request_id, member_id=session.auth_member_id
+                )
+            except BridgeEnrollmentError as exc:
+                raise _bridge_http_error(exc) from exc
+        elif body.action == "resume":
+            try:
+                runtime.bridge_enrollment.resume(
+                    request_id=wizard_request_id, member_id=session.auth_member_id
+                )
+            except BridgeEnrollmentError as exc:
+                raise _bridge_http_error(exc) from exc
+        elif body.action == "revoke":
+            try:
+                runtime.bridge_enrollment.revoke(
+                    request_id=wizard_request_id, member_id=session.auth_member_id
+                )
+            except BridgeEnrollmentError as exc:
+                if exc.code != "enrollment_missing_or_ambiguous":
+                    raise _bridge_http_error(exc) from exc
+        revision = runtime.settings_control.prepare_bridge_progress(
+            session.auth_member_id, request_id=wizard_request_id
+        )
+        payload = {
+            "request_id": wizard_request_id,
+            "enrollment_id": record.get("enrollment_id"),
+            "member_id": session.auth_member_id,
+            "action": body.action,
+            "previous_state": previous,
+            "state": next_state,
+            "revision": revision,
+            "changed_by_member_id": session.auth_member_id,
+            "changed_at": EventEnvelope.now_utc_iso(),
+            "content_exposed": False,
+            "writes_authorized": False,
+            "provider_effects": False,
+        }
+        fingerprint = _settings_request_fingerprint(
+            "settings.bridge_enrollment_controlled", payload
+        )
+        event_id = await _write_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.bridge_enrollment_controlled",
+            request_id=body.command_id,
+            request_fingerprint=fingerprint,
+            owner_member_id=session.auth_member_id,
+            payload=payload,
+        )
+        try:
+            mutation = runtime.settings_control.apply_bridge_enrollment_event(payload)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        current = mutation.current
+        if retry_preparation:
+            try:
+                prepared = runtime.bridge_enrollment.prepare(
+                    request_id=wizard_request_id,
+                    member_id=session.auth_member_id,
+                    device_class=str(record["device_class"]),
+                    capabilities=list(record["capabilities"]),
+                    central_url=_settings_central_url(
+                        request,
+                        allow_testserver=not runtime.settings.deployment_evidence_required,
+                    ),
+                    allow_testserver=not runtime.settings.deployment_evidence_required,
+                )
+            except BridgeEnrollmentError as exc:
+                await _record_central_bridge_progress(
+                    runtime,
+                    session,
+                    request_id=wizard_request_id,
+                    member_id=session.auth_member_id,
+                    previous_state="package_preparing",
+                    state="failed",
+                    suffix=f"control-{body.command_id}-failed",
+                    extra={"reason": exc.code},
+                )
+                raise _bridge_http_error(exc) from exc
+            current = await _record_central_bridge_progress(
+                runtime,
+                session,
+                request_id=wizard_request_id,
+                member_id=session.auth_member_id,
+                previous_state="package_preparing",
+                state="package_ready",
+                suffix=f"control-{body.command_id}-ready",
+                extra={
+                    "enrollment_id": prepared.enrollment_id,
+                    "expires_at": prepared.expires_at,
+                    "release_commit": prepared.release_commit,
+                    "package_sha256": prepared.package_sha256,
+                    "capability_set_sha256": prepared.capability_set_sha256,
+                },
+            )
+        _refresh_bridge_ingress(request)
+        return {
+            "accepted": True,
+            "event_id": event_id,
+            "state": current["state"],
+            "provider_effect_count": 0,
         }
 
 

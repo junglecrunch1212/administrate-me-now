@@ -620,6 +620,18 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .bridge-capabilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .55rem; margin: 0; padding: .8rem; border: 1px solid var(--line); border-radius: var(--radius); }
 .bridge-capabilities legend { padding: 0 .3rem; font-weight: 800; }
 .bridge-capabilities label { font-size: .82rem; }
+.bridge-wizard-intro { display: grid; gap: .75rem; }
+.bridge-member-confirmation, .bridge-wizard-progress { display: grid; gap: .8rem; }
+.bridge-device-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin: 0; padding: .8rem; border: 1px solid var(--line); border-radius: var(--radius); }
+.bridge-device-choice legend { padding: 0 .3rem; font-weight: 800; }
+.bridge-device-choice label, .bridge-capability-choice { display: flex; align-items: flex-start; gap: .55rem; padding: .65rem; border: 1px solid var(--line); border-radius: calc(var(--radius) - .2rem); background: var(--surface-soft); }
+.bridge-device-choice span, .bridge-capability-choice span { display: grid; gap: .2rem; }
+.bridge-progress-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .45rem; margin: 0; padding: 0; list-style: none; }
+.bridge-progress-list li { padding: .55rem .65rem; border: 1px solid var(--line); border-radius: .55rem; color: var(--muted); font-size: .78rem; font-weight: 750; }
+.bridge-progress-list li[data-complete="true"] { border-color: var(--success); color: var(--ink); background: var(--success-soft); }
+.bridge-capability-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .7rem; }
+.bridge-capability-status { display: grid; gap: .35rem; }
+.bridge-review { display: grid; gap: .35rem; }
 .settings-rule-list { list-style: disc; padding-left: 1.25rem; gap: .6rem; }
 .household-settings-list li, .advanced-capability-list li { display: flex; justify-content: space-between; gap: .75rem; align-items: start; padding: .75rem 0; border-top: 1px solid var(--line); }
 .household-settings-list li:first-child, .advanced-capability-list li:first-child { border-top: 0; }
@@ -782,6 +794,7 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   .evidence-grid dd { margin-bottom: .5rem; }
   .member-chip { max-width: 9.5rem; padding: .34rem .6rem; }
   .settings-overview-grid, .settings-summary-grid, .settings-card-grid { grid-template-columns: 1fr; }
+  .bridge-device-choice { grid-template-columns: 1fr; }
   .capability-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .candidate-policy-grid { grid-template-columns: 1fr; }
   .connection-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }

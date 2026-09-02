@@ -1,5 +1,24 @@
 # Migration map
 
+G09 self-service member-bridge enrollment update (2026-09-02): no projection,
+central runtime, bridge transport, or provider model is added. The Settings
+journal migrates additively from schema v4 to v5, converting an existing simple
+bridge request into a revisioned wizard record with independent capability
+states while preserving preferences, source/candidate policies, connection
+state, and capability requests. New private
+`settings.bridge_enrollment_started@v1`, `bridge.enrollment_progressed@v1`, and
+`settings.bridge_enrollment_controlled@v1` events replay the secret-free
+lifecycle at startup. Existing legacy request events remain readable and the
+legacy bootstrap package path remains accepted. The authoritative member bridge
+index, provisional `bridge.enrolled@v1` proof, connector authorization, and
+per-member process remain unchanged. Rollback selects protected G08 and ignores
+the additive wizard events; it does not rewrite an event, bridge receipt,
+credential, permission, provider state, source fact, or checkpoint. A target
+device can remove only bridge-owned helper state after central revocation.
+Deployment, family-Mac enrollment, Apple permission/account changes, live
+observation, write enablement, and provider effects remain separate Phase B
+owner decisions.
+
 G08 CoS Settings capability-catalog update (2026-09-03): no projection is
 added and the governed count remains fifteen. The Settings desired-state
 journal migrates additively from schema v3 to v4 while preserving preferences,
