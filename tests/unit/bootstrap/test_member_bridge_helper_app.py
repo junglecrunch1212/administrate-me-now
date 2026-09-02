@@ -6,6 +6,7 @@ import json
 import plistlib
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,10 @@ from adminme_bridge.enrollment_ui import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the document-opening helper is compiled and verified on macOS",
+)
 def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
     tmp_path: Path,
 ) -> None:
