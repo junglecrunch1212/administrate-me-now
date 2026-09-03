@@ -23,6 +23,7 @@ PREDECESSOR_COMMIT = "1" * 40
 CANDIDATE_COMMIT = "2" * 40
 PENDING_ID = "3" * 32
 PENDING_SHA = "4" * 64
+SETTINGS_PAYLOAD = b'{"revision":0,"schema_version":2}\n'
 
 
 def _paths(tmp_path: Path) -> DeploymentPaths:
@@ -33,6 +34,11 @@ def _paths(tmp_path: Path) -> DeploymentPaths:
     atomic_write(
         paths.instance_dir / "config" / "adapters.json",
         b'{"adapters":[]}',
+        mode=0o600,
+    )
+    atomic_write(
+        paths.instance_dir / "config" / "settings-control.json",
+        SETTINGS_PAYLOAD,
         mode=0o600,
     )
     return paths
@@ -72,6 +78,9 @@ def _journal_value(
             "previous": pointer,
         }
         pointer_payload = json.dumps(pointer, indent=2).encode("utf-8")
+    settings_payload = (
+        paths.instance_dir / "config" / "settings-control.json"
+    ).read_bytes()
     return {
         "transaction_id": "5" * 32,
         "operation": operation,
@@ -92,6 +101,11 @@ def _journal_value(
         "initial_readiness": json.loads(readiness_payload),
         "initial_readiness_bytes": base64.b64encode(readiness_payload).decode("ascii"),
         "initial_readiness_sha256": hashlib.sha256(readiness_payload).hexdigest(),
+        "initial_settings_control": json.loads(settings_payload),
+        "initial_settings_control_bytes": base64.b64encode(settings_payload).decode(
+            "ascii"
+        ),
+        "initial_settings_control_sha256": hashlib.sha256(settings_payload).hexdigest(),
         "was_running": True,
         "pending_attestation_id": PENDING_ID if operation == "activate" else None,
         "pending_attestation_sha256": (
@@ -227,6 +241,36 @@ def test_activation_journal_refuses_unproved_committed_activation(
         owner.create(value)
 
 
+def test_activation_journal_accepts_legacy_record_without_settings_snapshot(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    owner = ActivationJournal(paths)
+    value = _journal_value(paths)
+    for name in (
+        "initial_settings_control",
+        "initial_settings_control_bytes",
+        "initial_settings_control_sha256",
+    ):
+        del value[name]
+
+    created = owner.create(value)
+
+    assert "initial_settings_control" not in created
+
+
+def test_activation_journal_rejects_changed_settings_snapshot_digest(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    owner = ActivationJournal(paths)
+    value = _journal_value(paths)
+    value["initial_settings_control_sha256"] = "9" * 64
+
+    with pytest.raises(ActivationJournalError, match="settings control"):
+        owner.create(value)
+
+
 @pytest.mark.parametrize(
     "phase",
     (
@@ -254,6 +298,12 @@ def test_interrupted_activation_restores_exact_predecessor_bytes(
     owner = ActivationJournal(paths)
     value = owner.create(_journal_value(paths))
     value = owner.transition(value, phase)
+    settings_path = paths.instance_dir / "config" / "settings-control.json"
+    atomic_write(
+        settings_path,
+        b'{"revision":0,"schema_version":6}\n',
+        mode=0o600,
+    )
 
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
     events: list[str] = []
@@ -287,6 +337,7 @@ def test_interrupted_activation_restores_exact_predecessor_bytes(
     assert result is not None and result["status"] == "recovered"
     assert pointer_path.read_bytes() == pointer_payload
     assert readiness_path.read_bytes() == readiness_payload
+    assert settings_path.read_bytes() == SETTINGS_PAYLOAD
     assert events == ["stop", "openclaw", "plugin", "launchagents", "start"]
     assert not owner.path.exists()
     history = (
@@ -694,6 +745,78 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
 
     assert selector_events == []
     assert (paths.app_dir / "current-release.json").read_bytes() == current_payload
+
+
+def test_explicit_rollback_restores_predecessor_settings_control_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    pointer_payload, pointer, readiness_payload = _documents(paths)
+    readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    atomic_write(readiness_path, readiness_payload, mode=0o600)
+    owner = ActivationJournal(paths)
+    created = owner.create(_journal_value(paths))
+    committed = _commit_activation(owner, created)
+    owner.finish(committed)
+
+    candidate = paths.app_dir / "releases" / CANDIDATE_COMMIT
+    current = {
+        "path": str(candidate),
+        "commit": CANDIDATE_COMMIT,
+        "previous": pointer,
+    }
+    atomic_write(
+        paths.app_dir / "current-release.json",
+        json.dumps(current, indent=2).encode("utf-8"),
+        mode=0o600,
+    )
+    settings_path = paths.instance_dir / "config" / "settings-control.json"
+    atomic_write(
+        settings_path,
+        b'{"revision":0,"schema_version":6}\n',
+        mode=0o600,
+    )
+
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    manager.services = SimpleNamespace(
+        status=lambda: SimpleNamespace(status="healthy"),
+        stop=lambda *args, **kwargs: None,
+        start=lambda: SimpleNamespace(
+            status="healthy",
+            runtime="running",
+            openclaw="running",
+        ),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.validate_candidate",
+        lambda *_args, **_kwargs: {"compatible": True},
+    )
+    monkeypatch.setattr(manager, "_validate_prepared_runtime", lambda _release: None)
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.configure_required_llm_tool",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: {"status": "healthy", "checks": []},
+    )
+
+    result = manager.rollback()
+
+    assert result["status"] == "rolled_back"
+    assert settings_path.read_bytes() == SETTINGS_PAYLOAD
+    assert (paths.app_dir / "current-release.json").read_bytes() == pointer_payload
 
 
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(

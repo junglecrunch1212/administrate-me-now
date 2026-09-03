@@ -1451,6 +1451,8 @@ class UpgradeManager:
         dict[str, Any] | None,
         bytes,
         dict[str, Any],
+        bytes | None,
+        dict[str, Any] | None,
     ]:
         pointer_path = self.paths.app_dir / "current-release.json"
         pointer_payload, pointer = self._read_private_json_payload(pointer_path)
@@ -1473,6 +1475,10 @@ class UpgradeManager:
             self.paths.instance_dir / "config" / "adapters.json"
         )
         assert adapter_payload is not None and adapter_config is not None
+        settings_payload, settings_control = self._read_private_json_payload(
+            self.paths.instance_dir / "config" / "settings-control.json",
+            missing_ok=True,
+        )
         return (
             pointer_payload,
             pointer,
@@ -1480,6 +1486,8 @@ class UpgradeManager:
             readiness,
             adapter_payload,
             adapter_config,
+            settings_payload,
+            settings_control,
         )
 
     def _restore_journal_control_files(self, journal: dict[str, Any]) -> None:
@@ -1517,6 +1525,30 @@ class UpgradeManager:
             atomic_write(adapter_path, adapter_payload, mode=0o600)
             self._fsync_directory(adapter_path.parent)
 
+        if "initial_settings_control_bytes" in journal:
+            settings_path = self.paths.instance_dir / "config" / "settings-control.json"
+            settings_encoded = journal["initial_settings_control_bytes"]
+            if settings_encoded is None:
+                if os.path.lexists(settings_path):
+                    self._read_private_json_payload(settings_path)
+                    settings_path.unlink()
+                    self._fsync_directory(settings_path.parent)
+            else:
+                try:
+                    settings_payload = base64.b64decode(settings_encoded, validate=True)
+                except (TypeError, ValueError) as exc:
+                    raise UpgradeError(
+                        "activation journal settings-control bytes are invalid"
+                    ) from exc
+                if hashlib.sha256(settings_payload).hexdigest() != journal.get(
+                    "initial_settings_control_sha256"
+                ):
+                    raise UpgradeError(
+                        "activation journal settings-control bytes changed"
+                    )
+                atomic_write(settings_path, settings_payload, mode=0o600)
+                self._fsync_directory(settings_path.parent)
+
         readiness_path = (
             self.paths.instance_dir / "config" / "deployment-readiness.json"
         )
@@ -1526,20 +1558,20 @@ class UpgradeManager:
                 self._read_private_json_payload(readiness_path)
                 readiness_path.unlink()
                 self._fsync_directory(readiness_path.parent)
-            return
-        try:
-            readiness_payload = base64.b64decode(encoded, validate=True)
-        except (TypeError, ValueError) as exc:
-            raise UpgradeError(
-                "activation journal readiness bytes are invalid"
-            ) from exc
-        if (
-            hashlib.sha256(readiness_payload).hexdigest()
-            != journal["initial_readiness_sha256"]
-        ):
-            raise UpgradeError("activation journal readiness bytes changed")
-        atomic_write(readiness_path, readiness_payload, mode=0o600)
-        self._fsync_directory(readiness_path.parent)
+        else:
+            try:
+                readiness_payload = base64.b64decode(encoded, validate=True)
+            except (TypeError, ValueError) as exc:
+                raise UpgradeError(
+                    "activation journal readiness bytes are invalid"
+                ) from exc
+            if (
+                hashlib.sha256(readiness_payload).hexdigest()
+                != journal["initial_readiness_sha256"]
+            ):
+                raise UpgradeError("activation journal readiness bytes changed")
+            atomic_write(readiness_path, readiness_payload, mode=0o600)
+            self._fsync_directory(readiness_path.parent)
 
     def _prepared_adapter_config(
         self,
@@ -1868,6 +1900,8 @@ class UpgradeManager:
             readiness,
             adapter_payload,
             adapter_config,
+            settings_payload,
+            settings_control,
         ) = self._capture_activation_baseline()
         selected_adapter_payload, selected_adapter_config, binding_transition = (
             self._prepared_adapter_config(
@@ -1927,6 +1961,17 @@ class UpgradeManager:
                     "initial_readiness_sha256": (
                         hashlib.sha256(readiness_payload).hexdigest()
                         if readiness_payload is not None
+                        else None
+                    ),
+                    "initial_settings_control": settings_control,
+                    "initial_settings_control_bytes": (
+                        base64.b64encode(settings_payload).decode("ascii")
+                        if settings_payload is not None
+                        else None
+                    ),
+                    "initial_settings_control_sha256": (
+                        hashlib.sha256(settings_payload).hexdigest()
+                        if settings_payload is not None
                         else None
                     ),
                     "initial_adapter_config": adapter_config,
@@ -2641,6 +2686,27 @@ class UpgradeManager:
                 )
             except (TypeError, ValueError) as exc:
                 raise UpgradeError("rollback readiness history is invalid") from exc
+        restore_target_settings = "initial_settings_control_bytes" in activation_history
+        target_settings_payload: bytes | None = None
+        if restore_target_settings:
+            target_settings_encoded = activation_history[
+                "initial_settings_control_bytes"
+            ]
+            if target_settings_encoded is not None:
+                try:
+                    target_settings_payload = base64.b64decode(
+                        target_settings_encoded,
+                        validate=True,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise UpgradeError(
+                        "rollback settings-control history is invalid"
+                    ) from exc
+                if (
+                    hashlib.sha256(target_settings_payload).hexdigest()
+                    != (activation_history["initial_settings_control_sha256"])
+                ):
+                    raise UpgradeError("rollback settings-control history is invalid")
 
         (
             pointer_payload,
@@ -2649,6 +2715,8 @@ class UpgradeManager:
             readiness,
             adapter_payload,
             adapter_config,
+            settings_payload,
+            settings_control,
         ) = self._capture_activation_baseline()
         binding_transition = activation_history.get("provider_binding_transition")
         target_adapter_encoded = activation_history.get("initial_adapter_config_bytes")
@@ -2703,6 +2771,17 @@ class UpgradeManager:
                     "initial_readiness_sha256": (
                         hashlib.sha256(readiness_payload).hexdigest()
                         if readiness_payload is not None
+                        else None
+                    ),
+                    "initial_settings_control": settings_control,
+                    "initial_settings_control_bytes": (
+                        base64.b64encode(settings_payload).decode("ascii")
+                        if settings_payload is not None
+                        else None
+                    ),
+                    "initial_settings_control_sha256": (
+                        hashlib.sha256(settings_payload).hexdigest()
+                        if settings_payload is not None
                         else None
                     ),
                     "initial_adapter_config": adapter_config,
@@ -2829,6 +2908,26 @@ class UpgradeManager:
                 journal,
                 "readiness_selected",
             )
+            if restore_target_settings:
+                settings_path = (
+                    self.paths.instance_dir / "config" / "settings-control.json"
+                )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "settings_control_selecting",
+                )
+                if target_settings_payload is None:
+                    if os.path.lexists(settings_path):
+                        self._read_private_json_payload(settings_path)
+                        settings_path.unlink()
+                        self._fsync_directory(settings_path.parent)
+                else:
+                    atomic_write(settings_path, target_settings_payload, mode=0o600)
+                    self._fsync_directory(settings_path.parent)
+                journal = self.activation_journal.transition(
+                    journal,
+                    "settings_control_selected",
+                )
             configure_required_llm_tool(self.paths, test_mode=self.test_mode)
             journal = self.activation_journal.transition(
                 journal,

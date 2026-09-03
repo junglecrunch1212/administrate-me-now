@@ -128,9 +128,14 @@ class TasksProjection(Projection):
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_owner_party "
             "ON tasks(tenant_id, owner_party_id, work_kind)"
         )
+        service_work_columns = (
+            "tenant_id, service_party_id, beneficiary_party_id, status"
+            if "status" in columns
+            else "tenant_id, service_party_id, beneficiary_party_id"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_service_work "
-            "ON tasks(tenant_id, service_party_id, beneficiary_party_id)"
+            f"ON tasks({service_work_columns})"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_coordination "
