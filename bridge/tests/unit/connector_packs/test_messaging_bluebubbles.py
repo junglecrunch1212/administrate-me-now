@@ -12,10 +12,12 @@ from typing import Any, Mapping
 import httpx
 import pytest
 
+import adminme_bridge.enrollment_ui as enrollment_ui_module
 from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.events.envelope import EventEnvelope
 from adminme.events.registry import ensure_autoloaded, registry
 from adminme.lib.pack_registry.validator import validate_adapter_pack
+from bootstrap.bridge_enrollment import BridgeEnrollmentError
 from adminme_bridge.adapters.base import (
     BridgeContext,
     CommunicationSourceBridgeAdapter,
@@ -30,6 +32,7 @@ from adminme_bridge.connector_packs.messaging_bluebubbles import (
     BlueBubblesTransportError,
     MessagePage,
 )
+from adminme_bridge.enrollment_ui import MacOSEnrollmentInteraction
 from adminme_bridge.packs import COMMUNICATION_SOURCE_SUBKIND, discover_packs
 
 
@@ -311,6 +314,46 @@ async def test_rest_transport_auth_and_network_failures_never_expose_secret() ->
     assert secret not in str(network_failure.value)
     assert network_failure.value.__cause__ is None
     await unavailable_client.aclose()
+
+
+def test_enrollment_auth_failure_never_persists_or_retains_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(["1234", "Controls Verified", "fixture-wizard-password"])
+    interaction = MacOSEnrollmentInteraction()
+    monkeypatch.setattr(interaction, "_osascript", lambda *_args: next(responses))
+    stored: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        enrollment_ui_module.keyring,
+        "set_password",
+        lambda service, account, password: stored.append((service, account, password)),
+    )
+    resolvers: list[Any] = []
+
+    class FailingProbeTransport:
+        def __init__(self, **kwargs: Any) -> None:
+            resolvers.append(kwargs["credential_resolver"])
+
+        async def server_info(self) -> Mapping[str, Any]:
+            assert (
+                await resolvers[-1].resolve("keychain://fixture/not-yet-stored")
+                == "fixture-wizard-password"
+            )
+            raise BlueBubblesAuthenticationError("fixture authentication failure")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        enrollment_ui_module, "BlueBubblesRestTransport", FailingProbeTransport
+    )
+
+    with pytest.raises(BridgeEnrollmentError, match="could not be authenticated"):
+        interaction.choose_source("apple_messages_read", "Apple Messages")
+
+    assert stored == []
+    assert len(resolvers) == 1
+    assert resolvers[0].secret == ""
 
 
 async def test_history_boundary_precedes_history_and_emits_typed_private_facts(
