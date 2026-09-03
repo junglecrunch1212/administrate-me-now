@@ -82,11 +82,16 @@ def test_settings_v3_migration_preserves_existing_state_without_authority(
     path.write_text(json.dumps(original), encoding="utf-8")
     store = SettingsControlStore(path)
     migrated = store.read()
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 5
     assert migrated["revision"] == 9
     assert migrated["connections"] == original["connections"]
     assert migrated["member_preferences"] == original["member_preferences"]
-    assert migrated["bridge_requests"] == original["bridge_requests"]
+    bridge = migrated["bridge_requests"]["member-a"]
+    assert bridge["member_id"] == "member-a"
+    assert bridge["state"] == "requested"
+    assert bridge["capabilities"] == ["apple_notes"]
+    assert bridge["capability_states"]["apple_notes"]["state"] == "requested"
+    assert migrated["bridge_request_revisions"] == {"member-a": 1}
     assert migrated["capability_requests"] == {}
     assert migrated["capability_request_revisions"] == {}
 

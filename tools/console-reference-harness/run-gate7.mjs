@@ -1327,6 +1327,12 @@ async function run() {
         await principal.page.getByRole("button", { name: "CoS behavior", exact: true }).click();
         record("Settings offers only adult support profiles", await principal.page.locator(".profile-choice").count() === 3, await principal.page.locator(".profile-grid").textContent());
         await screenshot(principal.page, "surface-settings-behavior-desktop.png");
+        await principal.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
+        const bridgeWizardText = await principal.page.locator("#surface").textContent();
+        record("Settings bridge wizard explains ownership, local permissions, observation, and no writes", bridgeWizardText.includes("Native Apple access stays on your Mac") && bridgeWizardText.includes("observation mode") && bridgeWizardText.includes("macOS control") && bridgeWizardText.includes("No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted"), bridgeWizardText);
+        record("Settings bridge wizard exposes six available sources and keeps Messages planned", await principal.page.locator('.bridge-capability-choice input:not([disabled])').count() === 6 && bridgeWizardText.includes("Apple Messages reading remains unavailable until G10") && bridgeWizardText.includes("Reply and send remain unavailable until G11"), bridgeWizardText);
+        record("Settings bridge wizard confirms the exact authenticated read and action member", (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("Authenticated as") && (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("reading as") && (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("actions belong to"), await principal.page.locator(".bridge-member-confirmation").textContent());
+        record("Settings bridge wizard renders no enrollment secret", !bridgeWizardText.toLowerCase().includes("transfer_key") && !bridgeWizardText.toLowerCase().includes("proof_key") && !bridgeWizardText.toLowerCase().includes("enrollment token"), bridgeWizardText);
       } else {
         record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, `surface-${surface}-desktop.png`);
@@ -1481,11 +1487,12 @@ async function run() {
         record("Notes phone retains sources, search, and source evidence", await principalPhone.page.locator(".notes-source-button").count() === 3 && await principalPhone.page.locator(".notes-search input").count() === 1 && await principalPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "settings") {
         record("Settings phone retains all twelve control areas", await principalPhone.page.locator(".settings-nav button").count() === 12, await principalPhone.page.locator(".settings-nav").textContent());
-        await principalPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
-        record("Settings phone retains connection truth", (await principalPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principalPhone.page.locator("#surface").textContent());
+        await principalPhone.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
+        const phoneBridgeText = await principalPhone.page.locator("#surface").textContent();
+        record("Settings phone retains the self-service bridge review and source ceilings", phoneBridgeText.includes("SELF-SERVICE WIZARD") && phoneBridgeText.includes("Choose read-only sources") && phoneBridgeText.includes("Write ceiling"), phoneBridgeText);
       }
       await auditAccessibility(principalPhone.page, `narrow ${surface}`);
-      const screenshotName = surface === "comms" ? "surface-comms-focus-narrow.png" : surface === "settings" ? "surface-settings-connections-narrow.png" : `surface-${surface}-narrow.png`;
+      const screenshotName = surface === "comms" ? "surface-comms-focus-narrow.png" : surface === "settings" ? "surface-settings-bridge-wizard-narrow.png" : `surface-${surface}-narrow.png`;
       await screenshot(principalPhone.page, screenshotName);
     }
     await closePageContext(principalPhone);

@@ -16,6 +16,30 @@ next_phase: continue_observation_until_separately_authorized_change
 ---
 # Release handoff
 
+## 2026-09-02 G09 self-service member-bridge enrollment candidate
+
+G09 is a Phase A **PRESERVE/MODERNIZE/HARDEN** candidate built from the merged
+G08 protected-main release. It turns the existing request/bootstrap ceremony
+into a resumable adult-owned Settings wizard and reviewed document-opening
+target helper without adding a second bridge transport or source of truth.
+The exact request, instance, member, enrollment, Tailscale identity, device
+class, release commit, capability set, and expiry are encrypted and signed;
+target progress is signed, nonce-replay-resistant, content-free, and private.
+
+Pairing keeps every provider pack disabled. Calendar, Reminders, Contacts,
+Notes, Voice Memos, and Obsidian activate independently only after exact local
+permission/configuration evidence, adapter authentication, central attestation,
+compatible release, and explicit observation start. Pause/resume, partial
+success, denial, expiry/regeneration, central/target restart, revocation, and
+bridge-owned uninstall retain exact state. View-as and cross-adult mutation fail
+closed. Apple Messages read and reply remain planned for G10 and G11.
+
+No family bridge or Apple account was contacted; no credential, Keychain,
+LaunchAgent, permission, provider configuration, runtime selection, deployment,
+or live state was changed. All target operations use disposable fixtures and
+provider-effect accounting remains zero. Phase B activation and every real
+enrollment/permission/provider action require separate owner authorization.
+
 ## 2026-09-02 G08 CoS Settings capability catalog candidate
 
 G08 is a Phase A **PRESERVE/HARDEN** candidate built from protected `main`.

@@ -31,6 +31,13 @@ class BridgeConfig(BaseModel):
     configured_packs: list[str] = Field(default_factory=list)
     enabled_packs: list[str] = Field(default_factory=list)
     pack_config: dict[str, dict[str, object]] = Field(default_factory=dict)
+    requested_packs: list[str] = Field(default_factory=list)
+    wizard_contract: str | None = None
+    request_id: str | None = None
+    instance_id: str | None = None
+    release_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    capability_set_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    requested_capabilities: list[str] = Field(default_factory=list)
     command_poll_interval_s: float = Field(default=5.0, ge=1.0, le=300.0)
 
     def model_post_init(self, __context: object) -> None:
@@ -38,8 +45,20 @@ class BridgeConfig(BaseModel):
             raise ValueError("configured_packs must be unique")
         if len(set(self.enabled_packs)) != len(self.enabled_packs):
             raise ValueError("enabled_packs must be unique")
+        if len(set(self.requested_packs)) != len(self.requested_packs):
+            raise ValueError("requested_packs must be unique")
+        if len(set(self.requested_capabilities)) != len(self.requested_capabilities):
+            raise ValueError("requested_capabilities must be unique")
         if not set(self.enabled_packs) <= set(self.configured_packs):
             raise ValueError("enabled_packs must be a subset of configured_packs")
+        if self.wizard_contract is not None and (
+            not self.request_id
+            or not self.instance_id
+            or not self.release_commit
+            or not self.capability_set_sha256
+            or not self.requested_capabilities
+        ):
+            raise ValueError("wizard bridge configuration binding is incomplete")
         if set(self.pack_config) != set(self.configured_packs):
             raise ValueError("pack_config must exactly match configured_packs")
         from adminme.bridge_authorization import validate_configured_pack_config

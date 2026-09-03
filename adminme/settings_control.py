@@ -9,14 +9,26 @@ OAuth payloads, and credential references never cross this boundary.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
+from adminme.bridge_enrollment import (
+    CAPABILITY_STATES,
+    ENROLLMENT_STATES,
+    PROGRESS_CONTRACT,
+    SUPPORTED_CAPABILITIES,
+    WIZARD_CONTRACT,
+    BridgeEnrollmentError,
+    capability_catalog,
+    validate_capability_transition,
+    validate_enrollment_transition,
+)
 from adminme.capability_catalog import compose_member_catalog
 from adminme.cos_compiled_context import (
     compile_effective_cos_context,
@@ -219,7 +231,7 @@ class SettingsMutation:
 class SettingsControlStore:
     """Atomic, secret-free desired-state journal for member controls."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -232,6 +244,7 @@ class SettingsControlStore:
             "connections": {},
             "member_preferences": {},
             "bridge_requests": {},
+            "bridge_request_revisions": {},
             "candidate_policies": {},
             "source_policies_v2": {},
             "source_policy_v2_revisions": {},
@@ -252,6 +265,7 @@ class SettingsControlStore:
             2,
             3,
             4,
+            5,
         }:
             raise RuntimeError("Settings control journal has an unsupported schema")
         if value["schema_version"] == 1:
@@ -268,15 +282,59 @@ class SettingsControlStore:
             )
         if value["schema_version"] == 3:
             value = copy.deepcopy(value)
-            value["schema_version"] = self.SCHEMA_VERSION
+            value["schema_version"] = 4
             value["capability_requests"] = {}
             value["capability_request_revisions"] = {}
+        if value["schema_version"] == 4:
+            value = copy.deepcopy(value)
+            value["schema_version"] = self.SCHEMA_VERSION
+            value["bridge_request_revisions"] = {}
+            migrated: dict[str, dict[str, Any]] = {}
+            for member_id, record in value.get("bridge_requests", {}).items():
+                if not isinstance(record, dict):
+                    continue
+                capabilities = sorted(
+                    set(record.get("capabilities") or []) & SUPPORTED_CAPABILITIES
+                )
+                if not capabilities:
+                    continue
+                request_id = (
+                    "legacy-"
+                    + hashlib.sha256(str(member_id).encode("utf-8")).hexdigest()[:24]
+                )
+                migrated[str(member_id)] = {
+                    "request_id": request_id,
+                    "member_id": str(member_id),
+                    "requested_by_member_id": str(
+                        record.get("requested_by_member_id") or member_id
+                    ),
+                    "device_class": "another_mac",
+                    "capabilities": capabilities,
+                    "capability_states": {
+                        item: {
+                            "state": "requested",
+                            "reason": None,
+                            "last_successful_observation": None,
+                        }
+                        for item in capabilities
+                    },
+                    "state": "requested",
+                    "revision": 1,
+                    "requested_at": str(record.get("requested_at") or "unknown"),
+                    "updated_at": str(record.get("requested_at") or "unknown"),
+                    "observation_only": True,
+                    "writes_authorized": False,
+                    "provider_effects": False,
+                }
+                value["bridge_request_revisions"][str(member_id)] = 1
+            value["bridge_requests"] = migrated
         if not isinstance(value.get("revision"), int):
             raise RuntimeError("Settings control journal revision is invalid")
         for key in (
             "connections",
             "member_preferences",
             "bridge_requests",
+            "bridge_request_revisions",
             "candidate_policies",
             "source_policies_v2",
             "source_policy_v2_revisions",
@@ -286,6 +344,36 @@ class SettingsControlStore:
         ):
             if not isinstance(value.get(key), dict):
                 raise RuntimeError(f"Settings control journal {key} is invalid")
+        for member_id, record in value["bridge_requests"].items():
+            revision = value["bridge_request_revisions"].get(member_id)
+            if (
+                not isinstance(member_id, str)
+                or not isinstance(record, dict)
+                or record.get("member_id") != member_id
+                or not isinstance(record.get("request_id"), str)
+                or record.get("state") not in ENROLLMENT_STATES
+                or not isinstance(revision, int)
+                or revision < 1
+                or record.get("revision") != revision
+            ):
+                raise RuntimeError("Settings bridge enrollment state is invalid")
+            bridge_capabilities = record.get("capabilities")
+            capability_states = record.get("capability_states")
+            if (
+                not isinstance(bridge_capabilities, list)
+                or not bridge_capabilities
+                or set(bridge_capabilities) - SUPPORTED_CAPABILITIES
+                or not isinstance(capability_states, dict)
+                or set(capability_states) != set(bridge_capabilities)
+            ):
+                raise RuntimeError("Settings bridge capability state is invalid")
+            if any(
+                not isinstance(item, dict) or item.get("state") not in CAPABILITY_STATES
+                for item in capability_states.values()
+            ):
+                raise RuntimeError("Settings bridge capability state is invalid")
+        if set(value["bridge_request_revisions"]) - set(value["bridge_requests"]):
+            raise RuntimeError("Settings bridge enrollment revision is invalid")
         for member_rows in value["candidate_policies"].values():
             if not isinstance(member_rows, dict):
                 raise RuntimeError(
@@ -454,17 +542,322 @@ class SettingsControlStore:
         if not selected or set(selected) - allowed:
             raise ValueError("bridge capabilities are invalid")
         previous = copy.deepcopy(state["bridge_requests"].get(member_id) or {})
+        requested_at = datetime.now(timezone.utc).isoformat()
+        bridge_revision = self.bridge_request_revision(member_id, state=state) + 1
+        request_id = (
+            "legacy-"
+            + hashlib.sha256(
+                f"{member_id}:{requested_at}:{bridge_revision}".encode("utf-8")
+            ).hexdigest()[:24]
+        )
         current = {
+            "request_id": request_id,
             "member_id": member_id,
-            "capabilities": selected,
-            "state": "enrollment_preparation_required",
             "requested_by_member_id": requested_by_member_id,
-            "requested_at": datetime.now(timezone.utc).isoformat(),
+            "device_class": "another_mac",
+            "capabilities": selected,
+            "capability_states": {
+                item: {
+                    "state": "requested",
+                    "reason": None,
+                    "last_successful_observation": None,
+                }
+                for item in selected
+            },
+            "state": "requested",
+            "revision": bridge_revision,
+            "requested_at": requested_at,
+            "updated_at": requested_at,
+            "observation_only": True,
+            "writes_authorized": False,
+            "provider_effects": False,
         }
         state["bridge_requests"][member_id] = current
+        state["bridge_request_revisions"][member_id] = bridge_revision
         state["revision"] += 1
         _atomic_json(self.path, state)
         return SettingsMutation(previous, current, state["revision"])
+
+    def bridge_request_revision(
+        self, member_id: str, *, state: dict[str, Any] | None = None
+    ) -> int:
+        current = state or self.read()
+        value = current["bridge_request_revisions"].get(member_id, 0)
+        return int(value) if isinstance(value, int) and value >= 0 else 0
+
+    def prepare_bridge_start(self, member_id: str, *, expected_revision: int) -> int:
+        state = self.read()
+        self._expect_revision(state, expected_revision)
+        existing = state["bridge_requests"].get(member_id)
+        if isinstance(existing, dict) and existing.get("state") not in {
+            "revoked",
+            "expired",
+            "failed",
+        }:
+            raise ValueError("member already has an active bridge enrollment wizard")
+        return self.bridge_request_revision(member_id, state=state) + 1
+
+    def prepare_bridge_progress(self, member_id: str, *, request_id: str) -> int:
+        state = self.read()
+        record = state["bridge_requests"].get(member_id)
+        if not isinstance(record, dict) or record.get("request_id") != request_id:
+            raise ValueError("bridge enrollment request is missing")
+        if record.get("state") in {"revoked", "expired"}:
+            raise ValueError("bridge enrollment request is terminal")
+        return self.bridge_request_revision(member_id, state=state) + 1
+
+    @staticmethod
+    def _apply_bridge_enrollment_payload(
+        state: dict[str, Any], payload: dict[str, Any], *, increment_global: bool
+    ) -> SettingsMutation:
+        member_id = str(payload.get("member_id") or "")
+        request_id = str(payload.get("request_id") or "")
+        revision = payload.get("revision")
+        requested_state = str(payload.get("state") or "")
+        if not member_id or len(request_id) < 8:
+            raise ValueError("bridge enrollment requires member and request")
+        if requested_state not in ENROLLMENT_STATES:
+            raise ValueError("bridge enrollment state is invalid")
+        current_revision = int(state["bridge_request_revisions"].get(member_id, 0))
+        if not isinstance(revision, int) or revision != current_revision + 1:
+            raise ValueError(
+                "bridge enrollment revision is duplicate, missing, or out of order"
+            )
+        rows = state["bridge_requests"]
+        existing = rows.get(member_id)
+        previous = copy.deepcopy(existing or {})
+        if existing is None:
+            if requested_state != "requested":
+                raise ValueError("bridge enrollment must begin in requested")
+            capabilities = sorted(set(payload.get("capabilities") or []))
+            if not capabilities or set(capabilities) - SUPPORTED_CAPABILITIES:
+                raise ValueError("bridge enrollment capabilities are invalid")
+            current = {
+                "request_id": request_id,
+                "member_id": member_id,
+                "requested_by_member_id": str(
+                    payload.get("requested_by_member_id") or ""
+                ),
+                "device_class": str(payload.get("device_class") or ""),
+                "capabilities": capabilities,
+                "capability_states": {
+                    item: {
+                        "state": "requested",
+                        "reason": None,
+                        "last_successful_observation": None,
+                    }
+                    for item in capabilities
+                },
+                "state": requested_state,
+                "revision": revision,
+                "requested_at": str(payload.get("requested_at") or ""),
+                "updated_at": str(payload.get("requested_at") or ""),
+                "observation_only": True,
+                "writes_authorized": False,
+                "provider_effects": False,
+            }
+        else:
+            if existing.get("request_id") != request_id:
+                if existing.get("state") not in {"revoked", "expired", "failed"}:
+                    raise ValueError(
+                        "bridge enrollment request conflicts with active state"
+                    )
+                if requested_state != "requested":
+                    raise ValueError(
+                        "replacement bridge enrollment must begin in requested"
+                    )
+                capabilities = sorted(set(payload.get("capabilities") or []))
+                if not capabilities or set(capabilities) - SUPPORTED_CAPABILITIES:
+                    raise ValueError("bridge enrollment capabilities are invalid")
+                current = {
+                    "request_id": request_id,
+                    "member_id": member_id,
+                    "requested_by_member_id": str(
+                        payload.get("requested_by_member_id") or ""
+                    ),
+                    "device_class": str(payload.get("device_class") or ""),
+                    "capabilities": capabilities,
+                    "capability_states": {
+                        item: {
+                            "state": "requested",
+                            "reason": None,
+                            "last_successful_observation": None,
+                        }
+                        for item in capabilities
+                    },
+                    "state": "requested",
+                    "revision": revision,
+                    "requested_at": str(payload.get("requested_at") or ""),
+                    "updated_at": str(payload.get("requested_at") or ""),
+                    "observation_only": True,
+                    "writes_authorized": False,
+                    "provider_effects": False,
+                }
+            else:
+                current = copy.deepcopy(existing)
+                previous_state = str(payload.get("previous_state") or "")
+                if previous_state != existing.get("state"):
+                    raise ValueError("bridge enrollment previous state does not match")
+                capability_id = payload.get("capability_id")
+                capability_state = payload.get("capability_state")
+                if (capability_id is None) != (capability_state is None):
+                    raise ValueError("bridge capability progress is incomplete")
+                if previous_state != requested_state or capability_id is None:
+                    try:
+                        validate_enrollment_transition(previous_state, requested_state)
+                    except BridgeEnrollmentError as exc:
+                        raise ValueError(str(exc)) from exc
+                if capability_id is not None:
+                    capability_rows = cast(dict[str, Any], current["capability_states"])
+                    prior_capability = capability_rows.get(capability_id)
+                    if not isinstance(prior_capability, dict):
+                        raise ValueError("bridge capability is not selected")
+                    try:
+                        validate_capability_transition(
+                            str(prior_capability.get("state")), str(capability_state)
+                        )
+                    except BridgeEnrollmentError as exc:
+                        raise ValueError(str(exc)) from exc
+                    capability_rows[str(capability_id)] = {
+                        "state": str(capability_state),
+                        "reason": payload.get("reason"),
+                        "last_successful_observation": payload.get(
+                            "last_successful_observation"
+                        ),
+                        "updated_at": str(
+                            payload.get("progress_at")
+                            or payload.get("changed_at")
+                            or ""
+                        ),
+                    }
+                action = payload.get("action")
+                controlled_capabilities = cast(
+                    dict[str, dict[str, Any]], current["capability_states"]
+                )
+                if action == "pause":
+                    current["paused_from_state"] = previous_state
+                    for capability_row in controlled_capabilities.values():
+                        prior_capability_state = str(capability_row.get("state") or "")
+                        if prior_capability_state in {"revoked", "unsupported"}:
+                            continue
+                        validate_capability_transition(prior_capability_state, "paused")
+                        capability_row["paused_from_state"] = prior_capability_state
+                        capability_row["state"] = "paused"
+                elif action == "resume":
+                    for capability_row in controlled_capabilities.values():
+                        if capability_row.get("state") != "paused":
+                            continue
+                        resume_state = str(
+                            capability_row.pop(
+                                "paused_from_state", "permission_required"
+                            )
+                        )
+                        validate_capability_transition("paused", resume_state)
+                        capability_row["state"] = resume_state
+                    current.pop("paused_from_state", None)
+                elif action == "revoke":
+                    for capability_row in controlled_capabilities.values():
+                        if capability_row.get("state") != "unsupported":
+                            capability_row["state"] = "revoked"
+                            capability_row.pop("paused_from_state", None)
+                    current.pop("paused_from_state", None)
+                current.update(
+                    {
+                        "state": requested_state,
+                        "revision": revision,
+                        "updated_at": str(
+                            payload.get("progress_at")
+                            or payload.get("changed_at")
+                            or ""
+                        ),
+                    }
+                )
+                for key in (
+                    "enrollment_id",
+                    "expires_at",
+                    "release_commit",
+                    "package_sha256",
+                    "capability_set_sha256",
+                    "device_identity_sha256",
+                ):
+                    value = payload.get(key)
+                    if value is not None:
+                        current[key] = value
+        current["content_exposed"] = False
+        current["writes_authorized"] = False
+        current["provider_effects"] = False
+        rows[member_id] = current
+        state["bridge_request_revisions"][member_id] = revision
+        if increment_global:
+            state["revision"] += 1
+        return SettingsMutation(previous, copy.deepcopy(current), revision)
+
+    def apply_bridge_enrollment_event(
+        self, payload: dict[str, Any]
+    ) -> SettingsMutation:
+        state = self.read()
+        mutation = self._apply_bridge_enrollment_payload(
+            state, payload, increment_global=payload.get("state") == "requested"
+        )
+        _atomic_json(self.path, state)
+        return mutation
+
+    async def replay_bridge_enrollment_events(self, event_log: Any) -> int:
+        """Rebuild wizard state from typed encrypted events after restart/restore."""
+
+        state = self.read()
+        state["bridge_requests"] = {}
+        state["bridge_request_revisions"] = {}
+        count = 0
+        events = []
+        async for event in event_log.read_since(
+            types=[
+                "settings.bridge_enrollment_requested",
+                "settings.bridge_enrollment_started",
+                "bridge.enrollment_progressed",
+                "settings.bridge_enrollment_controlled",
+            ]
+        ):
+            events.append(event)
+        members_with_wizard = {
+            str(event.get("payload", {}).get("member_id") or "")
+            for event in events
+            if event.get("type") == "settings.bridge_enrollment_started"
+            and isinstance(event.get("payload"), dict)
+        }
+        for event in events:
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                raise RuntimeError("bridge enrollment event payload is invalid")
+            if event.get("type") == "settings.bridge_enrollment_requested":
+                member_id = str(payload.get("member_id") or "")
+                if member_id in members_with_wizard:
+                    continue
+                payload = {
+                    **payload,
+                    "request_id": "legacy-"
+                    + hashlib.sha256(member_id.encode("utf-8")).hexdigest()[:24],
+                    "device_class": "another_mac",
+                    "state": "requested",
+                    "revision": self.bridge_request_revision(member_id, state=state)
+                    + 1,
+                }
+            try:
+                self._apply_bridge_enrollment_payload(
+                    state, payload, increment_global=False
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("bridge enrollment replay failed closed") from exc
+            count += 1
+        _atomic_json(self.path, state)
+        return count
+
+    def bridge_request_for(
+        self, member_id: str, *, state: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        current = state or self.read()
+        value = current["bridge_requests"].get(member_id)
+        return copy.deepcopy(value) if isinstance(value, dict) else None
 
     def preferences_for(self, member_id: str) -> dict[str, Any]:
         value = self.read()["member_preferences"].get(member_id)
@@ -1243,7 +1636,11 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "member_label": member_label(
                     runtime, str(record.get("member_id") or "")
                 ),
-                "status": record.get("status"),
+                "status": (
+                    bridge_requests.get(record_member, {}).get("state")
+                    if isinstance(bridge_requests.get(record_member), dict)
+                    else record.get("status")
+                ),
                 "role": record.get("role"),
                 "identity_bound": bool(identity),
                 "adapters_active": list(record.get("adapters_active") or []),
@@ -1253,6 +1650,16 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                     "provider_capability_state", "not_attested"
                 ),
                 "activated_at": record.get("activated_at"),
+                "request_id": (
+                    bridge_requests.get(record_member, {}).get("request_id")
+                    if isinstance(bridge_requests.get(record_member), dict)
+                    else record.get("request_id")
+                ),
+                "capability_states": copy.deepcopy(
+                    bridge_requests.get(record_member, {}).get("capability_states", {})
+                    if isinstance(bridge_requests.get(record_member), dict)
+                    else {}
+                ),
             }
         )
     for requested_member, record in sorted(bridge_requests.items()):
@@ -1277,6 +1684,10 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "identity_bound": False,
                 "requested_capabilities": list(record.get("capabilities") or []),
                 "requested_at": record.get("requested_at"),
+                "request_id": record.get("request_id"),
+                "capability_states": copy.deepcopy(
+                    record.get("capability_states") or {}
+                ),
             }
         )
 
@@ -1547,6 +1958,23 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             },
         },
         "bridges": bridges,
+        "bridge_wizard": {
+            "contract": WIZARD_CONTRACT,
+            "progress_contract": PROGRESS_CONTRACT,
+            "enrollment_states": list(ENROLLMENT_STATES),
+            "capability_states": list(CAPABILITY_STATES),
+            "capabilities": capability_catalog(),
+            "current": copy.deepcopy(bridge_requests.get(view_id))
+            if private_owner_visible and isinstance(bridge_requests.get(view_id), dict)
+            else None,
+            "native_access_stays_on_member_mac": True,
+            "observation_only_default": True,
+            "writes_authorized": False,
+            "admin_may_complete_adult_consent": False,
+            "view_as_may_mutate": False,
+            "ordinary_json_contains_transfer_secret": False,
+            "recovery_actions": ["pause", "resume", "repair", "retry", "revoke"],
+        },
         "capabilities": catalog,
         "capability_request_revision": runtime.settings_control.capability_request_revision(
             view_id, state=state

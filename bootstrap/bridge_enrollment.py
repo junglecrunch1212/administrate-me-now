@@ -28,6 +28,12 @@ from adminme.bridge_authorization import (
     validate_bridge_record_set,
     validate_configured_pack_config,
 )
+from adminme.bridge_enrollment import (
+    BridgeEnrollmentError as WizardBridgeEnrollmentError,
+    WIZARD_CONTRACT,
+    device_proof_key,
+    inspect_transfer_package,
+)
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from bootstrap.contracts import DeploymentPaths, atomic_write, repository_root
@@ -905,6 +911,7 @@ class MemberBridgePaths:
     log_dir: Path
     launch_agent_path: Path
     service_state_path: Path
+    device_proof_key_path: Path
 
     @classmethod
     def from_root(cls, root: Path, *, production: bool = False) -> "MemberBridgePaths":
@@ -931,6 +938,7 @@ class MemberBridgePaths:
             log_dir=log_dir,
             launch_agent_path=launch_dir / f"{BRIDGE_LABEL}.plist",
             service_state_path=resolved / "service-state.json",
+            device_proof_key_path=resolved / "secrets" / "device-proof-key.bin",
         )
 
     @classmethod
@@ -971,6 +979,13 @@ class MemberBridgeInstaller:
             envelope = json.loads(transfer_path.read_text("utf-8"))
             if envelope.get("format") != TRANSFER_FORMAT:
                 raise BridgeEnrollmentError("unsupported bridge transfer format")
+            if "signature" in envelope:
+                try:
+                    return inspect_transfer_package(
+                        transfer_path.read_bytes(), transfer_code
+                    )
+                except WizardBridgeEnrollmentError as exc:
+                    raise BridgeEnrollmentError(str(exc)) from exc
             enrollment_id = envelope["enrollment_id"]
             plaintext = AESGCM(_decode_transfer_code(transfer_code)).decrypt(
                 base64.b64decode(envelope["nonce"]),
@@ -1139,12 +1154,16 @@ class MemberBridgeInstaller:
         configured = _unique_pack_names(
             transfer.get("configured_packs", []), label="configured_packs"
         )
+        requested = _unique_pack_names(
+            transfer.get("requested_packs", configured), label="requested_packs"
+        )
         enabled = _unique_pack_names(
             transfer.get("enabled_packs", []), label="enabled_packs"
         )
         pack_config = transfer.get("pack_config")
         if (
             not set(allowed) <= BUILT_IN_BRIDGE_PACKS
+            or not set(requested) <= set(allowed)
             or not set(configured) <= set(allowed)
             or enabled
             or not isinstance(pack_config, dict)
@@ -1167,6 +1186,21 @@ class MemberBridgeInstaller:
             raise BridgeEnrollmentError(
                 "child bridge package incorrectly allows Obsidian"
             )
+        if transfer.get("wizard_contract") == WIZARD_CONTRACT:
+            requested_capabilities = _unique_pack_names(
+                transfer.get("requested_capabilities"),
+                label="requested_capabilities",
+            )
+            if len(requested_capabilities) != len(requested):
+                raise BridgeEnrollmentError(
+                    "bridge wizard capability and pack bindings disagree"
+                )
+            if restrictions.get("observation_only") is not True or (
+                restrictions.get("provider_writes") != "deny"
+            ):
+                raise BridgeEnrollmentError(
+                    "bridge wizard package is not observation-only"
+                )
         observed_identity, observed_node = self._tailscale_identity()
         if identity_override is not None:
             if not self.test_mode:
@@ -1212,6 +1246,11 @@ class MemberBridgeInstaller:
             if self.paths.receipt_path.exists()
             else None
         )
+        prior_device_key = (
+            self.paths.device_proof_key_path.read_bytes()
+            if self.paths.device_proof_key_path.exists()
+            else None
+        )
         pointer_path = self.paths.root / "app" / "current-release.json"
         prior_pointer = pointer_path.read_bytes() if pointer_path.exists() else None
         config = {
@@ -1223,6 +1262,13 @@ class MemberBridgeInstaller:
             "packs_dir": str(self.paths.root / "packs"),
             "cursor_db_path": str(self.paths.root / "adapter-cursors.db"),
             "configured_packs": configured,
+            "requested_packs": requested,
+            "wizard_contract": transfer.get("wizard_contract"),
+            "request_id": transfer.get("request_id"),
+            "instance_id": transfer.get("instance_id"),
+            "release_commit": transfer.get("release_commit"),
+            "capability_set_sha256": transfer.get("capability_set_sha256"),
+            "requested_capabilities": list(transfer.get("requested_capabilities", [])),
             "enabled_packs": [],
             "pack_config": normalized_config,
             "log_level": "info",
@@ -1232,6 +1278,11 @@ class MemberBridgeInstaller:
                 self.paths.config_path,
                 yaml.safe_dump(config, sort_keys=True).encode("utf-8"),
             )
+            if transfer.get("wizard_contract") == WIZARD_CONTRACT:
+                atomic_write(
+                    self.paths.device_proof_key_path,
+                    device_proof_key(_decode_transfer_code(transfer_code)),
+                )
             self._install_launch_agent()
             self._start()
             now = self.now()
@@ -1266,6 +1317,15 @@ class MemberBridgeInstaller:
                 "event_id": event_id,
                 "accepted_at": now.isoformat(),
                 "configured_packs": configured,
+                "requested_packs": requested,
+                "requested_capabilities": list(
+                    transfer.get("requested_capabilities", [])
+                ),
+                "wizard_contract": transfer.get("wizard_contract"),
+                "request_id": transfer.get("request_id"),
+                "instance_id": transfer.get("instance_id"),
+                "release_commit": transfer.get("release_commit"),
+                "capability_set_sha256": transfer.get("capability_set_sha256"),
                 "enabled_packs": [],
                 "provider_capability_state": (
                     "not_attested"
@@ -1306,6 +1366,10 @@ class MemberBridgeInstaller:
                 self.paths.receipt_path.unlink(missing_ok=True)
             else:
                 atomic_write(self.paths.receipt_path, prior_receipt)
+            if prior_device_key is None:
+                self.paths.device_proof_key_path.unlink(missing_ok=True)
+            else:
+                atomic_write(self.paths.device_proof_key_path, prior_device_key)
             if prior_pointer is None:
                 pointer_path.unlink(missing_ok=True)
             else:
@@ -1361,6 +1425,7 @@ class MemberBridgeInstaller:
                     "central_url",
                     "accepted_at",
                     "enabled_packs",
+                    "requested_capabilities",
                 )
                 if key in receipt
             },
@@ -1436,6 +1501,28 @@ class MemberBridgeInstaller:
             "status": "disabled",
             "configuration_preserved": self.paths.config_path.is_file(),
             "central_revocation_still_required": True,
+        }
+
+    def revoke_and_uninstall(self) -> dict[str, Any]:
+        """Stop the helper and remove only reviewed bridge-owned material."""
+
+        self._stop()
+        removed: list[str] = []
+        for path in (
+            self.paths.config_path,
+            self.paths.receipt_path,
+            self.paths.launch_agent_path,
+            self.paths.service_state_path,
+            self.paths.device_proof_key_path,
+        ):
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+                removed.append(path.name)
+        return {
+            "status": "uninstalled",
+            "removed": sorted(removed),
+            "central_revocation_required": True,
+            "provider_effects": False,
         }
 
 
