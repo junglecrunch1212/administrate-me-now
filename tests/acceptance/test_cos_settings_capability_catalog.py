@@ -193,7 +193,7 @@ def test_g08_catalog_settings_openclaw_isolation_and_replay(tmp_path: Path) -> N
         assert catalog["summary"]["known"] == len(catalog["items"])
         item_by_id = {item["capability_id"]: item for item in catalog["items"]}
         assert item_by_id["planned.apple_messages_observation"]["implementation"] == (
-            "planned_g10"
+            "superseded_by_bridge.messaging-bluebubbles"
         )
         assert item_by_id["planned.apple_messages_reply"]["implementation"] == (
             "planned_g11"
@@ -213,6 +213,7 @@ def test_g08_catalog_settings_openclaw_isolation_and_replay(tmp_path: Path) -> N
         assert bridge_ids == {
             "bridge.calendaring-apple-calendar-bridge",
             "bridge.contacts-apple-contacts-bridge",
+            "bridge.messaging-bluebubbles",
             "bridge.knowledge-apple-notes",
             "bridge.knowledge-apple-voice-memos",
             "bridge.knowledge-obsidian",
@@ -589,5 +590,5 @@ def test_g08_encrypted_backup_restore_preserves_capability_requests(
             if item["capability_id"] == "planned.apple_messages_observation"
         )
         assert saved["state"] == "requested"
-        assert saved["catalog_version"] == "1.0.0"
+        assert saved["catalog_version"] == "1.1.0"
         assert client.portal.call(_provider_effect_count, client.app.state.runtime) == 0

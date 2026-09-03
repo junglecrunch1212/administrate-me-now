@@ -30,6 +30,7 @@ MEMBER_BRIDGE_ONLY_ADAPTER_KINDS = frozenset(
     {
         "calendaring-apple-calendar",
         "contacts-apple-contacts",
+        "messaging-bluebubbles",
         "reminders-apple-eventkit",
     }
 )
@@ -103,6 +104,8 @@ class ProviderBinding:
 
 def _provider_family(kind: str) -> str:
     normalized = kind.casefold()
+    if "bluebubbles" in normalized:
+        return "apple_messages"
     if "gmail" in normalized or "google" in normalized:
         return "google"
     if "microsoft" in normalized or "outlook" in normalized:

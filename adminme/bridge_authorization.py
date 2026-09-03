@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Literal, Mapping
+from urllib.parse import urlparse
 
 
 PROVIDER_ACCOUNT_PATTERN = re.compile(r"provider-account:[0-9a-f]{32,64}")
@@ -46,6 +47,32 @@ class BridgePackPolicy:
 
 
 BRIDGE_PACK_POLICIES: dict[str, BridgePackPolicy] = {
+    "messaging-bluebubbles": BridgePackPolicy(
+        pack="messaging-bluebubbles",
+        source_adapter="messaging-bluebubbles",
+        family="messaging",
+        event_types=frozenset(
+            {
+                "adapter.authenticated",
+                "adapter.error",
+                "adapter.record.quarantined",
+                "messaging.received",
+                "messaging.sent",
+                "messaging.source_observed",
+            }
+        ),
+        provider="bluebubbles",
+        provider_family="apple_messages",
+        permission_scopes=frozenset(
+            {"bluebubbles.messages.read", "macos.full_disk_access"}
+        ),
+        permission_reference="keychain://device-permissions/apple-messages",
+        container_key="protected_source_id",
+        shareable=False,
+        # G10 is observation-only. G11 must introduce any reply authority
+        # through a separately reviewed policy and command path.
+        write_operations=frozenset(),
+    ),
     "calendaring-apple-calendar-bridge": BridgePackPolicy(
         pack="calendaring-apple-calendar-bridge",
         source_adapter="calendaring-apple-calendar",
@@ -332,6 +359,97 @@ def validate_configured_pack_config(
                 )
             config["permission_scope"] = sorted(scopes)
             config["shared_container_ids"] = sorted(shared)
+            if pack == "messaging-bluebubbles":
+                expected_keys = {
+                    "member_id",
+                    "provider_account_id",
+                    "deployment_target",
+                    "workspace",
+                    "permission_scope",
+                    "binding_provenance",
+                    "ownership_attested",
+                    "protected_source_id",
+                    "allowed_container_ids",
+                    "shared_container_ids",
+                    "base_url",
+                    "credential_ref",
+                    "transport_version",
+                    "transport_commit",
+                    "history_limit",
+                    "poll_interval_seconds",
+                    "network_containment_verified",
+                    "remote_services_verified_disabled",
+                    "device_identity_sha256",
+                    "bridge_enrollment_id",
+                }
+                if set(config) != expected_keys:
+                    raise ValueError(
+                        "Messages bridge config must contain only the reviewed fields"
+                    )
+                source_id = str(config.get("protected_source_id") or "")
+                if re.fullmatch(r"protected-source:[0-9a-f]{64}", source_id) is None:
+                    raise ValueError(
+                        "Messages bridge requires an opaque protected source"
+                    )
+                parsed = urlparse(str(config.get("base_url") or ""))
+                if (
+                    parsed.scheme != "http"
+                    or parsed.hostname != "127.0.0.1"
+                    or parsed.port is None
+                    or parsed.username
+                    or parsed.password
+                    or parsed.path not in {"", "/"}
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError(
+                        "Messages transport must be bound to an exact loopback origin"
+                    )
+                credential_ref = str(config.get("credential_ref") or "")
+                if (
+                    PERMISSION_REFERENCE_PATTERN.fullmatch(credential_ref) is None
+                    or "bluebubbles" not in credential_ref.casefold()
+                ):
+                    raise ValueError(
+                        "Messages credential must remain in the local Keychain"
+                    )
+                if (
+                    config.get("transport_version") != "1.9.9"
+                    or config.get("transport_commit")
+                    != "ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1"
+                ):
+                    raise ValueError(
+                        "Messages transport does not match the reviewed pin"
+                    )
+                history_limit = config.get("history_limit")
+                poll_interval = config.get("poll_interval_seconds")
+                if (
+                    not isinstance(history_limit, int)
+                    or isinstance(history_limit, bool)
+                    or not 1 <= history_limit <= 1000
+                    or not isinstance(poll_interval, int | float)
+                    or isinstance(poll_interval, bool)
+                    or not 2 <= float(poll_interval) <= 300
+                ):
+                    raise ValueError("Messages observation bounds are invalid")
+                if (
+                    re.fullmatch(
+                        r"[0-9a-f]{64}", str(config.get("device_identity_sha256") or "")
+                    )
+                    is None
+                ):
+                    raise ValueError("Messages bridge device identity is invalid")
+                if (
+                    config.get("network_containment_verified") is not True
+                    or config.get("remote_services_verified_disabled") is not True
+                ):
+                    raise ValueError(
+                        "Messages bridge requires local containment verification"
+                    )
+                if config.get("bridge_enrollment_id") != enrollment_id:
+                    raise ValueError(
+                        "Messages bridge enrollment binding is contradictory"
+                    )
         normalized[pack] = config
     return normalized
 

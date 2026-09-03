@@ -13,7 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 import httpx
 import yaml
@@ -395,6 +395,7 @@ class MemberBridgeEnrollmentHelper:
         *,
         source_coordinate: str | None = None,
         account_coordinate: str | None = None,
+        connector_config: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build one exact, content-free local source coordinate.
 
@@ -452,7 +453,74 @@ class MemberBridgeEnrollmentHelper:
             "allowed_container_ids": [container],
             "shared_container_ids": [],
         }
+        if capability_id == "apple_messages_read":
+            supplied = dict(connector_config or {})
+            credential_ref = supplied.get("credential_ref")
+            base_url = supplied.get("base_url")
+            if not isinstance(credential_ref, str) or not isinstance(base_url, str):
+                raise BridgeEnrollmentError(
+                    "the reviewed Messages transport coordinate is unavailable"
+                )
+            if (
+                supplied.get("network_containment_verified") is not True
+                or supplied.get("remote_services_verified_disabled") is not True
+            ):
+                raise BridgeEnrollmentError(
+                    "the Messages transport containment review is incomplete"
+                )
+            config.update(
+                {
+                    "base_url": base_url,
+                    "credential_ref": credential_ref,
+                    "transport_version": "1.9.9",
+                    "transport_commit": ("ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1"),
+                    "history_limit": int(supplied.get("history_limit", 500)),
+                    "poll_interval_seconds": float(
+                        supplied.get("poll_interval_seconds", 5)
+                    ),
+                    "network_containment_verified": True,
+                    "remote_services_verified_disabled": True,
+                    "device_identity_sha256": hashlib.sha256(
+                        self.device_node_id.encode("utf-8")
+                    ).hexdigest(),
+                    "bridge_enrollment_id": str(
+                        self.transfer.get("enrollment_id") or ""
+                    ),
+                }
+            )
         return config
+
+    def record_transport_state(
+        self, capability_id: str, transport_state: str, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        """Record the content-free Messages transport/authentication lifecycle."""
+
+        if capability_id != "apple_messages_read" or transport_state not in {
+            "transport_absent",
+            "transport_incompatible",
+            "transport_installed",
+            "authentication_required",
+            "authenticated",
+        }:
+            raise BridgeEnrollmentError("invalid Messages transport state")
+        if self.capability_states.get(capability_id) == "requested":
+            self._report(
+                self.state,
+                capability_id=capability_id,
+                capability_state="implementation_available",
+            )
+        if self.capability_states.get(capability_id) == transport_state:
+            return {
+                "state": self.state,
+                "capability_states": dict(self.capability_states),
+                "provider_effects": False,
+            }
+        return self._report(
+            self.state,
+            capability_id=capability_id,
+            capability_state=transport_state,
+            reason=reason,
+        )
 
     def record_permission(
         self,
@@ -469,6 +537,16 @@ class MemberBridgeEnrollmentHelper:
                 capability_id=capability_id,
                 capability_state="implementation_available",
             )
+            self._report(
+                self.state,
+                capability_id=capability_id,
+                capability_state="permission_required",
+            )
+        elif capability_id == "apple_messages_read":
+            if self.capability_states[capability_id] != "authenticated":
+                raise BridgeEnrollmentError(
+                    "the reviewed local Messages transport is not authenticated"
+                )
             self._report(
                 self.state,
                 capability_id=capability_id,

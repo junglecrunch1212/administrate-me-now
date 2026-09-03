@@ -1,0 +1,55 @@
+kind: adapter
+subkind: communication-source
+family: messaging
+entrypoint: adminme_bridge.connector_packs.messaging_bluebubbles:BlueBubblesMessagesAdapter
+pack:
+  name: messaging-bluebubbles
+  version: 1.0.0
+  author: built-in
+  license: Apache-2.0
+write_capabilities: []
+capabilities:
+  - kind: Cat-A
+    runtime: bridge
+    event_families: [messaging.received, messaging.sent, messaging.source_observed, adapter.record.quarantined]
+observation_mode_required: true
+owner_scope_overridability_at_install: false
+sharing_model_discriminator: member-private
+sensitivity_default: sensitive
+dedup_strategy:
+  kind: native_message_id_and_revision_fingerprint
+source_assurance:
+  - source_events: [messaging.received, messaging.sent]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:noise_filtering
+  - source_events: [messaging.source_observed, adapter.record.quarantined]
+    mode: candidate_not_applicable
+config:
+  defaults:
+    base_url: http://127.0.0.1:1234
+    history_limit: 500
+    page_size: 250
+    reconcile_limit: 250
+    reconcile_lookback_ms: 604800000
+    poll_interval_seconds: 15
+    max_body_chars: 50000
+    transport_version: 1.9.9
+    transport_commit: ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1
+    network_containment_verified: false
+    remote_services_verified_disabled: false
+transport:
+  product: BlueBubbles Server
+  version: 1.9.9
+  source_commit: ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1
+  release_url: https://github.com/BlueBubblesApp/bluebubbles-server/releases/tag/v1.9.9
+  arm64_dmg_sha256: fafd650c883f52e7494a6625e45249f2144d197378a4d57143ccf6198bb2e862
+  arm64_dmg_size: 300676880
+  network_scope: loopback-only
+  server_listener_containment: must-be-independently-verified
+  credential_storage: local-keychain-reference-only
+  required_disabled_features: [private-api, firebase, webhooks, proxies]
+  compatibility: conditional-clean-macos-arm64-lab
+documentation:
+  mode: read-only-observation
+  attachment_mode: metadata-only

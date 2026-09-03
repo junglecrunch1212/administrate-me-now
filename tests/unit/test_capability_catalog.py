@@ -27,7 +27,7 @@ def test_catalog_is_manifest_derived_versioned_and_non_speculative() -> None:
     assert "planned.apple_messages_observation" in ids
     assert "planned.apple_messages_reply" in ids
     assert all("twilio" not in value for value in ids)
-    assert all("bluebubbles" not in value for value in ids)
+    assert "bridge.messaging-bluebubbles" in ids
     assert all("microsoft-graph-messaging" not in value for value in ids)
     by_id = {item["capability_id"]: item for item in catalog["items"]}
     assert by_id["adapter.financial-plaid"]["implementation_present"] is True
@@ -39,8 +39,20 @@ def test_catalog_is_manifest_derived_versioned_and_non_speculative() -> None:
         "member_bridge"
     )
     assert by_id["planned.apple_messages_observation"]["provider_options"] == [
-        "apple_messages_member_bridge"
+        "messaging-bluebubbles"
     ]
+    messages = by_id["bridge.messaging-bluebubbles"]
+    assert messages["implementation_present"] is True
+    assert messages["runtime_location"] == "member_bridge"
+    assert messages["verbs"] == {
+        "read": "supported",
+        "observe": "supported",
+        "draft": "unsupported",
+        "prepare": "unsupported",
+        "hold": "unsupported",
+        "execute": "unsupported",
+    }
+    assert messages["reconciliation_support"] is True
     for item in catalog["items"]:
         assert item["catalog_version"] == CATALOG_VERSION
         assert item["outcome"]

@@ -242,8 +242,15 @@ class IdentityResolutionPipeline:
             )
             return
 
-        best = _pick_best_match(
-            candidates, kind=kind, my_value_normalized=value_normalized
+        # Apple Messages participant endpoints are not person records. Exact
+        # reviewed identifier matches may resolve; fuzzy similarity never
+        # promotes or even suggests a Party for this passive private source.
+        best = (
+            None
+            if payload.get("provider") == "bluebubbles"
+            else _pick_best_match(
+                candidates, kind=kind, my_value_normalized=value_normalized
+            )
         )
         source_event_id = event.get("event_id", "")
 

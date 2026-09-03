@@ -16,6 +16,31 @@ next_phase: continue_observation_until_separately_authorized_change
 ---
 # Release handoff
 
+## 2026-09-03 G10 Apple Messages bridge ingestion candidate
+
+G10 is a Phase A **MODERNIZE/HARDEN** candidate built from the merged G09
+protected-main release. It adds one sealed, read-only member-bridge
+`communication-source` for BlueBubbles Server 1.9.9 at exact source commit
+`ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1` and exact Apple-silicon DMG
+digest. The bridge performs loopback REST reads only, keeps its credential in
+the member Mac Keychain, records durable bounded-best-effort cursor and source
+accounting state, and emits exact member/enrollment/device/account/source/chat/
+message provenance through authenticated central ingestion.
+
+Messages project into member-isolated Comms and enter the existing source
+policy, pinned `llm-task`, deterministic candidate, reconciliation, and Triage
+path. Endpoint participants do not become Parties. Attachment bodies and local
+paths do not cross the bridge. Every Messages provider write remains disabled;
+reply/send remain G11 work.
+
+No family bridge or Messages database was contacted. No software, credential,
+Keychain entry, permission, firewall, provider configuration, deployment, or
+live state was changed. Product installation is withheld because the signed
+1.9.9 artifact is unnotarized and compatibility remains conditional on a clean
+disposable macOS Apple-silicon rehearsal. Phase B and all real enrollment,
+permission, observation, containment, and write work require separate owner
+authorization.
+
 ## 2026-09-02 G09 self-service member-bridge enrollment candidate
 
 G09 is a Phase A **PRESERVE/MODERNIZE/HARDEN** candidate built from the merged

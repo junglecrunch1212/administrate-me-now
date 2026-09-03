@@ -57,6 +57,7 @@ class SettingsBridgeEnrollmentRequestedV1(BaseModel):
             "apple_notes",
             "apple_voice_memos",
             "obsidian",
+            "apple_messages_read",
         ]
     ] = Field(min_length=1)
     state: Literal["enrollment_preparation_required"]
@@ -81,6 +82,7 @@ class SettingsBridgeEnrollmentStartedV1(BaseModel):
             "apple_notes",
             "apple_voice_memos",
             "obsidian",
+            "apple_messages_read",
         ]
     ] = Field(min_length=1)
     state: Literal["requested"]
