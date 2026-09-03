@@ -135,6 +135,68 @@ def test_tasks_v4_additive_migration_accepts_existing_v2_table(
         conn.close()
 
 
+async def test_runner_migrates_existing_tasks_before_creating_new_indexes(
+    tmp_path: Path,
+) -> None:
+    """Exercise startup ordering against an encrypted pre-G07 Tasks database."""
+
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    config.projections_dir.mkdir(parents=True)
+    db_path = config.projection_db_path("tasks")
+    old = sqlcipher3.connect(str(db_path), isolation_level=None)
+    try:
+        old.execute(f'PRAGMA key = "x\'{TEST_KEY.hex()}\'"')
+        old.executescript(
+            """
+            CREATE TABLE tasks (
+                task_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                assignee_party TEXT,
+                due_date TEXT,
+                goal_ref TEXT,
+                domain TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, task_id)
+            );
+            """
+        )
+    finally:
+        old.close()
+
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
+    runner.register(TasksProjection())
+    await runner.start()
+    try:
+        conn = runner.connection("tasks")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(tasks)")}
+        assert {"owner_party_id", "service_party_id", "coordination_id"} <= columns
+        assert {
+            "idx_tasks_tenant_owner_party",
+            "idx_tasks_tenant_service_work",
+            "idx_tasks_tenant_coordination",
+        } <= indexes
+        service_work_columns = [
+            row[2]
+            for row in conn.execute(
+                "PRAGMA index_info(idx_tasks_tenant_service_work)"
+            )
+        ]
+        assert service_work_columns == [
+            "tenant_id",
+            "service_party_id",
+            "beneficiary_party_id",
+            "status",
+        ]
+    finally:
+        await runner.stop()
+        await log.close()
+
+
 async def test_task_created_inserts_row(rig: dict[str, Any]) -> None:
     log = rig["log"]
     bus = rig["bus"]

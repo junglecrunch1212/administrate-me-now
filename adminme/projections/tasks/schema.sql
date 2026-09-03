@@ -88,8 +88,6 @@ CREATE INDEX IF NOT EXISTS idx_tasks_tenant_status
     ON tasks(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_assignee
     ON tasks(tenant_id, assignee_party);
-CREATE INDEX IF NOT EXISTS idx_tasks_tenant_owner_party
-    ON tasks(tenant_id, owner_party_id, work_kind);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_due
     ON tasks(tenant_id, due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_goal
@@ -97,10 +95,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_tenant_goal
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_domain
     ON tasks(tenant_id, domain);
 
-CREATE INDEX IF NOT EXISTS idx_tasks_tenant_service_work
-    ON tasks(tenant_id, service_party_id, beneficiary_party_id, status);
-CREATE INDEX IF NOT EXISTS idx_tasks_tenant_coordination
-    ON tasks(tenant_id, coordination_id);
+-- Indexes that reference columns introduced after the original Tasks schema
+-- are created by TasksProjection.migrate_schema().  ProjectionRunner executes
+-- this file before the migration, so creating them here would make an existing
+-- encrypted database fail before its additive columns can be installed.
 
 -- Typed coordination is kept in the Tasks read model because it coordinates
 -- work without becoming a Task, Commitment, provider object, or transcript.

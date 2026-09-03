@@ -89,6 +89,8 @@ _ROLLBACK_PHASES = frozenset(
         "pointer_selected",
         "readiness_selecting",
         "readiness_selected",
+        "settings_control_selecting",
+        "settings_control_selected",
         "launchagents_selecting",
         "launchagents_selected",
         "services_starting",
@@ -394,8 +396,22 @@ def validate_journal(value: object) -> dict[str, Any]:
         "selected_adapter_config_sha256",
         "provider_binding_transition",
     }
-    has_config_transition = set(value) == required | transition_fields
-    if set(value) not in (required, required | transition_fields):
+    settings_fields = {
+        "initial_settings_control",
+        "initial_settings_control_bytes",
+        "initial_settings_control_sha256",
+    }
+    keys = set(value)
+    extras = keys - required
+    known_extras = transition_fields | settings_fields
+    has_config_transition = transition_fields <= keys
+    has_settings_snapshot = settings_fields <= keys
+    if (
+        not required <= keys
+        or not extras <= known_extras
+        or (bool(extras & transition_fields) != has_config_transition)
+        or (bool(extras & settings_fields) != has_settings_snapshot)
+    ):
         raise ActivationJournalError("activation journal schema is invalid")
     if (
         value.get("contract") != JOURNAL_CONTRACT
@@ -474,6 +490,28 @@ def validate_journal(value: object) -> dict[str, Any]:
     if readiness is None:
         if readiness_hash is not None or readiness_encoded is not None:
             raise ActivationJournalError("activation predecessor readiness is invalid")
+    else:
+        if not isinstance(readiness_encoded, str):
+            raise ActivationJournalError("activation predecessor readiness is invalid")
+        try:
+            readiness_payload = base64.b64decode(readiness_encoded, validate=True)
+            readiness_document = _json_no_duplicates(readiness_payload)
+        except (
+            TypeError,
+            ValueError,
+            ActivationJournalError,
+        ) as exc:
+            raise ActivationJournalError(
+                "activation predecessor readiness is invalid"
+            ) from exc
+        if (
+            not isinstance(readiness, dict)
+            or readiness_document != readiness
+            or not isinstance(readiness_hash, str)
+            or _HEX_64.fullmatch(readiness_hash) is None
+            or readiness_hash != hashlib.sha256(readiness_payload).hexdigest()
+        ):
+            raise ActivationJournalError("activation predecessor readiness is invalid")
     if has_config_transition:
         decoded_configs: dict[str, bytes] = {}
         for prefix in ("initial", "selected"):
@@ -529,28 +567,38 @@ def validate_journal(value: object) -> dict[str, Any]:
             raise ActivationJournalError(
                 "rollback provider-binding transition bytes do not match"
             )
-    else:
-        if not isinstance(readiness_encoded, str):
-            raise ActivationJournalError("activation predecessor readiness is invalid")
-        try:
-            readiness_payload = base64.b64decode(readiness_encoded, validate=True)
-            readiness_document = _json_no_duplicates(readiness_payload)
-        except (
-            TypeError,
-            ValueError,
-            ActivationJournalError,
-        ) as exc:
-            raise ActivationJournalError(
-                "activation predecessor readiness is invalid"
-            ) from exc
-        if (
-            not isinstance(readiness, dict)
-            or readiness_document != readiness
-            or not isinstance(readiness_hash, str)
-            or _HEX_64.fullmatch(readiness_hash) is None
-            or readiness_hash != hashlib.sha256(readiness_payload).hexdigest()
-        ):
-            raise ActivationJournalError("activation predecessor readiness is invalid")
+    if has_settings_snapshot:
+        settings = value.get("initial_settings_control")
+        settings_encoded = value.get("initial_settings_control_bytes")
+        settings_hash = value.get("initial_settings_control_sha256")
+        if settings is None:
+            if settings_encoded is not None or settings_hash is not None:
+                raise ActivationJournalError(
+                    "activation predecessor settings control is invalid"
+                )
+        else:
+            if not isinstance(settings, dict) or not isinstance(
+                settings_encoded, str
+            ):
+                raise ActivationJournalError(
+                    "activation predecessor settings control is invalid"
+                )
+            try:
+                settings_payload = base64.b64decode(settings_encoded, validate=True)
+                settings_document = _json_no_duplicates(settings_payload)
+            except (TypeError, ValueError, ActivationJournalError) as exc:
+                raise ActivationJournalError(
+                    "activation predecessor settings control is invalid"
+                ) from exc
+            if (
+                settings_document != settings
+                or not isinstance(settings_hash, str)
+                or _HEX_64.fullmatch(settings_hash) is None
+                or settings_hash != hashlib.sha256(settings_payload).hexdigest()
+            ):
+                raise ActivationJournalError(
+                    "activation predecessor settings control is invalid"
+                )
     pending_id = value.get("pending_attestation_id")
     pending_hash = value.get("pending_attestation_sha256")
     if operation == "activate":

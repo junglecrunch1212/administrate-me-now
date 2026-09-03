@@ -547,11 +547,14 @@ revalidates the pending binding again before selector authority exists.
 Immediately before the first selector mutation it consumes the completed
 preparation record, which can never grant retry authority again.
 
-The journal stores exact predecessor pointer/readiness bytes and the prior
-running state. It fsyncs intent before OpenClaw selection, service quiescence,
-plugin selection, pointer selection, readiness promotion, required-tool and
-LaunchAgent selection, restart, and Doctor. Candidate-bound active readiness is
-published only after the candidate pointer and before candidate services start.
+The journal stores exact predecessor pointer, readiness, adapter, and Settings
+control bytes plus the prior running state. Settings control is part of the
+rollback boundary because a newer runtime may migrate that file before Doctor
+can adjudicate the candidate. It fsyncs intent before OpenClaw selection,
+service quiescence, plugin selection, pointer selection, readiness promotion,
+required-tool and LaunchAgent selection, restart, and Doctor. Candidate-bound
+active readiness is published only after the candidate pointer and before
+candidate services start.
 An ordinary failure invokes the same recovery path immediately; SIGKILL or
 host death leaves the journal for the next guarded activate/rollback invocation,
 which performs recovery and returns without beginning new work. Recovery
@@ -573,6 +576,12 @@ depend on the disposable controller's ambient `PATH` after installation or
 during journal recovery. Plugin selection and adapter-derived member-topology
 selection are one stopped-service operation; recovery restores predecessor
 control bytes before running that operation.
+
+An additive projection change must also be exercised against an encrypted
+database from the prior schema. A clean event-log rebuild is necessary but does
+not prove existing-database startup ordering: schema statements run before the
+projection migration hook, so indexes over newly introduced columns belong in
+that hook.
 
 For central services and post-switch Doctor, the candidate manifest's
 formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older
