@@ -1,9 +1,9 @@
-"""Pinned, loopback-only BlueBubbles Server read transport.
+"""Pinned, loopback-only BlueBubbles Server Messages transport.
 
 The selected compatibility target is BlueBubbles Server 1.9.9 at the exact
-reviewed source commit below.  This module deliberately exposes only three
-read operations.  BlueBubbles' send/reaction/chat mutation routes are not
-represented, so the bridge adapter cannot call them accidentally.
+reviewed source commit below.  G11 adds one narrow AppleScript text route for
+an exact existing chat.  Chat creation, attachments, reactions, edits,
+unsend, read-state, typing, and group mutation routes remain unrepresented.
 """
 
 from __future__ import annotations
@@ -55,6 +55,10 @@ class BlueBubblesTransportError(RuntimeError):
 
 class BlueBubblesAuthenticationError(BlueBubblesTransportError):
     """Local credential resolution or BlueBubbles authentication failed."""
+
+
+class BlueBubblesAmbiguousWriteError(BlueBubblesTransportError):
+    """The request may have reached Messages but no terminal response arrived."""
 
 
 class CredentialResolver(Protocol):
@@ -116,7 +120,7 @@ class MessagePage:
 
 
 class BlueBubblesReadTransport(Protocol):
-    """Read operations used by :class:`BlueBubblesMessagesAdapter` only."""
+    """Pinned reads plus G11's one exact existing-chat text mutation."""
 
     async def server_info(self) -> Mapping[str, Any]: ...
 
@@ -131,6 +135,12 @@ class BlueBubblesReadTransport(Protocol):
     ) -> MessagePage: ...
 
     async def chat(self, native_chat_id: str) -> Mapping[str, Any]: ...
+
+    async def message(self, native_message_id: str) -> Mapping[str, Any]: ...
+
+    async def send_text_reply(
+        self, *, native_chat_id: str, body: str, temp_guid: str
+    ) -> Mapping[str, Any]: ...
 
     async def aclose(self) -> None: ...
 
@@ -184,6 +194,7 @@ class BlueBubblesRestTransport:
         *,
         body: Mapping[str, Any] | None = None,
         query: Mapping[str, str] | None = None,
+        ambiguous_on_timeout: bool = False,
     ) -> Mapping[str, Any]:
         # BlueBubbles 1.9.9 authenticates protected REST routes using a query
         # password.  Never call raise_for_status(): its exception renders the
@@ -196,6 +207,14 @@ class BlueBubblesRestTransport:
                 params={**dict(query or {}), "password": secret},
                 json=dict(body) if body is not None else None,
             )
+        except (httpx.ReadTimeout, httpx.WriteTimeout):
+            if ambiguous_on_timeout:
+                raise BlueBubblesAmbiguousWriteError(
+                    "BlueBubbles reply outcome is ambiguous; automatic retry is disabled"
+                ) from None
+            raise BlueBubblesTransportError(
+                "BlueBubbles loopback request timed out"
+            ) from None
         except httpx.HTTPError:
             raise BlueBubblesTransportError(
                 "BlueBubbles loopback request failed"
@@ -307,6 +326,64 @@ class BlueBubblesRestTransport:
             raise BlueBubblesTransportError("BlueBubbles chat response was malformed")
         return data
 
+    async def message(self, native_message_id: str) -> Mapping[str, Any]:
+        from urllib.parse import quote
+
+        data = self._data(
+            await self._request(
+                "GET",
+                f"/message/{quote(native_message_id, safe='')}",
+                query={"with": "chats"},
+            )
+        )
+        if not isinstance(data, dict):
+            raise BlueBubblesTransportError(
+                "BlueBubbles message response was malformed"
+            )
+        return data
+
+    async def send_text_reply(
+        self, *, native_chat_id: str, body: str, temp_guid: str
+    ) -> Mapping[str, Any]:
+        response = await self._request(
+            "POST",
+            "/message/text",
+            body={
+                "chatGuid": native_chat_id,
+                "tempGuid": temp_guid,
+                "message": body,
+                "method": "apple-script",
+            },
+            ambiguous_on_timeout=True,
+        )
+        data = self._data(response)
+        if not isinstance(data, dict):
+            raise BlueBubblesTransportError(
+                "BlueBubbles reply response contained no message evidence"
+            )
+        native_id = data.get("guid")
+        if native_id is not None and (not isinstance(native_id, str) or not native_id):
+            raise BlueBubblesTransportError(
+                "BlueBubbles reply response message identity was malformed"
+            )
+        returned_temp = data.get("tempGuid") or data.get("temp_guid")
+        if returned_temp is not None and returned_temp != temp_guid:
+            raise BlueBubblesTransportError(
+                "BlueBubbles reply response changed the temporary identity"
+            )
+        if native_id is None and returned_temp is None:
+            raise BlueBubblesTransportError(
+                "BlueBubbles reply response contained no acceptance evidence"
+            )
+        return {
+            "outcome": "sent" if native_id else "accepted",
+            "external_id": native_id,
+            "provider_revision": str(data.get("dateCreated"))
+            if data.get("dateCreated") is not None
+            else None,
+            "temp_guid": temp_guid,
+        }
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
@@ -314,6 +391,7 @@ class BlueBubblesRestTransport:
 
 __all__ = [
     "BlueBubblesAuthenticationError",
+    "BlueBubblesAmbiguousWriteError",
     "BlueBubblesReadTransport",
     "BlueBubblesRestTransport",
     "BlueBubblesTransportError",

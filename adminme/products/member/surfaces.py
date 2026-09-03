@@ -23,6 +23,7 @@ from adminme.reminders import (
     compose_reminders_cockpit,
 )
 from adminme.lib.session import Session
+from adminme.messages_reply import reply_control_for
 from adminme.triage_review import triage_review_state as _triage_review_state
 from adminme.products.member.navigation import (
     ADULT_SURFACES,
@@ -467,12 +468,18 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
         account_id = str(config.get("provider_account_id") or "")
         if not account_id:
             continue
+        reply_control = reply_control_for(runtime, member_id)
+        reply_enabled = (
+            reply_control["state"] == "enabled_ask_every_time"
+            and reply_control.get("bridge_enrollment_id") == record.get("enrollment_id")
+            and reply_control.get("provider_account_id") == account_id
+        )
         accounts.append(
             {
                 "id": f"bridge:{record.get('enrollment_id')}:messaging-bluebubbles",
                 "provider": "bluebubbles",
                 "provider_account_id": account_id,
-                "label": "Apple Messages (read-only)",
+                "label": "Apple Messages",
                 "channel": "Messages",
                 "workspace": "personal",
                 "state": (
@@ -490,7 +497,7 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
                 "capabilities": {
                     "read": authorized and enabled,
                     "threads": authorized and enabled,
-                    "reply": False,
+                    "reply": reply_enabled,
                     "send": False,
                     "mark_read": False,
                     "archive": False,
@@ -502,9 +509,11 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
                     "snooze_local": True,
                     "quiet_local": True,
                 },
-                "write_access_remedy": (
-                    "Apple Messages replies are unavailable until G11."
-                ),
+                "write_access_remedy": None
+                if reply_enabled
+                else reply_control.get("reason")
+                or "Enable ask-every-time replies in Settings.",
+                "reply_control": reply_control,
                 "connection_truth": {
                     "runtime": "member_bridge",
                     "identity_bound": bool(identity),
@@ -512,8 +521,8 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
                     "connector_id": "messaging-bluebubbles",
                     "protected_source_id": config.get("protected_source_id"),
                     "transport_version": config.get("transport_version"),
-                    "observation_only": True,
-                    "writes_authorized": False,
+                    "observation_only": runtime._observation_active,
+                    "writes_authorized": reply_enabled,
                 },
             }
         )
@@ -601,9 +610,10 @@ def _connector_catalog() -> list[dict[str, Any]]:
                 "group_conversations",
                 "reply_continuity",
                 "attachment_metadata",
+                "exact_existing_chat_text_reply_ask_every_time",
             ],
             "limitations": [
-                "read-only in G10; reply, send, reactions, edits, unsend, read state, and chat creation are unavailable",
+                "G11 adds only exact-text reply to an observed chat; new chats, attachments, autonomous replies, reactions, edits, unsend, read state, and group changes remain unavailable",
                 "bounded best-effort history has no provider replay cursor",
                 "RCS and per-message account identity are not contracted by the pinned transport",
             ],

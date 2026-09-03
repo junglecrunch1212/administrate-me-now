@@ -1,4 +1,4 @@
-"""Pinned read-only BlueBubbles Messages connector pack."""
+"""Pinned BlueBubbles observation and governed exact-reply connector pack."""
 
 from adminme_bridge.connector_packs.messaging_bluebubbles.adapter import (
     BlueBubblesMessagesAdapter,
@@ -10,6 +10,7 @@ from adminme_bridge.connector_packs.messaging_bluebubbles.transport import (
     SELECTED_TRANSPORT_COMMIT,
     SELECTED_TRANSPORT_VERSION,
     BlueBubblesAuthenticationError,
+    BlueBubblesAmbiguousWriteError,
     BlueBubblesReadTransport,
     BlueBubblesRestTransport,
     BlueBubblesTransportError,
@@ -20,6 +21,7 @@ from adminme_bridge.connector_packs.messaging_bluebubbles.transport import (
 
 __all__ = [
     "BlueBubblesAuthenticationError",
+    "BlueBubblesAmbiguousWriteError",
     "BlueBubblesMessagesAdapter",
     "BlueBubblesReadTransport",
     "BlueBubblesRestTransport",

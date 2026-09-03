@@ -15,7 +15,7 @@ from adminme.projections.interactions import handlers
 
 class InteractionsProjection(Projection):
     name = "interactions"
-    version = 6
+    version = 7
     subscribes_to = [
         "messaging.received",
         "messaging.sent",
@@ -28,6 +28,10 @@ class InteractionsProjection(Projection):
         "external_sync.write_requested",
         "external_sync.write_completed",
         "external_sync.write_failed",
+        "member.provider_action.confirmed",
+        "messaging.reply.canceled",
+        "messaging.reply.observed",
+        "messaging.reply.reconciled",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

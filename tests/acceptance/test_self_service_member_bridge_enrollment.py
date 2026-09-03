@@ -183,7 +183,27 @@ def test_g09_self_service_partial_success_restart_and_revocation(
         assert wizard["writes_authorized"] is False
         descriptors = {item["capability_id"]: item for item in wizard["capabilities"]}
         assert descriptors["apple_messages_read"]["implementation"] == "available"
-        assert descriptors["apple_messages_reply"]["implementation"] == "planned_g11"
+        assert descriptors["apple_messages_reply"]["implementation"] == "available"
+        assert descriptors["apple_messages_reply"][
+            "administrateme_write_ceiling"
+        ].startswith("Ask every time")
+        assert descriptors["apple_messages_reply"]["enrollment_selectable"] is False
+        assert (
+            "enable it separately"
+            in descriptors["apple_messages_reply"]["enrollment_note"]
+        )
+        reply_as_read_source = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=A_HEADERS,
+            json={
+                "expected_revision": 0,
+                "request_id": "g11-reply-is-separate",
+                "member_id": A,
+                "device_class": "another_mac",
+                "capabilities": ["apple_messages_reply"],
+            },
+        )
+        assert reply_as_read_source.status_code == 422
 
         cross_adult = client.post(
             "/api/member/v1/settings/bridges",

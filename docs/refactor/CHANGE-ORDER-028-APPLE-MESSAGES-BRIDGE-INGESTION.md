@@ -4,6 +4,11 @@ Status: Phase A implementation candidate; no family-Mac activation or provider e
 
 Goal: `[AM-COS-TRIAGE-V1][G10] Apple Messages Bridge Ingestion and Triage Integration`.
 
+G11 amendment: CO-029 preserves every read/ingestion boundary here and
+supersedes only the statements that the pack has no write seam. The current
+pack admits one governed existing-chat text `reply`; all live activation and
+every other Messages mutation remain excluded.
+
 ## Architecture decision
 
 This change is **MODERNIZE**. It replaces the historical assumption that every

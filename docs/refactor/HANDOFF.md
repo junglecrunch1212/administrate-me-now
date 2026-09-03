@@ -16,6 +16,35 @@ next_phase: continue_observation_until_separately_authorized_change
 ---
 # Release handoff
 
+## 2026-09-03 G11 governed Apple Messages reply candidate
+
+G11 is a Phase A **MODERNIZE/HARDEN** candidate built from merged G10 protected
+main. It adds one member-owned, ask-every-time plain-text reply to the exact
+existing observed Apple Messages chat. Settings binds the exact owner, bridge,
+account, protected source, pinned BlueBubbles capability, permission evidence,
+and revision; enable/pause/revoke are private event-sourced controls with zero
+provider effects.
+
+Comms requires an exact fixed-destination preview and explicit member action.
+The existing domain gate and signed single-use OpenClaw approval produce one
+expiring authenticated bridge command. Central and bridge gates independently
+revalidate the account, enrollment, source, chat, reply target, participant/body
+fingerprints, native revision, capability/policy, current setting, privacy, and
+observation state. The bridge exposes only the pinned existing-chat AppleScript
+text route, durably claims an attempt before provider contact, never retries an
+ambiguous outcome, and distinguishes accepted, sent, failed, and ambiguous.
+
+Terminal command state is not delivery. A later outgoing G10 observation must
+match exact native identity or one deterministic account/chat/body/participant
+candidate before separate observed and reconciled events close the lineage.
+Direct provider observations remain external member actions. Process, edge,
+transport, replay/restart, isolation, browser-contract, and exact fixture-effect
+tests pass locally; aggregate release evidence is recorded on the pull request.
+
+No family bridge, Messages account, credential, permission, deployment, reply
+setting, or live provider was touched. Phase B and every live Messages effect
+remain separately owner-authorized.
+
 ## 2026-09-03 G10 Apple Messages bridge ingestion candidate
 
 G10 is a Phase A **MODERNIZE/HARDEN** candidate built from the merged G09

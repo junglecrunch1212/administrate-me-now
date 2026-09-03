@@ -4,10 +4,10 @@ family: messaging
 entrypoint: adminme_bridge.connector_packs.messaging_bluebubbles:BlueBubblesMessagesAdapter
 pack:
   name: messaging-bluebubbles
-  version: 1.0.0
+  version: 1.1.0
   author: built-in
   license: Apache-2.0
-write_capabilities: []
+write_capabilities: [reply]
 capabilities:
   - kind: Cat-A
     runtime: bridge
@@ -51,5 +51,7 @@ transport:
   required_disabled_features: [private-api, firebase, webhooks, proxies]
   compatibility: conditional-clean-macos-arm64-lab
 documentation:
-  mode: read-only-observation
+  mode: observation-plus-governed-existing-chat-text-reply
   attachment_mode: metadata-only
+  reply_contract: apple-messages-member-reply-v1
+  prohibited_writes: [new-conversation, attachment, reaction, edit, unsend, read-state, typing, group-membership, bulk, autonomous-cos]

@@ -25,7 +25,7 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
-CATALOG_VERSION = "1.1.0"
+CATALOG_VERSION = "1.2.0"
 CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
@@ -354,14 +354,14 @@ _PLANNED_DESCRIPTORS: tuple[dict[str, Any], ...] = (
         "outcome": "Prepare and send a reply only through an accepted, separately approved path.",
         "source": "reviewed-descriptor:G11",
         "source_kind": "reviewed_optional_descriptor",
-        "implementation": "planned_g11",
-        "implementation_present": False,
+        "implementation": "superseded_by_bridge.messaging-bluebubbles",
+        "implementation_present": True,
         "runtime_location": "member_bridge",
         "verbs": {
-            "draft": "planned",
-            "prepare": "planned",
-            "hold": "planned",
-            "execute": "planned",
+            "draft": "member_only",
+            "prepare": "member_only",
+            "hold": "supported",
+            "execute": "ask_every_time",
         },
         "prerequisites": [
             "local_helper",
@@ -370,7 +370,10 @@ _PLANNED_DESCRIPTORS: tuple[dict[str, Any], ...] = (
             "openclaw_approval",
         ],
         "provider_options": ["apple_messages_member_bridge"],
-        "unavailable_reason": "Planned until G11 implements and accepts message reply execution.",
+        "terminal_result_support": True,
+        "later_observation_support": True,
+        "reconciliation_support": True,
+        "unavailable_reason": None,
     },
 )
 
@@ -587,6 +590,11 @@ def _bridge_definitions(repository_root: Path) -> list[dict[str, Any]]:
                             if writes
                             else {}
                         ),
+                        **(
+                            {"execute": "ask_every_time"}
+                            if artifact_id == "messaging-bluebubbles" and writes
+                            else {}
+                        ),
                     }
                 ),
                 "provider_options": [artifact_id],
@@ -596,7 +604,9 @@ def _bridge_definitions(repository_root: Path) -> list[dict[str, Any]]:
                     "member_consent",
                     "local_permission",
                 ],
-                "terminal_result_support": False,
+                "terminal_result_support": bool(
+                    artifact_id == "messaging-bluebubbles" and writes
+                ),
                 "later_observation_support": True,
                 "reconciliation_support": "candidate_assessment" in assurance_modes,
                 "request_key": _BRIDGE_REQUEST_KEYS[artifact_id],

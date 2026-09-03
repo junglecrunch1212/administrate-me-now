@@ -139,7 +139,7 @@ sharing never becomes AdministrateMe authorization.
 | Capability | Purpose | Gate 1 state |
 |---|---|---|
 | `parties` | Scoped endpoints, provider contact records, qualified Parties, identifier links, memberships, relationships, member profiles, facts, grants, and authorized FTS | Default-registered; CO-003 v2 lifecycle, deterministic identity, isolation, replay, and People composition implemented. |
-| `interactions` | Deduplicated, member/account/workspace-bound communication facts and explicit local/provider state | Default-registered; D28 Comms composition, scope/replay, provider command and process acceptance implemented. |
+| `interactions` | Deduplicated, member/account/workspace-bound communication facts and explicit local/provider state | Default-registered; D28 Comms composition plus G11 pending/approval/dispatch/result/observation/reconciliation state, scope/replay, provider command, and process acceptance implemented. |
 | `artifacts` | Documents/forms/records and links | Code/schema present; not in default runtime registry. |
 | `commitments` | Proposed, reviewed, active, completed obligations | Code/schema present; not in default runtime registry. |
 | `tasks` | Household execution work and ADHD attributes | Code/schema present; not in default runtime registry. |

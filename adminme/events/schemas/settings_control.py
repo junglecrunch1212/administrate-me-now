@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from adminme.bridge_enrollment import CAPABILITY_STATES, ENROLLMENT_STATES
 from adminme.events.registry import registry
@@ -239,6 +241,60 @@ class SettingsCapabilityRequestCancelledV1(BaseModel):
     provider_effects: Literal[False] = False
 
 
+class SettingsAppleMessagesReplyControlledV1(BaseModel):
+    """Owner-only desired state; this receipt can never itself send a message."""
+
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1, max_length=240)
+    action: Literal["enable", "pause", "revoke"]
+    state: Literal["enabled_ask_every_time", "paused", "revoked"]
+    revision: int = Field(ge=1)
+    coordinates: dict[str, str | None]
+    coordinates_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ask_every_time: Literal[True] = True
+    permits_new_conversation: Literal[False] = False
+    permits_cos_autonomy: Literal[False] = False
+    changed_by_member_id: str = Field(min_length=1, max_length=240)
+    changed_at: str = Field(min_length=1)
+    provider_effects: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_exact_authority(self) -> "SettingsAppleMessagesReplyControlledV1":
+        expected_keys = {
+            "member_id",
+            "bridge_enrollment_id",
+            "provider_account_id",
+            "protected_source_id",
+            "transport",
+            "capability_version",
+            "policy_version",
+            "permission_evidence_sha256",
+        }
+        expected_state = {
+            "enable": "enabled_ask_every_time",
+            "pause": "paused",
+            "revoke": "revoked",
+        }[self.action]
+        digest = hashlib.sha256(
+            json.dumps(
+                self.coordinates,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            set(self.coordinates) != expected_keys
+            or self.coordinates.get("member_id") != self.member_id
+            or self.changed_by_member_id != self.member_id
+            or self.state != expected_state
+            or self.coordinates_sha256 != digest
+        ):
+            raise ValueError("Messages reply authority coordinates are invalid")
+        return self
+
+
 registry.register("settings.profile_changed", 1, SettingsProfileChangedV1)
 registry.register("settings.preferences_changed", 1, SettingsPreferencesChangedV1)
 registry.register(
@@ -264,6 +320,11 @@ registry.register(
     "settings.capability_request_cancelled",
     1,
     SettingsCapabilityRequestCancelledV1,
+)
+registry.register(
+    "settings.apple_messages_reply_controlled",
+    1,
+    SettingsAppleMessagesReplyControlledV1,
 )
 
 

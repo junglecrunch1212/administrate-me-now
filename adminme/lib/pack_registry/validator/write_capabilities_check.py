@@ -16,10 +16,12 @@ Missing both shapes for a declared operation yields one ``error``
 finding per missing operation, named in the message + field-path
 ``write_capabilities[N]``.
 
-Category gate per memo 05 §2.1: only Cat-B carries a write surface. A
+Category gate per memo 05 §2.1: only Cat-B normally carries this write surface. A
 manifest with non-empty ``write_capabilities`` and a primary capability
 of Cat-A / Cat-C / Cat-D / Cat-E surfaces as ``error`` on the pack-level
-``write_capabilities`` field — the manifest is wrong-shape.
+``write_capabilities`` field — the manifest is wrong-shape. CO-029 adds one
+exact exception for a fixed-owner, observation-required Cat-A member bridge
+whose sole operation is the governed existing-chat ``reply`` edge seam.
 
 AST-walk only: no ``importlib.import_module`` on the adapter; we parse
 the file content with stdlib :mod:`ast`.
@@ -31,6 +33,9 @@ import ast
 from pathlib import Path
 
 from adminme.lib.pack_registry.models import AdapterManifest
+from adminme.lib.pack_registry.validator.bridge_communication_profile import (
+    sealed_bridge_communication_profile,
+)
 from adminme.lib.pack_registry.validator.result import ValidationFinding
 
 _CHECK_NAME = "write_capabilities"
@@ -105,6 +110,31 @@ def check_write_capabilities(
     """Run the write_capabilities method-presence rule against ``pack_dir`` / ``manifest``."""
     if not manifest.write_capabilities:
         return []
+
+    bridge_profile = sealed_bridge_communication_profile(Path(pack_dir), manifest)
+    if bridge_profile == "g11-governed-reply":
+        try:
+            tree = ast.parse((Path(pack_dir) / "adapter.py").read_text("utf-8"))
+        except (OSError, SyntaxError) as exc:
+            return [
+                _finding(
+                    "error",
+                    "G11 reply adapter.py could not be parsed: "
+                    f"{type(exc).__name__}: {exc}",
+                    "write_capabilities[0]",
+                )
+            ]
+        class_def = _find_adapter_class(tree)
+        methods = _method_names(class_def) if class_def is not None else set()
+        if "apply_write" in methods:
+            return []
+        return [
+            _finding(
+                "error",
+                "G11 governed reply declares no apply_write edge seam.",
+                "write_capabilities[0]",
+            )
+        ]
 
     findings: list[ValidationFinding] = []
     primary = manifest.capabilities[0].kind if manifest.capabilities else None

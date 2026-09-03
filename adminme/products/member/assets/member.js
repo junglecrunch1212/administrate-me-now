@@ -2049,8 +2049,10 @@ async function runCommsCommand(thread, operation, extras = {}) {
     });
     setBanner(result.local ? "Updated. The focus view has been recalculated." : "Your decision is saved. OpenClaw must separately approve this exact provider action before anything changes outside AdministrateMe.");
     await reloadActiveSurface();
+    return result;
   } catch (error) {
     setBanner(`${error.message} Nothing was changed.`);
+    return null;
   }
 }
 
@@ -2099,8 +2101,16 @@ function commsReadingPane(thread) {
   const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode(thread.why.join(" · "))); pane.append(why);
   if (thread.command_state) {
     const labels = {
-      pending: "Provider change requested; awaiting a terminal observation.",
+      pending: "Pending exact member approval.",
+      awaiting_openclaw_approval: "Member approval recorded; awaiting independent OpenClaw approval.",
+      dispatched: "Dispatched to the protected member-bridge queue; this is not a delivery claim.",
       suppressed: "Observation mode recorded the approved change without contacting the provider.",
+      result_accepted: "Transport accepted the reply; awaiting native outgoing observation.",
+      result_sent: "Transport reported sent; awaiting native outgoing observation.",
+      observed: "The outgoing message was observed through the read path; reconciliation is pending.",
+      reconciled: "The exact outgoing observation reconciled to this approved reply.",
+      ambiguous: "The transport result is ambiguous. AdministrateMe will not resend automatically; review the conversation.",
+      canceled: "The pending reply was canceled before dispatch.",
       completed: "Provider reported the requested change complete.",
       failed: "Provider change failed; the original message state remains authoritative.",
     };
@@ -2138,15 +2148,30 @@ function commsReadingPane(thread) {
   const compose = document.createElement("form"); compose.className = "comms-compose";
   const replyLabel = text("label", "Reply in this thread"); replyLabel.htmlFor = "comms-reply";
   const input = document.createElement("textarea"); input.id = "comms-reply"; input.rows = 4; input.maxLength = 20000; input.placeholder = "Write the reply you intend to send…"; compose.append(replyLabel, input);
+  const destination = document.createElement("dl"); destination.className = "settings-facts";
+  const participantLabels = [...new Set([...(latest.from || []), ...(latest.to || [])])];
+  for (const [label, value] of [["Your Messages account", thread.account_label], ["Source", `${thread.provider} · ${thread.transport || thread.channel}`], ["Native chat", thread.native_chat_id || "Unavailable"], ["Participants", participantLabels.join(", ") || thread.counterparties.join(", ") || "Unavailable"]]) destination.append(text("dt", label), text("dd", value));
+  compose.append(destination);
+  if (thread.is_group) compose.append(text("p", "Group conversation: this reply goes to the exact participant set shown above. Any stale or ambiguous participant state stops the command before provider contact.", "review-state"));
+  compose.append(text("p", "Sending is an external provider effect. The account, existing chat, and participant set are fixed and cannot be edited here. Plain text only; no attachment, signature, or quoted history is added.", "state-note"));
+  const preview = document.createElement("section"); preview.className = "state-card"; preview.hidden = true;
+  const previewBody = document.createElement("pre"); previewBody.className = "comms-reply-preview";
+  preview.append(text("strong", "Final exact preview"), text("p", `From ${thread.account_label} to the exact existing ${thread.is_group ? "group" : "conversation"}.`), previewBody, text("p", "Approving records this exact destination and Unicode body for one use. OpenClaw must still approve independently.", "review-state"));
+  compose.append(preview);
+  let approvedPreview = null;
   input.addEventListener("input", () => {
     input.removeAttribute("aria-invalid");
     input.removeAttribute("aria-describedby");
+    approvedPreview = null;
+    preview.hidden = true;
+    const submit = compose.querySelector('button[type="submit"]');
+    if (submit) submit.textContent = "Preview exact reply";
   });
   if (thread.capabilities.reply) {
-    compose.append(text("p", "This saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.", "state-note"));
-    const send = text("button", "Save reply for approval", "button button-primary"); send.type = "submit";
+    compose.append(text("p", "Replies are enabled ask-every-time. Previewing does nothing; the final explicit action records one pending command, never a delivery claim.", "state-note"));
+    const send = text("button", "Preview exact reply", "button button-primary"); send.type = "submit";
     compose.append(send);
-    compose.addEventListener("submit", (event) => {
+    compose.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!input.value.trim()) {
         input.setAttribute("aria-invalid", "true");
@@ -2155,11 +2180,33 @@ function commsReadingPane(thread) {
         input.focus();
         return;
       }
-      runCommsCommand(thread, "reply", { body: input.value.trim() });
+      if (approvedPreview === null) {
+        approvedPreview = input.value;
+        previewBody.textContent = approvedPreview;
+        preview.hidden = false;
+        send.textContent = "Approve this exact reply";
+        setBanner("Review the fixed account, chat, participants, and exact body. Nothing has been sent or queued.");
+        return;
+      }
+      if (input.value !== approvedPreview) {
+        approvedPreview = null;
+        preview.hidden = true;
+        send.textContent = "Preview exact reply";
+        setBanner("The body changed. Review a new exact preview; nothing was queued.");
+        return;
+      }
+      send.disabled = true;
+      input.disabled = true;
+      const result = await runCommsCommand(thread, "reply", { body: approvedPreview });
+      if (!result) { send.disabled = false; input.disabled = false; }
     });
   } else {
     input.disabled = true;
-    compose.append(text("p", "This account is connected read-only. Reconnect it with provider write access to reply or manage messages here.", "state-note"));
+    compose.append(text("p", thread.reply_eligibility?.reason || "This exact conversation is not eligible for replies. Enable the member-owned capability in Settings after read observation settles.", "state-note"));
+  }
+  if (thread.command_state === "awaiting_openclaw_approval" && thread.last_command_id) {
+    const cancel = text("button", "Cancel pending reply", "button button-quiet"); cancel.type = "button";
+    cancel.addEventListener("click", async () => { cancel.disabled = true; try { await api(`/api/member/v1/comms/replies/${encodeURIComponent(thread.last_command_id)}/cancel`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID() }) }); setBanner("Pending reply canceled. No provider call occurred."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The pending reply was not canceled.`); cancel.disabled = false; } }); compose.append(cancel);
   }
   pane.append(compose);
   return pane;
@@ -4038,12 +4085,22 @@ function bridgeSettings(data) {
     const form = document.createElement("form"); form.className = "card bridge-form"; form.append(text("p", "SELF-SERVICE WIZARD", "eyebrow"), text("h2", "Add Bridge"), text("p", "Review the member, device class, capabilities, data categories, observation behavior, and revocation before creating a 30-minute target-device handoff.", "state-note"));
     const selfCandidate = (data.control.bridge_candidates || []).find((item) => item.member_id === data.control.identity.authenticated_member_id); const member = document.createElement("input"); member.type = "text"; member.value = selfCandidate?.label || data.control.identity.authenticated_display_name; member.readOnly = true; form.append(field("Bridge owner", member));
     const devices = document.createElement("fieldset"); devices.className = "bridge-device-choice"; devices.append(text("legend", "Which Mac?")); for (const [value, label, note] of [["this_mac", "This Mac", "Download and open the handoff here."], ["another_mac", "Another Mac", "Transfer the package and one-time clipboard code. Tailscale and the reviewed helper are required."]]) { const row = document.createElement("label"); const input = document.createElement("input"); input.type = "radio"; input.name = "device_class"; input.value = value; input.checked = value === "this_mac"; input.disabled = !data.control.identity.can_mutate; const copy = document.createElement("span"); copy.append(text("strong", label), text("small", note)); row.append(input, copy); devices.append(row); } form.append(devices);
-    const capabilities = document.createElement("fieldset"); capabilities.className = "bridge-capabilities"; capabilities.append(text("legend", "Choose read-only sources")); for (const descriptor of wizard.capabilities || []) { const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; const input = document.createElement("input"); input.type = "checkbox"; input.name = "capability"; input.value = descriptor.capability_id; input.checked = ["apple_calendar", "apple_reminders"].includes(descriptor.capability_id); input.disabled = !data.control.identity.can_mutate || descriptor.implementation !== "available"; const copy = document.createElement("span"); copy.append(text("strong", descriptor.label), text("small", `${descriptor.administrateme_read_ceiling} · Write ceiling: ${descriptor.administrateme_write_ceiling}`), text("small", descriptor.local_permission)); if (descriptor.implementation !== "available") copy.append(text("span", titleCase(descriptor.implementation), "pill state-label state-unknown")); wrap.append(input, copy); capabilities.append(wrap); } form.append(capabilities);
+    const capabilities = document.createElement("fieldset"); capabilities.className = "bridge-capabilities"; capabilities.append(text("legend", "Choose read-only sources")); for (const descriptor of wizard.capabilities || []) { const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; const input = document.createElement("input"); input.type = "checkbox"; input.name = "capability"; input.value = descriptor.capability_id; input.checked = ["apple_calendar", "apple_reminders"].includes(descriptor.capability_id); input.disabled = !data.control.identity.can_mutate || descriptor.implementation !== "available" || descriptor.enrollment_selectable === false; const copy = document.createElement("span"); copy.append(text("strong", descriptor.label), text("small", `${descriptor.administrateme_read_ceiling} · Write ceiling: ${descriptor.administrateme_write_ceiling}`), text("small", descriptor.local_permission)); if (descriptor.enrollment_note) copy.append(text("small", descriptor.enrollment_note)); if (descriptor.implementation !== "available") copy.append(text("span", titleCase(descriptor.implementation), "pill state-label state-unknown")); wrap.append(input, copy); capabilities.append(wrap); } form.append(capabilities);
     const review = document.createElement("section"); review.className = "state-card bridge-review"; review.append(text("strong", "Review"), text("p", "The package binds this member, this instance, the selected device class, exact capabilities, compatible release, and expiry. Pairing alone activates no source. Each connector waits for local permission evidence, adapter authentication, central attestation, and compatible release."), text("p", "Revocation stops central ingestion. Enrollment never creates provider action authority.", "state-note")); form.append(review);
     const submit = text("button", "Prepare enrollment", "button button-primary"); submit.type = "submit"; submit.disabled = !data.control.identity.can_mutate || !selfCandidate; form.append(submit);
     form.addEventListener("submit", async (event) => { event.preventDefault(); const selected = [...form.querySelectorAll('input[name="capability"]:checked')].map((input) => input.value); const deviceClass = form.querySelector('input[name="device_class"]:checked')?.value; if (!selected.length) { setBanner("Choose at least one available bridge capability."); return; } submit.disabled = true; setBanner("Creating an encrypted, signed, short-lived bridge handoff…"); try { const result = await api("/api/member/v1/settings/bridges", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), member_id: data.control.identity.authenticated_member_id, device_class: deviceClass, capabilities: selected }) }); setBanner(result.next_step); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge request was not created.`); submit.disabled = false; } }); fragment.append(form);
   }
-  const planned = document.createElement("section"); planned.className = "card"; planned.append(text("h2", "Apple Messages capability boundary"), text("p", "Read-only Apple Messages observation is available through the reviewed member bridge. Reply and send remain unavailable until G11 and will still require separate member authority and action approval.", "state-note")); fragment.append(planned); return fragment;
+  const reply = data.control.apple_messages_replies || { state: "implementation_unavailable", revision: 0, prohibited: [] };
+  const replyCard = document.createElement("section"); replyCard.className = "card apple-messages-reply-control";
+  replyCard.append(text("p", "MEMBER-OWNED WRITE CAPABILITY", "eyebrow"), text("h2", "Enable replies from Comms"), text("span", titleCase(reply.state), `pill state-label state-${String(reply.state).replaceAll("_", "-")}`));
+  const replyFacts = document.createElement("dl"); replyFacts.className = "settings-facts";
+  for (const [label, value] of [["Exact member", data.control.identity.authenticated_display_name], ["Exact bridge", reply.bridge_enrollment_id || "Not connected"], ["Messages account/source", reply.provider_account_id ? `${reply.provider_account_id} · ${reply.source_class}` : "Unavailable"], ["Transport capability", reply.transport ? `${reply.transport} · BlueBubbles ${reply.transport_version || "unverified"}` : "Unsupported"], ["Observation and settlement", reply.observation_settled ? "Settled" : "Not settled"], ["Approval", "Ask every time for the exact body and destination"]]) replyFacts.append(text("dt", label), text("dd", value));
+  replyCard.append(replyFacts, text("p", reply.reason || "This permits only a plain-text reply to an exact existing observed chat. Enabling sends nothing.", "state-note"));
+  const remains = document.createElement("details"); remains.className = "settings-technical"; remains.append(text("summary", "What remains prohibited")); const prohibited = document.createElement("ul"); prohibited.className = "settings-rule-list"; for (const value of reply.prohibited || []) prohibited.append(text("li", value)); remains.append(prohibited); replyCard.append(remains);
+  const replyActions = document.createElement("div"); replyActions.className = "button-row";
+  const availableActions = reply.state === "enabled_ask_every_time" ? ["pause", "revoke"] : reply.state === "paused" ? ["enable", "revoke"] : reply.state === "available_but_disabled" ? ["enable", "revoke"] : [];
+  for (const action of availableActions) { const button = text("button", action === "enable" ? "Enable ask-every-time replies" : titleCase(action), action === "revoke" ? "button button-quiet" : "button button-primary"); button.type = "button"; button.disabled = !data.control.identity.can_mutate; button.addEventListener("click", async () => { button.disabled = true; setBanner(`${titleCase(action)} Messages replies…`); try { const result = await api("/api/member/v1/settings/apple-messages-replies", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: reply.revision || 0, request_id: crypto.randomUUID(), action }) }); setBanner(`Messages replies are ${titleCase(result.state)}. Enabling or changing this setting produced ${result.provider_effects || 0} provider effects.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Messages reply authority was not changed.`); button.disabled = false; } }); replyActions.append(button); }
+  replyCard.append(replyActions, text("p", "Pause and revoke take effect before bridge delivery. Revocation is terminal for this authority; re-enrollment is required to create a new one. New conversations and CoS-autonomous sending are never granted.", "review-state")); fragment.append(replyCard); return fragment;
 }
 
 function privacySettings(data) {

@@ -329,6 +329,9 @@ def compose_comms_cockpit(
         account_id = str(latest.get("provider_account_id") or "unknown")
         account = account_by_key.get((provider, account_id))
         messages = [_message(row, participants, party_labels) for row in ordered]
+        command_row = next(
+            (row for row in reversed(ordered) if row.get("last_command_id")), latest
+        )
         raw_ids = {
             str(event_id)
             for row in ordered
@@ -418,7 +421,9 @@ def compose_comms_cockpit(
                 "native_chat_id": latest.get("native_chat_id"),
                 "transport": latest.get("transport_class"),
                 "is_group": bool(latest.get("is_group")),
-                "read_only": provider == "bluebubbles",
+                "read_only": not bool(
+                    (account or {}).get("capabilities", {}).get("reply")
+                ),
                 "bucket": bucket,
                 "focus_score": _score(bucket, latest),
                 "why": why,
@@ -442,7 +447,24 @@ def compose_comms_cockpit(
                 "classification": latest.get("classification"),
                 "attention": attention,
                 "needs_reply": attention["signals"]["reply_signal"] == "required",
-                "command_state": latest.get("command_state"),
+                "command_state": command_row.get("command_state"),
+                "last_command_id": command_row.get("last_command_id"),
+                "reply_eligibility": {
+                    "eligible": bool(
+                        (account or {}).get("capabilities", {}).get("reply")
+                        and latest.get("native_chat_id")
+                        and latest.get("native_message_id")
+                        and latest.get("message_state", "active") == "active"
+                    ),
+                    "reason": (account or {}).get("write_access_remedy"),
+                    "destination_locked": True,
+                    "account_locked": True,
+                    "participant_set_locked": True,
+                    "plain_text_only": True,
+                    "ask_every_time": True,
+                    "external_provider_effect": True,
+                    "new_conversation_allowed": False,
+                },
                 "last_interaction_id": latest["interaction_id"],
                 "last_event_id": latest["last_event_id"],
                 "capabilities": (account or {}).get("capabilities", {}),
@@ -513,15 +535,21 @@ def validate_outbound_communication(
     if interaction.get("provider_account_id") != account.get("provider_account_id"):
         raise ValueError("communication account binding changed")
     if operation == "reply":
-        if not isinstance(recipient, str) or not recipient.strip():
-            raise ValueError("reply recipient is unavailable")
-        if any(value in recipient for value in ("\r", "\n", "\x00")):
-            raise ValueError("reply recipient contains unsafe header characters")
-        source_recipient = interaction.get("reply_to_identifier")
-        if interaction.get("provider") != "fixture" and not source_recipient:
-            raise ValueError("source-derived reply recipient is unavailable")
-        if source_recipient and recipient != source_recipient:
-            raise ValueError("reply recipient binding changed")
+        if interaction.get("provider") == "bluebubbles":
+            if not interaction.get("native_chat_id"):
+                raise ValueError("source-derived native chat is unavailable")
+            if recipient is not None:
+                raise ValueError("Messages reply recipient must remain chat-derived")
+        else:
+            if not isinstance(recipient, str) or not recipient.strip():
+                raise ValueError("reply recipient is unavailable")
+            if any(value in recipient for value in ("\r", "\n", "\x00")):
+                raise ValueError("reply recipient contains unsafe header characters")
+            source_recipient = interaction.get("reply_to_identifier")
+            if interaction.get("provider") != "fixture" and not source_recipient:
+                raise ValueError("source-derived reply recipient is unavailable")
+            if source_recipient and recipient != source_recipient:
+                raise ValueError("reply recipient binding changed")
         if not isinstance(body, str) or not body.strip():
             raise ValueError("reply body is empty")
         if "\x00" in body:
@@ -534,7 +562,11 @@ def validate_outbound_communication(
         "checks": [
             "self_member_scope",
             "exact_provider_account",
-            "source_derived_recipient" if operation == "reply" else "provider_target",
+            "source_derived_chat"
+            if operation == "reply" and interaction.get("provider") == "bluebubbles"
+            else "source_derived_recipient"
+            if operation == "reply"
+            else "provider_target",
             "member_authored_content" if operation == "reply" else "no_outbound_body",
         ],
     }
