@@ -196,7 +196,7 @@ def test_g08_catalog_settings_openclaw_isolation_and_replay(tmp_path: Path) -> N
             "superseded_by_bridge.messaging-bluebubbles"
         )
         assert item_by_id["planned.apple_messages_reply"]["implementation"] == (
-            "planned_g11"
+            "superseded_by_bridge.messaging-bluebubbles"
         )
         assert item_by_id["planned.apple_messages_reply"]["effective"] == {
             "read_available": False,
@@ -590,5 +590,5 @@ def test_g08_encrypted_backup_restore_preserves_capability_requests(
             if item["capability_id"] == "planned.apple_messages_observation"
         )
         assert saved["state"] == "requested"
-        assert saved["catalog_version"] == "1.1.0"
+        assert saved["catalog_version"] == "1.2.0"
         assert client.portal.call(_provider_effect_count, client.app.state.runtime) == 0

@@ -36,6 +36,7 @@ from adminme.cos_compiled_context import (
 )
 from adminme.openclaw_topology import member_agent_id
 from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
+from adminme.messages_reply import reply_control_for
 from adminme.projections.context_fabric.queries import (
     source_policy_proposals_for_member,
     source_policy_rules_for_member,
@@ -87,7 +88,7 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
         "product": "Communications",
         "runtime": "member bridge",
         "read": ["messages", "threads", "attachment metadata"],
-        "write": [],
+        "write": ["reply to exact existing observed chat (ask every time)"],
     },
     "messaging-twilio-sms": {
         "provider": "twilio_sms",
@@ -231,7 +232,7 @@ class SettingsMutation:
 class SettingsControlStore:
     """Atomic, secret-free desired-state journal for member controls."""
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -251,6 +252,8 @@ class SettingsControlStore:
             "source_policy_v2_migrations": {},
             "capability_requests": {},
             "capability_request_revisions": {},
+            "message_reply_controls": {},
+            "message_reply_control_revisions": {},
         }
 
     def read(self) -> dict[str, Any]:
@@ -266,6 +269,7 @@ class SettingsControlStore:
             3,
             4,
             5,
+            6,
         }:
             raise RuntimeError("Settings control journal has an unsupported schema")
         if value["schema_version"] == 1:
@@ -287,7 +291,7 @@ class SettingsControlStore:
             value["capability_request_revisions"] = {}
         if value["schema_version"] == 4:
             value = copy.deepcopy(value)
-            value["schema_version"] = self.SCHEMA_VERSION
+            value["schema_version"] = 5
             value["bridge_request_revisions"] = {}
             migrated: dict[str, dict[str, Any]] = {}
             for member_id, record in value.get("bridge_requests", {}).items():
@@ -328,6 +332,11 @@ class SettingsControlStore:
                 }
                 value["bridge_request_revisions"][str(member_id)] = 1
             value["bridge_requests"] = migrated
+        if value["schema_version"] == 5:
+            value = copy.deepcopy(value)
+            value["schema_version"] = self.SCHEMA_VERSION
+            value["message_reply_controls"] = {}
+            value["message_reply_control_revisions"] = {}
         if not isinstance(value.get("revision"), int):
             raise RuntimeError("Settings control journal revision is invalid")
         for key in (
@@ -341,6 +350,8 @@ class SettingsControlStore:
             "source_policy_v2_migrations",
             "capability_requests",
             "capability_request_revisions",
+            "message_reply_controls",
+            "message_reply_control_revisions",
         ):
             if not isinstance(value.get(key), dict):
                 raise RuntimeError(f"Settings control journal {key} is invalid")
@@ -453,6 +464,26 @@ class SettingsControlStore:
             value["capability_requests"]
         ):
             raise RuntimeError("Settings capability request owner revision is invalid")
+        for member_id, record in value["message_reply_controls"].items():
+            revision = value["message_reply_control_revisions"].get(member_id)
+            if (
+                not isinstance(member_id, str)
+                or not isinstance(record, dict)
+                or record.get("member_id") != member_id
+                or record.get("state")
+                not in {"enabled_ask_every_time", "paused", "revoked"}
+                or not isinstance(revision, int)
+                or revision < 1
+                or record.get("revision") != revision
+                or record.get("ask_every_time") is not True
+                or record.get("provider_effects") is not False
+                or not isinstance(record.get("coordinates"), dict)
+            ):
+                raise RuntimeError("Settings Messages reply control is invalid")
+        if set(value["message_reply_control_revisions"]) - set(
+            value["message_reply_controls"]
+        ):
+            raise RuntimeError("Settings Messages reply revision is invalid")
         return value
 
     @staticmethod
@@ -1109,6 +1140,127 @@ class SettingsControlStore:
             for _, record in sorted(rows.items())
             if isinstance(record, dict)
         ]
+
+    def message_reply_control_revision(
+        self, member_id: str, *, state: dict[str, Any] | None = None
+    ) -> int:
+        current = state or self.read()
+        value = current["message_reply_control_revisions"].get(member_id, 0)
+        return int(value) if isinstance(value, int) and value >= 0 else 0
+
+    def prepare_message_reply_control(
+        self, member_id: str, *, expected_revision: int, action: str
+    ) -> int:
+        current_state = self.read()
+        current_revision = self.message_reply_control_revision(
+            member_id, state=current_state
+        )
+        if current_revision != expected_revision:
+            raise ValueError("Messages reply setting changed; refresh before saving")
+        existing = current_state["message_reply_controls"].get(member_id)
+        existing_state = existing.get("state") if isinstance(existing, dict) else None
+        if action == "enable":
+            if existing_state == "revoked":
+                raise ValueError("Revoked Messages reply authority cannot be resumed")
+        elif action == "pause":
+            if existing_state != "enabled_ask_every_time":
+                raise ValueError("Messages replies are not enabled")
+        elif action == "revoke":
+            if existing_state == "revoked":
+                raise ValueError("Messages replies are already revoked")
+        else:
+            raise ValueError("Messages reply control action is invalid")
+        return current_revision + 1
+
+    @staticmethod
+    def _apply_message_reply_control_payload(
+        state: dict[str, Any], payload: dict[str, Any], *, increment_global: bool
+    ) -> SettingsMutation:
+        member_id = str(payload.get("member_id") or "")
+        revision = payload.get("revision")
+        requested_state = payload.get("state")
+        if not member_id or requested_state not in {
+            "enabled_ask_every_time",
+            "paused",
+            "revoked",
+        }:
+            raise ValueError("Messages reply control payload is invalid")
+        if not isinstance(revision, int) or revision < 1:
+            raise ValueError("Messages reply control revision is invalid")
+        current_revision = int(
+            state["message_reply_control_revisions"].get(member_id, 0)
+        )
+        if revision != current_revision + 1:
+            raise ValueError("Messages reply control revision is not consecutive")
+        coordinates = payload.get("coordinates")
+        if (
+            not isinstance(coordinates, dict)
+            or coordinates.get("member_id") != member_id
+            or payload.get("changed_by_member_id") != member_id
+            or payload.get("coordinates_sha256")
+            != hashlib.sha256(
+                json.dumps(
+                    coordinates,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        ):
+            raise ValueError("Messages reply coordinates do not bind the exact member")
+        rows = state["message_reply_controls"]
+        previous = copy.deepcopy(rows.get(member_id) or {})
+        current = {
+            "member_id": member_id,
+            "state": requested_state,
+            "revision": revision,
+            "coordinates": copy.deepcopy(coordinates),
+            "coordinates_sha256": str(payload.get("coordinates_sha256") or ""),
+            "ask_every_time": True,
+            "changed_by_member_id": str(payload.get("changed_by_member_id") or ""),
+            "changed_at": str(payload.get("changed_at") or ""),
+            "provider_effects": False,
+        }
+        rows[member_id] = current
+        state["message_reply_control_revisions"][member_id] = revision
+        if increment_global:
+            state["revision"] += 1
+        return SettingsMutation(previous, copy.deepcopy(current), revision)
+
+    def apply_message_reply_control_event(
+        self, payload: dict[str, Any]
+    ) -> SettingsMutation:
+        state = self.read()
+        mutation = self._apply_message_reply_control_payload(
+            state, payload, increment_global=True
+        )
+        _atomic_json(self.path, state)
+        return mutation
+
+    async def replay_message_reply_control_events(self, event_log: Any) -> int:
+        """Rebuild reply authority from the encrypted append-only receipts."""
+
+        state = self.read()
+        state["message_reply_controls"] = {}
+        state["message_reply_control_revisions"] = {}
+        count = 0
+        async for event in event_log.read_since(
+            types=["settings.apple_messages_reply_controlled"]
+        ):
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                raise RuntimeError("Messages reply control event is invalid")
+            try:
+                self._apply_message_reply_control_payload(
+                    state, payload, increment_global=False
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Messages reply control replay failed closed"
+                ) from exc
+            count += 1
+        _atomic_json(self.path, state)
+        return count
 
     def effective_source_policy_v2(
         self,
@@ -2096,6 +2248,19 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             },
         },
         "bridges": bridges,
+        "apple_messages_replies": (
+            reply_control_for(runtime, view_id, settings_state=state)
+            if private_owner_visible
+            else {
+                "state": "bridge_not_connected",
+                "reason": "Reply controls are owner-only and unavailable in view-as.",
+                "member_id": view_id,
+                "ask_every_time": True,
+                "enabled": False,
+                "revision": None,
+                "provider_effects": False,
+            }
+        ),
         "bridge_wizard": {
             "contract": WIZARD_CONTRACT,
             "progress_contract": PROGRESS_CONTRACT,

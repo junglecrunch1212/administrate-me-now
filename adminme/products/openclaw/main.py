@@ -42,6 +42,12 @@ from adminme.lib.scope import filter_rows
 from adminme.lib.session import Session, Source
 from adminme.lib.skill_runner.wrapper import SkillContext
 from adminme.openclaw_approvals import ApprovalReceiptError
+from adminme.messages_reply import (
+    REPLY_CONTRACT,
+    approval_is_current,
+    canonical_sha256,
+    participant_ids,
+)
 from adminme.openclaw_topology import binding_fingerprints, member_agent_id
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
@@ -63,6 +69,7 @@ from adminme.projections.tasks.queries import (
 from adminme.projections.commitments.queries import get_commitment
 from adminme.projections.calendars.queries import get_calendar_event
 from adminme.projections.lists.queries import get_item as get_list_item
+from adminme.projections.interactions.queries import get_interaction, participants_for
 from adminme.projections.context_fabric.queries import (
     source_policy_proposals_for_member,
     source_policy_rules_for_member,
@@ -2502,6 +2509,12 @@ async def _execute_pending_provider_action(
         or domain_event.get("payload", {}).get("member_id") != session.auth_member_id
     ):
         raise HTTPException(404, "pending provider action not found")
+    canceled = await runtime.event_log.get_by_idempotency(
+        session.tenant_id,
+        f"messages-reply-cancel:{session.auth_member_id}:{domain_event['payload']['action_id']}",
+    )
+    if canceled is not None:
+        raise HTTPException(409, "pending Messages reply was canceled")
     prior_key = f"external-sync-approved:{domain_event['event_id']}"
     prior = await runtime.event_log.get_by_idempotency(session.tenant_id, prior_key)
     if prior is not None:
@@ -2512,6 +2525,52 @@ async def _execute_pending_provider_action(
             "domain_approval_event_id": domain_event["event_id"],
         }
     payload = domain_event["payload"]
+    provider_payload = payload.get("command_payload")
+    if (
+        payload.get("provider") == "bluebubbles"
+        and isinstance(provider_payload, dict)
+        and provider_payload.get("contract") == REPLY_CONTRACT
+    ):
+        current, reason = approval_is_current(
+            runtime,
+            member_id=session.auth_member_id,
+            command_payload=provider_payload,
+        )
+        if not current:
+            raise HTTPException(409, f"Messages reply approval is stale: {reason}")
+        if runtime.projections is None:
+            raise HTTPException(503, "Messages conversation state is unavailable")
+        interaction = get_interaction(
+            runtime.projections.connection("interactions"),
+            session,
+            interaction_id=str(provider_payload.get("interaction_id") or ""),
+        )
+        if interaction is None:
+            raise HTTPException(409, "Messages conversation became unavailable")
+        expected = {
+            "last_event_id": provider_payload.get("expected_last_event_id"),
+            "native_chat_id": provider_payload.get("native_chat_id"),
+            "native_message_id": provider_payload.get("in_reply_to_native_message_id"),
+            "native_revision": provider_payload.get("expected_native_revision"),
+            "bridge_enrollment_id": provider_payload.get("bridge_enrollment_id"),
+            "provider_account_id": provider_payload.get("provider_account_id"),
+            "protected_source_id": provider_payload.get("protected_source_id"),
+        }
+        if any(interaction.get(key) != value for key, value in expected.items()):
+            raise HTTPException(409, "Messages conversation or destination changed")
+        current_participants = participant_ids(
+            participants_for(
+                runtime.projections.connection("interactions"),
+                session,
+                interaction_ids=[str(interaction["interaction_id"])],
+            ).get(str(interaction["interaction_id"]), [])
+        )
+        if current_participants != provider_payload.get(
+            "participant_ids"
+        ) or canonical_sha256(current_participants) != provider_payload.get(
+            "participant_fingerprint"
+        ):
+            raise HTTPException(409, "Messages participants changed")
     request_fingerprint = str(payload["request_fingerprint"])
     approval_event_id = await _consume_openclaw_approval(
         request,
@@ -2536,7 +2595,11 @@ async def _execute_pending_provider_action(
         "domain_approval_event_id": domain_event["event_id"],
         "openclaw_approval_event_id": approval_event_id,
         "request_fingerprint": request_fingerprint,
-        "privacy_guard_version": "member-provider-action-v1",
+        "privacy_guard_version": (
+            "apple-messages-plain-text-exact-v1"
+            if payload.get("provider") == "bluebubbles"
+            else "member-provider-action-v1"
+        ),
         "origin_proposal_id": payload.get("origin_proposal_id"),
     }
     await _guard(runtime, session, "external_sync.write_requested", command_payload)

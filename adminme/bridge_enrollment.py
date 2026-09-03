@@ -195,7 +195,10 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
         "administrateme_read_ceiling": (
             "Observe bounded personal message history/live changes and attachment metadata"
         ),
-        "administrateme_write_ceiling": "None",
+        "administrateme_write_ceiling": (
+            "Exact text reply to an existing observed chat only after G11 is "
+            "separately enabled and each reply is approved"
+        ),
         "transport": {
             "name": "BlueBubbles Server",
             "version": "1.9.9",
@@ -210,19 +213,40 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "apple_messages_reply": {
         "label": "Apple Messages reply",
-        "pack": None,
-        "implementation": "planned_g11",
-        "data_categories": ["message replies"],
-        "local_permission": "Planned for G11",
-        "settings_url": None,
-        "native_permission_ceiling": "Unavailable",
+        "pack": "messaging-bluebubbles",
+        "implementation": "available",
+        "enrollment_selectable": False,
+        "enrollment_note": (
+            "Represented here for capability health; enable it separately only "
+            "after Apple Messages read observation settles."
+        ),
+        "data_categories": ["exact text replies to existing observed chats"],
+        "local_permission": (
+            "BlueBubbles AppleScript text-message capability, verified locally; "
+            "Private API remains disabled"
+        ),
+        "settings_url": "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+        "native_permission_ceiling": "Text reply in one exact existing chat",
         "administrateme_read_ceiling": "None",
-        "administrateme_write_ceiling": "Unavailable until G11",
+        "administrateme_write_ceiling": (
+            "Ask every time; no new chat, attachment, reaction, edit, unsend, "
+            "read receipt, typing indicator, bulk send, or autonomous CoS send"
+        ),
+        "transport": {
+            "name": "BlueBubbles Server",
+            "version": "1.9.9",
+            "commit": "ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1",
+            "mode": "bluebubbles-rest-apple-script-existing-chat-v1",
+            "private_api": False,
+        },
     },
 }
 
 SUPPORTED_CAPABILITIES = frozenset(
-    key for key, value in CAPABILITIES.items() if value["implementation"] == "available"
+    key
+    for key, value in CAPABILITIES.items()
+    if value["implementation"] == "available"
+    and value.get("enrollment_selectable", True) is True
 )
 TERMINAL_STATES = frozenset({"revoked", "expired", "failed"})
 
@@ -775,7 +799,7 @@ class BridgeEnrollmentCoordinator:
         expires = issued + timedelta(minutes=TRANSFER_TTL_MINUTES)
         enrollment_id = f"bridge-enrollment-{os.urandom(12).hex()}"
         capability_digest = capability_set_digest(selected)
-        packs = sorted(str(CAPABILITIES[item]["pack"]) for item in selected)
+        packs = sorted({str(CAPABILITIES[item]["pack"]) for item in selected})
         transfer = {
             "schema_version": 1,
             "wizard_contract": WIZARD_CONTRACT,

@@ -386,10 +386,10 @@ def test_g10_connector_to_production_triage_comms_policy_and_replay(
             "available"
         )
         assert wizard_capabilities["apple_messages_reply"]["implementation"] == (
-            "planned_g11"
+            "available"
         )
         asset = client.get("/member-assets/member.js")
-        assert "Read-only Apple Messages observation is available" in asset.text
+        assert "Enable replies from Comms" in asset.text
 
         message_events = sink.accepted[:-1]
         for _envelope, event_id in message_events:

@@ -1208,11 +1208,13 @@ async function run() {
         record("Comms identifies deterministic private focus", await principal.page.locator("#mode-label").textContent() === "Private · deterministic focus", await principal.page.locator("#mode-label").textContent());
         record("Comms renders one member-bound account and thread", await principal.page.locator(".account-filters .account-filter").count() === 2 && await principal.page.locator(".comms-thread").count() === 1, await principal.page.locator("#surface").textContent());
         record("Comms explains focus without a model", (await principal.page.locator(".focus-reason").textContent()).includes("Why it is here"), await principal.page.locator(".focus-reason").textContent());
-        record("Comms reply requires independent approval", (await principal.page.locator(".comms-compose").textContent()).includes("pending provider action") && await principal.page.getByRole("button", { name: "Save reply for approval" }).count() === 1, await principal.page.locator(".comms-compose").textContent());
+        const commsCompose = principal.page.locator(".comms-compose");
+        const commsComposeText = await commsCompose.textContent();
+        record("Comms reply fixes destination and requires an exact two-step preview", commsComposeText.includes("external provider effect") && commsComposeText.includes("Native chat") && commsComposeText.includes("Participants") && commsComposeText.includes("Plain text only") && await principal.page.getByRole("button", { name: "Preview exact reply" }).count() === 1, commsComposeText);
         const replyByLabel = principal.page.getByLabel("Reply in this thread", { exact: true });
         record("Comms reply has one explicit accessible label", await replyByLabel.count() === 1 && await replyByLabel.getAttribute("id") === "comms-reply", await principal.page.locator(".comms-compose").innerHTML());
         await replyByLabel.fill(" ");
-        await principal.page.getByRole("button", { name: "Save reply for approval" }).click();
+        await principal.page.getByRole("button", { name: "Preview exact reply" }).click();
         record(
           "Comms blank reply is announced and associated without a provider request",
           await replyByLabel.getAttribute("aria-invalid") === "true"
@@ -1225,7 +1227,24 @@ async function run() {
             banner: await principal.page.locator("#state-banner").textContent(),
           }),
         );
-        await replyByLabel.fill("");
+        const exactBrowserReply = "  Exact browser reply: café 🧭\nsecond line  ";
+        await replyByLabel.fill(exactBrowserReply);
+        await principal.page.getByRole("button", { name: "Preview exact reply" }).click();
+        record("Comms preview preserves the exact Unicode body without queueing", await principal.page.locator(".comms-reply-preview").textContent() === exactBrowserReply && (await principal.page.locator("#state-banner").textContent()).includes("Nothing has been sent or queued") && await principal.page.getByRole("button", { name: "Approve this exact reply" }).count() === 1, await commsCompose.textContent());
+        await replyByLabel.fill(`${exactBrowserReply}changed`);
+        record("Changing a previewed body invalidates approval immediately", await principal.page.locator(".comms-reply-preview").isHidden() && await principal.page.getByRole("button", { name: "Preview exact reply" }).count() === 1, await commsCompose.textContent());
+        await replyByLabel.fill(exactBrowserReply);
+        await principal.page.getByRole("button", { name: "Preview exact reply" }).click();
+        let replyCommandPosts = 0;
+        const countReplyCommand = async (route) => {
+          if (route.request().method() === "POST") replyCommandPosts += 1;
+          await route.continue();
+        };
+        await principal.page.route("**/api/member/v1/comms/*/commands", countReplyCommand);
+        await principal.page.getByRole("button", { name: "Approve this exact reply" }).dblclick();
+        await principal.page.getByText("Your decision is saved.", { exact: false }).waitFor();
+        record("Comms double-click creates one pending provider command and no delivery claim", replyCommandPosts === 1 && (await principal.page.locator("#state-banner").textContent()).includes("OpenClaw must separately approve"), JSON.stringify({ replyCommandPosts, banner: await principal.page.locator("#state-banner").textContent() }));
+        await principal.page.unroute("**/api/member/v1/comms/*/commands", countReplyCommand);
         await screenshot(principal.page, "surface-comms-focus-desktop.png");
         await principal.page.getByRole("button", { name: /^Quieted/ }).click();
         record("Comms quiet lens is interactive", (await principal.page.locator(".comms-list").textContent()).includes("Nothing in this lens"), await principal.page.locator(".comms-list").textContent());
@@ -1330,7 +1349,8 @@ async function run() {
         await principal.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
         const bridgeWizardText = await principal.page.locator("#surface").textContent();
         record("Settings bridge wizard explains ownership, local permissions, observation, and no writes", bridgeWizardText.includes("Native Apple access stays on your Mac") && bridgeWizardText.includes("observation mode") && bridgeWizardText.includes("macOS control") && bridgeWizardText.includes("No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted"), bridgeWizardText);
-        record("Settings bridge wizard exposes seven available read sources and keeps Messages writes unavailable", await principal.page.locator('.bridge-capability-choice input:not([disabled])').count() === 7 && bridgeWizardText.includes("Read-only Apple Messages observation is available through the reviewed member bridge") && bridgeWizardText.includes("Reply and send remain unavailable until G11"), bridgeWizardText);
+        const replyCapabilityChoice = principal.page.locator(".bridge-capability-choice").filter({ hasText: "Apple Messages reply" }).locator("input");
+        record("Settings bridge wizard exposes seven read sources and represents reply as a separate disabled capability", await principal.page.locator('.bridge-capability-choice input:not([disabled])').count() === 7 && await replyCapabilityChoice.count() === 1 && await replyCapabilityChoice.isDisabled() && bridgeWizardText.includes("enable it separately only after Apple Messages read observation settles") && bridgeWizardText.includes("Enable replies from Comms") && bridgeWizardText.includes("Ask every time"), bridgeWizardText);
         record("Settings bridge wizard confirms the exact authenticated read and action member", (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("Authenticated as") && (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("reading as") && (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("actions belong to"), await principal.page.locator(".bridge-member-confirmation").textContent());
         record("Settings bridge wizard renders no enrollment secret", !bridgeWizardText.toLowerCase().includes("transfer_key") && !bridgeWizardText.toLowerCase().includes("proof_key") && !bridgeWizardText.toLowerCase().includes("enrollment token"), bridgeWizardText);
       } else {
@@ -1480,7 +1500,7 @@ async function run() {
         record("Triage phone retains the provider capability ceiling", await principalPhone.page.getByLabel("Scheduled date date").count() === 1 && await principalPhone.page.getByLabel("Scheduled date time (optional)").count() === 0 && (await principalPhone.page.locator(".triage-detail").textContent()).includes("discards due time"), await principalPhone.page.locator(".triage-detail").textContent());
       } else if (surface === "comms") {
         await principalPhone.page.locator(".comms-thread").filter({ hasText: "Fixture Sender" }).click();
-        record("Comms phone retains focus explanation and reply approval", await principalPhone.page.locator(".focus-reason").count() === 1 && await principalPhone.page.getByRole("button", { name: "Save reply for approval" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
+        record("Comms phone retains focus explanation and exact reply preview", await principalPhone.page.locator(".focus-reason").count() === 1 && await principalPhone.page.getByRole("button", { name: "Preview exact reply" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "reminders") {
         record("Reminders phone retains typed task controls", await principalPhone.page.locator(".reminder-item").filter({ hasText: "Return the signed school form" }).count() === 1 && await principalPhone.page.locator(".task-quick-add").count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "notes") {

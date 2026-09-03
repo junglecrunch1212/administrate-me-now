@@ -14,20 +14,6 @@ _BRIDGE_OPERATIONAL_EVENTS = frozenset(
 )
 
 
-def _is_read_only_bridge_communication(manifest: AdapterManifest) -> bool:
-    return bool(
-        len(manifest.capabilities) == 1
-        and manifest.capabilities[0].kind == "Cat-A"
-        and manifest.capabilities[0].runtime == "bridge"
-        and manifest.observation_mode_required
-        and not manifest.owner_scope_overridability_at_install
-        and not manifest.write_capabilities
-        and {"messaging.received", "messaging.sent"}.issubset(
-            manifest.capabilities[0].event_families
-        )
-    )
-
-
 def _finding(message: str, field_path: str) -> ValidationFinding:
     return ValidationFinding(
         severity="error",
@@ -48,6 +34,7 @@ def check_source_assurance_contract(
     *,
     registry: Any | None = None,
     projections_dir: Path | None = None,
+    member_bridge_profile: str | None = None,
 ) -> list[ValidationFinding]:
     """Require every declared source family to have a downstream disposition.
 
@@ -65,7 +52,7 @@ def check_source_assurance_contract(
     """
 
     findings: list[ValidationFinding] = []
-    read_only_bridge_communication = _is_read_only_bridge_communication(manifest)
+    member_bridge_communication = member_bridge_profile is not None
     declared: dict[str, str] = {}
     for cap_index, capability in enumerate(manifest.capabilities):
         for event_type in capability.event_families:
@@ -89,10 +76,7 @@ def check_source_assurance_contract(
                 "Cat-D": {"canonical_projection"},
                 "Cat-E": {"terminal_action"},
             }[capability.kind]
-            if (
-                read_only_bridge_communication
-                and event_type in _BRIDGE_OPERATIONAL_EVENTS
-            ):
+            if member_bridge_communication and event_type in _BRIDGE_OPERATIONAL_EVENTS:
                 required_modes = {"candidate_not_applicable"}
             if not modes.intersection(required_modes):
                 findings.append(

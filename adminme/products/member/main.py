@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -54,6 +54,18 @@ from adminme.events.schemas.calendar_policy import (
 from adminme.lib.scope import allowed_read, filter_one
 from adminme.lib.session import Session
 from adminme.message_context import authored_message_text
+from adminme.messages_reply import (
+    REPLY_APPROVAL_TTL_SECONDS,
+    REPLY_CAPABILITY_VERSION,
+    REPLY_CONTENT_GUARD,
+    REPLY_CONTRACT,
+    REPLY_POLICY_VERSION,
+    body_sha256,
+    canonical_sha256,
+    participant_ids,
+    reply_control_for,
+    validate_exact_body,
+)
 from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
     OpenClawTimeout,
@@ -212,6 +224,13 @@ class SettingsConnectionRequest(BaseModel):
     action: Literal["pause", "resume"]
 
 
+class SettingsAppleMessagesReplyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    action: Literal["enable", "pause", "revoke"]
+
+
 class SettingsCandidatePolicyRequest(BaseModel):
     model_config = {"extra": "forbid"}
     expected_revision: int = Field(ge=0)
@@ -255,7 +274,7 @@ class SettingsBridgeRequest(BaseModel):
             "obsidian",
             "apple_messages_read",
         ]
-    ] = Field(min_length=1, max_length=7)
+    ] = Field(min_length=1, max_length=8)
 
 
 class SettingsBridgeControlRequest(BaseModel):
@@ -453,6 +472,11 @@ class CommsCommandRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     body: str | None = Field(default=None, max_length=20_000)
     snoozed_until: str | None = None
+
+
+class CommsReplyCancelRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
 
 
 class ReminderCommandRequest(BaseModel):
@@ -1070,6 +1094,7 @@ _COMMS_EXTERNAL_OPERATIONS = {
     "twilio_sms": {"reply"},
     "twilio_whatsapp": {"reply"},
     "fixture": {"reply"},
+    "bluebubbles": {"reply"},
 }
 
 _REMINDER_PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
@@ -6225,6 +6250,114 @@ async def change_settings_capability_request(
         }
 
 
+@router.post("/api/member/v1/settings/apple-messages-replies", status_code=202)
+async def control_apple_messages_replies(
+    body: SettingsAppleMessagesReplyRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Change owner-only reply authority without creating a provider command."""
+
+    _require_self_settings(session)
+    if session.auth_role != "principal":
+        raise HTTPException(403, "Messages reply authority requires its adult owner")
+    runtime = _runtime(request)
+    control = reply_control_for(runtime, session.auth_member_id)
+    if body.action == "enable" and control["state"] not in {
+        "available_but_disabled",
+        "paused",
+    }:
+        raise HTTPException(
+            409,
+            control.get("reason")
+            or f"Messages replies cannot be enabled from {control['state']}",
+        )
+    fingerprint = _settings_request_fingerprint(
+        "settings.apple_messages_reply_controlled",
+        {
+            "expected_revision": body.expected_revision,
+            "action": body.action,
+            "coordinates_sha256": control["coordinates_sha256"],
+        },
+    )
+    lock = runtime.settings_command_locks.setdefault(
+        f"messages-reply:{session.auth_member_id}", asyncio.Lock()
+    )
+    async with lock:
+        prior = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.apple_messages_reply_controlled",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior is not None:
+            return {
+                "accepted": True,
+                "idempotent": True,
+                "event_id": prior["event_id"],
+                "state": prior["payload"]["state"],
+                "revision": prior["payload"]["revision"],
+                "provider_effects": 0,
+            }
+        previous_state = runtime.settings_control.read()
+        try:
+            revision = runtime.settings_control.prepare_message_reply_control(
+                session.auth_member_id,
+                expected_revision=body.expected_revision,
+                action=body.action,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        requested_state = {
+            "enable": "enabled_ask_every_time",
+            "pause": "paused",
+            "revoke": "revoked",
+        }[body.action]
+        changed_at = EventEnvelope.now_utc_iso()
+        payload = {
+            "member_id": session.auth_member_id,
+            "action": body.action,
+            "state": requested_state,
+            "revision": revision,
+            "coordinates": control["coordinates"],
+            "coordinates_sha256": control["coordinates_sha256"],
+            "ask_every_time": True,
+            "permits_new_conversation": False,
+            "permits_cos_autonomy": False,
+            "changed_by_member_id": session.auth_member_id,
+            "changed_at": changed_at,
+            "provider_effects": False,
+        }
+        await _guard_member_write(
+            runtime, session, "settings.apple_messages_reply_controlled", payload
+        )
+        try:
+            mutation = runtime.settings_control.apply_message_reply_control_event(
+                payload
+            )
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.apple_messages_reply_controlled",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload=payload,
+            )
+        except Exception:
+            runtime.settings_control.save_candidate(previous_state)
+            raise
+        return {
+            "accepted": True,
+            "event_id": event_id,
+            "state": mutation.current["state"],
+            "revision": mutation.revision,
+            "ask_every_time": True,
+            "provider_effects": 0,
+        }
+
+
 @router.post("/api/member/v1/settings/bridges", status_code=202)
 async def request_settings_bridge(
     body: SettingsBridgeRequest,
@@ -7250,9 +7383,9 @@ async def _communication_command_locked(
     )
     fixture_recipient = next(
         (
-            item["party_id"]
+            item.get("party_id")
             for item in participant_map.get(interaction_id, [])
-            if item["role"] == "from"
+            if item["role"] == "from" and item.get("party_id")
         ),
         None,
     )
@@ -7270,6 +7403,98 @@ async def _communication_command_locked(
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    provider_payload: dict[str, Any] = {
+        "interaction_id": interaction_id,
+        "expected_last_event_id": body.expected_last_event_id,
+        "recipient": recipient,
+        "body": (body.body or "").strip() or None,
+        "thread_id": interaction.get("thread_id"),
+        "subject": interaction.get("subject"),
+        "rfc_message_id": interaction.get("rfc_message_id"),
+        "workspace": interaction.get("workspace") or "personal",
+        "content_privacy_guard": content_privacy_guard,
+    }
+    observation_active = runtime._observation_active
+    if provider == "bluebubbles":
+        try:
+            exact_body = validate_exact_body(body.body)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        source_participants = participant_ids(participant_map.get(interaction_id, []))
+        if len(source_participants) < 2:
+            raise HTTPException(
+                409, "the exact Messages participant set is unavailable"
+            )
+        reply_control = reply_control_for(runtime, session.auth_member_id)
+        if reply_control["state"] != "enabled_ask_every_time":
+            raise HTTPException(
+                409,
+                reply_control.get("reason")
+                or "enable ask-every-time Messages replies in Settings",
+            )
+        if (
+            reply_control.get("provider_account_id") != provider_account_id
+            or reply_control.get("bridge_enrollment_id")
+            != interaction.get("bridge_enrollment_id")
+            or reply_control.get("protected_source_id")
+            != interaction.get("protected_source_id")
+        ):
+            raise HTTPException(409, "the Messages reply coordinates changed")
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=REPLY_APPROVAL_TTL_SECONDS)
+        ).isoformat()
+        observation_active = (
+            await runtime.observation.is_active()
+            if runtime.observation is not None
+            else True
+        )
+        provider_payload = {
+            "contract": REPLY_CONTRACT,
+            "command_id": body.request_id,
+            "idempotency_key": f"messages-reply:{session.auth_member_id}:{body.request_id}",
+            "member_owner_id": session.auth_member_id,
+            "actor_principal_id": session.auth_member_id,
+            "operator_principal_id": session.auth_member_id,
+            "bridge_enrollment_id": interaction.get("bridge_enrollment_id"),
+            "provider_account_id": provider_account_id,
+            "protected_source_id": interaction.get("protected_source_id"),
+            "native_chat_id": interaction.get("native_chat_id"),
+            "in_reply_to_native_message_id": interaction.get("native_message_id"),
+            "interaction_id": interaction_id,
+            "expected_last_event_id": body.expected_last_event_id,
+            "expected_native_revision": interaction.get("native_revision"),
+            "participant_ids": source_participants,
+            "participant_fingerprint": canonical_sha256(source_participants),
+            "is_group": bool(interaction.get("is_group")),
+            "body": exact_body,
+            "body_fingerprint": body_sha256(exact_body),
+            "capability_version": REPLY_CAPABILITY_VERSION,
+            "policy_version": REPLY_POLICY_VERSION,
+            "setting_revision": reply_control["revision"],
+            "approval_basis": "authenticated_member_exact_preview",
+            "approval_expires_at": expires_at,
+            "correlation_id": session.correlation_id,
+            "causation_id": body.expected_last_event_id,
+            "observation_mode_disposition": (
+                "suppress_without_transport_call"
+                if observation_active
+                else "dispatch_if_all_gates_pass"
+            ),
+            "command_authentication": {
+                "scheme": "protected-central-event-log-v1",
+                "audience_bridge_enrollment_id": interaction.get(
+                    "bridge_enrollment_id"
+                ),
+            },
+            "content_privacy_guard": {
+                **content_privacy_guard,
+                "policy": REPLY_CONTENT_GUARD,
+                "plain_text_only": True,
+                "attachments": [],
+                "quoted_history_added": False,
+                "signature_added": False,
+            },
+        }
     command_payload = {
         "command_id": body.request_id,
         "member_id": session.auth_member_id,
@@ -7277,18 +7502,10 @@ async def _communication_command_locked(
         "provider_account_id": provider_account_id,
         "operation": body.operation,
         "target_external_id": interaction.get("native_message_id"),
-        "expected_provider_revision": None,
-        "payload": {
-            "interaction_id": interaction_id,
-            "expected_last_event_id": body.expected_last_event_id,
-            "recipient": recipient,
-            "body": (body.body or "").strip() or None,
-            "thread_id": interaction.get("thread_id"),
-            "subject": interaction.get("subject"),
-            "rfc_message_id": interaction.get("rfc_message_id"),
-            "workspace": interaction.get("workspace") or "personal",
-            "content_privacy_guard": content_privacy_guard,
-        },
+        "expected_provider_revision": interaction.get("native_revision")
+        if provider == "bluebubbles"
+        else None,
+        "payload": provider_payload,
         "requested_at": now,
     }
     decision = await runtime.guarded_write.check(
@@ -7325,7 +7542,89 @@ async def _communication_command_locked(
         "domain_approval_event_id": event_id,
         "state": "awaiting_openclaw_approval",
         "duplicate": duplicate,
-        "observation_mode": runtime._observation_active,
+        "observation_mode": observation_active,
+    }
+
+
+@router.post("/api/member/v1/comms/replies/{command_id}/cancel", status_code=202)
+async def cancel_communication_reply(
+    command_id: str,
+    body: CommsReplyCancelRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Cancel a G11 reply before the independent OpenClaw approval is consumed."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "communication actions are unavailable in view-as")
+    runtime = _runtime(request)
+    domain_key = f"provider-action:{session.auth_member_id}:{command_id}"
+    domain_event = await runtime.event_log.get_by_idempotency(
+        session.tenant_id, domain_key
+    )
+    nested = (
+        domain_event.get("payload", {}).get("command_payload")
+        if isinstance(domain_event, dict)
+        else None
+    )
+    if (
+        not isinstance(domain_event, dict)
+        or domain_event.get("type") != "member.provider_action.confirmed"
+        or not isinstance(nested, dict)
+        or nested.get("contract") != REPLY_CONTRACT
+    ):
+        raise HTTPException(404, "pending Messages reply not found")
+    external = await runtime.event_log.get_by_idempotency(
+        session.tenant_id, f"external-sync-approved:{domain_event['event_id']}"
+    )
+    if external is not None:
+        raise HTTPException(409, "Messages reply was already dispatched")
+    cancel_key = f"messages-reply-cancel:{session.auth_member_id}:{command_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, cancel_key)
+    if prior is not None:
+        return {
+            "accepted": True,
+            "idempotent": True,
+            "event_id": prior["event_id"],
+            "state": "canceled",
+            "provider_effects": 0,
+        }
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "command_id": command_id,
+        "member_id": session.auth_member_id,
+        "interaction_id": nested["interaction_id"],
+        "domain_approval_event_id": domain_event["event_id"],
+        "canceled_at": now,
+        "provider_called": False,
+    }
+    await _guard_member_write(runtime, session, "messaging.reply.canceled", payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="messaging.reply.canceled",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity="sensitive",
+            correlation_id=session.correlation_id,
+            causation_id=domain_event["event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=cancel_key,
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("interactions", event_id)
+    return {
+        "accepted": True,
+        "event_id": event_id,
+        "state": "canceled",
+        "provider_effects": 0,
     }
 
 

@@ -21,8 +21,9 @@ the architecture amendments forbid):
    observation suppression.
 
 4. **Cat-A with messaging family** normally runs centrally or as a plugin.
-   G10 modernizes that older placement rule for a member-private bridge only
-   when it is observation-required, non-overridable, and declares no writes.
+   G10/G11 modernize that older placement rule for a sealed member-private
+   bridge only when it is observation-required, non-overridable, and either
+   read-only or declares exactly the governed existing-chat reply.
 
 Manifest-level rules (2) and (3) surface as findings on the
 manifest's pack-level field paths
@@ -55,6 +56,7 @@ def check_capability_runtime_coherence(
     manifest: AdapterManifest,
     *,
     pack_family: str | None = None,
+    member_bridge_profile: str | None = None,
 ) -> list[ValidationFinding]:
     """Run all four coherence rules against ``manifest`` and return findings.
 
@@ -83,17 +85,11 @@ def check_capability_runtime_coherence(
                 )
             )
 
-        read_only_member_bridge = bool(
-            cap.runtime == "bridge"
-            and not manifest.write_capabilities
-            and manifest.observation_mode_required
-            and not manifest.owner_scope_overridability_at_install
-        )
         if (
             cap.kind == "Cat-A"
             and pack_family == "messaging"
             and cap.runtime not in {"central", "plugin"}
-            and not read_only_member_bridge
+            and member_bridge_profile is None
         ):
             findings.append(
                 ValidationFinding(
@@ -103,8 +99,9 @@ def check_capability_runtime_coherence(
                         f"Cat-A messaging capability at index {index} "
                         f"declares runtime={cap.runtime!r}; messaging "
                         f"family requires runtime in {{'central', 'plugin'}} or "
-                        "the G10 read-only member-bridge profile "
-                        "(no writes, observation required, owner scope fixed)."
+                        "the sealed G10/G11 member-bridge profile "
+                        "(observation required, owner scope fixed, and at most "
+                        "the exact governed reply write)."
                     ),
                     field_path=f"capabilities[{index}].runtime",
                 )

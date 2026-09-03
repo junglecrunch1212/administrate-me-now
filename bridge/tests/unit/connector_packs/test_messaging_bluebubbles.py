@@ -1,4 +1,4 @@
-"""Read-only, fixture-only tests for the pinned BlueBubbles bridge pack."""
+"""Fixture-only tests for the pinned BlueBubbles bridge pack."""
 
 from __future__ import annotations
 
@@ -17,6 +17,18 @@ from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.events.envelope import EventEnvelope
 from adminme.events.registry import ensure_autoloaded, registry
 from adminme.lib.pack_registry.validator import validate_adapter_pack
+from adminme.lib.pack_registry.parser import parse_adapter_manifest
+from adminme.lib.pack_registry.validator.bridge_communication_profile import (
+    sealed_bridge_communication_profile,
+)
+from adminme.messages_reply import (
+    REPLY_CAPABILITY_VERSION,
+    REPLY_CONTRACT,
+    REPLY_POLICY_VERSION,
+    REPLY_TRANSPORT,
+    body_sha256,
+    canonical_sha256,
+)
 from bootstrap.bridge_enrollment import BridgeEnrollmentError
 from adminme_bridge.adapters.base import (
     BridgeContext,
@@ -26,6 +38,7 @@ from adminme_bridge.adapters.sinks import EmitResult
 from adminme_bridge.connector_packs.messaging_bluebubbles import (
     SELECTED_TRANSPORT_COMMIT,
     SELECTED_TRANSPORT_VERSION,
+    BlueBubblesAmbiguousWriteError,
     BlueBubblesAuthenticationError,
     BlueBubblesMessagesAdapter,
     BlueBubblesRestTransport,
@@ -68,6 +81,9 @@ class _FixtureTransport:
     pages: list[MessagePage]
     chats: dict[str, Mapping[str, Any]]
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    messages: dict[str, Mapping[str, Any]] = field(default_factory=dict)
+    effects: list[dict[str, str]] = field(default_factory=list)
+    send_error: Exception | None = None
 
     async def server_info(self) -> Mapping[str, Any]:
         self.calls.append(("server_info", {}))
@@ -85,6 +101,34 @@ class _FixtureTransport:
     async def chat(self, native_chat_id: str) -> Mapping[str, Any]:
         self.calls.append(("chat", {"native_chat_id": native_chat_id}))
         return self.chats[native_chat_id]
+
+    async def message(self, native_message_id: str) -> Mapping[str, Any]:
+        self.calls.append(("message", {"native_message_id": native_message_id}))
+        return self.messages[native_message_id]
+
+    async def send_text_reply(
+        self, *, native_chat_id: str, body: str, temp_guid: str
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            (
+                "send_text_reply",
+                {
+                    "native_chat_id": native_chat_id,
+                    "body": body,
+                    "temp_guid": temp_guid,
+                },
+            )
+        )
+        if self.send_error is not None:
+            raise self.send_error
+        self.effects.append(
+            {"native_chat_id": native_chat_id, "body": body, "temp_guid": temp_guid}
+        )
+        return {
+            "outcome": "sent",
+            "external_id": "message-reply-result",
+            "provider_revision": "reply-revision",
+        }
 
     async def aclose(self) -> None:
         self.calls.append(("aclose", {}))
@@ -111,6 +155,20 @@ def _config(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
+
+
+def _reply_config(**overrides: Any) -> dict[str, Any]:
+    return _config(
+        network_containment_verified=True,
+        remote_services_verified_disabled=True,
+        reply_transport=REPLY_TRANSPORT,
+        reply_capability_version=REPLY_CAPABILITY_VERSION,
+        reply_permission_verified=True,
+        reply_permission_evidence_sha256=hashlib.sha256(
+            b"fixture-local-reply-permission"
+        ).hexdigest(),
+        **overrides,
+    )
 
 
 def _context(sink: _RecordingSink) -> BridgeContext:
@@ -178,7 +236,9 @@ def _chat(
     }
 
 
-def test_manifest_and_protocol_are_explicitly_read_only() -> None:
+def test_manifest_and_protocol_admit_only_the_reviewed_reply_write(
+    tmp_path: Path,
+) -> None:
     root = Path(__file__).resolve().parents[3] / "adminme_bridge" / "connector_packs"
     handles = {handle.name: handle for handle in discover_packs(root)}
     handle = handles["messaging-bluebubbles"]
@@ -191,9 +251,10 @@ def test_manifest_and_protocol_are_explicitly_read_only() -> None:
     )
     assert isinstance(adapter, CommunicationSourceBridgeAdapter)
     assert not hasattr(adapter, "send")
-    assert not hasattr(adapter, "apply_write")
+    assert hasattr(adapter, "apply_write")
     assert SELECTED_TRANSPORT_COMMIT == ("ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1")
     assert adapter.status().extra["write_capabilities"] == []
+    assert adapter.status().extra["new_conversation"] is False
     ensure_autoloaded()
     validation = validate_adapter_pack(
         handle.pack_dir,
@@ -201,6 +262,20 @@ def test_manifest_and_protocol_are_explicitly_read_only() -> None:
         projections_dir=Path(__file__).resolve().parents[4] / "adminme" / "projections",
     )
     assert validation.errors() == []
+    manifest = parse_adapter_manifest(handle.pack_dir)
+    assert (
+        sealed_bridge_communication_profile(handle.pack_dir, manifest)
+        == "g11-governed-reply"
+    )
+    impersonator = tmp_path / "impersonator"
+    impersonator.mkdir()
+    impersonator.joinpath("pack.yaml").write_text(
+        handle.pack_dir.joinpath("pack.yaml")
+        .read_text("utf-8")
+        .replace("name: messaging-bluebubbles", "name: messaging-impersonator"),
+        "utf-8",
+    )
+    assert sealed_bridge_communication_profile(impersonator, manifest) is None
     cursor_store.close()
 
 
@@ -279,6 +354,125 @@ async def test_rest_transport_is_loopback_only_and_uses_only_read_routes() -> No
             )
 
 
+async def test_rest_transport_uses_exact_text_route_and_never_retries_timeout() -> None:
+    resolver = _Resolver("fixture-password-never-emitted")
+    requests: list[httpx.Request] = []
+
+    def sent(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "data": {
+                    "guid": "message-reply-1",
+                    "tempGuid": "temp-reply-1",
+                    "dateCreated": 1_800,
+                }
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(sent))
+    transport = BlueBubblesRestTransport(
+        base_url="http://127.0.0.1:1234",
+        credential_ref=CREDENTIAL_REF,
+        credential_resolver=resolver,
+        client=client,
+    )
+    exact_body = "  Exact Unicode café 🧭\nsecond line  "
+    result = await transport.send_text_reply(
+        native_chat_id="iMessage;-;chat-fixture",
+        body=exact_body,
+        temp_guid="temp-reply-1",
+    )
+    assert result == {
+        "outcome": "sent",
+        "external_id": "message-reply-1",
+        "provider_revision": "1800",
+        "temp_guid": "temp-reply-1",
+    }
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == "/api/v1/message/text"
+    assert json.loads(requests[0].content) == {
+        "chatGuid": "iMessage;-;chat-fixture",
+        "tempGuid": "temp-reply-1",
+        "message": exact_body,
+        "method": "apple-script",
+    }
+    await client.aclose()
+
+    accepted_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                request=request,
+                json={"data": {"tempGuid": "temp-reply-accepted"}},
+            )
+        )
+    )
+    accepted_transport = BlueBubblesRestTransport(
+        base_url="http://127.0.0.1:1234",
+        credential_ref=CREDENTIAL_REF,
+        credential_resolver=resolver,
+        client=accepted_client,
+    )
+    accepted = await accepted_transport.send_text_reply(
+        native_chat_id="iMessage;-;chat-fixture",
+        body=exact_body,
+        temp_guid="temp-reply-accepted",
+    )
+    assert accepted == {
+        "outcome": "accepted",
+        "external_id": None,
+        "provider_revision": None,
+        "temp_guid": "temp-reply-accepted",
+    }
+    await accepted_client.aclose()
+
+    no_evidence_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, request=request, json={"data": {}})
+        )
+    )
+    no_evidence_transport = BlueBubblesRestTransport(
+        base_url="http://127.0.0.1:1234",
+        credential_ref=CREDENTIAL_REF,
+        credential_resolver=resolver,
+        client=no_evidence_client,
+    )
+    with pytest.raises(BlueBubblesTransportError, match="acceptance evidence"):
+        await no_evidence_transport.send_text_reply(
+            native_chat_id="iMessage;-;chat-fixture",
+            body=exact_body,
+            temp_guid="temp-reply-no-evidence",
+        )
+    await no_evidence_client.aclose()
+
+    attempts = 0
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("outcome unknown", request=request)
+
+    timeout_client = httpx.AsyncClient(transport=httpx.MockTransport(timeout))
+    timeout_transport = BlueBubblesRestTransport(
+        base_url="http://127.0.0.1:1234",
+        credential_ref=CREDENTIAL_REF,
+        credential_resolver=resolver,
+        client=timeout_client,
+    )
+    with pytest.raises(BlueBubblesAmbiguousWriteError, match="ambiguous"):
+        await timeout_transport.send_text_reply(
+            native_chat_id="iMessage;-;chat-fixture",
+            body=exact_body,
+            temp_guid="temp-reply-timeout",
+        )
+    assert attempts == 1
+    await timeout_client.aclose()
+
+
 async def test_rest_transport_auth_and_network_failures_never_expose_secret() -> None:
     secret = "fixture-password-must-stay-redacted"
     resolver = _Resolver(secret)
@@ -314,6 +508,91 @@ async def test_rest_transport_auth_and_network_failures_never_expose_secret() ->
     assert secret not in str(network_failure.value)
     assert network_failure.value.__cause__ is None
     await unavailable_client.aclose()
+
+
+async def test_reply_adapter_reproves_target_and_preserves_terminal_outcomes(
+    tmp_path: Path,
+) -> None:
+    chat_id = "iMessage;-;chat-fixture"
+    native_message_id = "message-reply-target"
+    target = _message(native_message_id, 1_000, chat_id=chat_id)
+    target_revision = (
+        "1000:"
+        + hashlib.sha256(
+            json.dumps(target, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).hexdigest()[:32]
+    )
+    participants = ["participant-alpha", f"self:{ACCOUNT}"]
+    exact_body = "  Exact Unicode café 🧭\nsecond line  "
+    payload = {
+        "contract": REPLY_CONTRACT,
+        "command_id": "command-reply-adapter",
+        "member_owner_id": "member-fixture",
+        "bridge_enrollment_id": "bridge-enrollment-fixture",
+        "provider_account_id": ACCOUNT,
+        "protected_source_id": SOURCE,
+        "native_chat_id": chat_id,
+        "in_reply_to_native_message_id": native_message_id,
+        "expected_native_revision": target_revision,
+        "participant_ids": participants,
+        "participant_fingerprint": canonical_sha256(participants),
+        "is_group": False,
+        "body": exact_body,
+        "body_fingerprint": body_sha256(exact_body),
+        "capability_version": REPLY_CAPABILITY_VERSION,
+        "policy_version": REPLY_POLICY_VERSION,
+        "interaction_id": "interaction-reply-target",
+    }
+
+    def make_adapter(
+        transport: _FixtureTransport, suffix: str
+    ) -> BlueBubblesMessagesAdapter:
+        adapter = BlueBubblesMessagesAdapter(
+            config=_reply_config(),
+            transport=transport,
+            cursor_store=AdapterCursorStore(tmp_path / f"reply-{suffix}.sqlite3"),
+        )
+        adapter._probe_verified = True  # noqa: SLF001 - focused edge fixture
+        adapter.status().state = "running"
+        return adapter
+
+    sent_transport = _FixtureTransport(
+        [], {chat_id: _chat(chat_id)}, messages={native_message_id: target}
+    )
+    sent_adapter = make_adapter(sent_transport, "sent")
+    result = await sent_adapter.apply_write("reply", payload, native_message_id)
+    assert result["outcome"] == "sent"
+    assert sent_transport.effects[0]["body"] == exact_body
+
+    stale = dict(payload)
+    stale["expected_native_revision"] = "changed-revision"
+    before = list(sent_transport.effects)
+    with pytest.raises(ValueError, match="revision changed"):
+        await sent_adapter.apply_write("reply", stale, native_message_id)
+    assert sent_transport.effects == before
+
+    ambiguous_transport = _FixtureTransport(
+        [],
+        {chat_id: _chat(chat_id)},
+        messages={native_message_id: target},
+        send_error=BlueBubblesAmbiguousWriteError("fixture timeout after acceptance"),
+    )
+    ambiguous_adapter = make_adapter(ambiguous_transport, "ambiguous")
+    ambiguous = await ambiguous_adapter.apply_write("reply", payload, native_message_id)
+    assert ambiguous["outcome"] == "ambiguous"
+    assert ambiguous["automatic_retry"] is False
+    assert ambiguous_transport.effects == []
+
+    unavailable_transport = _FixtureTransport(
+        [],
+        {chat_id: _chat(chat_id)},
+        messages={native_message_id: target},
+        send_error=BlueBubblesTransportError("fixture unavailable"),
+    )
+    unavailable_adapter = make_adapter(unavailable_transport, "unavailable")
+    with pytest.raises(BlueBubblesTransportError, match="unavailable"):
+        await unavailable_adapter.apply_write("reply", payload, native_message_id)
+    assert unavailable_transport.effects == []
 
 
 def test_enrollment_auth_failure_never_persists_or_retains_password(

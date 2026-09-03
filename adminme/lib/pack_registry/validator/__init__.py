@@ -55,6 +55,9 @@ from adminme.lib.pack_registry.parser import (
 from adminme.lib.pack_registry.validator.base_class_conformance import (
     check_base_class_conformance,
 )
+from adminme.lib.pack_registry.validator.bridge_communication_profile import (
+    sealed_bridge_communication_profile,
+)
 from adminme.lib.pack_registry.validator.capability_runtime_coherence import (
     check_capability_runtime_coherence,
 )
@@ -138,10 +141,15 @@ def validate_adapter_pack(
     pack_dir = Path(pack_dir)
     manifest = parse_adapter_manifest(pack_dir)
     pack_family = _read_pack_family(pack_dir)
+    member_bridge_profile = sealed_bridge_communication_profile(pack_dir, manifest)
 
     findings: list[ValidationFinding] = []
     findings.extend(
-        check_capability_runtime_coherence(manifest, pack_family=pack_family)
+        check_capability_runtime_coherence(
+            manifest,
+            pack_family=pack_family,
+            member_bridge_profile=member_bridge_profile,
+        )
     )
     findings.extend(check_event_schema_registration(manifest, registry=registry))
     findings.extend(
@@ -154,6 +162,7 @@ def validate_adapter_pack(
             manifest,
             registry=registry,
             projections_dir=projections_dir,
+            member_bridge_profile=member_bridge_profile,
         )
     )
     findings.extend(check_base_class_conformance(pack_dir, manifest))

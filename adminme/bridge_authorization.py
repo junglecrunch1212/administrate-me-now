@@ -69,9 +69,9 @@ BRIDGE_PACK_POLICIES: dict[str, BridgePackPolicy] = {
         permission_reference="keychain://device-permissions/apple-messages",
         container_key="protected_source_id",
         shareable=False,
-        # G10 is observation-only. G11 must introduce any reply authority
-        # through a separately reviewed policy and command path.
-        write_operations=frozenset(),
+        # G11 admits only an exact-text reply to a previously observed chat.
+        # New conversations and every other Messages mutation remain absent.
+        write_operations=frozenset({"reply"}),
     ),
     "calendaring-apple-calendar-bridge": BridgePackPolicy(
         pack="calendaring-apple-calendar-bridge",
@@ -382,9 +382,22 @@ def validate_configured_pack_config(
                     "device_identity_sha256",
                     "bridge_enrollment_id",
                 }
-                if set(config) != expected_keys:
+                reply_keys = {
+                    "reply_transport",
+                    "reply_capability_version",
+                    "reply_permission_verified",
+                    "reply_permission_evidence_sha256",
+                }
+                supplied_reply_keys = set(config) & reply_keys
+                if set(config) != expected_keys and set(config) != (
+                    expected_keys | reply_keys
+                ):
                     raise ValueError(
                         "Messages bridge config must contain only the reviewed fields"
+                    )
+                if supplied_reply_keys and supplied_reply_keys != reply_keys:
+                    raise ValueError(
+                        "Messages reply capability evidence must be complete"
                     )
                 source_id = str(config.get("protected_source_id") or "")
                 if re.fullmatch(r"protected-source:[0-9a-f]{64}", source_id) is None:
@@ -450,6 +463,28 @@ def validate_configured_pack_config(
                     raise ValueError(
                         "Messages bridge enrollment binding is contradictory"
                     )
+                if supplied_reply_keys:
+                    permission_verified = config.get("reply_permission_verified")
+                    permission_evidence = config.get("reply_permission_evidence_sha256")
+                    capability_invalid = (
+                        config.get("reply_transport")
+                        != "bluebubbles-rest-apple-script-existing-chat-v1"
+                        or config.get("reply_capability_version")
+                        != "apple-messages-reply-v1"
+                        or not isinstance(permission_verified, bool)
+                        or (
+                            permission_verified
+                            and re.fullmatch(
+                                r"[0-9a-f]{64}", str(permission_evidence or "")
+                            )
+                            is None
+                        )
+                        or (not permission_verified and permission_evidence is not None)
+                    )
+                    if capability_invalid:
+                        raise ValueError(
+                            "Messages reply capability evidence is invalid"
+                        )
         normalized[pack] = config
     return normalized
 

@@ -44,6 +44,7 @@ from adminme.bridge_enrollment import (
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import AppendValidationError
 from adminme.events.writer import EventSink
+from adminme.messages_reply import REPLY_CONTRACT, approval_is_current
 from adminme.products.bridge.auth import (
     EnrollmentMemberIdResolver,
     MemberIdResolver,
@@ -1262,6 +1263,63 @@ async def pending_commands(
                 break
 
     runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None and commands:
+        permitted: list[dict[str, Any]] = []
+        sink = _get_event_sink(request)
+        for command in commands:
+            command_body = command.get("payload")
+            if (
+                command.get("provider") != "bluebubbles"
+                or not isinstance(command_body, dict)
+                or command_body.get("contract") != REPLY_CONTRACT
+            ):
+                permitted.append(command)
+                continue
+            current, reason = approval_is_current(
+                runtime,
+                member_id=member_id,
+                command_payload=command_body,
+            )
+            if current:
+                permitted.append(command)
+                continue
+            now = EventEnvelope.now_utc_iso()
+            await sink.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=_expected_tenant_id(request) or "tenant-default",
+                    type="external_sync.write_failed",
+                    schema_version=2,
+                    occurred_at=now,
+                    source_adapter="bridge-command-current-authority-gate",
+                    source_account_id=str(command["provider_account_id"]),
+                    owner_scope=owner_scope,
+                    visibility_scope=owner_scope,
+                    sensitivity="sensitive",
+                    causation_id=str(command["event_id"]),
+                    idempotency_key=f"external-sync-result:{command['command_id']}",
+                    payload={
+                        "command_id": command["command_id"],
+                        "member_id": member_id,
+                        "provider": command["provider"],
+                        "operation": command["operation"],
+                        "error_kind": "permission",
+                        "message": f"Messages reply authority is no longer current: {reason}",
+                        "retryable": False,
+                        "failed_at": now,
+                        "command_event_id": command["event_id"],
+                        "domain_approval_event_id": command["domain_approval_event_id"],
+                        "openclaw_approval_event_id": command[
+                            "openclaw_approval_event_id"
+                        ],
+                        "provider_account_id": command["provider_account_id"],
+                        "request_fingerprint": command["request_fingerprint"],
+                        "provider_called": False,
+                        "origin_proposal_id": command.get("origin_proposal_id"),
+                    },
+                )
+            )
+        commands = permitted
     observation = getattr(runtime, "observation", None)
     observation_active = True if observation is None else await observation.is_active()
     if observation_active and commands:
@@ -1276,7 +1334,14 @@ async def pending_commands(
                 "operation": command["operation"],
                 "external_id": None,
                 "provider_revision": None,
-                "result": {"reason": "observation_mode_active"},
+                "result": {
+                    "outcome": "suppressed",
+                    "reason": "observation_mode_active",
+                    "interaction_id": (command.get("payload") or {}).get(
+                        "interaction_id"
+                    ),
+                    "automatic_retry": False,
+                },
                 "completed_at": now,
                 "suppressed": True,
             }

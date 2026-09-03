@@ -5,6 +5,7 @@ action_gates:
   __default__: deny
   commitment.*: allow
   communication.*: allow
+  messaging.reply.*: allow
   task.*: allow
   triage.*: allow
   context.relationship.rejected: allow
@@ -42,6 +43,9 @@ rate_limits:
     window_s: 60
     max_n: 20
   communication.send:
+    window_s: 60
+    max_n: 20
+  messaging.reply.*:
     window_s: 60
     max_n: 20
   settings.connection_lifecycle_changed:

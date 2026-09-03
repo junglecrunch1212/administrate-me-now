@@ -102,6 +102,7 @@ from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.reconciliation import ReconciliationAdmissionEvaluator
 from adminme.settings_control import SettingsControlStore
+from adminme.messages_reply_reconciliation import MessagesReplyReconciler
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from adminme.source_policy import source_policy_event_types
 from adminme.source_policy_shadow import SourcePolicyShadowEvaluator
@@ -759,9 +760,15 @@ class AdministrateMeRuntime:
                 event_sink=self.events,
                 channels=self.settings.service_channel_accounts,
             )
+            self.messages_reply_reconciler = MessagesReplyReconciler(
+                self.event_log, self.events
+            )
             await self.settings_control.replay_source_policy_v2_events(self.event_log)
             await self.settings_control.replay_capability_request_events(self.event_log)
             await self.settings_control.replay_bridge_enrollment_events(self.event_log)
+            await self.settings_control.replay_message_reply_control_events(
+                self.event_log
+            )
             self.source_policy_shadow = SourcePolicyShadowEvaluator(
                 self.events,
                 self.settings_control,
@@ -950,6 +957,13 @@ class AdministrateMeRuntime:
                 ["messaging.received"],
                 self.direct_intake.handle,
                 consumer_version=self.direct_intake.CONSUMER_VERSION,
+                replay_on_version_change=True,
+            )
+            self.bus.subscribe(
+                "apple-messages-reply:reconciliation",
+                ["messaging.sent"],
+                self.messages_reply_reconciler.handle,
+                consumer_version=self.messages_reply_reconciler.CONSUMER_VERSION,
                 replay_on_version_change=True,
             )
 
@@ -1372,6 +1386,10 @@ class AdministrateMeRuntime:
             "fixture",
         }
         provider = payload.get("provider")
+        if provider == "bluebubbles":
+            # Apple Messages is bridge-hosted.  The protected bridge command
+            # queue owns suppression, delivery, and terminal result handling.
+            return
         if (
             provider
             not in {"google_calendar", "google_tasks"} | communication_providers

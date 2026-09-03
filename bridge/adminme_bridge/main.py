@@ -17,6 +17,16 @@ from typing import Any
 
 from adminme.events.envelope import EventEnvelope
 from adminme.bridge_authorization import BRIDGE_PACK_POLICIES, BridgePackPolicy
+from adminme.messages_reply import (
+    REPLY_CAPABILITY_VERSION,
+    REPLY_CONTENT_GUARD,
+    REPLY_CONTRACT,
+    REPLY_POLICY_VERSION,
+    REPLY_TRANSPORT,
+    body_sha256,
+    canonical_sha256,
+    validate_exact_body,
+)
 
 from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeContext
 from adminme_bridge.config import BridgeConfig, load_config
@@ -46,18 +56,78 @@ class _CommandLedger:
             "CREATE TABLE IF NOT EXISTS bridge_command_results ("
             "command_id TEXT PRIMARY KEY, envelope_json TEXT NOT NULL)"
         )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_command_attempts ("
+            "command_id TEXT PRIMARY KEY, request_fingerprint TEXT NOT NULL, "
+            "started_at TEXT NOT NULL)"
+        )
 
-    def get(self, command_id: str) -> dict | None:
+    def get(
+        self, command_id: str, request_fingerprint: str | None = None
+    ) -> dict | None:
         row = self._conn.execute(
             "SELECT envelope_json FROM bridge_command_results WHERE command_id = ?",
             (command_id,),
         ).fetchone()
-        return json.loads(row[0]) if row else None
+        if row is None:
+            return None
+        envelope = json.loads(row[0])
+        cached_fingerprint = (envelope.get("payload") or {}).get("request_fingerprint")
+        if (
+            request_fingerprint is not None
+            and cached_fingerprint != request_fingerprint
+        ):
+            raise ValueError("cached command result fingerprint mismatch")
+        return envelope
 
     def put(self, command_id: str, envelope: dict) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO bridge_command_results VALUES (?, ?)",
             (command_id, json.dumps(envelope, separators=(",", ":"), sort_keys=True)),
+        )
+
+    def begin(self, command_id: str, request_fingerprint: str) -> str:
+        """Durably claim one effect before contacting a provider.
+
+        A matching row without a result means a prior process could have
+        reached the transport.  Returning ``ambiguous`` prevents a restart
+        from guessing that retry is safe.
+        """
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT request_fingerprint FROM bridge_command_attempts "
+                "WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    "INSERT INTO bridge_command_attempts VALUES (?, ?, ?)",
+                    (
+                        command_id,
+                        request_fingerprint,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                outcome = "new"
+            elif str(row[0]) == request_fingerprint:
+                outcome = "ambiguous"
+            else:
+                outcome = "conflict"
+            self._conn.execute("COMMIT")
+            return outcome
+        except Exception:
+            if self._conn.in_transaction:
+                self._conn.execute("ROLLBACK")
+            raise
+
+    def abandon_before_provider_call(self, command_id: str) -> None:
+        """Clear a claim only when an adapter proves no provider call began."""
+
+        self._conn.execute(
+            "DELETE FROM bridge_command_attempts WHERE command_id = ?",
+            (command_id,),
         )
 
     def close(self) -> None:
@@ -90,7 +160,7 @@ def configured_packs(config: BridgeConfig) -> list[PackHandle]:
 
 
 class BridgeSupervisor:
-    """Async supervisor for Cat-D knowledge-source adapters."""
+    """Async supervisor for separately enrolled member-bridge adapters."""
 
     def __init__(
         self,
@@ -217,7 +287,14 @@ class BridgeSupervisor:
                 response = await self._ingest_client.fetch_commands(list(adapters))
                 for command in response["commands"]:
                     command_id = str(command["command_id"])
-                    result_envelope = self._command_ledger.get(command_id)
+                    try:
+                        result_envelope = self._command_ledger.get(
+                            command_id, str(command["request_fingerprint"])
+                        )
+                    except ValueError as exc:
+                        result_envelope = self._result_envelope(
+                            command, error=exc, provider_called=False
+                        )
                     if result_envelope is None:
                         try:
                             adapter = self._authorized_command_adapter(
@@ -228,33 +305,60 @@ class BridgeSupervisor:
                                 command, error=exc, provider_called=False
                             )
                         else:
-                            provider_called = True
-                            try:
-                                result = await getattr(adapter, "apply_write")(
-                                    str(command["operation"]),
-                                    dict(command.get("payload") or {}),
-                                    command.get("target_external_id"),
-                                )
-                            except RuntimeError as exc:
-                                if "has not finished starting" in str(exc):
-                                    continue
+                            attempt = self._command_ledger.begin(
+                                command_id, str(command["request_fingerprint"])
+                            )
+                            if attempt == "conflict":
                                 result_envelope = self._result_envelope(
                                     command,
-                                    error=exc,
-                                    provider_called=provider_called,
+                                    error=ValueError(
+                                        "command id reused with a different fingerprint"
+                                    ),
+                                    provider_called=False,
                                 )
-                            except Exception as exc:  # noqa: BLE001 - provider failure
+                            elif attempt == "ambiguous":
                                 result_envelope = self._result_envelope(
                                     command,
-                                    error=exc,
-                                    provider_called=provider_called,
+                                    result={
+                                        "outcome": "ambiguous",
+                                        "applied": False,
+                                        "suppressed": False,
+                                        "reason": "prior_bridge_attempt_has_no_terminal_receipt",
+                                        "automatic_retry": False,
+                                    },
+                                    provider_called=True,
                                 )
                             else:
-                                result_envelope = self._result_envelope(
-                                    command,
-                                    result=result,
-                                    provider_called=provider_called,
-                                )
+                                provider_called = True
+                                try:
+                                    result = await getattr(adapter, "apply_write")(
+                                        str(command["operation"]),
+                                        dict(command.get("payload") or {}),
+                                        command.get("target_external_id"),
+                                    )
+                                except RuntimeError as exc:
+                                    if "has not finished starting" in str(exc):
+                                        self._command_ledger.abandon_before_provider_call(
+                                            command_id
+                                        )
+                                        continue
+                                    result_envelope = self._result_envelope(
+                                        command,
+                                        error=exc,
+                                        provider_called=provider_called,
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    result_envelope = self._result_envelope(
+                                        command,
+                                        error=exc,
+                                        provider_called=provider_called,
+                                    )
+                                else:
+                                    result_envelope = self._result_envelope(
+                                        command,
+                                        result=result,
+                                        provider_called=provider_called,
+                                    )
                         self._command_ledger.put(command_id, result_envelope)
                     submit = await self._ingest_client.submit(result_envelope)
                     if not submit.ok:
@@ -292,6 +396,7 @@ class BridgeSupervisor:
                 "list_identifier",
             ),
             "container_external_id": ("container_external_id",),
+            "protected_source_id": ("protected_source_id",),
         }.get(str(policy.container_key), ())
         for key in aliases:
             value = payload.get(key)
@@ -351,6 +456,146 @@ class BridgeSupervisor:
         adapter = adapters.get(str(provider))
         if adapter is None:
             violations.append("adapter")
+        payload = command.get("payload")
+        if provider == "bluebubbles":
+            if not isinstance(payload, dict):
+                violations.append("payload")
+            else:
+                expected_fields = {
+                    "contract",
+                    "command_id",
+                    "idempotency_key",
+                    "member_owner_id",
+                    "actor_principal_id",
+                    "operator_principal_id",
+                    "bridge_enrollment_id",
+                    "provider_account_id",
+                    "protected_source_id",
+                    "native_chat_id",
+                    "in_reply_to_native_message_id",
+                    "interaction_id",
+                    "expected_last_event_id",
+                    "expected_native_revision",
+                    "participant_ids",
+                    "participant_fingerprint",
+                    "is_group",
+                    "body",
+                    "body_fingerprint",
+                    "capability_version",
+                    "policy_version",
+                    "setting_revision",
+                    "approval_basis",
+                    "approval_expires_at",
+                    "correlation_id",
+                    "causation_id",
+                    "observation_mode_disposition",
+                    "command_authentication",
+                    "content_privacy_guard",
+                }
+                if set(payload) != expected_fields:
+                    violations.append("payload_fields")
+                if payload.get("contract") != REPLY_CONTRACT:
+                    violations.append("reply_contract")
+                if payload.get("command_id") != command.get("command_id"):
+                    violations.append("payload_command_id")
+                if payload.get("idempotency_key") != (
+                    f"messages-reply:{self._config.member_id}:"
+                    f"{command.get('command_id')}"
+                ):
+                    violations.append("idempotency_key")
+                if payload.get("member_owner_id") != self._config.member_id:
+                    violations.append("payload_member_id")
+                if (
+                    payload.get("actor_principal_id") != self._config.member_id
+                    or payload.get("operator_principal_id") != self._config.member_id
+                ):
+                    violations.append("member_principal")
+                if payload.get("bridge_enrollment_id") != self._config.enrollment_id:
+                    violations.append("bridge_enrollment_id")
+                if payload.get("provider_account_id") != config.get(
+                    "provider_account_id"
+                ):
+                    violations.append("payload_provider_account_id")
+                if payload.get("protected_source_id") != config.get(
+                    "protected_source_id"
+                ):
+                    violations.append("protected_source_id")
+                if payload.get("capability_version") != REPLY_CAPABILITY_VERSION:
+                    violations.append("capability_version")
+                if payload.get("policy_version") != REPLY_POLICY_VERSION:
+                    violations.append("policy_version")
+                if payload.get("approval_basis") != (
+                    "authenticated_member_exact_preview"
+                ):
+                    violations.append("approval_basis")
+                if payload.get("observation_mode_disposition") not in {
+                    "suppress_without_transport_call",
+                    "dispatch_if_all_gates_pass",
+                }:
+                    violations.append("observation_mode_disposition")
+                if (
+                    config.get("reply_transport") != REPLY_TRANSPORT
+                    or config.get("reply_capability_version")
+                    != REPLY_CAPABILITY_VERSION
+                    or config.get("reply_permission_verified") is not True
+                ):
+                    violations.append("local_reply_capability")
+                if adapter is not None:
+                    status = adapter.status()
+                    if status.state != "running" or not bool(
+                        getattr(adapter, "_probe_verified", False)
+                    ):
+                        violations.append("local_transport_readiness")
+                authentication = payload.get("command_authentication")
+                if not isinstance(authentication, dict) or authentication != {
+                    "scheme": "protected-central-event-log-v1",
+                    "audience_bridge_enrollment_id": self._config.enrollment_id,
+                }:
+                    violations.append("command_authentication")
+                guard = payload.get("content_privacy_guard")
+                if (
+                    not isinstance(guard, dict)
+                    or guard.get("policy") != REPLY_CONTENT_GUARD
+                    or guard.get("plain_text_only") is not True
+                    or guard.get("attachments") != []
+                    or guard.get("quoted_history_added") is not False
+                    or guard.get("signature_added") is not False
+                ):
+                    violations.append("content_privacy_guard")
+                try:
+                    exact_body = validate_exact_body(payload.get("body"))
+                except ValueError:
+                    violations.append("body")
+                else:
+                    if payload.get("body_fingerprint") != body_sha256(exact_body):
+                        violations.append("body_fingerprint")
+                participants = payload.get("participant_ids")
+                if (
+                    not isinstance(participants, list)
+                    or len(participants) < 2
+                    or participants != sorted(set(participants))
+                    or payload.get("participant_fingerprint")
+                    != canonical_sha256(participants)
+                ):
+                    violations.append("participants")
+                if (
+                    not isinstance(payload.get("native_chat_id"), str)
+                    or not payload.get("native_chat_id")
+                    or payload.get("in_reply_to_native_message_id")
+                    != command.get("target_external_id")
+                ):
+                    violations.append("native_target")
+                try:
+                    expires_at = datetime.fromisoformat(
+                        str(payload.get("approval_expires_at")).replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    violations.append("approval_expiry")
+                else:
+                    if expires_at.tzinfo is None or expires_at <= datetime.now(
+                        timezone.utc
+                    ):
+                        violations.append("approval_expired")
         if violations:
             raise ValueError(
                 "bridge command contract denied: " + ", ".join(sorted(set(violations)))

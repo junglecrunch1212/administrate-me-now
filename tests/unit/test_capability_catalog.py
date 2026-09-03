@@ -47,11 +47,12 @@ def test_catalog_is_manifest_derived_versioned_and_non_speculative() -> None:
     assert messages["verbs"] == {
         "read": "supported",
         "observe": "supported",
-        "draft": "unsupported",
-        "prepare": "unsupported",
-        "hold": "unsupported",
-        "execute": "unsupported",
+        "draft": "supported",
+        "prepare": "supported",
+        "hold": "supported",
+        "execute": "ask_every_time",
     }
+    assert messages["terminal_result_support"] is True
     assert messages["reconciliation_support"] is True
     for item in catalog["items"]:
         assert item["catalog_version"] == CATALOG_VERSION
@@ -94,7 +95,7 @@ def test_settings_v3_migration_preserves_existing_state_without_authority(
     path.write_text(json.dumps(original), encoding="utf-8")
     store = SettingsControlStore(path)
     migrated = store.read()
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["revision"] == 9
     assert migrated["connections"] == original["connections"]
     assert migrated["member_preferences"] == original["member_preferences"]
@@ -106,6 +107,8 @@ def test_settings_v3_migration_preserves_existing_state_without_authority(
     assert migrated["bridge_request_revisions"] == {"member-a": 1}
     assert migrated["capability_requests"] == {}
     assert migrated["capability_request_revisions"] == {}
+    assert migrated["message_reply_controls"] == {}
+    assert migrated["message_reply_control_revisions"] == {}
 
 
 def test_capability_request_cache_is_revisioned_and_inert(tmp_path: Path) -> None:

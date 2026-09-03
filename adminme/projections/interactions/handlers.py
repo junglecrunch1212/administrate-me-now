@@ -46,6 +46,14 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _handle_command_completed(envelope, conn)
     elif event_type == "external_sync.write_failed":
         _handle_command_failed(envelope, conn)
+    elif event_type == "member.provider_action.confirmed":
+        _handle_member_command_approved(envelope, conn)
+    elif event_type == "messaging.reply.canceled":
+        _handle_reply_lifecycle(envelope, conn, "canceled")
+    elif event_type == "messaging.reply.observed":
+        _handle_reply_lifecycle(envelope, conn, "observed")
+    elif event_type == "messaging.reply.reconciled":
+        _handle_reply_lifecycle(envelope, conn, "reconciled")
     else:
         return
 
@@ -734,7 +742,7 @@ def _handle_command_requested(
         return
     expected = (p.get("payload") or {}).get("expected_last_event_id")
     conn.execute(
-        "UPDATE interactions SET command_state='pending', last_command_id=?, last_event_id=? "
+        "UPDATE interactions SET command_state='dispatched', last_command_id=?, last_event_id=? "
         "WHERE tenant_id=? AND interaction_id=? AND (? IS NULL OR last_event_id=?)",
         (
             p["command_id"],
@@ -764,8 +772,20 @@ def _handle_command_completed(
         if key in {"unread", "archived", "starred", "important"}
     }
     assignments = ["command_state=?", "last_command_id=?", "last_event_id=?"]
+    outcome = str(result.get("outcome") or "completed")
+    command_state = (
+        "suppressed"
+        if p.get("suppressed")
+        else "ambiguous"
+        if outcome == "ambiguous"
+        else "result_accepted"
+        if outcome == "accepted"
+        else "result_sent"
+        if outcome == "sent"
+        else "completed"
+    )
     values: list[Any] = [
-        "suppressed" if p.get("suppressed") else "completed",
+        command_state,
         p["command_id"],
         envelope["event_id"],
     ]
@@ -789,4 +809,47 @@ def _handle_command_failed(
         "UPDATE interactions SET command_state='failed', last_event_id=? "
         "WHERE tenant_id=? AND last_command_id=?",
         (envelope["event_id"], envelope["tenant_id"], p["command_id"]),
+    )
+
+
+def _handle_member_command_approved(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    nested = p.get("command_payload") or {}
+    if p.get("provider") not in _COMMS_PROVIDERS or not isinstance(nested, dict):
+        return
+    interaction_id = nested.get("interaction_id")
+    if not interaction_id:
+        return
+    # Do not advance last_event_id: the immutable source revision remains the
+    # CAS target until the independently approved external command exists.
+    conn.execute(
+        "UPDATE interactions SET command_state='awaiting_openclaw_approval', "
+        "last_command_id=? WHERE tenant_id=? AND interaction_id=? "
+        "AND last_event_id=?",
+        (
+            p["action_id"],
+            envelope["tenant_id"],
+            interaction_id,
+            nested.get("expected_last_event_id"),
+        ),
+    )
+
+
+def _handle_reply_lifecycle(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection, state: str
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "UPDATE interactions SET command_state=?, last_command_id=?, last_event_id=? "
+        "WHERE tenant_id=? AND interaction_id=? AND last_command_id=?",
+        (
+            state,
+            p["command_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["interaction_id"],
+            p["command_id"],
+        ),
     )

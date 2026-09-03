@@ -1,4 +1,4 @@
-"""Read-only Apple Messages ingestion through pinned BlueBubbles Server REST."""
+"""Observed Apple Messages plus G11's exact existing-chat text reply."""
 
 from __future__ import annotations
 
@@ -14,6 +14,15 @@ from typing import Any, ClassVar, Literal, Mapping
 
 from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.events.envelope import EventEnvelope
+from adminme.messages_reply import (
+    REPLY_CAPABILITY_VERSION,
+    REPLY_CONTRACT,
+    REPLY_POLICY_VERSION,
+    REPLY_TRANSPORT,
+    body_sha256,
+    canonical_sha256,
+    validate_exact_body,
+)
 from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
 from adminme_bridge.adapters.sinks import BridgeEventSink, IngestClientBridgeSink
 from adminme_bridge.connector_packs.messaging_bluebubbles.transport import (
@@ -23,6 +32,7 @@ from adminme_bridge.connector_packs.messaging_bluebubbles.transport import (
     SELECTED_TRANSPORT_COMMIT,
     SELECTED_TRANSPORT_VERSION,
     BlueBubblesAuthenticationError,
+    BlueBubblesAmbiguousWriteError,
     BlueBubblesReadTransport,
     BlueBubblesRestTransport,
     BlueBubblesTransportError,
@@ -110,7 +120,7 @@ class _DecodedMessage:
 
 
 class BlueBubblesMessagesAdapter:
-    """Observe Messages facts; never send, mutate, download, OCR, or transcribe."""
+    """Observe Messages and execute only G11's exact existing-chat text reply."""
 
     subkind: ClassVar[Literal["communication-source"]] = "communication-source"
     name: ClassVar[str] = "messaging-bluebubbles"
@@ -192,6 +202,16 @@ class BlueBubblesMessagesAdapter:
         self._remote_services_verified_disabled = (
             self._config.get("remote_services_verified_disabled", False) is True
         )
+        self._reply_enabled = (
+            self._config.get("reply_transport") == REPLY_TRANSPORT
+            and self._config.get("reply_capability_version") == REPLY_CAPABILITY_VERSION
+            and self._config.get("reply_permission_verified") is True
+            and isinstance(self._config.get("reply_permission_evidence_sha256"), str)
+            and _SHA256_PATTERN.fullmatch(
+                str(self._config.get("reply_permission_evidence_sha256"))
+            )
+            is not None
+        )
         self._configured_computer_sha256 = self._config.get(
             "transport_computer_id_sha256"
         )
@@ -210,8 +230,10 @@ class BlueBubblesMessagesAdapter:
         self._owns_cursor_store = cursor_store is None
         self._status = AdapterStatus(
             extra={
-                "read_only": True,
-                "write_capabilities": [],
+                "read_only": not self._reply_enabled,
+                "write_capabilities": ["reply"] if self._reply_enabled else [],
+                "reply_scope": "exact_existing_observed_chat_text_only",
+                "new_conversation": False,
                 "transport_version": SELECTED_TRANSPORT_VERSION,
                 "transport_commit": SELECTED_TRANSPORT_COMMIT,
                 "selected_arm64_dmg_sha256": SELECTED_ARM64_DMG_SHA256,
@@ -277,6 +299,141 @@ class BlueBubblesMessagesAdapter:
 
     def status(self) -> AdapterStatus:
         return self._status
+
+    async def apply_write(
+        self,
+        operation: str,
+        payload: dict[str, Any],
+        target_external_id: str | None,
+    ) -> dict[str, Any]:
+        """Execute one exact reply after independently re-proving its target."""
+
+        if operation != "reply":
+            raise ValueError("Messages bridge supports only exact-chat reply")
+        if not self._reply_enabled:
+            raise ValueError("Messages reply capability is not locally active")
+        if not self._probe_verified or self._status.state != "running":
+            raise RuntimeError("Messages reply transport has not finished starting")
+        if payload.get("contract") != REPLY_CONTRACT:
+            raise ValueError("Messages reply contract is invalid")
+        if (
+            payload.get("capability_version") != REPLY_CAPABILITY_VERSION
+            or payload.get("policy_version") != REPLY_POLICY_VERSION
+        ):
+            raise ValueError("Messages reply capability or policy changed")
+        if (
+            payload.get("member_owner_id") != self._member_id
+            or payload.get("bridge_enrollment_id") != self._bridge_enrollment_id
+        ):
+            raise ValueError("Messages reply owner or enrollment changed")
+        if (
+            payload.get("provider_account_id") != self._provider_account_id
+            or payload.get("protected_source_id") != self._protected_source_id
+        ):
+            raise ValueError("Messages reply account or source changed")
+        body = validate_exact_body(payload.get("body"))
+        if payload.get("body_fingerprint") != body_sha256(body):
+            raise ValueError("Messages reply body fingerprint changed")
+        native_chat_id = payload.get("native_chat_id")
+        native_message_id = payload.get("in_reply_to_native_message_id")
+        if (
+            not isinstance(native_chat_id, str)
+            or not native_chat_id
+            or not isinstance(native_message_id, str)
+            or not native_message_id
+            or native_message_id != target_external_id
+        ):
+            raise ValueError("Messages reply native target changed")
+        expected_participants = payload.get("participant_ids")
+        if (
+            not isinstance(expected_participants, list)
+            or expected_participants != sorted(set(expected_participants))
+            or payload.get("participant_fingerprint")
+            != canonical_sha256(expected_participants)
+        ):
+            raise ValueError("Messages reply participants are invalid")
+
+        # These fresh reads happen before the only provider mutation.  The
+        # transport must prove both the chat participant set and the reply
+        # target's membership in that exact chat.
+        chat = await self._transport.chat(native_chat_id)
+        if chat.get("guid") != native_chat_id or chat.get("style") not in {43, 45}:
+            raise ValueError("Messages reply chat is unavailable or unsupported")
+        observed_participants = sorted(
+            [
+                *self._participants(chat),
+                _SELF_PARTICIPANT_PREFIX + self._provider_account_id,
+            ]
+        )
+        if (
+            observed_participants != expected_participants
+            or canonical_sha256(observed_participants)
+            != payload.get("participant_fingerprint")
+            or bool(chat.get("style") == 43) is not bool(payload.get("is_group"))
+        ):
+            raise ValueError("Messages reply participant set changed")
+        target = await self._transport.message(native_message_id)
+        chats = target.get("chats")
+        if (
+            target.get("guid") != native_message_id
+            or not isinstance(chats, list)
+            or len(chats) != 1
+            or not isinstance(chats[0], dict)
+            or chats[0].get("guid") != native_chat_id
+        ):
+            raise ValueError("Messages reply target no longer belongs to the chat")
+        expected_revision = payload.get("expected_native_revision")
+        try:
+            current_revision = self._native_revision(target)
+        except _RecordRejected as exc:
+            raise ValueError("Messages reply target revision is unavailable") from exc
+        if expected_revision != current_revision:
+            raise ValueError("Messages reply target revision changed")
+
+        command_id = str(payload.get("command_id") or "")
+        if not command_id:
+            raise ValueError("Messages reply command identity is missing")
+        temp_guid = "administrateme-" + str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"administrateme:{command_id}")
+        )
+        try:
+            result = await self._transport.send_text_reply(
+                native_chat_id=native_chat_id,
+                body=body,
+                temp_guid=temp_guid,
+            )
+        except BlueBubblesAmbiguousWriteError:
+            return {
+                "outcome": "ambiguous",
+                "applied": False,
+                "suppressed": False,
+                "external_id": None,
+                "provider_revision": None,
+                "interaction_id": payload.get("interaction_id"),
+                "native_chat_id": native_chat_id,
+                "body_fingerprint": payload["body_fingerprint"],
+                "participant_fingerprint": payload["participant_fingerprint"],
+                "temp_guid": temp_guid,
+                "automatic_retry": False,
+            }
+        outcome = result.get("outcome")
+        if outcome not in {"accepted", "sent"}:
+            raise BlueBubblesTransportError(
+                "BlueBubbles reply returned no accepted or sent evidence"
+            )
+        return {
+            "outcome": outcome,
+            "applied": True,
+            "suppressed": False,
+            "external_id": result.get("external_id"),
+            "provider_revision": result.get("provider_revision"),
+            "interaction_id": payload.get("interaction_id"),
+            "native_chat_id": native_chat_id,
+            "body_fingerprint": payload["body_fingerprint"],
+            "participant_fingerprint": payload["participant_fingerprint"],
+            "temp_guid": temp_guid,
+            "automatic_retry": False,
+        }
 
     def _store(self) -> AdapterCursorStore:
         if self._cursor_store is None:
@@ -383,7 +540,8 @@ class BlueBubblesMessagesAdapter:
             )
         if info.get("private_api") is not False:
             raise BlueBubblesTransportError(
-                "BlueBubbles Private API must be disabled for read-only ingestion"
+                "BlueBubbles Private API must remain disabled for the reviewed "
+                "Messages transport"
             )
         computer_id = info.get("computer_id")
         if not isinstance(computer_id, str) or not computer_id:
@@ -898,6 +1056,23 @@ class BlueBubblesMessagesAdapter:
         if isinstance(date, bool) or not isinstance(date, (int, float)) or date < 0:
             raise _RecordRejected("message_timestamp_was_malformed", kind="malformed")
         return _Position(int(date), guid)
+
+    def _native_revision(self, record: Mapping[str, Any]) -> str:
+        position = self._position(record)
+        revision_candidates = [position.date_ms]
+        for key in ("dateEdited", "dateRetracted", "dateDelivered", "dateRead"):
+            value = record.get(key)
+            if value is not None:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or value < 0
+                ):
+                    raise _RecordRejected(
+                        "message_revision_was_malformed", kind="malformed"
+                    )
+                revision_candidates.append(int(value))
+        return f"{max(revision_candidates)}:{self._record_digest(record)[:32]}"
 
     def _safe_position(self, record: Mapping[str, Any]) -> _Position:
         try:
