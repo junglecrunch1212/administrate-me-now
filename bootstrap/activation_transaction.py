@@ -577,9 +577,7 @@ def validate_journal(value: object) -> dict[str, Any]:
                     "activation predecessor settings control is invalid"
                 )
         else:
-            if not isinstance(settings, dict) or not isinstance(
-                settings_encoded, str
-            ):
+            if not isinstance(settings, dict) or not isinstance(settings_encoded, str):
                 raise ActivationJournalError(
                     "activation predecessor settings control is invalid"
                 )

@@ -147,7 +147,7 @@ async def test_runner_migrates_existing_tasks_before_creating_new_indexes(
     db_path = config.projection_db_path("tasks")
     old = sqlcipher3.connect(str(db_path), isolation_level=None)
     try:
-        old.execute(f'PRAGMA key = "x\'{TEST_KEY.hex()}\'"')
+        old.execute(f"PRAGMA key = \"x'{TEST_KEY.hex()}'\"")
         old.executescript(
             """
             CREATE TABLE tasks (
@@ -182,9 +182,7 @@ async def test_runner_migrates_existing_tasks_before_creating_new_indexes(
         } <= indexes
         service_work_columns = [
             row[2]
-            for row in conn.execute(
-                "PRAGMA index_info(idx_tasks_tenant_service_work)"
-            )
+            for row in conn.execute("PRAGMA index_info(idx_tasks_tenant_service_work)")
         ]
         assert service_work_columns == [
             "tenant_id",

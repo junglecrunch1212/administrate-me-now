@@ -105,9 +105,7 @@ def _journal_value(
         "initial_settings_control_bytes": base64.b64encode(settings_payload).decode(
             "ascii"
         ),
-        "initial_settings_control_sha256": hashlib.sha256(
-            settings_payload
-        ).hexdigest(),
+        "initial_settings_control_sha256": hashlib.sha256(settings_payload).hexdigest(),
         "was_running": True,
         "pending_attestation_id": PENDING_ID if operation == "activate" else None,
         "pending_attestation_sha256": (

@@ -1526,9 +1526,7 @@ class UpgradeManager:
             self._fsync_directory(adapter_path.parent)
 
         if "initial_settings_control_bytes" in journal:
-            settings_path = (
-                self.paths.instance_dir / "config" / "settings-control.json"
-            )
+            settings_path = self.paths.instance_dir / "config" / "settings-control.json"
             settings_encoded = journal["initial_settings_control_bytes"]
             if settings_encoded is None:
                 if os.path.lexists(settings_path):
@@ -1537,9 +1535,7 @@ class UpgradeManager:
                     self._fsync_directory(settings_path.parent)
             else:
                 try:
-                    settings_payload = base64.b64decode(
-                        settings_encoded, validate=True
-                    )
+                    settings_payload = base64.b64decode(settings_encoded, validate=True)
                 except (TypeError, ValueError) as exc:
                     raise UpgradeError(
                         "activation journal settings-control bytes are invalid"
@@ -2690,9 +2686,7 @@ class UpgradeManager:
                 )
             except (TypeError, ValueError) as exc:
                 raise UpgradeError("rollback readiness history is invalid") from exc
-        restore_target_settings = (
-            "initial_settings_control_bytes" in activation_history
-        )
+        restore_target_settings = "initial_settings_control_bytes" in activation_history
         target_settings_payload: bytes | None = None
         if restore_target_settings:
             target_settings_encoded = activation_history[
@@ -2708,12 +2702,11 @@ class UpgradeManager:
                     raise UpgradeError(
                         "rollback settings-control history is invalid"
                     ) from exc
-                if hashlib.sha256(target_settings_payload).hexdigest() != (
-                    activation_history["initial_settings_control_sha256"]
+                if (
+                    hashlib.sha256(target_settings_payload).hexdigest()
+                    != (activation_history["initial_settings_control_sha256"])
                 ):
-                    raise UpgradeError(
-                        "rollback settings-control history is invalid"
-                    )
+                    raise UpgradeError("rollback settings-control history is invalid")
 
         (
             pointer_payload,
