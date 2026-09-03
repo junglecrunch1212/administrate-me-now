@@ -35,6 +35,17 @@ class LocalSourceChoice:
     connector_config: dict[str, Any] | None = None
 
 
+@dataclass
+class _EphemeralCredentialResolver:
+    """Hold a wizard-entered password only until the authenticated probe ends."""
+
+    secret: str
+
+    async def resolve(self, reference: str) -> str:
+        del reference
+        return self.secret
+
+
 class EnrollmentInteraction(Protocol):
     def inspect_transport(self, capability_id: str) -> dict[str, Any]: ...
 
@@ -206,6 +217,14 @@ return text returned of result"""
             )
             if not port.isdigit() or not 1 <= int(port) <= 65535:
                 raise BridgeEnrollmentError("the BlueBubbles loopback port is invalid")
+            containment = self._osascript(
+                """display dialog "Before entering a credential, independently verify that the host firewall blocks inbound access to the BlueBubbles port and that Private API, Firebase, Cloudflare, zrok, ngrok, Dynamic DNS, and webhooks are disabled in BlueBubbles. AdministrateMe cannot verify those controls from message data." buttons {"Not Ready", "Controls Verified"} default button "Controls Verified" cancel button "Not Ready" with title "Apple Messages containment"
+return button returned of result"""
+            )
+            if containment != "Controls Verified":
+                raise BridgeEnrollmentError(
+                    "BlueBubbles network containment is not verified"
+                )
             password = self._osascript(
                 """display dialog "Enter the BlueBubbles Server password. It is stored only in this Mac's Keychain." default answer "" with hidden answer with title "Apple Messages authentication"
 return text returned of result"""
@@ -214,12 +233,13 @@ return text returned of result"""
                 raise BridgeEnrollmentError("BlueBubbles authentication is required")
             service = "administrateme-bluebubbles"
             account = "member-bridge"
-            keyring.set_password(service, account, password)
             base_url = f"http://127.0.0.1:{port}"
             credential_ref = f"keychain://{service}/{account}"
+            resolver = _EphemeralCredentialResolver(password)
             transport = BlueBubblesRestTransport(
                 base_url=base_url,
                 credential_ref=credential_ref,
+                credential_resolver=resolver,
             )
 
             async def _probe() -> Mapping[str, Any]:
@@ -229,32 +249,31 @@ return text returned of result"""
                     await transport.aclose()
 
             try:
-                info = asyncio.run(_probe())
-            except (BlueBubblesTransportError, ValueError):
-                raise BridgeEnrollmentError(
-                    "the reviewed BlueBubbles transport could not be authenticated"
-                ) from None
-            if (
-                not isinstance(info, dict)
-                or str(info.get("server_version") or info.get("serverVersion") or "")
-                != "1.9.9"
-            ):
-                raise BridgeEnrollmentError(
-                    "the local BlueBubbles Server is not the reviewed version"
-                )
-            computer = str(info.get("computer_id") or info.get("computerId") or "")
-            if not computer:
-                raise BridgeEnrollmentError(
-                    "the local BlueBubbles source identity is unavailable"
-                )
-            containment = self._osascript(
-                """display dialog "Before observation starts, independently verify that the host firewall blocks inbound access to the BlueBubbles port and that Private API, Firebase, Cloudflare, zrok, ngrok, Dynamic DNS, and webhooks are disabled in BlueBubbles. AdministrateMe cannot verify those controls from message data." buttons {"Not Ready", "Controls Verified"} default button "Controls Verified" cancel button "Not Ready" with title "Apple Messages containment"
-return button returned of result"""
-            )
-            if containment != "Controls Verified":
-                raise BridgeEnrollmentError(
-                    "BlueBubbles network containment is not verified"
-                )
+                try:
+                    info = asyncio.run(_probe())
+                except (BlueBubblesTransportError, ValueError):
+                    raise BridgeEnrollmentError(
+                        "the reviewed BlueBubbles transport could not be authenticated"
+                    ) from None
+                if (
+                    not isinstance(info, dict)
+                    or str(
+                        info.get("server_version") or info.get("serverVersion") or ""
+                    )
+                    != "1.9.9"
+                ):
+                    raise BridgeEnrollmentError(
+                        "the local BlueBubbles Server is not the reviewed version"
+                    )
+                computer = str(info.get("computer_id") or info.get("computerId") or "")
+                if not computer:
+                    raise BridgeEnrollmentError(
+                        "the local BlueBubbles source identity is unavailable"
+                    )
+                keyring.set_password(service, account, password)
+            finally:
+                resolver.secret = ""
+                password = ""
             digest = hashlib.sha256(computer.encode("utf-8")).hexdigest()
             return LocalSourceChoice(
                 source_coordinate=f"protected-source:{digest}",
