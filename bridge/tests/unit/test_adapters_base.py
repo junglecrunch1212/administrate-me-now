@@ -88,6 +88,7 @@ def test_bridge_context_is_frozen_dataclass_with_required_fields() -> None:
         "tenant_id",
         "enrollment_id",
         "configuration_sha256",
+        "device_identity_sha256",
     }
     assert ctx.tenant_id == "tenant-default"
 
@@ -151,6 +152,7 @@ def test_bridge_context_field_order_preserves_positional_arg_compatibility() -> 
         "tenant_id",
         "enrollment_id",
         "configuration_sha256",
+        "device_identity_sha256",
     ]
     # And constructable via positional args (no `sink` supplied).
     ctx = BridgeContext(

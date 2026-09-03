@@ -23,6 +23,20 @@ CREATE TABLE IF NOT EXISTS interactions (
     body_preview       TEXT,
     thread_id          TEXT,
     native_message_id  TEXT,
+    native_chat_id     TEXT,
+    native_revision    TEXT,
+    native_revision_ms INTEGER NOT NULL DEFAULT 0,
+    reply_to_native_message_id TEXT,
+    transport_class    TEXT,
+    is_group           INTEGER NOT NULL DEFAULT 0,
+    message_state      TEXT NOT NULL DEFAULT 'active',
+    bridge_enrollment_id TEXT,
+    device_identity_sha256 TEXT,
+    connector_id       TEXT,
+    protected_source_id TEXT,
+    transport_version  TEXT,
+    transport_commit   TEXT,
+    correlation_id     TEXT,
     member_id          TEXT,
     provider           TEXT,
     provider_account_id TEXT,
@@ -38,6 +52,8 @@ CREATE TABLE IF NOT EXISTS interactions (
     reply_to_identifier TEXT,
     provider_labels    TEXT NOT NULL DEFAULT '[]',
     attachment_metadata TEXT NOT NULL DEFAULT '[]',
+    assessment_outcome  TEXT,
+    assessment_reason_codes TEXT NOT NULL DEFAULT '[]',
     command_state      TEXT,
     last_command_id    TEXT,
     delivery_status    TEXT,
@@ -74,6 +90,20 @@ CREATE TABLE IF NOT EXISTS interaction_participants (
     role               TEXT NOT NULL,          -- 'from' | 'to' | 'cc' | 'bcc' | 'mentioned'
     PRIMARY KEY (tenant_id, interaction_id, party_id, role)
 );
+
+-- Provider endpoints are not Parties. They remain here until a separate
+-- identity-resolution event proves an exact Party relationship.
+CREATE TABLE IF NOT EXISTS interaction_source_participants (
+    tenant_id          TEXT NOT NULL,
+    interaction_id     TEXT NOT NULL,
+    participant_id     TEXT NOT NULL,
+    role               TEXT NOT NULL,
+    is_self            INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, interaction_id, participant_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_isparts_tenant_interaction
+    ON interaction_source_participants(tenant_id, interaction_id);
 
 CREATE INDEX IF NOT EXISTS idx_iparts_tenant_party
     ON interaction_participants(tenant_id, party_id);

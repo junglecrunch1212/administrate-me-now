@@ -182,7 +182,7 @@ def test_g09_self_service_partial_success_restart_and_revocation(
         assert wizard["contract"] == "administrateme-member-bridge-wizard-v1"
         assert wizard["writes_authorized"] is False
         descriptors = {item["capability_id"]: item for item in wizard["capabilities"]}
-        assert descriptors["apple_messages_read"]["implementation"] == "planned_g10"
+        assert descriptors["apple_messages_read"]["implementation"] == "available"
         assert descriptors["apple_messages_reply"]["implementation"] == "planned_g11"
 
         cross_adult = client.post(

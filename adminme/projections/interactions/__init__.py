@@ -15,7 +15,7 @@ from adminme.projections.interactions import handlers
 
 class InteractionsProjection(Projection):
     name = "interactions"
-    version = 5
+    version = 6
     subscribes_to = [
         "messaging.received",
         "messaging.sent",
@@ -23,6 +23,7 @@ class InteractionsProjection(Projection):
         "interaction.participant_resolved",
         "messaging.classified",
         "messaging.semantic_features_extracted",
+        "triage.intent.features_extracted",
         "communication.state_changed",
         "external_sync.write_requested",
         "external_sync.write_completed",
@@ -61,6 +62,16 @@ class InteractionsProjection(Projection):
                     tenant_id, service_principal_id, provider,
                     provider_account_id, native_message_id
                 ) WHERE native_message_id IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS interaction_source_participants (
+                tenant_id TEXT NOT NULL,
+                interaction_id TEXT NOT NULL,
+                participant_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                is_self INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (tenant_id, interaction_id, participant_id, role)
+            );
+            CREATE INDEX IF NOT EXISTS idx_isparts_tenant_interaction
+                ON interaction_source_participants(tenant_id, interaction_id);
             """
         )
         columns = {
@@ -68,6 +79,20 @@ class InteractionsProjection(Projection):
         }
         additions = {
             "native_message_id": "TEXT",
+            "native_chat_id": "TEXT",
+            "native_revision": "TEXT",
+            "native_revision_ms": "INTEGER NOT NULL DEFAULT 0",
+            "reply_to_native_message_id": "TEXT",
+            "transport_class": "TEXT",
+            "is_group": "INTEGER NOT NULL DEFAULT 0",
+            "message_state": "TEXT NOT NULL DEFAULT 'active'",
+            "bridge_enrollment_id": "TEXT",
+            "device_identity_sha256": "TEXT",
+            "connector_id": "TEXT",
+            "protected_source_id": "TEXT",
+            "transport_version": "TEXT",
+            "transport_commit": "TEXT",
+            "correlation_id": "TEXT",
             "classification": "TEXT",
             "classification_confidence": "REAL",
             "body_text": "TEXT",
@@ -86,6 +111,8 @@ class InteractionsProjection(Projection):
             "reply_to_identifier": "TEXT",
             "provider_labels": "TEXT NOT NULL DEFAULT '[]'",
             "attachment_metadata": "TEXT NOT NULL DEFAULT '[]'",
+            "assessment_outcome": "TEXT",
+            "assessment_reason_codes": "TEXT NOT NULL DEFAULT '[]'",
             "command_state": "TEXT",
             "last_command_id": "TEXT",
             "delivery_status": "TEXT",

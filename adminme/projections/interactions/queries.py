@@ -87,10 +87,15 @@ def participants_for(
         return {}
     placeholders = ",".join("?" for _ in interaction_ids)
     rows = conn.execute(
-        f"SELECT interaction_id, party_id, role FROM interaction_participants "  # noqa: S608 - bound placeholders
+        f"SELECT interaction_id, party_id, NULL AS participant_id, role, "  # noqa: S608 - bound placeholders
+        f"1 AS resolved, 0 AS is_self FROM interaction_participants "
         f"WHERE tenant_id=? AND interaction_id IN ({placeholders}) "
-        "ORDER BY interaction_id, role, party_id",
-        (session.tenant_id, *interaction_ids),
+        "UNION ALL "
+        "SELECT interaction_id, NULL AS party_id, participant_id, role, "
+        "0 AS resolved, is_self FROM interaction_source_participants "
+        f"WHERE tenant_id=? AND interaction_id IN ({placeholders}) "
+        "ORDER BY interaction_id, role, party_id, participant_id",
+        (session.tenant_id, *interaction_ids, session.tenant_id, *interaction_ids),
     ).fetchall()
     allowed = set(interaction_ids)
     result: dict[str, list[dict[str, str]]] = {}
@@ -99,9 +104,16 @@ def participants_for(
         interaction_id = str(value["interaction_id"])
         if interaction_id not in allowed:
             continue
-        result.setdefault(interaction_id, []).append(
-            {"party_id": str(value["party_id"]), "role": str(value["role"])}
-        )
+        row_value = {
+            "role": str(value["role"]),
+            "resolved": "party" if bool(value["resolved"]) else "endpoint",
+            "is_self": "true" if bool(value["is_self"]) else "false",
+        }
+        if value.get("party_id") is not None:
+            row_value["party_id"] = str(value["party_id"])
+        if value.get("participant_id") is not None:
+            row_value["participant_id"] = str(value["participant_id"])
+        result.setdefault(interaction_id, []).append(row_value)
     return result
 
 

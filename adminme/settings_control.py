@@ -86,8 +86,8 @@ PROVIDER_CATALOG: dict[str, dict[str, Any]] = {
         "label": "iMessage / SMS",
         "product": "Communications",
         "runtime": "member bridge",
-        "read": ["messages", "threads", "attachments"],
-        "write": ["reply", "send"],
+        "read": ["messages", "threads", "attachment metadata"],
+        "write": [],
     },
     "messaging-twilio-sms": {
         "provider": "twilio_sms",
@@ -1371,6 +1371,70 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                 "actions": ["resume"] if setup_state == "paused" else ["pause"],
             }
         )
+    for identity, record in sorted(
+        getattr(runtime.settings, "bridge_enrollments", {}).items()
+    ):
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "active"
+            or record.get("member_id") != member_id
+            or "messaging-bluebubbles" not in record.get("configured_packs", [])
+        ):
+            continue
+        config = (record.get("pack_config") or {}).get("messaging-bluebubbles")
+        if not isinstance(config, dict):
+            continue
+        connection_id = f"bridge:{record.get('enrollment_id')}:messaging-bluebubbles"
+        authorized = "messaging-bluebubbles" in record.get("authorized_packs", [])
+        enabled = "messaging-bluebubbles" in record.get("enabled_packs", [])
+        active = "messaging-bluebubbles" in record.get("adapters_active", [])
+        rows.append(
+            {
+                "id": connection_id,
+                "provider": "bluebubbles",
+                "provider_label": "Apple Messages",
+                "label": "Apple Messages (read-only)",
+                "account_hint": config.get("provider_account_id"),
+                "product": "Communications",
+                "workspace": "personal",
+                "binding": {
+                    "state": "healthy" if authorized else "unverified",
+                    "ownership_attested": config.get("ownership_attested") is True,
+                    "provenance": config.get("binding_provenance"),
+                    "permission_count": len(config.get("permission_scope") or []),
+                    "content_exposed": False,
+                    "identity_bound": bool(identity),
+                    "bridge_enrollment_id": record.get("enrollment_id"),
+                    "device_identity_sha256": config.get("device_identity_sha256"),
+                    "protected_source_id": config.get("protected_source_id"),
+                },
+                "deployment": "member bridge",
+                "setup": "connected" if authorized and enabled else "configured",
+                "runtime": "running"
+                if active
+                else "starting"
+                if enabled
+                else "not_running",
+                "permissions": {
+                    "read": ["messages", "threads", "attachment metadata"],
+                    "write": [],
+                    "credential_reference_present": _credential_reference_present(
+                        config
+                    ),
+                    "write_capability_source": "none_g10_observation_only",
+                },
+                "safety": {
+                    "observation_only": True,
+                    "human_gate_required": False,
+                    "openclaw_approval_required": False,
+                    "writes_execute": False,
+                    "network_containment_required": True,
+                },
+                "last_sync_at": record.get("last_successful_observation"),
+                "error": None,
+                "actions": ["pause"],
+            }
+        )
     return sorted(rows, key=lambda row: (row["product"], row["label"].casefold()))
 
 
@@ -1496,6 +1560,80 @@ def compose_source_policy_v2_sources(
                     else "unknown",
                     "scope_widening": False,
                     "credential_creation": False,
+                },
+                **effective,
+            }
+        )
+
+    for record in getattr(runtime.settings, "bridge_enrollments", {}).values():
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "active"
+            or record.get("member_id") != member_id
+            or "messaging-bluebubbles" not in record.get("configured_packs", [])
+        ):
+            continue
+        config = (record.get("pack_config") or {}).get("messaging-bluebubbles")
+        if not isinstance(config, dict):
+            continue
+        connection_id = f"bridge:{record.get('enrollment_id')}:messaging-bluebubbles"
+        coordinate = SourceCoordinate(
+            tenant_id=runtime.settings.instance.tenant_id,
+            owner_principal_id=member_id,
+            owner_kind="member",
+            context_member_id=member_id,
+            adapter_category="communication",
+            adapter_kind="messaging-bluebubbles",
+            adapter_instance_id=str(record.get("enrollment_id") or connection_id),
+            provider="bluebubbles",
+            provider_family="apple_messages",
+            provider_account_id=str(
+                config.get("provider_account_id") or "unattributed"
+            ),
+            workspace="personal",
+            source_kind="adapter:bluebubbles",
+            source_class="passive_communication",
+            trusted_route=f"member_private:{member_id}",
+            bridge_enrollment_id=str(record.get("enrollment_id") or "unknown"),
+            device_identity_sha256=config.get("device_identity_sha256"),
+            connector_id="messaging-bluebubbles",
+            protected_source_id=str(config.get("protected_source_id") or "unknown"),
+            native_container_kind="source",
+            native_container_id=str(config.get("protected_source_id") or "unknown"),
+        )
+        effective = runtime.settings_control.effective_source_policy_v2(
+            member_id, coordinate, state=state
+        )
+        connection = connections.get(connection_id, {})
+        sources.append(
+            {
+                "policy_key": coordinate.key,
+                "label": "Apple Messages (read-only)",
+                "provider_label": "Apple Messages",
+                "account_hint": config.get("provider_account_id"),
+                "workspace": "personal",
+                "adapter_instance_id": coordinate.adapter_instance_id,
+                "source_kind": coordinate.source_kind,
+                "coordinate": coordinate.model_dump(mode="json"),
+                "coordinate_state": "exact" if coordinate.exact else "ambiguous",
+                "configurable": coordinate.exact,
+                "acquisition": {
+                    "state": effective["policy"]["acquisition_state"],
+                    "coverage": "partial",
+                    "freshness": "current"
+                    if connection.get("last_sync_at")
+                    else "unknown",
+                    "provider_capability": "available"
+                    if connection.get("setup") in {"connected", "configured"}
+                    else "unknown",
+                    "scope_widening": False,
+                    "credential_creation": False,
+                },
+                "transport_assurance": {
+                    "version": config.get("transport_version"),
+                    "coverage": "bounded_best_effort",
+                    "global_history_complete": False,
+                    "network_containment_required": True,
                 },
                 **effective,
             }

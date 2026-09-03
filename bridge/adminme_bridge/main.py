@@ -22,6 +22,7 @@ from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeCon
 from adminme_bridge.config import BridgeConfig, load_config
 from adminme_bridge.ingest_client import IngestClient
 from adminme_bridge.packs import (
+    COMMUNICATION_SOURCE_SUBKIND,
     PackHandle,
     PackLoadError,
     discover_packs,
@@ -114,7 +115,8 @@ class BridgeSupervisor:
                                     self._config.resolved_cursor_db_path()
                                 )
                             }
-                            if handle.subkind == "knowledge-source"
+                            if handle.subkind
+                            in {"knowledge-source", COMMUNICATION_SOURCE_SUBKIND}
                             else {}
                         ),
                     },
@@ -139,6 +141,15 @@ class BridgeSupervisor:
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()
+        device_identities = {
+            str(pack_config.get("device_identity_sha256"))
+            for name, pack_config in self._config.pack_config.items()
+            if name in self._config.enabled_packs
+            and pack_config.get("device_identity_sha256")
+        }
+        device_identity_sha256 = (
+            next(iter(device_identities)) if len(device_identities) == 1 else ""
+        )
         return BridgeContext(
             member_id=self._config.member_id,
             ingest_client=self._ingest_client,
@@ -147,6 +158,7 @@ class BridgeSupervisor:
             tenant_id=self._config.tenant_id,
             enrollment_id=self._config.enrollment_id,
             configuration_sha256=configuration_sha256,
+            device_identity_sha256=device_identity_sha256,
         )
 
     async def start(self) -> None:
@@ -435,7 +447,16 @@ def _status_to_dict(status: AdapterStatus) -> dict:
     return {
         "state": status.state,
         "last_error": status.last_error,
+        "last_cursor_advance_at": (
+            status.last_cursor_advance_at.isoformat()
+            if status.last_cursor_advance_at is not None
+            else None
+        ),
+        "started_at": (
+            status.started_at.isoformat() if status.started_at is not None else None
+        ),
         "restart_count": status.restart_count,
+        "extra": dict(status.extra),
     }
 
 

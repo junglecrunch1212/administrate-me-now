@@ -416,6 +416,8 @@ def _container_from_payload(payload: dict[str, Any], policy: Any) -> str | None:
         )
     elif policy.container_key == "container_external_id":
         value = payload.get("container_external_id")
+    elif policy.container_key == "protected_source_id":
+        value = payload.get("protected_source_id")
     else:
         value = None
     return str(value) if value is not None else None
@@ -529,11 +531,17 @@ async def _enforce_active_bridge_contract(
         await _enforce_terminal_result(request, envelope, authorization)
         return envelope
     policy = authorization.policy_for_source(envelope.source_adapter)
+    bridge_record = _bridge_record(request, tailscale_identity)
     violations: list[str] = []
     if policy is None:
         violations.append("source_adapter")
     elif envelope.type not in policy.event_types:
         violations.append("event_type")
+    elif (
+        policy.pack == "messaging-bluebubbles"
+        and policy.pack not in bridge_record.get("enabled_packs", [])
+    ):
+        violations.append("pack_not_enabled")
     expected_account = (
         authorization.source_account_for(policy) if policy is not None else None
     )
@@ -551,7 +559,29 @@ async def _enforce_active_bridge_contract(
         payload_account = envelope.payload.get("provider_account_id")
         if payload_account is not None and payload_account != expected_account:
             violations.append("payload.provider_account_id")
-        if envelope.type not in {"adapter.authenticated", "adapter.error"}:
+        if policy.pack == "messaging-bluebubbles" and envelope.type in {
+            "messaging.received",
+            "messaging.sent",
+            "messaging.source_observed",
+        }:
+            config = authorization.pack_config[policy.pack]
+            if (
+                envelope.payload.get("bridge_enrollment_id")
+                != authorization.enrollment_id
+            ):
+                violations.append("payload.bridge_enrollment_id")
+            if envelope.payload.get("device_identity_sha256") != config.get(
+                "device_identity_sha256"
+            ):
+                violations.append("payload.device_identity_sha256")
+            if envelope.payload.get("connector_id") != "messaging-bluebubbles":
+                violations.append("payload.connector_id")
+            if envelope.payload.get("workspace") != "personal":
+                violations.append("payload.workspace")
+            expected_version = 1 if envelope.type == "messaging.source_observed" else 7
+            if envelope.schema_version != expected_version:
+                violations.append("schema_version")
+        if not envelope.type.startswith("adapter."):
             container = _payload_container(envelope, policy)
             allowed = authorization.pack_config.get(policy.pack, {}).get(
                 "allowed_container_ids", []
@@ -567,6 +597,13 @@ async def _enforce_active_bridge_contract(
             },
         )
     assert policy is not None
+    if policy.pack == "messaging-bluebubbles":
+        device_digest = authorization.pack_config[policy.pack].get(
+            "device_identity_sha256"
+        )
+        envelope = envelope.model_copy(
+            update={"actor_identity": f"bridge-device:{device_digest}"}
+        )
     return _promote_reviewed_sharing(envelope, authorization, policy)
 
 
@@ -1164,6 +1201,7 @@ async def pending_commands(
         policy.provider
         for pack in authorization.packs
         if (policy := BRIDGE_PACK_POLICIES[pack]).provider is not None
+        and policy.write_operations
     }
     selected = (
         allowed

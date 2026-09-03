@@ -32,7 +32,14 @@ sources:
     upstream_path: "/"
     source_commit: "unknown"
     local_path: "docs/reference/bluebubbles/"
-    notes: "BlueBubbles server, API, and WebSocket events."
+    notes: "Historical documentation mirror. G10 implementation authority is the separately pinned server source and binary below, not this floating documentation snapshot."
+    reviewed_transport:
+      product: "BlueBubbles Server"
+      version: "1.9.9"
+      source_repo: "BlueBubblesApp/bluebubbles-server"
+      source_commit: "ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1"
+      arm64_dmg_sha256: "fafd650c883f52e7494a6625e45249f2144d197378a4d57143ccf6198bb2e862"
+      compatibility: "conditional-until-clean-macos-lab"
 
   google_gmail:
     upstream_repo: "googleapis/google-api-nodejs-client"

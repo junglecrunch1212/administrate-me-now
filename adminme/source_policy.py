@@ -84,12 +84,19 @@ class SourceCoordinate(BaseModel):
     adapter_kind: str = Field(min_length=1, max_length=240)
     adapter_instance_id: str = Field(min_length=1, max_length=500)
     provider: str = Field(min_length=1, max_length=120)
+    provider_family: str | None = Field(default=None, min_length=1, max_length=120)
     provider_account_id: str = Field(min_length=1, max_length=500)
     workspace: str = Field(min_length=1, max_length=240)
     source_kind: str = Field(min_length=1, max_length=240)
     source_class: SourceClass
     trusted_route: str = Field(min_length=1, max_length=500)
-    native_container_kind: Literal["folder", "list", "label", "calendar"] | None = None
+    bridge_enrollment_id: str | None = Field(default=None, min_length=1, max_length=240)
+    device_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    connector_id: str | None = Field(default=None, min_length=1, max_length=240)
+    protected_source_id: str | None = Field(default=None, min_length=1, max_length=500)
+    native_container_kind: (
+        Literal["folder", "list", "label", "calendar", "source"] | None
+    ) = None
     native_container_id: str | None = Field(default=None, min_length=1, max_length=1000)
 
     @model_validator(mode="after")
@@ -138,6 +145,16 @@ class SourceCoordinate(BaseModel):
                 self.provider_account_id,
                 self.workspace,
                 self.trusted_route,
+                *(
+                    value
+                    for value in (
+                        self.bridge_enrollment_id,
+                        self.device_identity_sha256,
+                        self.connector_id,
+                        self.protected_source_id,
+                    )
+                    if value is not None
+                ),
             )
         )
 
@@ -400,7 +417,10 @@ def source_coordinate_for_event(
         or "unknown"
     )
     adapter_instance = str(
-        payload.get("adapter_instance_id") or event.get("source_adapter") or "unknown"
+        payload.get("adapter_instance_id")
+        or payload.get("bridge_enrollment_id")
+        or event.get("source_adapter")
+        or "unknown"
     )
     account_id = str(
         payload.get("provider_account_id")
@@ -416,9 +436,12 @@ def source_coordinate_for_event(
         adapter_instance = source_kind
         account_id = owner_id
         workspace = "private_portal"
-    container_kind: Literal["folder", "list", "label", "calendar"] | None = None
+    container_kind: Literal["folder", "list", "label", "calendar", "source"] | None = (
+        None
+    )
     container_id: str | None = None
     for kind, key in (
+        ("source", "protected_source_id"),
         ("calendar", "calendar_external_id"),
         ("calendar", "calendar_id"),
         ("list", "list_external_id"),
@@ -447,11 +470,34 @@ def source_coordinate_for_event(
             if source_class == "direct_authenticated_intent"
             else _provider_for_event(event, payload)
         ),
+        provider_family=(
+            "apple_messages"
+            if payload.get("connector_id") == "messaging-bluebubbles"
+            else None
+        ),
         provider_account_id=account_id,
         workspace=workspace,
         source_kind=source_kind,
         source_class=source_class,
         trusted_route=_trusted_route(event, payload, owner_id, owner_kind),
+        bridge_enrollment_id=(
+            str(payload["bridge_enrollment_id"])
+            if payload.get("bridge_enrollment_id")
+            else None
+        ),
+        device_identity_sha256=(
+            str(payload["device_identity_sha256"])
+            if payload.get("device_identity_sha256")
+            else None
+        ),
+        connector_id=(
+            str(payload["connector_id"]) if payload.get("connector_id") else None
+        ),
+        protected_source_id=(
+            str(payload["protected_source_id"])
+            if payload.get("protected_source_id")
+            else None
+        ),
         native_container_kind=container_kind,
         native_container_id=container_id,
     )

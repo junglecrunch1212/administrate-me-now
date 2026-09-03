@@ -126,7 +126,9 @@ _COMMUNICATION_PROVIDERS: dict[str, tuple[str, str]] = {
 _PROVIDER_WRITE_CAPABILITIES: dict[str, frozenset[str]] = {
     "gmail": frozenset({"reply", "send", "mark_read", "archive"}),
     "microsoft_graph": frozenset({"reply", "send", "mark_read", "archive"}),
-    "bluebubbles": frozenset({"reply", "send"}),
+    # G10 is strictly observational. G11 may add a separately reviewed reply
+    # capability; no existing provider command is inherited here.
+    "bluebubbles": frozenset(),
     "twilio_sms": frozenset({"reply", "send"}),
     "twilio_whatsapp": frozenset({"reply", "send"}),
 }
@@ -433,6 +435,88 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
                 "connection_truth": truth,
             }
         )
+    for identity, record in sorted(
+        getattr(runtime.settings, "bridge_enrollments", {}).items()
+    ):
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "active"
+            or record.get("member_id") != member_id
+            or "messaging-bluebubbles" not in record.get("configured_packs", [])
+        ):
+            continue
+        config = (record.get("pack_config") or {}).get("messaging-bluebubbles")
+        if not isinstance(config, dict):
+            continue
+        authorized = "messaging-bluebubbles" in record.get("authorized_packs", [])
+        enabled = "messaging-bluebubbles" in record.get("enabled_packs", [])
+        active = "messaging-bluebubbles" in record.get("adapters_active", [])
+        bridge_request_for = getattr(
+            runtime.settings_control, "bridge_request_for", None
+        )
+        request = bridge_request_for(member_id) if callable(bridge_request_for) else {}
+        if not isinstance(request, dict):
+            request = {}
+        capability_states = request.get("capability_states")
+        if not isinstance(capability_states, dict):
+            capability_states = {}
+        capability = capability_states.get("apple_messages_read")
+        if not isinstance(capability, dict):
+            capability = {}
+        state = str(capability.get("state") or "configured")
+        account_id = str(config.get("provider_account_id") or "")
+        if not account_id:
+            continue
+        accounts.append(
+            {
+                "id": f"bridge:{record.get('enrollment_id')}:messaging-bluebubbles",
+                "provider": "bluebubbles",
+                "provider_account_id": account_id,
+                "label": "Apple Messages (read-only)",
+                "channel": "Messages",
+                "workspace": "personal",
+                "state": (
+                    "active"
+                    if authorized
+                    and enabled
+                    and active
+                    and state in {"active", "settled"}
+                    else "settling"
+                    if authorized and enabled and state in {"observing", "settling"}
+                    else "degraded"
+                    if state == "degraded"
+                    else state
+                ),
+                "capabilities": {
+                    "read": authorized and enabled,
+                    "threads": authorized and enabled,
+                    "reply": False,
+                    "send": False,
+                    "mark_read": False,
+                    "archive": False,
+                    "reaction": False,
+                    "edit": False,
+                    "unsend": False,
+                    "chat_create": False,
+                    "attachments": "metadata_only",
+                    "snooze_local": True,
+                    "quiet_local": True,
+                },
+                "write_access_remedy": (
+                    "Apple Messages replies are unavailable until G11."
+                ),
+                "connection_truth": {
+                    "runtime": "member_bridge",
+                    "identity_bound": bool(identity),
+                    "enrollment_id": record.get("enrollment_id"),
+                    "connector_id": "messaging-bluebubbles",
+                    "protected_source_id": config.get("protected_source_id"),
+                    "transport_version": config.get("transport_version"),
+                    "observation_only": True,
+                    "writes_authorized": False,
+                },
+            }
+        )
     if (
         runtime.fixture_adapter is not None
         and runtime.settings.fixture_member_id == member_id
@@ -512,13 +596,16 @@ def _connector_catalog() -> list[dict[str, Any]]:
             "supported": [
                 "sync",
                 "threads",
-                "reply",
-                "send",
-                "attachments",
-                "delivery_state",
+                "incoming_observation",
+                "outgoing_observation",
+                "group_conversations",
+                "reply_continuity",
+                "attachment_metadata",
             ],
             "limitations": [
-                "no supported Apple history API; requires an explicitly trusted local bridge"
+                "read-only in G10; reply, send, reactions, edits, unsend, read state, and chat creation are unavailable",
+                "bounded best-effort history has no provider replay cursor",
+                "RCS and per-message account identity are not contracted by the pinned transport",
             ],
         },
         {

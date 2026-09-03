@@ -286,6 +286,17 @@ class RuntimeSettings:
             raise ValueError(
                 "strict topology requires one unambiguous bridge identity per member"
             )
+        messages_bridge_records = {
+            identity: record
+            for identity, record in self.bridge_enrollments.items()
+            if record.get("status") == "active"
+            and "messaging-bluebubbles" in record.get("configured_packs", [])
+        }
+        if messages_bridge_records:
+            # A private Messages account cannot be accepted under two members,
+            # including in credential-free Phase-A composition tests. This is
+            # a source-ownership boundary, not merely deployment evidence.
+            validate_bridge_record_set(messages_bridge_records)
         if self.deployment_evidence_required:
             validate_bridge_record_set(self.bridge_enrollments)
         bindings: tuple[ProviderBinding, ...] = ()

@@ -14,6 +14,46 @@ from pydantic import BaseModel, Field, model_validator
 from adminme.events.registry import registry
 
 
+class AppleMessagesParticipantV1(BaseModel):
+    """Provider endpoint observed in one native Messages conversation.
+
+    These identifiers are communication endpoints, not Party records. Identity
+    resolution remains a separate, evidence-backed projection concern.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    participant_id: str = Field(min_length=1, max_length=500)
+    role: Literal["sender", "recipient", "self"]
+    is_self: bool = False
+
+
+class AppleMessagesAttachmentMetadataV1(BaseModel):
+    """Content-free attachment metadata with an opaque protected reference."""
+
+    model_config = {"extra": "forbid"}
+
+    attachment_id: str = Field(min_length=1, max_length=500)
+    mime_type: str | None = Field(default=None, max_length=240)
+    uti: str | None = Field(default=None, max_length=240)
+    byte_size: int | None = Field(default=None, ge=0)
+    filename: str | None = Field(default=None, max_length=500)
+    transfer_state: str | None = Field(default=None, max_length=120)
+    is_outgoing: bool = False
+    is_sticker: bool = False
+    protected_ref: str = Field(
+        min_length=1,
+        max_length=500,
+        pattern=r"^protected-attachment:[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def _reject_paths(self) -> "AppleMessagesAttachmentMetadataV1":
+        if self.filename and ("/" in self.filename or "\\" in self.filename):
+            raise ValueError("attachment filename cannot expose a local path")
+        return self
+
+
 class MessagingReceivedV1(BaseModel):
     model_config = {"extra": "forbid"}
     source_channel: str = Field(min_length=1)
@@ -139,6 +179,85 @@ class MessagingReceivedV6(MessagingReceivedV5):
         return self
 
 
+class MessagingReceivedV7(MessagingReceivedV5):
+    """Read-only member-bridge observation from the reviewed Messages source."""
+
+    model_config = {"extra": "forbid"}
+
+    bridge_enrollment_id: str = Field(min_length=1, max_length=240)
+    source_channel: Literal["imessage", "sms", "unknown"]  # type: ignore[assignment]
+    from_identifier: str = Field(min_length=1, max_length=500)  # type: ignore[assignment]
+    to_identifier: str = Field(min_length=1, max_length=500)  # type: ignore[assignment]
+    subject: str | None = Field(default=None, max_length=1000)  # type: ignore[assignment]
+    body_text: str | None = Field(default=None, max_length=50_000)  # type: ignore[assignment]
+    body_html: None = None  # type: ignore[assignment]
+    device_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    connector_id: Literal["messaging-bluebubbles"]
+    protected_source_id: str = Field(pattern=r"^protected-source:[0-9a-f]{64}$")
+    native_chat_id: str = Field(min_length=1, max_length=500)
+    native_revision: str = Field(min_length=1, max_length=500)
+    native_revision_ms: int = Field(ge=0)
+    direction: Literal["incoming"]
+    participants: list[AppleMessagesParticipantV1] = Field(min_length=1, max_length=100)
+    sender_id: str = Field(min_length=1, max_length=500)
+    observed_at: str = Field(min_length=1)
+    reply_to_native_message_id: str | None = Field(default=None, max_length=500)
+    transport_class: Literal["imessage", "sms", "unknown"]
+    is_group: bool
+    message_state: Literal["active", "edited", "retracted"]
+    attachments: list[AppleMessagesAttachmentMetadataV1] = Field(  # type: ignore[assignment]
+        default_factory=list, max_length=100
+    )
+    transport_version: Literal["1.9.9"]
+    transport_commit: Literal["ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1"]
+    correlation_id: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_bridge_observation(self) -> "MessagingReceivedV7":
+        if self.member_id is None or self.routing_target_id != self.member_id:
+            raise ValueError("Messages bridge observation must remain member-private")
+        if self.provider != "bluebubbles" or self.workspace != "personal":
+            raise ValueError("Messages bridge observation has the wrong provider scope")
+        if self.native_message_id == self.native_chat_id:
+            raise ValueError("message and chat identities must remain distinct")
+        participant_ids = [item.participant_id for item in self.participants]
+        if len(participant_ids) != len(set(participant_ids)):
+            raise ValueError("message participants must be unique")
+        self_id = f"self:{self.provider_account_id}"
+        local_endpoints = [item for item in self.participants if item.is_self]
+        if len(local_endpoints) != 1 or local_endpoints[0].participant_id != self_id:
+            raise ValueError("message must identify the exact local endpoint once")
+        for participant in self.participants:
+            expected_role = (
+                "self"
+                if participant.participant_id == self_id
+                else "sender"
+                if participant.participant_id == self.sender_id
+                else "recipient"
+            )
+            if participant.is_self != (participant.participant_id == self_id):
+                raise ValueError("message participant self marker is contradictory")
+            if participant.role != expected_role:
+                raise ValueError("incoming participant role is contradictory")
+        if self.sender_id == self_id or self.sender_id not in participant_ids:
+            raise ValueError("incoming sender must be a remote participant")
+        if self.from_identifier != self.sender_id or self.to_identifier != self_id:
+            raise ValueError("incoming sender fields contradict each other")
+        if (
+            self.to_identifiers != [self_id]
+            or self.cc_identifiers
+            or self.bcc_identifiers
+        ):
+            raise ValueError("incoming recipient fields contradict the local endpoint")
+        if self.transport_class != self.source_channel:
+            raise ValueError("message transport fields contradict each other")
+        if any(item.is_outgoing for item in self.attachments):
+            raise ValueError("incoming attachment direction is contradictory")
+        if self.reply_to_native_message_id == self.native_message_id:
+            raise ValueError("message cannot reply to itself")
+        return self
+
+
 class InteractionParticipantResolvedV1(BaseModel):
     """Identity pipeline result linking an interaction role to a Party."""
 
@@ -252,6 +371,116 @@ class MessagingSentV6(MessagingSentV5):
             raise ValueError("service sent observation cannot impersonate a member")
         if self.routing_scope == "unresolved" and self.routing_target_id is not None:
             raise ValueError("unresolved sent observation cannot name a target")
+        return self
+
+
+class MessagingSentV7(MessagingSentV5):
+    """Read-only observation of a member-authored native Messages record."""
+
+    model_config = {"extra": "forbid"}
+
+    bridge_enrollment_id: str = Field(min_length=1, max_length=240)
+    source_channel: Literal["imessage", "sms", "unknown"]  # type: ignore[assignment]
+    to_identifier: str = Field(min_length=1, max_length=500)  # type: ignore[assignment]
+    subject: str | None = Field(default=None, max_length=1000)  # type: ignore[assignment]
+    body_text: str | None = Field(default=None, max_length=50_000)  # type: ignore[assignment]
+    body_html: None = None  # type: ignore[assignment]
+    device_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    connector_id: Literal["messaging-bluebubbles"]
+    protected_source_id: str = Field(pattern=r"^protected-source:[0-9a-f]{64}$")
+    native_chat_id: str = Field(min_length=1, max_length=500)
+    native_message_id: str = Field(min_length=1, max_length=240)  # type: ignore[assignment]
+    native_revision: str = Field(min_length=1, max_length=500)
+    native_revision_ms: int = Field(ge=0)
+    direction: Literal["outgoing"]
+    participants: list[AppleMessagesParticipantV1] = Field(min_length=1, max_length=100)
+    sender_id: str = Field(min_length=1, max_length=500)
+    observed_at: str = Field(min_length=1)
+    reply_to_native_message_id: str | None = Field(default=None, max_length=500)
+    transport_class: Literal["imessage", "sms", "unknown"]
+    is_group: bool
+    message_state: Literal["active", "edited", "retracted"]
+    attachments: list[AppleMessagesAttachmentMetadataV1] = Field(
+        default_factory=list, max_length=100
+    )
+    transport_version: Literal["1.9.9"]
+    transport_commit: Literal["ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1"]
+    correlation_id: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_bridge_observation(self) -> "MessagingSentV7":
+        if (
+            self.member_id is None
+            or self.send_as != "member"
+            or self.routing_target_id != self.member_id
+        ):
+            raise ValueError("Messages sent observation must remain member-private")
+        if self.provider != "bluebubbles" or self.workspace != "personal":
+            raise ValueError("Messages bridge observation has the wrong provider scope")
+        if self.native_message_id == self.native_chat_id:
+            raise ValueError("message and chat identities must remain distinct")
+        participant_ids = [item.participant_id for item in self.participants]
+        if len(participant_ids) != len(set(participant_ids)):
+            raise ValueError("message participants must be unique")
+        self_id = f"self:{self.provider_account_id}"
+        local_endpoints = [item for item in self.participants if item.is_self]
+        if len(local_endpoints) != 1 or local_endpoints[0].participant_id != self_id:
+            raise ValueError("message must identify the exact local endpoint once")
+        for participant in self.participants:
+            expected_role = (
+                "self" if participant.participant_id == self_id else "recipient"
+            )
+            if participant.is_self != (participant.participant_id == self_id):
+                raise ValueError("message participant self marker is contradictory")
+            if participant.role != expected_role:
+                raise ValueError("outgoing participant role is contradictory")
+        if self.sender_id != self_id:
+            raise ValueError("outgoing sender must be the exact local endpoint")
+        if self.to_identifier == self_id or self.to_identifier not in participant_ids:
+            raise ValueError("outgoing recipient must be a remote participant")
+        if self.transport_class != self.source_channel:
+            raise ValueError("message transport fields contradict each other")
+        if any(not item.is_outgoing for item in self.attachments):
+            raise ValueError("outgoing attachment direction is contradictory")
+        if self.reply_to_native_message_id == self.native_message_id:
+            raise ValueError("message cannot reply to itself")
+        return self
+
+
+class MessagingSourceObservedV1(BaseModel):
+    """Content-free coverage and assurance receipt for one bounded read cycle."""
+
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1, max_length=240)
+    bridge_enrollment_id: str = Field(min_length=1, max_length=240)
+    device_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    connector_id: Literal["messaging-bluebubbles"]
+    provider: Literal["bluebubbles"]
+    provider_account_id: str = Field(pattern=r"^provider-account:[0-9a-f]{32,64}$")
+    workspace: Literal["personal"]
+    protected_source_id: str = Field(pattern=r"^protected-source:[0-9a-f]{64}$")
+    transport_version: Literal["1.9.9"]
+    transport_commit: Literal["ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1"]
+    phase: Literal["history", "live", "reconcile"]
+    coverage: Literal["complete", "partial", "unknown"]
+    truncated: bool
+    requested: int = Field(ge=0)
+    accepted: int = Field(ge=0)
+    duplicates: int = Field(ge=0)
+    quarantined: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    missing: int = Field(ge=0)
+    watermark_ms: int = Field(ge=0)
+    observed_at: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_counts(self) -> "MessagingSourceObservedV1":
+        accounted = self.accepted + self.duplicates + self.quarantined + self.failed
+        if accounted + self.missing != self.requested:
+            raise ValueError("Messages source assurance counts must reconcile")
+        if self.truncated and self.coverage == "complete":
+            raise ValueError("truncated Messages coverage cannot be complete")
         return self
 
 
@@ -528,6 +757,7 @@ registry.register("messaging.received", 3, MessagingReceivedV3)
 registry.register("messaging.received", 4, MessagingReceivedV4)
 registry.register("messaging.received", 5, MessagingReceivedV5)
 registry.register("messaging.received", 6, MessagingReceivedV6)
+registry.register("messaging.received", 7, MessagingReceivedV7)
 registry.register(
     "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
 )
@@ -537,6 +767,8 @@ registry.register("messaging.sent", 3, MessagingSentV3)
 registry.register("messaging.sent", 4, MessagingSentV4)
 registry.register("messaging.sent", 5, MessagingSentV5)
 registry.register("messaging.sent", 6, MessagingSentV6)
+registry.register("messaging.sent", 7, MessagingSentV7)
+registry.register("messaging.source_observed", 1, MessagingSourceObservedV1)
 registry.register("communication.state_changed", 1, CommunicationStateChangedV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)

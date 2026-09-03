@@ -112,7 +112,10 @@ def _people(
     role: str,
 ) -> list[str]:
     return [
-        party_labels.get(value["party_id"], value["party_id"])
+        party_labels.get(
+            value.get("party_id", ""),
+            value.get("party_id") or value.get("participant_id") or "Unknown endpoint",
+        )
         for value in participants.get(interaction_id, [])
         if value["role"] == role
     ]
@@ -139,8 +142,24 @@ def _message(
         "attachments": _json_list(row.get("attachment_metadata")),
         "unread": bool(row.get("unread")),
         "delivery_status": row.get("delivery_status"),
+        "native_message_id": row.get("native_message_id"),
+        "native_chat_id": row.get("native_chat_id"),
+        "reply_to_native_message_id": row.get("reply_to_native_message_id"),
+        "transport": row.get("transport_class"),
+        "is_group": bool(row.get("is_group")),
+        "message_state": row.get("message_state") or "active",
+        "source": {
+            "connector_id": row.get("connector_id"),
+            "bridge_enrollment_id": row.get("bridge_enrollment_id"),
+            "provider_account_id": row.get("provider_account_id"),
+            "workspace": row.get("workspace"),
+            "protected_source_id": row.get("protected_source_id"),
+            "native_revision": row.get("native_revision"),
+        },
         "evidence_event_ids": _json_list(row.get("raw_event_ids")),
         "last_event_id": row.get("last_event_id"),
+        "triage_status": row.get("assessment_outcome") or "pending",
+        "triage_reason_codes": _json_list(row.get("assessment_reason_codes")),
     }
 
 
@@ -396,6 +415,10 @@ def compose_comms_cockpit(
                 "account_label": account.get("label") if account else account_id,
                 "workspace": latest.get("workspace") or "personal",
                 "channel": latest.get("channel_specific"),
+                "native_chat_id": latest.get("native_chat_id"),
+                "transport": latest.get("transport_class"),
+                "is_group": bool(latest.get("is_group")),
+                "read_only": provider == "bluebubbles",
                 "bucket": bucket,
                 "focus_score": _score(bucket, latest),
                 "why": why,
@@ -410,6 +433,7 @@ def compose_comms_cockpit(
                     {item["matter_id"] for item in triage_links}
                 ),
                 "triage_candidates": triage_links,
+                "triage_status": latest.get("assessment_outcome") or "pending",
                 "alert_count": alert_count,
                 "snoozed_until": latest.get("snoozed_until"),
                 "quieted": bool(latest.get("quieted")),

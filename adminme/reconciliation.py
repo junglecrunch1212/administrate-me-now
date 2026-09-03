@@ -871,7 +871,29 @@ class ReconciliationAdmissionEvaluator:
         ):
             if event.get("tenant_id") != source.get("tenant_id"):
                 continue
-            if normalized_exact_text(_payload(event).get("to_identifier")) == sender:
+            prior = _payload(event)
+            exact_source_keys = (
+                "provider",
+                "provider_account_id",
+                "workspace",
+                "bridge_enrollment_id",
+                "protected_source_id",
+            )
+            if any(
+                payload.get(key) != prior.get(key)
+                for key in exact_source_keys
+                if payload.get(key) is not None
+            ):
+                continue
+            recipients = {
+                normalized_exact_text(value)
+                for value in [
+                    prior.get("to_identifier"),
+                    *(prior.get("to_identifiers") or []),
+                ]
+                if value
+            }
+            if sender in recipients:
                 matched_event_id = str(event["event_id"])
         return matched_event_id
 

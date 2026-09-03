@@ -23,6 +23,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import yaml
+
 from adminme.lib.pack_registry.models import AdapterManifest
 from adminme.lib.pack_registry.validator.result import ValidationFinding
 
@@ -37,6 +39,94 @@ _CATEGORY_TO_ABC: dict[str, str] = {
 }
 _ABC_TO_CATEGORY: dict[str, str] = {v: k for k, v in _CATEGORY_TO_ABC.items()}
 _ABC_NAMES: frozenset[str] = frozenset(_ABC_TO_CATEGORY.keys())
+
+
+def _is_read_only_bridge_communication(
+    pack_dir: Path, manifest: AdapterManifest
+) -> bool:
+    """Recognize only the sealed G10 communication-source manifest shape."""
+
+    try:
+        raw = yaml.safe_load((pack_dir / "pack.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    return bool(
+        isinstance(raw, dict)
+        and raw.get("kind") == "adapter"
+        and raw.get("subkind") == "communication-source"
+        and raw.get("family") == "messaging"
+        and len(manifest.capabilities) == 1
+        and manifest.capabilities[0].kind == "Cat-A"
+        and manifest.capabilities[0].runtime == "bridge"
+        and manifest.observation_mode_required
+        and not manifest.owner_scope_overridability_at_install
+        and not manifest.write_capabilities
+    )
+
+
+def _bridge_communication_class(tree: ast.Module) -> ast.ClassDef | None:
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
+            continue
+        for statement in node.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = statement.value
+            targets = (
+                statement.targets
+                if isinstance(statement, ast.Assign)
+                else [statement.target]
+            )
+            if (
+                any(
+                    isinstance(target, ast.Name) and target.id == "subkind"
+                    for target in targets
+                )
+                and isinstance(value, ast.Constant)
+                and value.value == "communication-source"
+            ):
+                return node
+    return None
+
+
+def _check_read_only_bridge_class(
+    class_def: ast.ClassDef | None,
+) -> list[ValidationFinding]:
+    if class_def is None:
+        return [
+            _finding(
+                "error",
+                "communication-source pack declares no public class with the exact "
+                "communication-source discriminator.",
+            )
+        ]
+    methods = {
+        statement.name: statement
+        for statement in class_def.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    violations: list[str] = []
+    for name in ("start", "stop"):
+        if not isinstance(methods.get(name), ast.AsyncFunctionDef):
+            violations.append(f"async {name}")
+    if "status" not in methods:
+        violations.append("status")
+    for name in ("send", "apply_write"):
+        if name in methods:
+            violations.append(f"forbidden {name}")
+    inherited = _inherited_abcs(class_def)
+    if inherited:
+        violations.append(f"central ABC inheritance {inherited!r}")
+    if not violations:
+        return []
+    return [
+        _finding(
+            "error",
+            f"read-only bridge communication class {class_def.name!r} failed "
+            f"structural conformance: {', '.join(violations)}.",
+            "capabilities[0].kind",
+        )
+    ]
 
 
 def _base_name(base: ast.expr) -> str | None:
@@ -100,6 +190,9 @@ def check_base_class_conformance(
                 f"{type(exc).__name__}: {exc}",
             )
         ]
+
+    if _is_read_only_bridge_communication(pack_dir, manifest):
+        return _check_read_only_bridge_class(_bridge_communication_class(tree))
 
     class_def = _find_adapter_class(tree)
     if class_def is None:

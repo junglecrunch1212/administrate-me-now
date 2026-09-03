@@ -36,6 +36,8 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _handle_classified(envelope, conn)
     elif event_type == "messaging.semantic_features_extracted":
         _handle_semantic_features(envelope, conn)
+    elif event_type == "triage.intent.features_extracted":
+        _handle_assessment(envelope, conn)
     elif event_type == "communication.state_changed":
         _handle_state_changed(envelope, conn)
     elif event_type == "external_sync.write_requested":
@@ -182,19 +184,24 @@ def _handle_messaging(
         provider_account_id=provider_account_id,
     )
 
-    conn.execute(
+    advanced = conn.execute(
         """
         INSERT INTO interactions (
             interaction_id, tenant_id, direction, channel_family,
             channel_specific, occurred_at, subject, summary, body_ref, body_text,
-            body_preview, thread_id, native_message_id, member_id, provider,
-            provider_account_id, workspace, unread, archived, starred, important,
+            body_preview, thread_id, native_message_id,
+            native_chat_id, native_revision, native_revision_ms,
+            reply_to_native_message_id, transport_class, is_group, message_state,
+            bridge_enrollment_id, device_identity_sha256, connector_id,
+            protected_source_id, transport_version, transport_commit, correlation_id,
+            member_id, provider, provider_account_id, workspace,
+            unread, archived, starred, important,
             rfc_message_id, reply_to_identifier, provider_labels,
             attachment_metadata, delivery_status,
             raw_event_ids, owner_scope, visibility_scope,
             sensitivity, response_urgency, suggested_action, auto_handled,
             last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, interaction_id) DO UPDATE SET
             direction        = excluded.direction,
             channel_family   = excluded.channel_family,
@@ -207,6 +214,20 @@ def _handle_messaging(
             body_preview     = excluded.body_preview,
             thread_id        = excluded.thread_id,
             native_message_id = excluded.native_message_id,
+            native_chat_id   = excluded.native_chat_id,
+            native_revision  = excluded.native_revision,
+            native_revision_ms = excluded.native_revision_ms,
+            reply_to_native_message_id = excluded.reply_to_native_message_id,
+            transport_class  = excluded.transport_class,
+            is_group         = excluded.is_group,
+            message_state    = excluded.message_state,
+            bridge_enrollment_id = excluded.bridge_enrollment_id,
+            device_identity_sha256 = excluded.device_identity_sha256,
+            connector_id     = excluded.connector_id,
+            protected_source_id = excluded.protected_source_id,
+            transport_version = excluded.transport_version,
+            transport_commit = excluded.transport_commit,
+            correlation_id   = excluded.correlation_id,
             member_id        = excluded.member_id,
             provider         = excluded.provider,
             provider_account_id = excluded.provider_account_id,
@@ -225,7 +246,13 @@ def _handle_messaging(
             visibility_scope = excluded.visibility_scope,
             sensitivity      = excluded.sensitivity,
             last_event_id    = excluded.last_event_id
-        WHERE interactions.last_event_id < excluded.last_event_id
+        WHERE (
+            excluded.native_revision_ms > 0
+            AND interactions.native_revision_ms < excluded.native_revision_ms
+        ) OR (
+            excluded.native_revision_ms = 0
+            AND interactions.last_event_id < excluded.last_event_id
+        )
         """,
         (
             interaction_id,
@@ -241,6 +268,20 @@ def _handle_messaging(
             _preview(body_text),
             p.get("thread_id"),
             p.get("native_message_id"),
+            p.get("native_chat_id"),
+            p.get("native_revision"),
+            int(p.get("native_revision_ms") or 0),
+            p.get("reply_to_native_message_id"),
+            p.get("transport_class"),
+            int(bool(p.get("is_group", False))),
+            p.get("message_state") or "active",
+            p.get("bridge_enrollment_id"),
+            p.get("device_identity_sha256"),
+            p.get("connector_id"),
+            p.get("protected_source_id"),
+            p.get("transport_version"),
+            p.get("transport_commit"),
+            p.get("correlation_id"),
             member_id,
             provider,
             provider_account_id,
@@ -263,10 +304,50 @@ def _handle_messaging(
             0,
             envelope["event_id"],
         ),
-    )
+    ).rowcount
+    if not advanced:
+        return
 
-    # Participants: 'from' and 'to' for v1. Deduplicate per the PK so
-    # idempotent replay is a no-op.
+    typed_participants = p.get("participants")
+    if isinstance(typed_participants, list):
+        conn.execute(
+            "DELETE FROM interaction_source_participants "
+            "WHERE tenant_id=? AND interaction_id=?",
+            (envelope["tenant_id"], interaction_id),
+        )
+        sender_id = str(p.get("sender_id") or "")
+        source_participants: list[tuple[str, str, bool]] = []
+        for value in typed_participants:
+            if not isinstance(value, dict) or not value.get("participant_id"):
+                continue
+            participant_id = str(value["participant_id"])
+            source_participants.append(
+                (
+                    participant_id,
+                    "from" if participant_id == sender_id else "to",
+                    bool(value.get("is_self")),
+                )
+            )
+        for participant_id, role_key, is_self in source_participants:
+            conn.execute(
+                "INSERT INTO interaction_source_participants "
+                "(tenant_id, interaction_id, participant_id, role, is_self) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, interaction_id, participant_id, role) "
+                "DO UPDATE SET is_self=excluded.is_self",
+                (
+                    envelope["tenant_id"],
+                    interaction_id,
+                    participant_id,
+                    role_key,
+                    int(is_self),
+                ),
+            )
+        return
+
+    # Preserve the established legacy contract for older provider-neutral
+    # schemas. Only the new typed Messages participant records distinguish raw
+    # endpoints from evidence-resolved Parties.
     role_values = {
         "from": [p.get("from_identifier")],
         "to": list(p.get("to_identifiers") or [p.get("to_identifier")]),
@@ -463,6 +544,9 @@ def _handle_participant_resolved(
     ).rowcount
     if not advanced:
         return
+    # Older schemas stored unresolved endpoint text in the Party table. Replace
+    # that legacy role once exact resolution is proven. Typed Messages endpoint
+    # provenance lives in interaction_source_participants and is retained.
     conn.execute(
         "DELETE FROM interaction_participants "
         "WHERE tenant_id=? AND interaction_id=? AND role=?",
@@ -495,6 +579,39 @@ def _handle_classified(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
         (
             p["classification"],
             p["confidence"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            interaction_id,
+            envelope["event_id"],
+        ),
+    )
+
+
+def _handle_assessment(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    """Attach the terminal candidate disposition without creating a Triage item."""
+
+    p = envelope["payload"]
+    interaction_id = _interaction_for_source(
+        conn, tenant_id=envelope["tenant_id"], source_event_id=p["source_event_id"]
+    )
+    if interaction_id is None:
+        return
+    outcome = p.get("assessment_outcome")
+    if outcome is None:
+        outcome = (
+            "failed"
+            if p.get("extraction_state") == "unavailable"
+            else "eligible_candidates"
+            if p.get("candidates")
+            else "no_candidate"
+        )
+    conn.execute(
+        "UPDATE interactions SET assessment_outcome=?, assessment_reason_codes=?, "
+        "last_event_id=? WHERE tenant_id=? AND interaction_id=? "
+        "AND last_event_id < ?",
+        (
+            outcome,
+            json.dumps(p.get("reason_codes") or [], separators=(",", ":")),
             envelope["event_id"],
             envelope["tenant_id"],
             interaction_id,

@@ -25,7 +25,7 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
-CATALOG_VERSION = "1.0.0"
+CATALOG_VERSION = "1.1.0"
 CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
@@ -258,6 +258,16 @@ _ARTIFACT_OUTCOMES: dict[str, dict[str, Any]] = {
         "outcome": "Observe an exactly bound member or CoS-owned mailbox through the reviewed adapter.",
         "sensitivity": ["normal", "sensitive", "privileged"],
     },
+    "messaging-bluebubbles": {
+        "category": "communications",
+        "label": "Apple Messages bridge",
+        "outcome": (
+            "Observe a member-owned Apple Messages source through the pinned "
+            "read-only local transport."
+        ),
+        "sensitivity": ["sensitive", "privileged"],
+        "request_key": "apple_messages_read",
+    },
     "reminders-apple-eventkit": {
         "category": "planning",
         "label": "Apple Reminders",
@@ -324,13 +334,18 @@ _PLANNED_DESCRIPTORS: tuple[dict[str, Any], ...] = (
         "outcome": "Observe authorized Apple Messages through a reviewed member-bridge path.",
         "source": "reviewed-descriptor:G10",
         "source_kind": "reviewed_optional_descriptor",
-        "implementation": "planned_g10",
-        "implementation_present": False,
+        "implementation": "superseded_by_bridge.messaging-bluebubbles",
+        "implementation_present": True,
         "runtime_location": "member_bridge",
-        "verbs": {"read": "planned", "observe": "planned"},
-        "prerequisites": ["local_helper", "member_bridge", "member_consent"],
-        "provider_options": ["apple_messages_member_bridge"],
-        "unavailable_reason": "Planned until G10 implements and accepts the message observation path.",
+        "verbs": {"read": "supported", "observe": "supported"},
+        "prerequisites": [
+            "local_helper",
+            "member_bridge",
+            "member_consent",
+            "local_permission",
+        ],
+        "provider_options": ["messaging-bluebubbles"],
+        "unavailable_reason": None,
     },
     {
         "capability_id": "planned.apple_messages_reply",
@@ -361,6 +376,7 @@ _PLANNED_DESCRIPTORS: tuple[dict[str, Any], ...] = (
 
 
 _BRIDGE_REQUEST_KEYS = {
+    "messaging-bluebubbles": "apple_messages_read",
     "calendaring-apple-calendar-bridge": "apple_calendar",
     "reminders-apple-eventkit-bridge": "apple_reminders",
     "contacts-apple-contacts-bridge": "apple_contacts",
@@ -538,6 +554,12 @@ def _bridge_definitions(repository_root: Path) -> list[dict[str, Any]]:
         implementation_present = bool(entrypoint) and (
             module_path.is_file() or package_path.is_file()
         )
+        writes = [str(value) for value in manifest.get("write_capabilities") or []]
+        assurance_modes = {
+            str(value.get("mode"))
+            for value in manifest.get("source_assurance") or []
+            if isinstance(value, dict)
+        }
         definitions.append(
             {
                 "capability_id": f"bridge.{artifact_id}",
@@ -556,9 +578,15 @@ def _bridge_definitions(repository_root: Path) -> list[dict[str, Any]]:
                     {
                         "read": "supported",
                         "observe": "supported",
-                        "draft": "supported",
-                        "prepare": "supported",
-                        "hold": "supported",
+                        **(
+                            {
+                                "draft": "supported",
+                                "prepare": "supported",
+                                "hold": "supported",
+                            }
+                            if writes
+                            else {}
+                        ),
                     }
                 ),
                 "provider_options": [artifact_id],
@@ -570,7 +598,7 @@ def _bridge_definitions(repository_root: Path) -> list[dict[str, Any]]:
                 ],
                 "terminal_result_support": False,
                 "later_observation_support": True,
-                "reconciliation_support": False,
+                "reconciliation_support": "candidate_assessment" in assurance_modes,
                 "request_key": _BRIDGE_REQUEST_KEYS[artifact_id],
             }
         )

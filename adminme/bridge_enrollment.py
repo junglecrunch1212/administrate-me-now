@@ -83,6 +83,11 @@ ENROLLMENT_STATES: tuple[str, ...] = (
 CAPABILITY_STATES: tuple[str, ...] = (
     "requested",
     "implementation_available",
+    "transport_absent",
+    "transport_incompatible",
+    "transport_installed",
+    "authentication_required",
+    "authenticated",
     "prerequisite_missing",
     "permission_required",
     "permission_denied",
@@ -92,6 +97,7 @@ CAPABILITY_STATES: tuple[str, ...] = (
     "observing",
     "settling",
     "settled",
+    "active",
     "degraded",
     "paused",
     "revoked",
@@ -168,14 +174,39 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "apple_messages_read": {
         "label": "Apple Messages",
-        "pack": None,
-        "implementation": "planned_g10",
-        "data_categories": ["messages", "threads", "attachments"],
-        "local_permission": "Planned for G10",
-        "settings_url": None,
-        "native_permission_ceiling": "Unavailable",
-        "administrateme_read_ceiling": "Unavailable until G10",
+        "pack": "messaging-bluebubbles",
+        "implementation": "available",
+        "data_categories": [
+            "message text",
+            "chat and participant endpoints",
+            "reply continuity",
+            "attachment metadata only",
+        ],
+        "local_permission": (
+            "Full Disk Access for reviewed BlueBubbles Server 1.9.9; "
+            "AdministrateMe connects only to 127.0.0.1, and activation also "
+            "requires host-firewall containment plus all BlueBubbles remote "
+            "services and Private API disabled"
+        ),
+        "settings_url": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+        "native_permission_ceiling": (
+            "Read the local Messages database through BlueBubbles Server 1.9.9"
+        ),
+        "administrateme_read_ceiling": (
+            "Observe bounded personal message history/live changes and attachment metadata"
+        ),
         "administrateme_write_ceiling": "None",
+        "transport": {
+            "name": "BlueBubbles Server",
+            "version": "1.9.9",
+            "commit": "ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1",
+            "binary_sha256": (
+                "fafd650c883f52e7494a6625e45249f2144d197378a4d57143ccf6198bb2e862"
+            ),
+            "install_mode": "guided_only_unnotarized_release",
+            "network_boundary": "loopback_only",
+            "private_api": False,
+        },
     },
     "apple_messages_reply": {
         "label": "Apple Messages reply",
@@ -260,7 +291,26 @@ CAPABILITY_TRANSITIONS: dict[str, frozenset[str]] = {
         {"implementation_available", "paused", "unsupported", "revoked"}
     ),
     "implementation_available": frozenset(
-        {"prerequisite_missing", "permission_required", "paused", "revoked"}
+        {
+            "transport_absent",
+            "transport_incompatible",
+            "transport_installed",
+            "prerequisite_missing",
+            "permission_required",
+            "paused",
+            "revoked",
+        }
+    ),
+    "transport_absent": frozenset({"transport_installed", "paused", "revoked"}),
+    "transport_incompatible": frozenset({"transport_installed", "paused", "revoked"}),
+    "transport_installed": frozenset(
+        {"authentication_required", "degraded", "paused", "revoked"}
+    ),
+    "authentication_required": frozenset(
+        {"authenticated", "degraded", "paused", "revoked"}
+    ),
+    "authenticated": frozenset(
+        {"permission_required", "degraded", "paused", "revoked"}
     ),
     "prerequisite_missing": frozenset({"permission_required", "paused", "revoked"}),
     "permission_required": frozenset(
@@ -275,8 +325,9 @@ CAPABILITY_TRANSITIONS: dict[str, frozenset[str]] = {
     ),
     "observation_starting": frozenset({"observing", "degraded", "paused", "revoked"}),
     "observing": frozenset({"settling", "settled", "degraded", "paused", "revoked"}),
-    "settling": frozenset({"settled", "degraded", "paused", "revoked"}),
-    "settled": frozenset({"observing", "degraded", "paused", "revoked"}),
+    "settling": frozenset({"settled", "active", "degraded", "paused", "revoked"}),
+    "settled": frozenset({"observing", "active", "degraded", "paused", "revoked"}),
+    "active": frozenset({"observing", "degraded", "paused", "revoked"}),
     "degraded": frozenset(
         {
             "permission_required",
@@ -290,6 +341,11 @@ CAPABILITY_TRANSITIONS: dict[str, frozenset[str]] = {
         {
             "requested",
             "implementation_available",
+            "transport_absent",
+            "transport_incompatible",
+            "transport_installed",
+            "authentication_required",
+            "authenticated",
             "prerequisite_missing",
             "permission_required",
             "permission_denied",
@@ -299,6 +355,7 @@ CAPABILITY_TRANSITIONS: dict[str, frozenset[str]] = {
             "observing",
             "settling",
             "settled",
+            "active",
             "degraded",
             "revoked",
         }
@@ -1005,6 +1062,17 @@ class BridgeEnrollmentCoordinator:
             )
         except ValueError as exc:
             raise BridgeEnrollmentError("source_coordinate_invalid", str(exc)) from exc
+        if (
+            pack == "messaging-bluebubbles"
+            and normalized[pack].get("device_identity_sha256")
+            != hashlib.sha256(
+                str(record.get("bridge_node_id") or "").encode()
+            ).hexdigest()
+        ):
+            raise BridgeEnrollmentError(
+                "device_identity_mismatch",
+                "Messages source must bind to the enrolled bridge device",
+            )
         policy = BRIDGE_PACK_POLICIES[pack]
         states = dict(record.get("pack_capability_states") or {})
         states[pack] = (

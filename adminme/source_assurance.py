@@ -415,6 +415,7 @@ async def audit_source_assurance(
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
             "external_sync.legacy_effect_reconciled",
+            "messaging.source_observed",
         }
     )
     watermark_event_id = through_event_id
@@ -429,6 +430,7 @@ async def audit_source_assurance(
     recovery_requests: dict[str, dict[str, Any]] = {}
     recovery_assessments: dict[str, dict[str, Any]] = {}
     recovery_refusals: set[str] = set()
+    messaging_cycles: list[dict[str, Any]] = []
     async for event in event_log.read_metadata_since(
         # An empty log has a null public watermark; the impossible empty
         # string still provides a closed upper bound if an append races the
@@ -459,6 +461,8 @@ async def audit_source_assurance(
         elif event.get("type") == "external_sync.legacy_effect_reconciled":
             command_id = str(payload.get("command_id") or "")
             effect_reconciliations.setdefault(command_id, []).append(event)
+        elif event.get("type") == "messaging.source_observed":
+            messaging_cycles.append(event)
         if event.get("type") in by_type:
             source_events.append(event)
 
@@ -625,6 +629,23 @@ async def audit_source_assurance(
     )
     effects_healthy = _provider_effect_integrity_healthy(effect_counts)
     zero_effects = _zero_provider_effects(effect_counts)
+    messaging_counts = {
+        key: sum(
+            int((event.get("payload") or {}).get(key) or 0)
+            for event in messaging_cycles
+        )
+        for key in (
+            "requested",
+            "accepted",
+            "duplicates",
+            "quarantined",
+            "failed",
+            "missing",
+        )
+    }
+    latest_messaging = (
+        messaging_cycles[-1].get("payload", {}) if messaging_cycles else {}
+    )
     window_start = _aware_datetime(provider_effect_window_started_at)
     if window_start is None:
         window_counts = _provider_effect_counts([], {})
@@ -689,6 +710,30 @@ async def audit_source_assurance(
                 "counts": window_counts,
                 "content_exposed": False,
             },
+            "content_exposed": False,
+        },
+        "messaging_ingestion": {
+            "contract": "messages-source-accounting-v1",
+            "cycles": len(messaging_cycles),
+            "counts": messaging_counts,
+            "accounting_reconciles": messaging_counts["requested"]
+            == sum(
+                messaging_counts[key]
+                for key in (
+                    "accepted",
+                    "duplicates",
+                    "quarantined",
+                    "failed",
+                    "missing",
+                )
+            ),
+            "latest": {
+                "phase": latest_messaging.get("phase"),
+                "coverage": latest_messaging.get("coverage"),
+                "truncated": latest_messaging.get("truncated"),
+                "observed_at": latest_messaging.get("observed_at"),
+            },
+            "global_history_complete": False,
             "content_exposed": False,
         },
         "watermark_event_id": watermark_event_id,

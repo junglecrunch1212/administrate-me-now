@@ -1,8 +1,9 @@
 """Connector-pack loader scaffolding for the bridge daemon.
 
 Per memo 04 §3.1: bridge-side adapter packs declare ``kind: adapter`` with
-one of two subkinds: ``knowledge-source`` (Cat-D) or ``state-mirror``
-(Cat-B). The loader walks ``<packs_dir>/*/pack.yaml``, filters by that
+one of three subkinds: ``knowledge-source`` (Cat-D), ``communication-source``
+(read-only Cat-A observation), or ``state-mirror`` (Cat-B). The loader walks
+``<packs_dir>/*/pack.yaml``, filters by that
 discriminator, and yields :class:`PackHandle` records. 11c-i shipped the
 Cat-D scaffold; 11b-ii-α-1 extends the filter to also accept Cat-B
 state-mirror packs per [D19] (runtime substrate orthogonal to category)
@@ -22,8 +23,15 @@ import yaml
 
 KNOWLEDGE_SOURCE_KIND = "adapter"
 KNOWLEDGE_SOURCE_SUBKIND = "knowledge-source"
+COMMUNICATION_SOURCE_SUBKIND = "communication-source"
 STATE_MIRROR_SUBKIND = "state-mirror"
-_ALLOWED_SUBKINDS = frozenset({KNOWLEDGE_SOURCE_SUBKIND, STATE_MIRROR_SUBKIND})
+_ALLOWED_SUBKINDS = frozenset(
+    {
+        KNOWLEDGE_SOURCE_SUBKIND,
+        COMMUNICATION_SOURCE_SUBKIND,
+        STATE_MIRROR_SUBKIND,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +51,8 @@ def discover_packs(packs_dir: Path) -> Iterator[PackHandle]:
     """Yield PackHandle per bridge-runnable adapter pack found under packs_dir.
 
     Accepts ``kind: adapter`` packs whose ``subkind`` is either
-    ``knowledge-source`` (Cat-D) or ``state-mirror`` (Cat-B per [D19] +
+    ``knowledge-source`` (Cat-D), ``communication-source`` (read-only Cat-A),
+    or ``state-mirror`` (Cat-B per [D19] +
     ``docs/10-split-memo-11b-ii-alpha.md`` §1). Packs with any other
     ``kind``/``subkind`` are silently skipped per memo 04 §3.1.
     Malformed manifests raise PackLoadError immediately."""
@@ -113,7 +122,10 @@ def instantiate_pack(
     config = {**defaults, **raw_config}
     config.update(config_override or {})
     try:
-        if handle.subkind == KNOWLEDGE_SOURCE_SUBKIND:
+        if handle.subkind in {
+            KNOWLEDGE_SOURCE_SUBKIND,
+            COMMUNICATION_SOURCE_SUBKIND,
+        }:
             adapter = adapter_class(config=config)
         elif config:
             adapter = adapter_class(internal_config=config)
@@ -133,6 +145,18 @@ def instantiate_pack(
         raise PackLoadError(
             f"knowledge entrypoint {handle.entrypoint} lacks subkind discriminator"
         )
+    if handle.subkind == COMMUNICATION_SOURCE_SUBKIND:
+        if getattr(adapter, "subkind", None) != COMMUNICATION_SOURCE_SUBKIND:
+            raise PackLoadError(
+                f"communication entrypoint {handle.entrypoint} lacks the read-only "
+                "communication-source discriminator"
+            )
+        if callable(getattr(adapter, "send", None)) or callable(
+            getattr(adapter, "apply_write", None)
+        ):
+            raise PackLoadError(
+                f"communication-source entrypoint {handle.entrypoint} exposes writes"
+            )
     if handle.subkind == STATE_MIRROR_SUBKIND and not hasattr(adapter, "family"):
         raise PackLoadError(
             f"state-mirror entrypoint {handle.entrypoint} lacks family discriminator"
@@ -143,6 +167,7 @@ def instantiate_pack(
 __all__ = [
     "KNOWLEDGE_SOURCE_KIND",
     "KNOWLEDGE_SOURCE_SUBKIND",
+    "COMMUNICATION_SOURCE_SUBKIND",
     "STATE_MIRROR_SUBKIND",
     "PackHandle",
     "PackLoadError",

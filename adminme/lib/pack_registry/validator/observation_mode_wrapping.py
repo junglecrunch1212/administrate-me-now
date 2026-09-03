@@ -25,6 +25,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import yaml
+
 from adminme.lib.pack_registry.models import AdapterManifest
 from adminme.lib.pack_registry.validator.result import ValidationFinding
 
@@ -33,6 +35,27 @@ _OBS_FN = "outbound"
 _OBS_MODULE = ("adminme", "lib", "observation")
 
 _CATEGORY_TO_METHOD: dict[str, str] = {"Cat-A": "send", "Cat-E": "execute_action"}
+
+
+def _is_read_only_bridge_communication(
+    pack_dir: Path, manifest: AdapterManifest
+) -> bool:
+    try:
+        raw = yaml.safe_load((pack_dir / "pack.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    return bool(
+        isinstance(raw, dict)
+        and raw.get("kind") == "adapter"
+        and raw.get("subkind") == "communication-source"
+        and raw.get("family") == "messaging"
+        and len(manifest.capabilities) == 1
+        and manifest.capabilities[0].kind == "Cat-A"
+        and manifest.capabilities[0].runtime == "bridge"
+        and manifest.observation_mode_required
+        and not manifest.owner_scope_overridability_at_install
+        and not manifest.write_capabilities
+    )
 
 
 def _finding(severity: str, message: str) -> ValidationFinding:
@@ -111,6 +134,11 @@ def check_observation_mode_wrapping(
     manifest: AdapterManifest,
 ) -> list[ValidationFinding]:
     """Run the observation-mode wrapping rule against ``pack_dir`` / ``manifest``."""
+    if _is_read_only_bridge_communication(Path(pack_dir), manifest):
+        # This profile has no outbound method at all. Structural validation in
+        # base_class_conformance requires that send/apply_write remain absent.
+        return []
+
     kinds = {cap.kind for cap in manifest.capabilities}
     relevant = kinds & _CATEGORY_TO_METHOD.keys()
     if not relevant:

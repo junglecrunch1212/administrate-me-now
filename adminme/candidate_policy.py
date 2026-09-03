@@ -193,7 +193,7 @@ SOURCE_CATALOG: tuple[dict[str, Any], ...] = (
         group="Messages and conversations",
         channel_type="chat message",
         projection="Comms",
-        implementation="planned",
+        implementation="current",
         adapter_kind="messaging-bluebubbles",
         signals=(
             "direction",
@@ -202,7 +202,6 @@ SOURCE_CATALOG: tuple[dict[str, Any], ...] = (
             "body",
             "thread",
             "attachments",
-            "reactions",
         ),
         candidate_kinds=CANDIDATE_KINDS,
         extraction_layers=("provider metadata", "bounded regex", "grounded language"),

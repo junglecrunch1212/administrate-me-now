@@ -1,12 +1,14 @@
-"""KnowledgeAdapter Protocol — Cat-D bridge-side adapter contract.
+"""Read-side and state-mirror protocols for bridge-hosted adapters.
 
 Per [PM-34]: distinct from the five central ABCs in
 ``adminme/lib/adapters/`` because Cat-D knowledge-source adapters
 emit to an HTTP client, not to a local event log. Structural Protocol
 (not abstract). Adapter packs land in 11c-ii.
 
-Per memo 04 §3.1: packs declare ``kind: adapter, subkind:
-knowledge-source``; the bridge ``packs`` loader filters by that.
+``CommunicationSourceBridgeAdapter`` is deliberately read-only.  It is the
+bridge-runtime shape for a Cat-A communication *observation* source, and does
+not expose ``send`` or ``apply_write``.  Keeping that absence structural makes
+it impossible for a G10 Messages source to enter the bridge command dispatcher.
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ if TYPE_CHECKING:
     from adminme_bridge.adapters.sinks import BridgeEventSink
 
 
-AdapterState = Literal["starting", "running", "backoff", "stopped", "crashed"]
+AdapterState = Literal[
+    "starting", "running", "degraded", "backoff", "stopped", "crashed"
+]
 
 
 @dataclass
@@ -64,6 +68,7 @@ class BridgeContext:
     tenant_id: str = "tenant-default"
     enrollment_id: str = ""
     configuration_sha256: str = ""
+    device_identity_sha256: str = ""
 
 
 @runtime_checkable
@@ -71,6 +76,22 @@ class KnowledgeAdapter(Protocol):
     """Structural contract every L1-bridge knowledge-source adapter satisfies."""
 
     subkind: ClassVar[str]
+
+    async def start(self, *, ctx: BridgeContext) -> None: ...
+    async def stop(self) -> None: ...
+    def status(self) -> AdapterStatus: ...
+
+
+@runtime_checkable
+class CommunicationSourceBridgeAdapter(Protocol):
+    """Read-only Cat-A communication observation source on a member bridge.
+
+    Runtime placement is orthogonal to the five adapter categories.  Unlike a
+    central communication adapter, this protocol represents ingestion only;
+    write methods are intentionally absent from the contract.
+    """
+
+    subkind: ClassVar[Literal["communication-source"]]
 
     async def start(self, *, ctx: BridgeContext) -> None: ...
     async def stop(self) -> None: ...
@@ -101,7 +122,9 @@ class StateMirrorBridgeAdapter(Protocol):
     def status(self) -> AdapterStatus: ...
 
 
-BridgeAdapter: TypeAlias = KnowledgeAdapter | StateMirrorBridgeAdapter
+BridgeAdapter: TypeAlias = (
+    KnowledgeAdapter | CommunicationSourceBridgeAdapter | StateMirrorBridgeAdapter
+)
 
 
 __all__ = [
@@ -109,6 +132,7 @@ __all__ = [
     "AdapterStatus",
     "BridgeAdapter",
     "BridgeContext",
+    "CommunicationSourceBridgeAdapter",
     "KnowledgeAdapter",
     "StateMirrorBridgeAdapter",
 ]

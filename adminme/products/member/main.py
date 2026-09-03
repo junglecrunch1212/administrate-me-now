@@ -253,8 +253,9 @@ class SettingsBridgeRequest(BaseModel):
             "apple_notes",
             "apple_voice_memos",
             "obsidian",
+            "apple_messages_read",
         ]
-    ] = Field(min_length=1, max_length=6)
+    ] = Field(min_length=1, max_length=7)
 
 
 class SettingsBridgeControlRequest(BaseModel):
@@ -1066,7 +1067,6 @@ _EXTERNAL_OPERATIONS = {
 _COMMS_EXTERNAL_OPERATIONS = {
     "gmail": {"reply", "mark_read", "mark_unread", "archive", "restore"},
     "microsoft_graph": {"reply", "mark_read", "mark_unread", "archive", "restore"},
-    "bluebubbles": {"reply"},
     "twilio_sms": {"reply"},
     "twilio_whatsapp": {"reply"},
     "fixture": {"reply"},
