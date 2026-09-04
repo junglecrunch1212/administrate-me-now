@@ -335,9 +335,7 @@ def test_reconcile_timeout_restores_exact_private_openclaw_config(
     release = tmp_path / "releases" / "candidate"
     plugin = release / "openclaw" / "administrateme"
     (plugin / "dist").mkdir(parents=True)
-    (plugin / "dist" / "index.js").write_text(
-        "export default {};", encoding="utf-8"
-    )
+    (plugin / "dist" / "index.js").write_text("export default {};", encoding="utf-8")
     (plugin / "openclaw.plugin.json").write_text(
         json.dumps(
             {
