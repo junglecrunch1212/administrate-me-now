@@ -2963,10 +2963,6 @@ class UpgradeManager:
             else:
                 atomic_write(readiness_path, target_readiness_payload, mode=0o600)
                 self._fsync_directory(readiness_path.parent)
-            self._write_refreshed_runtime_binding(
-                target_readiness,
-                candidate_commit=target_commit,
-            )
             journal = self.activation_journal.transition(
                 journal,
                 "readiness_selected",
@@ -2992,6 +2988,10 @@ class UpgradeManager:
                     "settings_control_selected",
                 )
             configure_required_llm_tool(self.paths, test_mode=self.test_mode)
+            self._write_refreshed_runtime_binding(
+                target_readiness,
+                candidate_commit=target_commit,
+            )
             journal = self.activation_journal.transition(
                 journal,
                 "launchagents_selecting",
