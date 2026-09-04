@@ -346,6 +346,89 @@ def test_interrupted_activation_restores_exact_predecessor_bytes(
     assert json.loads(history.read_text("utf-8"))["phase"] == "recovered"
 
 
+def test_interrupted_activation_refreshes_binding_after_plugin_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    value = _journal_value(paths)
+    readiness = {
+        "contract": "deployment-readiness-v1",
+        "deployment_binding": {
+            "release_commit": PREDECESSOR_COMMIT,
+            "instance_fingerprint": "6" * 64,
+            "host_fingerprint": "7" * 64,
+            "configuration_fingerprint": "8" * 64,
+        },
+    }
+    readiness_payload = json.dumps(readiness, indent=2).encode("utf-8")
+    value.update(
+        {
+            "initial_readiness": readiness,
+            "initial_readiness_bytes": base64.b64encode(readiness_payload).decode(
+                "ascii"
+            ),
+            "initial_readiness_sha256": hashlib.sha256(readiness_payload).hexdigest(),
+        }
+    )
+    owner = ActivationJournal(paths)
+    owner.create(value)
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    events: list[str] = []
+    manager.services = SimpleNamespace(
+        stop=lambda *args, **kwargs: events.append("stop"),
+        start=lambda: (
+            events.append("start")
+            or SimpleNamespace(
+                status="healthy",
+                runtime="running",
+                openclaw="running",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_install_reviewed_openclaw",
+        lambda _release: events.append("openclaw"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: events.append("plugin"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *_args, **_kwargs: events.append("launchagents"),
+    )
+
+    def refresh(
+        active_readiness: dict[str, Any], *, candidate_commit: str
+    ) -> dict[str, Any]:
+        assert candidate_commit == PREDECESSOR_COMMIT
+        assert events[-1] == "launchagents"
+        events.append("binding")
+        refreshed = json.loads(json.dumps(active_readiness))
+        refreshed["deployment_binding"]["configuration_fingerprint"] = "9" * 64
+        return refreshed
+
+    monkeypatch.setattr(manager, "_refresh_active_runtime_binding", refresh)
+
+    result = manager._recover_interrupted_transaction()  # noqa: SLF001
+
+    assert result is not None and result["status"] == "recovered"
+    active = json.loads(
+        (paths.instance_dir / "config" / "deployment-readiness.json").read_text("utf-8")
+    )
+    assert active["deployment_binding"]["configuration_fingerprint"] == "9" * 64
+    assert events == [
+        "stop",
+        "openclaw",
+        "plugin",
+        "launchagents",
+        "binding",
+        "start",
+    ]
+
+
 def test_activation_recovery_failure_keeps_journal_and_services_stopped(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -553,6 +636,11 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     monkeypatch.setattr(
         "bootstrap.upgrade.install_launch_agents",
         lambda *_args, **_kwargs: events.append("launchagents"),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_write_refreshed_runtime_binding",
+        lambda *_args, **_kwargs: None,
     )
 
     result = manager._recover_interrupted_transaction(  # noqa: SLF001
@@ -867,12 +955,21 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
         "_post_switch_doctor",
         lambda _release: {"status": "healthy", "checks": []},
     )
+    refreshed: list[tuple[dict[str, Any] | None, str]] = []
+    monkeypatch.setattr(
+        manager,
+        "_write_refreshed_runtime_binding",
+        lambda readiness, *, candidate_commit: refreshed.append(
+            (readiness, candidate_commit)
+        ),
+    )
 
     result = manager.rollback()
 
     assert result["status"] == "rolled_back"
     assert settings_path.read_bytes() == SETTINGS_PAYLOAD
     assert (paths.app_dir / "current-release.json").read_bytes() == pointer_payload
+    assert refreshed == [(json.loads(readiness_payload), PREDECESSOR_COMMIT)]
 
 
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(

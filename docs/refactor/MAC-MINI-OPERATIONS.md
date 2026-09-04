@@ -568,17 +568,22 @@ candidate services start.
 An ordinary failure invokes the same recovery path immediately; SIGKILL or
 host death leaves the journal for the next guarded activate/rollback invocation,
 which performs recovery and returns without beginning new work. Recovery
-restores the predecessor selectors and exact control bytes, then restores its
-running/stopped state. A markerless retained predecessor is checked against the
-clean Git object database supplied to that guarded invocation (which may be a
-later protected-main commit), while the journal's captured predecessor and
-candidate commits remain the exact ancestry and byte-proof coordinates. The
+restores the predecessor selectors and exact owner-evidence control bytes, then
+mechanically refreshes only the configuration fingerprint after the final
+plugin selector and restores the prior running/stopped state. This keeps the
+retained physical attestations bound to the exact configuration the recovered
+runtime will load without inventing a new human confirmation. A markerless
+retained predecessor is checked against the clean Git object database supplied
+to that guarded invocation (which may be a later protected-main commit), while
+the journal's captured predecessor and candidate commits remain the exact
+ancestry and byte-proof coordinates. The
 temporary materialized controller tree is never treated as a Git repository.
 Failure to converge leaves services stopped and the journal in place. A
 committed activation history is also the sole authority
 for journaled explicit rollback, including restoration of the predecessor's
-exact readiness bytes. These mechanics do not execute HTR-08 or HTR-09 and do
-not substitute for post-switch browser/privacy/isolation/effect acceptance.
+readiness evidence and the same post-selector configuration-fingerprint
+refresh. These mechanics do not execute HTR-08 or HTR-09 and do not substitute
+for post-switch browser/privacy/isolation/effect acceptance.
 
 OpenClaw reconciliation resolves the instance-owned `bin/openclaw` selector
 directly and revalidates it against the reviewed source receipt. It does not
