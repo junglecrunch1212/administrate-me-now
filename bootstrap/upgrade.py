@@ -1393,6 +1393,36 @@ class UpgradeManager:
         )
         return refreshed
 
+    def _write_refreshed_runtime_binding(
+        self,
+        active_readiness: dict[str, Any] | None,
+        *,
+        candidate_commit: str,
+    ) -> None:
+        """Rebind retained owner evidence to the final selector configuration."""
+
+        if active_readiness is None:
+            return
+        if self.test_mode and not isinstance(
+            active_readiness.get("deployment_binding"), dict
+        ):
+            # Older unit fixtures predate deployment bindings. Production is
+            # always strict through ``_refresh_active_runtime_binding``.
+            return
+        refreshed = self._refresh_active_runtime_binding(
+            active_readiness,
+            candidate_commit=candidate_commit,
+        )
+        readiness_path = (
+            self.paths.instance_dir / "config" / "deployment-readiness.json"
+        )
+        atomic_write(
+            readiness_path,
+            json.dumps(refreshed, indent=2, sort_keys=True).encode("utf-8"),
+            mode=0o600,
+        )
+        self._fsync_directory(readiness_path.parent)
+
     def _preflight_keychain_access(self, candidate: Path) -> None:
         """Fail before preparation or service mutation when macOS ACLs would prompt."""
 
@@ -1715,6 +1745,14 @@ class UpgradeManager:
             ):
                 try:
                     operation()
+                except Exception as exc:
+                    recovery_errors.append(exc)
+            if not recovery_errors:
+                try:
+                    self._write_refreshed_runtime_binding(
+                        recovery_journal["initial_readiness"],
+                        candidate_commit=predecessor_commit,
+                    )
                 except Exception as exc:
                     recovery_errors.append(exc)
             if journal["was_running"] and not recovery_errors:
@@ -2925,6 +2963,10 @@ class UpgradeManager:
             else:
                 atomic_write(readiness_path, target_readiness_payload, mode=0o600)
                 self._fsync_directory(readiness_path.parent)
+            self._write_refreshed_runtime_binding(
+                target_readiness,
+                candidate_commit=target_commit,
+            )
             journal = self.activation_journal.transition(
                 journal,
                 "readiness_selected",
