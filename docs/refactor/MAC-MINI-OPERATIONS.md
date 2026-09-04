@@ -570,7 +570,8 @@ host death leaves the journal for the next guarded activate/rollback invocation,
 which performs recovery and returns without beginning new work. Recovery
 restores the predecessor selectors and exact owner-evidence control bytes, then
 mechanically refreshes only the configuration fingerprint after the final
-plugin selector and restores the prior running/stopped state. This keeps the
+plugin and required-tool configuration selectors, then restores the prior
+running/stopped state. This keeps the
 retained physical attestations bound to the exact configuration the recovered
 runtime will load without inventing a new human confirmation. A markerless
 retained predecessor is checked against the clean Git object database supplied

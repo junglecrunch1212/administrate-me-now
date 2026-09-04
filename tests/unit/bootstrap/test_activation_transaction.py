@@ -942,9 +942,10 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
         lambda *_args, **_kwargs: None,
     )
+    selector_order: list[str] = []
     monkeypatch.setattr(
         "bootstrap.upgrade.configure_required_llm_tool",
-        lambda *_args, **_kwargs: None,
+        lambda *_args, **_kwargs: selector_order.append("llm_tool"),
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.install_launch_agents",
@@ -959,8 +960,9 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
     monkeypatch.setattr(
         manager,
         "_write_refreshed_runtime_binding",
-        lambda readiness, *, candidate_commit: refreshed.append(
-            (readiness, candidate_commit)
+        lambda readiness, *, candidate_commit: (
+            selector_order.append("runtime_binding"),
+            refreshed.append((readiness, candidate_commit)),
         ),
     )
 
@@ -970,6 +972,7 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
     assert settings_path.read_bytes() == SETTINGS_PAYLOAD
     assert (paths.app_dir / "current-release.json").read_bytes() == pointer_payload
     assert refreshed == [(json.loads(readiness_payload), PREDECESSOR_COMMIT)]
+    assert selector_order == ["llm_tool", "runtime_binding"]
 
 
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
