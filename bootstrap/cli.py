@@ -213,6 +213,15 @@ def build_parser() -> argparse.ArgumentParser:
                     "candidate-pending evidence"
                 ),
             )
+        elif name == "rollback":
+            child.add_argument(
+                "--recovery-repository",
+                type=Path,
+                help=(
+                    "exact clean protected-main checkout used for fail-closed "
+                    "rollback recovery verification"
+                ),
+            )
         elif name == "bridge-export":
             child.add_argument("member_id")
             child.add_argument("output", type=Path)
@@ -556,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "upgrade":
             _print(upgrades.activate(args.candidate))
         else:
-            _print(upgrades.rollback())
+            _print(upgrades.rollback(args.recovery_repository))
         return 0
     except Exception as exc:
         _print(

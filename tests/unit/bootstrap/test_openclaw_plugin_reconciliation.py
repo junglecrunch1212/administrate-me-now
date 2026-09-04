@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from adminme.openclaw_topology import member_agent_id
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.openclaw_activation import remove_unsupported_member_topology
 from bootstrap.openclaw_tools import (
+    OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS,
     administrateme_plugin_status,
     reconcile_administrateme_plugin,
 )
@@ -131,6 +133,7 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         ),
         encoding="utf-8",
     )
+    (runtime_dir / "openclaw.json").chmod(0o600)
     monkeypatch.setattr(
         "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
         lambda _paths: "/reviewed/openclaw",
@@ -239,6 +242,7 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
         ),
         encoding="utf-8",
     )
+    target.chmod(0o600)
     monkeypatch.setattr(
         "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
         lambda _paths: "/reviewed/openclaw",
@@ -321,3 +325,84 @@ def test_reconcile_rejects_a_plugin_path_outside_the_release(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError, match="escapes"):
         reconcile_administrateme_plugin(paths, release)
+
+
+def test_reconcile_timeout_restores_exact_private_openclaw_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    release = tmp_path / "releases" / "candidate"
+    plugin = release / "openclaw" / "administrateme"
+    (plugin / "dist").mkdir(parents=True)
+    (plugin / "dist" / "index.js").write_text(
+        "export default {};", encoding="utf-8"
+    )
+    (plugin / "openclaw.plugin.json").write_text(
+        json.dumps(
+            {
+                "configSchema": {
+                    "type": "object",
+                    "properties": {
+                        "bindingFingerprints": {},
+                        "dmScope": {},
+                        "memberAgentIds": {},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_dir = paths.instance_dir / "config"
+    runtime_dir = paths.instance_dir / "openclaw" / "runtime"
+    config_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    (config_dir / "adapters.json").write_text(
+        '{"member_chat_enabled_members":[],"openclaw_actor_identities":{}}',
+        encoding="utf-8",
+    )
+    target = runtime_dir / "openclaw.json"
+    original = b'{"plugins":{"entries":{"administrateme":{"enabled":true}}}}\n'
+    target.write_bytes(original)
+    target.chmod(0o600)
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
+        lambda _paths: "/reviewed/openclaw",
+    )
+    inspect_count = 0
+    observed_timeouts: list[int] = []
+
+    def run(
+        command: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal inspect_count
+        observed_timeouts.append(int(kwargs["timeout"]))
+        if command[1:4] == ["plugins", "inspect", "administrateme"]:
+            inspect_count += 1
+            return subprocess.CompletedProcess(
+                command,
+                0 if inspect_count == 1 else 1,
+                "{}" if inspect_count == 1 else "",
+                "",
+            )
+        if command[1:3] == ["plugins", "uninstall"]:
+            target.write_bytes(b'{"plugins":{"entries":{}}}\n')
+            target.chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, "{}", "")
+        if command[1:3] == ["plugins", "install"]:
+            raise subprocess.TimeoutExpired(
+                command,
+                OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS,
+            )
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr("bootstrap.openclaw_tools.subprocess.run", run)
+
+    with pytest.raises(RuntimeError, match="plugin command timed out"):
+        reconcile_administrateme_plugin(paths, release)
+
+    assert target.read_bytes() == original
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert observed_timeouts
+    assert set(observed_timeouts) == {OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS}

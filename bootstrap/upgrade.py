@@ -2609,17 +2609,38 @@ class UpgradeManager:
             "source_assessment_repair": source_repair_evidence,
         }
 
-    def rollback(self) -> dict[str, Any]:
+    def rollback(
+        self,
+        recovery_repository: Path | None = None,
+    ) -> dict[str, Any]:
         with self._operation_lock():
-            recovered = self._recover_interrupted_transaction()
+            if not self.test_mode:
+                if recovery_repository is None:
+                    raise UpgradeError(
+                        "rollback requires an explicit clean recovery repository"
+                    )
+                try:
+                    recovery_repository = recovery_repository.resolve(strict=True)
+                    reviewed_candidate_commit(recovery_repository)
+                except (OSError, SourceIdentityError) as exc:
+                    raise UpgradeError(
+                        "rollback recovery repository is not a clean reviewed checkout"
+                    ) from exc
+            recovered = self._recover_interrupted_transaction(recovery_repository)
             if recovered is not None:
                 return recovered
             history_exists = any(self.activation_journal.history.iterdir())
             if self.test_mode and not history_exists:
                 return self._rollback_locked()
-            return self._rollback_transactional_locked()
+            return self._rollback_transactional_locked(
+                recovery_repository=recovery_repository
+            )
 
-    def _rollback_transactional_locked(self) -> dict[str, Any]:
+    def _rollback_transactional_locked(
+        self,
+        *,
+        recovery_repository: Path | None = None,
+    ) -> dict[str, Any]:
         pointer_path = self.paths.app_dir / "current-release.json"
         current, current_release, _protected, _digest, _rows = (
             self._release_pointer_state()
@@ -2967,7 +2988,7 @@ class UpgradeManager:
             history = self.activation_journal.finish(journal)
         except Exception as rollback_error:
             try:
-                recovery = self._recover_interrupted_transaction()
+                recovery = self._recover_interrupted_transaction(recovery_repository)
             except Exception as recovery_error:
                 raise UpgradeError(
                     f"rollback failed ({rollback_error}); durable current-release "

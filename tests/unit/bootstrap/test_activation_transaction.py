@@ -571,6 +571,62 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     assert json.loads(history.read_text("utf-8"))["phase"] == "recovered"
 
 
+def test_rollback_forwards_recovery_repository_to_transactional_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    recovery_repository = tmp_path / "reviewed-candidate"
+    recovery_repository.mkdir()
+    manager.activation_journal.history.mkdir(parents=True)
+    (manager.activation_journal.history / "existing.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    observed: list[tuple[str, Path | None]] = []
+    monkeypatch.setattr(
+        manager,
+        "_recover_interrupted_transaction",
+        lambda repository=None: observed.append(("recover", repository)) or None,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_rollback_transactional_locked",
+        lambda *, recovery_repository=None: (
+            observed.append(("rollback", recovery_repository))
+            or {"status": "rolled_back"}
+        ),
+    )
+
+    result = manager.rollback(recovery_repository)
+
+    assert result == {"status": "rolled_back"}
+    assert observed == [
+        ("recover", recovery_repository),
+        ("rollback", recovery_repository),
+    ]
+
+
+def test_production_rollback_requires_recovery_repository_before_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=False)
+    recovery_started = False
+
+    def recover(_repository: Path | None = None) -> None:
+        nonlocal recovery_started
+        recovery_started = True
+
+    monkeypatch.setattr(manager, "_recover_interrupted_transaction", recover)
+
+    with pytest.raises(RuntimeError, match="explicit clean recovery repository"):
+        manager.rollback()
+
+    assert recovery_started is False
+
+
 @pytest.mark.parametrize(
     "transition_contract",
     [

@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from bootstrap.contracts import DeploymentPaths, load_versions
+from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.openclaw_activation import (
     reconcile_member_topology,
     remove_unsupported_member_topology,
@@ -22,6 +23,8 @@ from bootstrap.openclaw_install import resolve_reviewed_openclaw
 REQUIRED_LLM_TOOL = "llm-task"
 REQUIRED_LLM_AGENT = "main"
 ADMINISTRATEME_PLUGIN = "administrateme"
+OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS = 300
+_MAX_OPENCLAW_CONFIG_BYTES = 16 * 1024 * 1024
 _MEMBER_TOPOLOGY_CONFIG_KEYS = frozenset(
     {"bindingFingerprints", "dmScope", "memberAgentIds"}
 )
@@ -57,6 +60,36 @@ def _supports_member_topology(manifest: Path) -> bool:
     if declared and declared != _MEMBER_TOPOLOGY_CONFIG_KEYS:
         raise RuntimeError("reviewed plugin declares a partial member-topology schema")
     return declared == _MEMBER_TOPOLOGY_CONFIG_KEYS
+
+
+def _openclaw_config_snapshot(
+    paths: DeploymentPaths,
+) -> tuple[Path, bytes, int]:
+    """Read the private config without following links for exact restoration."""
+
+    config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(config_path, flags)
+    except OSError as exc:
+        raise RuntimeError("OpenClaw configuration is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or mode & 0o077
+            or metadata.st_size > _MAX_OPENCLAW_CONFIG_BYTES
+        ):
+            raise RuntimeError("OpenClaw configuration is not a bounded private file")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read(_MAX_OPENCLAW_CONFIG_BYTES + 1)
+        if len(payload) != metadata.st_size:
+            raise RuntimeError("OpenClaw configuration changed while being captured")
+    finally:
+        os.close(descriptor)
+    return config_path, payload, mode
 
 
 def administrateme_plugin_status(
@@ -99,7 +132,7 @@ def administrateme_plugin_status(
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS,
             env=_environment(paths),
         )
         inspected = json.loads(completed.stdout) if completed.returncode == 0 else {}
@@ -176,64 +209,78 @@ def reconcile_administrateme_plugin(
     supports_member_topology = _supports_member_topology(manifest)
     executable = resolve_reviewed_openclaw(paths)
     environment = _environment(paths)
+    config_path, original_config, original_mode = _openclaw_config_snapshot(paths)
     topology: dict[str, Any] | None = None
 
-    if not supports_member_topology:
-        # OpenClaw validates the existing entry against the incoming manifest
-        # before installation. Remove only candidate-owned fields/rows first so
-        # a retained predecessor can be installed and then checked again.
-        topology = remove_unsupported_member_topology(paths)
-
     def run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [executable, *arguments],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=environment,
-        )
-
-    for _ in range(20):
-        inspected = run(["plugins", "inspect", ADMINISTRATEME_PLUGIN, "--json"])
-        if inspected.returncode:
-            break
-        removed = run(
-            [
-                "plugins",
-                "uninstall",
-                ADMINISTRATEME_PLUGIN,
-                "--force",
-                "--keep-files",
-            ]
-        )
-        if removed.returncode:
-            raise RuntimeError(
-                "stale AdministrateMe plugin registration could not be removed"
+        try:
+            return subprocess.run(
+                [executable, *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS,
+                env=environment,
             )
-    else:
-        raise RuntimeError(
-            "stale AdministrateMe plugin registrations exceeded the safety bound"
-        )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("bounded OpenClaw plugin command timed out") from exc
 
-    installed = run(["plugins", "install", "--link", "--force", str(plugin)])
-    if installed.returncode:
-        raise RuntimeError("reviewed AdministrateMe plugin registration failed")
-    topology = (
-        reconcile_member_topology(paths)
-        if supports_member_topology
-        else remove_unsupported_member_topology(paths)
-    )
-    validated = run(["config", "validate"])
-    if validated.returncode:
-        raise RuntimeError("OpenClaw rejected the reviewed plugin configuration")
-    status = administrateme_plugin_status(paths, release)
-    if not status["ok"]:
-        raise RuntimeError(
-            "OpenClaw did not load AdministrateMe from the selected release"
+    try:
+        if not supports_member_topology:
+            # OpenClaw validates the existing entry against the incoming manifest
+            # before installation. Remove only candidate-owned fields/rows first so
+            # a retained predecessor can be installed and then checked again.
+            topology = remove_unsupported_member_topology(paths)
+
+        for _ in range(20):
+            inspected = run(["plugins", "inspect", ADMINISTRATEME_PLUGIN, "--json"])
+            if inspected.returncode:
+                break
+            removed = run(
+                [
+                    "plugins",
+                    "uninstall",
+                    ADMINISTRATEME_PLUGIN,
+                    "--force",
+                    "--keep-files",
+                ]
+            )
+            if removed.returncode:
+                raise RuntimeError(
+                    "stale AdministrateMe plugin registration could not be removed"
+                )
+        else:
+            raise RuntimeError(
+                "stale AdministrateMe plugin registrations exceeded the safety bound"
+            )
+
+        installed = run(["plugins", "install", "--link", "--force", str(plugin)])
+        if installed.returncode:
+            raise RuntimeError("reviewed AdministrateMe plugin registration failed")
+        topology = (
+            reconcile_member_topology(paths)
+            if supports_member_topology
+            else remove_unsupported_member_topology(paths)
         )
-    status["member_topology"] = topology
-    return status
+        validated = run(["config", "validate"])
+        if validated.returncode:
+            raise RuntimeError("OpenClaw rejected the reviewed plugin configuration")
+        status = administrateme_plugin_status(paths, release)
+        if not status["ok"]:
+            raise RuntimeError(
+                "OpenClaw did not load AdministrateMe from the selected release"
+            )
+        status["member_topology"] = topology
+        return status
+    except Exception:
+        try:
+            atomic_write(config_path, original_config, mode=original_mode)
+        except Exception as restoration_error:
+            raise RuntimeError(
+                "OpenClaw plugin reconciliation failed and exact configuration "
+                "restoration also failed"
+            ) from restoration_error
+        raise
 
 
 def required_llm_tool_status(
