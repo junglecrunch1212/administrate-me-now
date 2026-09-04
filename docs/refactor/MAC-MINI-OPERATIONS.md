@@ -585,7 +585,11 @@ directly and revalidates it against the reviewed source receipt. It does not
 depend on the disposable controller's ambient `PATH` after installation or
 during journal recovery. Plugin selection and adapter-derived member-topology
 selection are one stopped-service operation; recovery restores predecessor
-control bytes before running that operation.
+control bytes before running that operation. The plugin CLI has a bounded
+five-minute window for cold integrity scans. Reconciliation captures the exact
+private OpenClaw configuration before its first mutation and restores those
+bytes atomically if uninstall, install, topology selection, validation, or
+runtime-source proof fails.
 
 An additive projection change must also be exercised against an encrypted
 database from the prior schema. A clean event-log rebuild is necessary but does
@@ -600,8 +604,14 @@ side-by-side global Node installation out of the candidate runtime.
 The lower-level rollback command is:
 
 ```bash
-python -m bootstrap.cli rollback
+python -m bootstrap.cli rollback \
+  --recovery-repository /absolute/path/to/exact-clean-protected-main-checkout
 ```
+
+Production rollback requires that explicit clean Git checkout before selector
+work begins. It supplies the trusted object database used to verify and recover
+the retained current release if rollback is interrupted or fails. Test-mode
+fixtures may omit it.
 
 Do not remove the prior release or rollback state until the full trust period
 and a fresh backup/restore rehearsal have passed.
