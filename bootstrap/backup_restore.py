@@ -13,13 +13,16 @@ import os
 import re
 import shutil
 import stat
+import struct
 import tarfile
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO
 
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from adminme.events.bus import EventBus
@@ -61,7 +64,8 @@ class BackupError(RuntimeError):
     pass
 
 
-_BACKUP_FORMAT = "administrateme-backup-v1"
+_BACKUP_FORMAT = "administrateme-backup-v2"
+_LEGACY_BACKUP_FORMAT = "administrateme-backup-v1"
 _MANIFEST_FORMAT = "administrateme-backup-manifest-v1"
 _REHEARSAL_CONTRACT = "backup-rehearsal-v1"
 _REHEARSAL_MARKER = ".administrateme-rehearsal-v1"
@@ -70,10 +74,62 @@ _REHEARSAL_EXTRACTION_COMPLETE = ".extraction-complete"
 _REHEARSAL_GUARDIAN_PID = ".guardian.pid"
 _MAX_BACKUP_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_UNPACKED_BYTES = 16 * 1024 * 1024 * 1024
-_MAX_AESGCM_PLAINTEXT_BYTES = (1 << 31) - 1
 _MAX_ARCHIVE_FILES = 100_000
+_BACKUP_V2_MAGIC = b"ADMINME-BACKUP-V2\x00"
+_BACKUP_V2_TAG_BYTES = 16
+_BACKUP_V2_MAX_HEADER_BYTES = 4096
+_BACKUP_STREAM_CHUNK_BYTES = 1024 * 1024
 _HEX_40 = re.compile(r"[0-9a-f]{40}")
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True)
+class _ArchiveEntry:
+    path: Path
+    archive_name: str
+    size: int
+    sha256: str
+    identity: tuple[int, int, int, int, int]
+
+
+class _EncryptingWriter:
+    """Present a minimal tar writer while emitting only ciphertext to disk."""
+
+    def __init__(self, destination: BinaryIO, encryptor: Any) -> None:
+        self._destination = destination
+        self._encryptor = encryptor
+        self.plaintext_bytes = 0
+
+    def write(self, payload: bytes) -> int:
+        self.plaintext_bytes += len(payload)
+        if self.plaintext_bytes > _MAX_BACKUP_BYTES:
+            raise BackupError("backup archive exceeds the supported size boundary")
+        encrypted = self._encryptor.update(payload)
+        if encrypted:
+            self._destination.write(encrypted)
+        return len(payload)
+
+    def flush(self) -> None:
+        self._destination.flush()
+
+
+class _HashingReader:
+    """Hash and count one source file while tar streams it."""
+
+    def __init__(self, source: BinaryIO) -> None:
+        self._source = source
+        self._digest = hashlib.sha256()
+        self.bytes_read = 0
+
+    def read(self, size: int = -1) -> bytes:
+        payload = self._source.read(size)
+        self.bytes_read += len(payload)
+        self._digest.update(payload)
+        return payload
+
+    @property
+    def sha256(self) -> str:
+        return self._digest.hexdigest()
 
 
 def _is_generated_openclaw_codex_cache(path: Path, *, state_root: Path) -> bool:
@@ -235,22 +291,22 @@ def _fsync_private_directory(path: Path, *, label: str) -> None:
         os.close(descriptor)
 
 
-def _authenticate_backup(
-    source: Path,
-    backup_key: bytes,
-    *,
-    expected_artifact_sha256: str | None = None,
-) -> tuple[dict[str, Any], bytes, str]:
-    encoded, _metadata = _read_regular_file_once(
-        source,
-        maximum_size=_MAX_BACKUP_BYTES,
+def _source_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
     )
-    artifact_sha256 = hashlib.sha256(encoded).hexdigest()
-    if (
-        expected_artifact_sha256 is not None
-        and artifact_sha256 != expected_artifact_sha256
-    ):
-        raise BackupError("backup source identity changed")
+
+
+def _decode_legacy_backup(
+    encoded: bytes,
+    backup_key: bytes,
+) -> tuple[dict[str, Any], bytes]:
+    """Read v1 artifacts so existing rollback backups remain usable."""
+
     try:
         envelope = json.loads(encoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -265,8 +321,8 @@ def _authenticate_backup(
     }:
         raise BackupError("backup envelope shape is invalid")
     if (
-        envelope.get("format") != _BACKUP_FORMAT
-        or envelope.get("version") != BACKUP_FORMAT_VERSION
+        envelope.get("format") != _LEGACY_BACKUP_FORMAT
+        or envelope.get("version") != 1
         or not isinstance(envelope.get("created_at"), str)
         or not isinstance(envelope.get("manifest_sha256"), str)
         or _HEX_64.fullmatch(str(envelope.get("manifest_sha256"))) is None
@@ -291,6 +347,193 @@ def _authenticate_backup(
         raise BackupError("backup decryption or authentication failed") from exc
     if len(payload) > _MAX_UNPACKED_BYTES:
         raise BackupError("backup plaintext exceeds the supported size boundary")
+    return envelope, payload
+
+
+def _authenticate_backup_to_path(
+    source: Path,
+    backup_key: bytes,
+    plaintext_target: Path,
+    *,
+    expected_artifact_sha256: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Authenticate one backup before publishing its plaintext archive."""
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source, flags)
+    target_created = False
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BackupError("backup source is not a regular file")
+        if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            raise BackupError("backup source ownership or mode is unsafe")
+        if metadata.st_size <= 0 or metadata.st_size > _MAX_BACKUP_BYTES:
+            raise BackupError("backup source exceeds the supported size boundary")
+        starting_identity = _source_identity(metadata)
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            artifact_digest = hashlib.sha256()
+            hashed_bytes = 0
+            for chunk in iter(
+                lambda: handle.read(_BACKUP_STREAM_CHUNK_BYTES),
+                b"",
+            ):
+                hashed_bytes += len(chunk)
+                artifact_digest.update(chunk)
+            if hashed_bytes != metadata.st_size:
+                raise BackupError("backup source changed while it was hashed")
+            artifact_sha256 = artifact_digest.hexdigest()
+            if (
+                expected_artifact_sha256 is not None
+                and artifact_sha256 != expected_artifact_sha256
+            ):
+                raise BackupError("backup source identity changed")
+
+            handle.seek(0)
+            magic = handle.read(len(_BACKUP_V2_MAGIC))
+            if magic != _BACKUP_V2_MAGIC:
+                handle.seek(0)
+                encoded = handle.read(_MAX_BACKUP_BYTES + 1)
+                if len(encoded) != metadata.st_size:
+                    raise BackupError("backup source changed while it was read")
+                envelope, payload = _decode_legacy_backup(encoded, backup_key)
+                plaintext_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                target_descriptor = os.open(
+                    plaintext_target,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                target_created = True
+                try:
+                    with os.fdopen(target_descriptor, "wb", closefd=False) as output:
+                        output.write(payload)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.fchmod(target_descriptor, 0o600)
+                finally:
+                    os.close(target_descriptor)
+                if _source_identity(os.fstat(descriptor)) != starting_identity:
+                    raise BackupError("backup source changed during authentication")
+                return envelope, artifact_sha256
+
+            encoded_header_size = handle.read(4)
+            if len(encoded_header_size) != 4:
+                raise BackupError("backup envelope is truncated")
+            header_size = struct.unpack(">I", encoded_header_size)[0]
+            if header_size <= 0 or header_size > _BACKUP_V2_MAX_HEADER_BYTES:
+                raise BackupError("backup envelope header size is invalid")
+            encoded_header = handle.read(header_size)
+            if len(encoded_header) != header_size:
+                raise BackupError("backup envelope is truncated")
+            try:
+                envelope = json.loads(encoded_header.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise BackupError("backup envelope header is invalid") from exc
+            if not isinstance(envelope, dict) or set(envelope) != {
+                "format",
+                "version",
+                "created_at",
+                "manifest_sha256",
+                "nonce",
+            }:
+                raise BackupError("backup envelope shape is invalid")
+            if (
+                envelope.get("format") != _BACKUP_FORMAT
+                or envelope.get("version") != BACKUP_FORMAT_VERSION
+                or not isinstance(envelope.get("created_at"), str)
+                or not isinstance(envelope.get("manifest_sha256"), str)
+                or _HEX_64.fullmatch(str(envelope.get("manifest_sha256"))) is None
+                or not isinstance(envelope.get("nonce"), str)
+            ):
+                raise BackupError("unsupported or malformed backup envelope")
+            try:
+                nonce = base64.b64decode(envelope["nonce"], validate=True)
+            except (ValueError, TypeError) as exc:
+                raise BackupError("backup envelope encoding is invalid") from exc
+            if len(nonce) != 12:
+                raise BackupError("backup envelope cryptographic shape is invalid")
+            associated_data = magic + encoded_header_size + encoded_header
+            ciphertext_start = len(associated_data)
+            ciphertext_size = metadata.st_size - ciphertext_start - _BACKUP_V2_TAG_BYTES
+            if ciphertext_size <= 0 or ciphertext_size > _MAX_BACKUP_BYTES:
+                raise BackupError("backup envelope cryptographic shape is invalid")
+            handle.seek(-_BACKUP_V2_TAG_BYTES, os.SEEK_END)
+            tag = handle.read(_BACKUP_V2_TAG_BYTES)
+            if len(tag) != _BACKUP_V2_TAG_BYTES:
+                raise BackupError("backup envelope is truncated")
+            handle.seek(ciphertext_start)
+
+            plaintext_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            target_descriptor = os.open(
+                plaintext_target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            target_created = True
+            try:
+                decryptor = Cipher(
+                    algorithms.AES(backup_key),
+                    modes.GCM(nonce, tag),
+                ).decryptor()
+                decryptor.authenticate_additional_data(associated_data)
+                remaining = ciphertext_size
+                plaintext_bytes = 0
+                with os.fdopen(target_descriptor, "wb", closefd=False) as output:
+                    while remaining:
+                        encrypted = handle.read(
+                            min(remaining, _BACKUP_STREAM_CHUNK_BYTES)
+                        )
+                        if not encrypted:
+                            raise BackupError("backup envelope is truncated")
+                        remaining -= len(encrypted)
+                        plaintext = decryptor.update(encrypted)
+                        plaintext_bytes += len(plaintext)
+                        if plaintext_bytes > _MAX_UNPACKED_BYTES:
+                            raise BackupError(
+                                "backup plaintext exceeds the supported size boundary"
+                            )
+                        output.write(plaintext)
+                    output.write(decryptor.finalize())
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.fchmod(target_descriptor, 0o600)
+            except BackupError:
+                raise
+            except Exception as exc:
+                raise BackupError("backup decryption or authentication failed") from exc
+            finally:
+                os.close(target_descriptor)
+            if _source_identity(os.fstat(descriptor)) != starting_identity:
+                raise BackupError("backup source changed during authentication")
+            return envelope, artifact_sha256
+    except BaseException:
+        if target_created:
+            try:
+                plaintext_target.unlink()
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def _authenticate_backup(
+    source: Path,
+    backup_key: bytes,
+    *,
+    expected_artifact_sha256: str | None = None,
+) -> tuple[dict[str, Any], bytes, str]:
+    """Compatibility helper for bounded callers and legacy unit fixtures."""
+
+    with tempfile.TemporaryDirectory(prefix="adminme-authenticated-backup-") as root:
+        target = Path(root) / "payload.tar"
+        envelope, artifact_sha256 = _authenticate_backup_to_path(
+            source,
+            backup_key,
+            target,
+            expected_artifact_sha256=expected_artifact_sha256,
+        )
+        payload = target.read_bytes()
     return envelope, payload, artifact_sha256
 
 
@@ -379,8 +622,23 @@ def _extract_and_validate_payload(
     payload: bytes,
     staging_root: Path,
 ) -> dict[str, Any]:
+    return _extract_and_validate_archive(io.BytesIO(payload), staging_root)
+
+
+def _extract_and_validate_archive_path(
+    source: Path,
+    staging_root: Path,
+) -> dict[str, Any]:
+    with source.open("rb") as archive_source:
+        return _extract_and_validate_archive(archive_source, staging_root)
+
+
+def _extract_and_validate_archive(
+    archive_source: BinaryIO,
+    staging_root: Path,
+) -> dict[str, Any]:
     try:
-        archive = tarfile.open(fileobj=io.BytesIO(payload), mode="r:")
+        archive = tarfile.open(fileobj=archive_source, mode="r:")
     except tarfile.TarError as exc:
         raise BackupError("backup archive is invalid") from exc
     with archive:
@@ -852,14 +1110,19 @@ def _extract_child(
     key_pipe: Any,
     result_pipe: Any,
 ) -> None:
+    archive_path = Path(staging_root) / ".authenticated-backup.tar"
     try:
         key = key_pipe.recv_bytes()
-        envelope, payload, artifact_sha256 = _authenticate_backup(
+        envelope, artifact_sha256 = _authenticate_backup_to_path(
             Path(source),
             key,
+            archive_path,
             expected_artifact_sha256=expected_artifact_sha256,
         )
-        manifest = _extract_and_validate_payload(payload, Path(staging_root))
+        manifest = _extract_and_validate_archive_path(
+            archive_path,
+            Path(staging_root),
+        )
         if manifest["manifest_sha256"] != envelope["manifest_sha256"]:
             raise BackupError("backup manifest identity does not match envelope")
         result_pipe.send(
@@ -875,6 +1138,10 @@ def _extract_child(
     except BaseException as exc:
         result_pipe.send({"status": "failed", "error_code": _child_failure_code(exc)})
     finally:
+        try:
+            archive_path.unlink()
+        except FileNotFoundError:
+            pass
         key_pipe.close()
         result_pipe.close()
 
@@ -1348,29 +1615,12 @@ class BackupManager:
         if should_restart:
             self.services.stop()
         try:
-            payload, manifest = self._build_archive()
-            if len(payload) > _MAX_AESGCM_PLAINTEXT_BYTES:
-                raise BackupError(
-                    "backup payload exceeds the authenticated-encryption boundary"
-                )
-            nonce = os.urandom(12)
-            ciphertext = AESGCM(backup_key).encrypt(
-                nonce,
-                payload,
-                b"administrateme-backup-v1",
-            )
-            envelope = {
-                "format": "administrateme-backup-v1",
-                "version": BACKUP_FORMAT_VERSION,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "manifest_sha256": manifest["manifest_sha256"],
-                "nonce": base64.b64encode(nonce).decode("ascii"),
-                "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
-            }
-            atomic_write(
+            entries, manifest = self._inventory_archive()
+            self._write_streaming_backup(
                 destination,
-                json.dumps(envelope, sort_keys=True).encode("utf-8"),
-                mode=0o600,
+                entries=entries,
+                manifest=manifest,
+                backup_key=backup_key,
             )
         finally:
             if should_restart:
@@ -1382,6 +1632,8 @@ class BackupManager:
             "event_log_sha256": manifest.get("event_log_sha256"),
             "manifest_sha256": manifest["manifest_sha256"],
             "encrypted": True,
+            "format": _BACKUP_FORMAT,
+            "version": BACKUP_FORMAT_VERSION,
             "services_restarted": should_restart,
         }
 
@@ -1655,12 +1907,18 @@ class BackupManager:
         references = self._references()
         backup_key = self.store.get(references["backup"])
         event_key = self.store.get(references["event_log"])
-        envelope, payload, _artifact_sha256 = _authenticate_backup(source, backup_key)
         staging_root = Path(
             tempfile.mkdtemp(prefix="restore-staging-", dir=self.paths.root)
         )
+        archive_path = staging_root / ".authenticated-backup.tar"
         try:
-            manifest = self._extract_and_validate(payload, staging_root)
+            envelope, _artifact_sha256 = _authenticate_backup_to_path(
+                source,
+                backup_key,
+                archive_path,
+            )
+            manifest = _extract_and_validate_archive_path(archive_path, staging_root)
+            archive_path.unlink()
             if manifest["manifest_sha256"] != envelope["manifest_sha256"]:
                 raise BackupError("backup manifest identity does not match envelope")
             staged_state = staging_root / "state"
@@ -1723,9 +1981,10 @@ class BackupManager:
             raise BackupError("secret-reference metadata is missing")
         return json.loads(path.read_text("utf-8"))["references"]
 
-    def _build_archive(self) -> tuple[bytes, dict[str, Any]]:
+    def _inventory_archive(self) -> tuple[list[_ArchiveEntry], dict[str, Any]]:
+        entries: list[_ArchiveEntry] = []
         files: list[dict[str, Any]] = []
-        payloads: dict[str, bytes] = {}
+        unpacked_size = 0
         for path in sorted(self.paths.instance_dir.rglob("*")):
             # OpenClaw's Codex launcher writes process-scoped wrappers, cache,
             # and local telemetry below each agent's codex-home. They can
@@ -1749,7 +2008,10 @@ class BackupManager:
                 continue
             relative = Path("state") / path.relative_to(self.paths.instance_dir)
             try:
-                payload = path.read_bytes()
+                descriptor = os.open(
+                    path,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
             except FileNotFoundError:
                 # SQLite removes quiesced shared-memory and WAL sidecars after
                 # the directory walk can already have observed them. They are
@@ -1757,17 +2019,50 @@ class BackupManager:
                 if path.name.endswith(("-shm", "-wal")):
                     continue
                 raise
+            try:
+                starting = os.fstat(descriptor)
+                if not stat.S_ISREG(starting.st_mode) or starting.st_uid != os.getuid():
+                    raise BackupError("backup source ownership or type is unsafe")
+                digest = hashlib.sha256()
+                bytes_read = 0
+                with os.fdopen(descriptor, "rb", closefd=False) as source:
+                    for chunk in iter(
+                        lambda: source.read(_BACKUP_STREAM_CHUNK_BYTES),
+                        b"",
+                    ):
+                        bytes_read += len(chunk)
+                        digest.update(chunk)
+                ending = os.fstat(descriptor)
+                if bytes_read != starting.st_size or _source_identity(
+                    ending
+                ) != _source_identity(starting):
+                    raise BackupError("backup source changed during inventory")
+            finally:
+                os.close(descriptor)
             relative_name = relative.as_posix()
-            payloads[relative_name] = payload
-            files.append(
-                {
-                    "path": relative_name,
-                    "size": len(payload),
-                    "sha256": __import__("hashlib").sha256(payload).hexdigest(),
-                }
+            source_sha256 = digest.hexdigest()
+            item = {
+                "path": relative_name,
+                "size": bytes_read,
+                "sha256": source_sha256,
+            }
+            files.append(item)
+            entries.append(
+                _ArchiveEntry(
+                    path=path,
+                    archive_name=relative_name,
+                    size=bytes_read,
+                    sha256=source_sha256,
+                    identity=_source_identity(starting),
+                )
             )
+            unpacked_size += bytes_read
+            if len(entries) > _MAX_ARCHIVE_FILES:
+                raise BackupError("backup source exceeds the file-count boundary")
+            if unpacked_size > _MAX_UNPACKED_BYTES:
+                raise BackupError("backup source exceeds the unpacked size boundary")
         manifest: dict[str, Any] = {
-            "format": "administrateme-backup-manifest-v1",
+            "format": _MANIFEST_FORMAT,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "file_count": len(files),
             "files": files,
@@ -1781,21 +2076,154 @@ class BackupManager:
             raise BackupError("backup source omits the encrypted event log")
         manifest["event_log_sha256"] = event_entry["sha256"]
         canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-        manifest["manifest_sha256"] = (
-            __import__("hashlib").sha256(canonical).hexdigest()
+        manifest["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
+        return entries, manifest
+
+    @staticmethod
+    def _add_verified_archive_entry(
+        archive: tarfile.TarFile,
+        entry: _ArchiveEntry,
+    ) -> None:
+        descriptor = os.open(
+            entry.path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
         )
-        buffer = io.BytesIO()
-        with tarfile.open(fileobj=buffer, mode="w") as archive:
-            for item in files:
-                info = tarfile.TarInfo(item["path"])
-                info.size = item["size"]
-                info.mode = 0o600
-                archive.addfile(info, io.BytesIO(payloads[item["path"]]))
+        try:
+            starting = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(starting.st_mode)
+                or starting.st_uid != os.getuid()
+                or _source_identity(starting) != entry.identity
+            ):
+                raise BackupError("backup source changed before archive streaming")
+            info = tarfile.TarInfo(entry.archive_name)
+            info.size = entry.size
+            info.mode = 0o600
+            with os.fdopen(descriptor, "rb", closefd=False) as source:
+                verified = _HashingReader(source)
+                archive.addfile(info, verified)
+            ending = os.fstat(descriptor)
+            if (
+                verified.bytes_read != entry.size
+                or verified.sha256 != entry.sha256
+                or _source_identity(ending) != entry.identity
+            ):
+                raise BackupError("backup source changed during archive streaming")
+        finally:
+            os.close(descriptor)
+
+    def _stream_archive(
+        self,
+        destination: Any,
+        *,
+        entries: list[_ArchiveEntry],
+        manifest: dict[str, Any],
+    ) -> None:
+        with tarfile.open(
+            fileobj=destination,
+            mode="w|",
+            bufsize=_BACKUP_STREAM_CHUNK_BYTES,
+        ) as archive:
+            for entry in entries:
+                self._add_verified_archive_entry(archive, entry)
             encoded = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
             info = tarfile.TarInfo("manifest.json")
             info.size = len(encoded)
             info.mode = 0o600
             archive.addfile(info, io.BytesIO(encoded))
+
+    def _write_streaming_backup(
+        self,
+        destination: Path,
+        *,
+        entries: list[_ArchiveEntry],
+        manifest: dict[str, Any],
+        backup_key: bytes,
+    ) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _fsync_private_directory(destination.parent, label="backup target")
+        if os.path.lexists(destination):
+            raise BackupError("refusing to replace an existing backup artifact")
+        nonce = os.urandom(12)
+        envelope = {
+            "format": _BACKUP_FORMAT,
+            "version": BACKUP_FORMAT_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "manifest_sha256": manifest["manifest_sha256"],
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+        }
+        encoded_header = json.dumps(
+            envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded_header) > _BACKUP_V2_MAX_HEADER_BYTES:
+            raise BackupError("backup envelope header exceeds its size boundary")
+        encoded_header_size = struct.pack(">I", len(encoded_header))
+        associated_data = _BACKUP_V2_MAGIC + encoded_header_size + encoded_header
+        encryptor = Cipher(
+            algorithms.AES(backup_key),
+            modes.GCM(nonce),
+        ).encryptor()
+        encryptor.authenticate_additional_data(associated_data)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            dir=destination.parent,
+        )
+        temporary = Path(temporary_name)
+        published = False
+        try:
+            with os.fdopen(descriptor, "wb") as output:
+                os.fchmod(output.fileno(), 0o600)
+                output.write(associated_data)
+                encrypted_archive = _EncryptingWriter(output, encryptor)
+                self._stream_archive(
+                    encrypted_archive,
+                    entries=entries,
+                    manifest=manifest,
+                )
+                final_ciphertext = encryptor.finalize()
+                if final_ciphertext:
+                    output.write(final_ciphertext)
+                output.write(encryptor.tag)
+                output.flush()
+                os.fsync(output.fileno())
+                if output.tell() > _MAX_BACKUP_BYTES:
+                    raise BackupError(
+                        "backup artifact exceeds the supported size boundary"
+                    )
+            os.link(temporary, destination, follow_symlinks=False)
+            published = True
+            temporary.unlink()
+            _fsync_private_directory(destination.parent, label="backup target")
+        except BaseException:
+            cleanup_error: BaseException | None = None
+            if published:
+                try:
+                    destination.unlink()
+                except BaseException as exc:
+                    cleanup_error = exc
+            if temporary.exists():
+                try:
+                    temporary.unlink()
+                except BaseException as exc:
+                    cleanup_error = cleanup_error or exc
+            try:
+                _fsync_private_directory(destination.parent, label="backup target")
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+            if cleanup_error is not None:
+                raise BackupError(
+                    "failed backup publication could not be durably removed"
+                ) from cleanup_error
+            raise
+
+    def _build_archive(self) -> tuple[bytes, dict[str, Any]]:
+        """Build a bounded in-memory archive for compatibility-focused tests."""
+
+        entries, manifest = self._inventory_archive()
+        buffer = io.BytesIO()
+        self._stream_archive(buffer, entries=entries, manifest=manifest)
         return buffer.getvalue(), manifest
 
     def _extract_and_validate(

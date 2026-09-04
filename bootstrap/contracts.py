@@ -51,7 +51,7 @@ SECTION_NAMES = (
 )
 
 BOOTSTRAP_SCHEMA_VERSION = 1
-BACKUP_FORMAT_VERSION = 1
+BACKUP_FORMAT_VERSION = 2
 RUNTIME_LABEL = "com.administrateme.runtime"
 OPENCLAW_LABEL = "com.administrateme.openclaw"
 

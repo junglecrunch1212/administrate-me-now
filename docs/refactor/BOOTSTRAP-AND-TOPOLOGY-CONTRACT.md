@@ -321,3 +321,11 @@ rule. This establishes activation-bound HTR-05/HTR-09 mechanics only when an
 owner-created pending artifact validates. It does not execute human HTR rows,
 authorize deployment, promote fixture evidence, or complete post-switch
 privacy/browser/effect acceptance.
+
+The authenticated backup container is versioned independently from its strict
+manifest. Version 2 streams the complete tar archive through AES-256-GCM,
+authenticates the bounded header as associated data, appends the terminal tag,
+and publishes only a fully synced mode-0600 ciphertext artifact. Creation
+rehashes each source while streaming and leaves no plaintext file; restore and
+rehearsal retain version 1 read compatibility and extract version 2 only after
+whole-artifact authentication.

@@ -238,6 +238,16 @@ OpenClaw/Codex sessions, workspace state, and every household database remain
 included; every other state-tree link remains a hard failure. The archive never
 includes the Keychain values themselves.
 
+Backup format v2 streams the tar archive through AES-256-GCM into a private
+temporary ciphertext file and atomically publishes it only after the final
+authentication tag and filesystem sync succeed. Source files are hashed during
+inventory and again while streamed, so drift fails without publishing an
+artifact. Restore authenticates the complete ciphertext before extraction and
+removes any failed plaintext stage. The v2 path is not constrained by the
+one-shot AEAD API's 2 GiB plaintext ceiling; the existing 8 GiB encrypted
+artifact and 16 GiB unpacked-state safety bounds still apply. Restore retains
+read compatibility with version 1 artifacts.
+
 Before a candidate switch, run the non-replacing rehearsal from that exact
 clean candidate's Python 3.14 environment. The candidate path must be the same
 checkout that supplies `bootstrap.backup_restore`; do not run this command from

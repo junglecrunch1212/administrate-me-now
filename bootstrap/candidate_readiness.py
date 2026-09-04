@@ -26,7 +26,7 @@ from typing import Any, Iterator, Mapping
 
 import yaml
 
-from bootstrap.contracts import DeploymentPaths, ensure_within
+from bootstrap.contracts import BACKUP_FORMAT_VERSION, DeploymentPaths, ensure_within
 from bootstrap.provider_binding_transition import (
     PreparedProviderBindingTransition,
     ProviderBindingTransitionError,
@@ -767,8 +767,8 @@ def _validate_rehearsal(
         or predecessor.get("rollback_compatible") != "not_evaluated"
         or predecessor.get("automatic_rollback_eligible") != "not_evaluated"
         or not isinstance(artifact, dict)
-        or artifact.get("format") != "administrateme-backup-v1"
-        or artifact.get("version") != 1
+        or artifact.get("format") != "administrateme-backup-v2"
+        or artifact.get("version") != BACKUP_FORMAT_VERSION
         or artifact.get("authenticated") is not True
         or artifact.get("exact_manifest_members") is not True
         or not isinstance(offline, dict)
