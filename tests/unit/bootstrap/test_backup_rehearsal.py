@@ -20,9 +20,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES
 from bootstrap.backup_restore import (
+    _BACKUP_V2_MAGIC,
     BackupError,
     BackupManager,
     _authenticate_backup,
+    _authenticate_backup_to_path,
     _write_new_private_file,
     _extract_and_validate_payload,
 )
@@ -331,8 +333,90 @@ def test_backup_authentication_rejects_distinct_wrong_key(tmp_path: Path) -> Non
     source.write_text(json.dumps(envelope), encoding="utf-8")
     source.chmod(0o600)
 
+    authenticated, decrypted, _artifact_sha256 = _authenticate_backup(source, key)
+    assert authenticated["format"] == "administrateme-backup-v1"
+    assert decrypted == payload
+
     with pytest.raises(BackupError, match="decryption or authentication failed"):
         _authenticate_backup(source, b"b" * 32)
+
+
+def test_streaming_backup_round_trip_and_wrong_key_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    paths.create()
+    events = paths.instance_dir / "events"
+    events.mkdir()
+    event_payload = b"encrypted-event-log" * 100_000
+    (events / "events.db").write_bytes(event_payload)
+    manager = BackupManager(
+        paths,
+        root=Path(__file__).resolve().parents[3],
+        test_mode=True,
+    )
+    entries, manifest = manager._inventory_archive()
+    destination = paths.backup_dir / "streaming.ambackup"
+    key = b"s" * 32
+
+    manager._write_streaming_backup(
+        destination,
+        entries=entries,
+        manifest=manifest,
+        backup_key=key,
+    )
+
+    assert destination.read_bytes().startswith(_BACKUP_V2_MAGIC)
+    envelope, archive_payload, _artifact_sha256 = _authenticate_backup(
+        destination,
+        key,
+    )
+    assert envelope["format"] == "administrateme-backup-v2"
+    assert envelope["version"] == 2
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    extracted = _extract_and_validate_payload(archive_payload, staging)
+    assert extracted["manifest_sha256"] == manifest["manifest_sha256"]
+    assert (staging / "state" / "events" / "events.db").read_bytes() == (event_payload)
+
+    plaintext = tmp_path / "wrong-key.tar"
+    with pytest.raises(BackupError, match="decryption or authentication failed"):
+        _authenticate_backup_to_path(destination, b"w" * 32, plaintext)
+    assert not plaintext.exists()
+
+
+def test_streaming_backup_refuses_source_drift_without_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    paths.create()
+    events = paths.instance_dir / "events"
+    events.mkdir()
+    event_log = events / "events.db"
+    event_log.write_bytes(b"first")
+    manager = BackupManager(
+        paths,
+        root=Path(__file__).resolve().parents[3],
+        test_mode=True,
+    )
+    entries, manifest = manager._inventory_archive()
+    event_log.write_bytes(b"second")
+    destination = paths.backup_dir / "drifted.ambackup"
+
+    with pytest.raises(BackupError, match="changed before archive streaming"):
+        manager._write_streaming_backup(
+            destination,
+            entries=entries,
+            manifest=manifest,
+            backup_key=b"d" * 32,
+        )
+
+    assert not destination.exists()
+    assert not list(paths.backup_dir.glob(".drifted.ambackup.*"))
 
 
 def test_failed_post_link_receipt_publish_removes_target(

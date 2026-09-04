@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import fcntl
 import hashlib
 import io
@@ -503,16 +502,9 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     assert not list(rehearsal_parent.glob("run-*"))
 
     tampered_path = paths.backup_dir / "tampered.ambackup"
-    tampered_envelope = json.loads(Path(backup["path"]).read_text("utf-8"))
-    tampered_ciphertext = bytearray(
-        base64.b64decode(tampered_envelope["ciphertext"], validate=True)
-    )
-    tampered_ciphertext[-1] ^= 0x01
-    tampered_envelope["ciphertext"] = base64.b64encode(tampered_ciphertext).decode()
-    tampered_path.write_text(
-        json.dumps(tampered_envelope, sort_keys=True),
-        encoding="utf-8",
-    )
+    tampered_envelope = bytearray(Path(backup["path"]).read_bytes())
+    tampered_envelope[-17] ^= 0x01
+    tampered_path.write_bytes(tampered_envelope)
     tampered_path.chmod(0o600)
     with pytest.raises(BackupError, match="backup_rehearsal_validation_failed"):
         BackupManager(paths, root=candidate, test_mode=True).rehearse(

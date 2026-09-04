@@ -189,8 +189,8 @@ def _rehearsal(
         },
         "deployment_binding": snapshot.public(),
         "artifact": {
-            "format": "administrateme-backup-v1",
-            "version": 1,
+            "format": "administrateme-backup-v2",
+            "version": 2,
             "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             "authenticated": True,
             "exact_manifest_members": True,
