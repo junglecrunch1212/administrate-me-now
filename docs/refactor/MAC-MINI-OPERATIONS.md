@@ -557,6 +557,14 @@ revalidates the pending binding again before selector authority exists.
 Immediately before the first selector mutation it consumes the completed
 preparation record, which can never grant retry authority again.
 
+A successful intentional rollback does not make that consumed release
+preparation reusable. The rolled-back commit remains ineligible for another
+activation even when its source tree is unchanged and a new candidate-pending
+attestation exists. Publish and review a new protected-main successor commit,
+then repeat the preliminary rehearsal, HTR-10 review, and candidate-pending
+attestation for that exact commit. Never delete or rewrite the consumed
+preparation record or installed release to make a prior commit retryable.
+
 The journal stores exact predecessor pointer, readiness, adapter, and Settings
 control bytes plus the prior running state. Settings control is part of the
 rollback boundary because a newer runtime may migrate that file before Doctor
