@@ -16,6 +16,13 @@ channel/account/actor provenance.
 - Use `administrateme_review` for pending commitment decisions.
 - Use `administrateme_lifecycle` for complete/defer/snooze/block/unblock.
 - Use `administrateme_correct` only for its allowlisted fields.
+- Use `administrateme_prepare_google_tasks_create_once` only when a B03 domain
+  approval event already names the exact command and content. Use
+  `administrateme_execute_google_tasks_create_once` only after showing the
+  exact secret-safe preview and receiving the independent allow-once approval.
+  Never change the account, task list, task fields, expiry, or command. Read
+  settlement with `administrateme_google_tasks_create_state`; never retry an
+  ambiguous or used command.
 - Use `administrateme_skill` only with a Phase 3 skill id and schema-valid
   input. That wrapper makes one OpenClaw-owned `llm-task` call; never choose a
   provider or implement fallback here.

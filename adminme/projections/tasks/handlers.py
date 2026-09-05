@@ -91,11 +91,262 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "cos.delegated_action.canonical_outcome_returned": apply_delegated_action_canonical_outcome_returned,
         "cos.delegated_action.reconciled": apply_delegated_action_reconciled,
         "cos.delegated_action.withdrawn": apply_delegated_action_withdrawn,
+        "cos.google_tasks_execution.prepared": apply_google_tasks_execution_prepared,
+        "cos.google_tasks_execution.openclaw_approved": apply_google_tasks_execution_openclaw_approved,
+        "cos.google_tasks_execution.contact_attempt_committed": apply_google_tasks_execution_contact_committed,
+        "cos.google_tasks_execution.provider_result_received": apply_google_tasks_execution_provider_result_received,
+        "cos.google_tasks_execution.terminal": apply_google_tasks_execution_terminal,
+        "cos.google_tasks_execution.observed": apply_google_tasks_execution_observed,
+        "cos.google_tasks_execution.reconciled": apply_google_tasks_execution_reconciled,
+        "cos.google_tasks_execution.revoked": apply_google_tasks_execution_revoked,
     }
     handler = dispatch.get(event_type)
     if handler is None:
         return
     handler(envelope, conn)
+
+
+def _b03_state(
+    conn: sqlcipher3.Connection,
+    envelope: dict[str, Any],
+    state: str,
+    changed_at: str,
+) -> None:
+    command_id = str(envelope["payload"]["command_id"])
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET "
+        "state=CASE WHEN revoked_at IS NOT NULL AND ? != 'revoked' THEN state ELSE ? END, "
+        "last_event_id=? "
+        "WHERE tenant_id=? AND command_id=? AND last_event_id <= ?",
+        (
+            state,
+            state,
+            envelope["event_id"],
+            envelope["tenant_id"],
+            command_id,
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO cos_google_tasks_execution_history_v2 "
+        "(tenant_id, command_id, state, source_event_id, changed_at) VALUES (?, ?, ?, ?, ?)",
+        (envelope["tenant_id"], command_id, state, envelope["event_id"], changed_at),
+    )
+
+
+def apply_google_tasks_execution_prepared(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """INSERT OR IGNORE INTO cos_google_tasks_execution_v2 (
+               tenant_id, command_id, state, execution_policy_version,
+               action_class, envelope_id, envelope_revision, represented_cos,
+               actual_operator, context_scope, on_behalf_of, authority_grant_id,
+               operating_agreement_id, resource_owner, provider_owner, provider,
+               provider_account, adapter_identity, destination_task_list,
+               content_fingerprint, approval_fingerprint, desired_task_content_json,
+               domain_approval_event_id, initiating_event_id, valid_from,
+               expires_at, idempotency_key, maximum_effect_count,
+               provider_effect_count, last_event_id, owner_scope,
+               visibility_scope, sensitivity
+           ) VALUES (?, ?, 'held_for_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+        (
+            envelope["tenant_id"],
+            p["command_id"],
+            p["execution_policy_version"],
+            p["action_class"],
+            p["execution_envelope_id"],
+            p["execution_envelope_revision"],
+            p["represented_cos"],
+            p["actual_operator"],
+            p["active_context"],
+            p["on_behalf_of"],
+            p["authority_basis"],
+            p["operating_agreement_id"],
+            p["resource_owner"],
+            p["provider_owner"],
+            p["provider"],
+            p["provider_account_coordinate"],
+            p["adapter_identity"],
+            p["destination_task_list_coordinate"],
+            p["approved_task_content_fingerprint"],
+            p["approval_fingerprint"],
+            json.dumps(
+                p["desired_task_content"], sort_keys=True, separators=(",", ":")
+            ),
+            p["domain_approval_event_id"],
+            envelope["event_id"],
+            p["valid_from"],
+            p["expires_at"],
+            p["idempotency_key"],
+            p["maximum_effect_count"],
+            envelope["event_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+        ),
+    )
+    _b03_state(conn, envelope, "held_for_approval", str(p["created_at"]))
+
+
+def apply_google_tasks_execution_openclaw_approved(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET openclaw_approval_event_id=?, "
+        "approval_fingerprint=?, last_event_id=? WHERE tenant_id=? AND command_id=? "
+        "AND envelope_id=? AND envelope_revision=? AND domain_approval_event_id=?",
+        (
+            p["openclaw_approval_event_id"],
+            p["approval_fingerprint"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+            p["execution_envelope_id"],
+            p["execution_envelope_revision"],
+            p["domain_approval_event_id"],
+        ),
+    )
+    if conn.execute("SELECT changes()").fetchone()[0]:
+        _b03_state(conn, envelope, "approved", str(p["approved_at"]))
+
+
+def apply_google_tasks_execution_contact_committed(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET contact_attempt_event_id=?, "
+        "provider_contact_state='contact_attempt_committed', used_at=?, last_event_id=? "
+        "WHERE tenant_id=? AND command_id=? AND contact_attempt_event_id IS NULL",
+        (
+            envelope["event_id"],
+            p["committed_at"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
+    )
+    if conn.execute("SELECT changes()").fetchone()[0]:
+        _b03_state(conn, envelope, "contact_attempt_committed", str(p["committed_at"]))
+
+
+def apply_google_tasks_execution_provider_result_received(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET provider_result_event_id=?, "
+        "native_task_id=?, provider_revision=?, provider_contact_state='result_received', "
+        "provider_effect_count=1, last_event_id=? WHERE tenant_id=? AND command_id=? "
+        "AND contact_attempt_event_id=? AND provider_result_event_id IS NULL",
+        (
+            envelope["event_id"],
+            p["native_task_id"],
+            p.get("provider_revision"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+            p["contact_attempt_event_id"],
+        ),
+    )
+    if conn.execute("SELECT changes()").fetchone()[0]:
+        _b03_state(
+            conn,
+            envelope,
+            "provider_result_received",
+            str(p["result_received_at"]),
+        )
+
+
+def apply_google_tasks_execution_terminal(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    state = {
+        "success": "terminal_success",
+        "failure_before_contact": "terminal_failure_before_contact",
+        "ambiguous_after_possible_contact": "ambiguous_result_after_possible_contact",
+        "suppressed": "terminal_failure_before_contact",
+    }[p["outcome"]]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET terminal_result_event_id=?, "
+        "terminal_result_state=?, native_task_id=?, provider_revision=?, "
+        "provider_effect_count=?, last_event_id=? WHERE tenant_id=? AND command_id=? "
+        "AND terminal_result_event_id IS NULL",
+        (
+            envelope["event_id"],
+            p["outcome"],
+            p.get("native_task_id"),
+            p.get("provider_revision"),
+            p["effect_count"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
+    )
+    if conn.execute("SELECT changes()").fetchone()[0]:
+        _b03_state(conn, envelope, state, str(p["terminal_at"]))
+
+
+def apply_google_tasks_execution_observed(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET observation_event_id=?, "
+        "observation_state='later_observation_received', provider_revision=?, "
+        "last_event_id=? WHERE tenant_id=? AND command_id=?",
+        (
+            envelope["event_id"],
+            p.get("provider_revision"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
+    )
+    _b03_state(conn, envelope, "later_observation_received", str(p["observed_at"]))
+
+
+def apply_google_tasks_execution_reconciled(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    state = "reconciled" if p["outcome"] == "matched" else p["outcome"]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET reconciliation_event_id=?, "
+        "reconciliation_state=?, last_event_id=? WHERE tenant_id=? AND command_id=?",
+        (
+            envelope["event_id"],
+            p["outcome"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
+    )
+    _b03_state(conn, envelope, state, str(p["reconciled_at"]))
+
+
+def apply_google_tasks_execution_revoked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "UPDATE cos_google_tasks_execution_v2 SET revoked_at=?, last_event_id=? "
+        "WHERE tenant_id=? AND command_id=? AND envelope_id=? AND envelope_revision=?",
+        (
+            p["revoked_at"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+            p["execution_envelope_id"],
+            p["execution_envelope_revision"],
+        ),
+    )
+    _b03_state(conn, envelope, "revoked", str(p["revoked_at"]))
 
 
 def _delegated_state(

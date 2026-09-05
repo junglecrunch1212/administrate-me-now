@@ -164,6 +164,16 @@ class ExternalSentV2(ExternalSentV1, OutboundAuditEvidenceV2):
     model_config = {"extra": "forbid"}
 
 
+class ExternalSentV3(ExternalSentV2):
+    """B03 proof that observation stayed active and one admission was consumed."""
+
+    model_config = {"extra": "forbid"}
+    observation_mode_active: Literal[True]
+    scoped_outbound_admission: Literal["consumed"]
+    execution_envelope_id: str = Field(min_length=1, max_length=240)
+    contact_attempt_event_id: str = Field(min_length=1, max_length=240)
+
+
 registry.register("observation.suppressed", 1, ObservationSuppressedV1)
 registry.register("observation.suppressed", 2, ObservationSuppressedV2)
 registry.register("write.denied", 1, WriteDeniedV1)
@@ -172,3 +182,4 @@ registry.register("observation.enabled", 1, ObservationEnabledV1)
 registry.register("observation.disabled", 1, ObservationDisabledV1)
 registry.register("external.sent", 1, ExternalSentV1)
 registry.register("external.sent", 2, ExternalSentV2)
+registry.register("external.sent", 3, ExternalSentV3)

@@ -31,6 +31,7 @@ import logging
 import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -58,6 +59,61 @@ class OutboundAuditContext:
     owner_scope: str
     visibility_scope: str
     sensitivity: str
+    scoped_admission: "ScopedOutboundAdmission | None" = None
+
+
+@dataclass(frozen=True)
+class ScopedOutboundAdmission:
+    """Consumed, single-command exception while global observation stays on."""
+
+    command_id: str
+    initiating_event_id: str
+    execution_envelope_id: str
+    execution_envelope_revision: int
+    domain_approval_event_id: str
+    openclaw_approval_event_id: str
+    provider: str
+    provider_account_id: str
+    operation: str
+    destination_id: str
+    content_fingerprint: str
+    owner_scope: str
+    visibility_scope: str
+    expires_at: str
+    maximum_effect_count: int
+    contact_attempt_event_id: str
+
+    def admits(
+        self,
+        audit: OutboundAuditContext,
+        *,
+        action: str,
+        target_identifier: str,
+    ) -> bool:
+        try:
+            expiry = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return bool(
+            self.maximum_effect_count == 1
+            and self.execution_envelope_revision >= 1
+            and self.contact_attempt_event_id
+            and expiry.tzinfo is not None
+            and expiry > datetime.now(timezone.utc)
+            and self.command_id == audit.initiating_command_id
+            and self.initiating_event_id == audit.initiating_event_id
+            and self.domain_approval_event_id == audit.domain_approval_event_id
+            and self.openclaw_approval_event_id == audit.openclaw_approval_event_id
+            and self.provider == audit.provider == "google_tasks"
+            and self.provider_account_id.casefold()
+            == audit.provider_account_id.casefold()
+            and self.operation == audit.operation == "create_task"
+            and action == "tasks.create_task"
+            and self.destination_id == target_identifier
+            and self.content_fingerprint == audit.content_fingerprint
+            and self.owner_scope == audit.owner_scope
+            and self.visibility_scope == audit.visibility_scope
+        )
 
 
 _OUTBOUND_AUDIT: ContextVar[OutboundAuditContext | None] = ContextVar(
@@ -309,7 +365,15 @@ async def outbound(
         if audit
         else {}
     )
-    if is_active:
+    scoped_admitted = bool(
+        is_active
+        and audit
+        and audit.scoped_admission
+        and audit.scoped_admission.admits(
+            audit, action=action, target_identifier=target_identifier
+        )
+    )
+    if is_active and not scoped_admitted:
         suppressed = EventEnvelope(
             event_at_ms=int(time.time() * 1000),
             tenant_id=session.tenant_id,
@@ -345,7 +409,7 @@ async def outbound(
         event_at_ms=int(time.time() * 1000),
         tenant_id=session.tenant_id,
         type="external.sent",
-        schema_version=2 if audit else 1,
+        schema_version=3 if scoped_admitted else 2 if audit else 1,
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter="observation",
         source_account_id="system",
@@ -364,6 +428,16 @@ async def outbound(
             "session_correlation_id": session.correlation_id,
             **audit_payload,
             **({"provider_called": True} if audit else {}),
+            **(
+                {
+                    "observation_mode_active": True,
+                    "scoped_outbound_admission": "consumed",
+                    "execution_envelope_id": audit.scoped_admission.execution_envelope_id,
+                    "contact_attempt_event_id": audit.scoped_admission.contact_attempt_event_id,
+                }
+                if scoped_admitted and audit and audit.scoped_admission
+                else {}
+            ),
         },
     )
     await event_sink.write(sent, correlation_id=session.correlation_id)
@@ -375,6 +449,7 @@ __all__ = [
     "ObservationState",
     "OutboundAuditContext",
     "OutboundResult",
+    "ScopedOutboundAdmission",
     "outbound",
     "reset_outbound_audit_context",
     "set_outbound_audit_context",

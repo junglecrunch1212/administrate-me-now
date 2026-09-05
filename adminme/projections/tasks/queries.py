@@ -560,6 +560,61 @@ def list_delegated_actions(
     ]
 
 
+def get_google_tasks_execution(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    command_id: str,
+) -> dict[str, Any] | None:
+    """Return one scope-filtered production-v2 B03 execution record."""
+
+    row = conn.execute(
+        "SELECT * FROM cos_google_tasks_execution_v2 WHERE tenant_id=? AND command_id=?",
+        (session.tenant_id, command_id),
+    ).fetchone()
+    visible = filter_one(session, dict(row) if row is not None else None)
+    if visible is None:
+        return None
+    try:
+        visible["desired_task_content"] = json.loads(
+            str(visible.pop("desired_task_content_json"))
+        )
+    except (TypeError, json.JSONDecodeError):
+        visible["desired_task_content"] = {}
+    for key in ("provider_effect_count", "maximum_effect_count", "envelope_revision"):
+        visible[key] = int(visible[key])
+    visible["history"] = [
+        dict(history)
+        for history in conn.execute(
+            "SELECT state, source_event_id, changed_at FROM "
+            "cos_google_tasks_execution_history_v2 WHERE tenant_id=? AND command_id=? "
+            "ORDER BY changed_at, source_event_id",
+            (session.tenant_id, command_id),
+        ).fetchall()
+    ]
+    return visible
+
+
+def list_google_tasks_executions(
+    conn: sqlcipher3.Connection, session: Session
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT command_id FROM cos_google_tasks_execution_v2 WHERE tenant_id=? "
+        "ORDER BY valid_from DESC, command_id",
+        (session.tenant_id,),
+    ).fetchall()
+    return [
+        item
+        for row in rows
+        if (
+            item := get_google_tasks_execution(
+                conn, session, command_id=str(row["command_id"])
+            )
+        )
+        is not None
+    ]
+
+
 def list_execution_envelopes(
     conn: sqlcipher3.Connection,
     session: Session,

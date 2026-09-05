@@ -53,6 +53,15 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
     "administrateme_prepare_delegated_action": frozenset({"prepare_external_actions"}),
     "administrateme_execute_delegated_action": frozenset({"execute_fixture_actions"}),
     "administrateme_observe_delegated_action": frozenset({"execute_fixture_actions"}),
+    "administrateme_prepare_google_tasks_create_once": frozenset(
+        {"execute_google_tasks_create_trial"}
+    ),
+    "administrateme_execute_google_tasks_create_once": frozenset(
+        {"execute_google_tasks_create_trial"}
+    ),
+    "administrateme_google_tasks_create_state": frozenset(
+        {"execute_google_tasks_create_trial"}
+    ),
 }
 
 
@@ -172,12 +181,35 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "administrateme_capability_request",
         ],
     },
+    {
+        "capability_id": "domain.google_tasks_create_trial",
+        "category": "delegated_actions",
+        "label": "Create one approved Google task",
+        "outcome": "Create at most one exact task in one reviewed service-owned Google Tasks list during a bounded trial.",
+        "source": "product:google-tasks-create-production-v2",
+        "verbs": {
+            "read": "supported",
+            "observe": "supported",
+            "prepare": "single_use_trial",
+            "hold": "single_use_trial",
+            "execute": "single_use_trial",
+        },
+        "openclaw_tools": [
+            "administrateme_prepare_google_tasks_create_once",
+            "administrateme_execute_google_tasks_create_once",
+            "administrateme_google_tasks_create_state",
+        ],
+        "terminal_result_support": True,
+        "later_observation_support": True,
+        "reconciliation_support": True,
+    },
 )
 
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
     "product:member-chat": "adminme/member_chat.py",
     "product:member-surfaces": "adminme/products/member/surfaces.py",
+    "product:google-tasks-create-production-v2": "adminme/google_tasks_execution.py",
     "product:today": "adminme/what_now.py",
     "product:triage": "adminme/source_policy.py",
     "product:cos-authority": "adminme/products/member/cos.py",
@@ -1034,11 +1066,27 @@ def compose_member_catalog(
             authority_state = "owner_scope_bound"
         else:
             authority_state = "member_consent_required"
+        b03_trial = row.get("capability_id") == "domain.google_tasks_create_trial"
         execute_authorized = bool(
             execute_supported
-            and "execute_fixture_actions" in permissions
+            and (
+                (
+                    b03_trial
+                    and "execute_google_tasks_create_trial" in permissions
+                    and sum(
+                        binding.write_binding_state == "trial"
+                        for binding in runtime.settings.provider_bindings
+                    )
+                    == 1
+                    and runtime._observation_active
+                )
+                or (
+                    not b03_trial
+                    and "execute_fixture_actions" in permissions
+                    and not runtime._observation_active
+                )
+            )
             and openclaw_state == "healthy"
-            and not runtime._observation_active
             and not paused
         )
         effective_tools = [

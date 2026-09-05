@@ -32,6 +32,10 @@ from adminme.lib.adapters import (
     WriteResult,
 )
 from adminme.lib.observation import outbound as observation_outbound
+from adminme.google_tasks_execution import (
+    canonical_task_content as canonical_b03_task_content,
+    task_content_fingerprint as b03_task_content_fingerprint,
+)
 from adminme.provider_bindings import adapter_owner_coordinate_id
 
 _log = logging.getLogger(__name__)
@@ -189,7 +193,13 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         object.__setattr__(
             self,
             "write_capabilities",
-            [] if read_only else list(type(self).write_capabilities),
+            (
+                []
+                if read_only
+                else ["create_task"]
+                if self._config.get("b03_google_tasks_create") is not None
+                else list(type(self).write_capabilities)
+            ),
         )
         self._credentials_resolver = (
             credentials_resolver or _default_credentials_resolver
@@ -880,6 +890,28 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             payload.get("tasklist_id") or self._config.get("tasklist_id") or ""
         )
         target_id = str(operation.target_external_id or payload.get("task_id") or "")
+        b03 = self._config.get("b03_google_tasks_create")
+        if b03 is not None:
+            if not isinstance(b03, dict):
+                raise WriteCapabilityError("B03 adapter coordinate is malformed")
+            desired = canonical_b03_task_content(
+                {
+                    key: payload[key]
+                    for key in ("title", "notes", "due", "status", "parent", "previous")
+                    if key in payload
+                }
+            )
+            if (
+                operation.kind != "create_task"
+                or target_id
+                or payload.get("b03_production_v2") is not True
+                or tasklist_id != b03.get("destination_task_list_id")
+                or payload.get("content_fingerprint")
+                != b03_task_content_fingerprint(desired)
+            ):
+                raise WriteCapabilityError(
+                    "B03 Google Tasks adapter accepts only its exact approved create"
+                )
         task_body = {
             key: payload[key]
             for key in ("title", "notes", "due", "status", "completed")
@@ -990,6 +1022,17 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             applied=True,
             external_id=str(external_id) if external_id else None,
             suppressed=False,
+            provider_revision=(
+                str(response["etag"]) if response.get("etag") is not None else None
+            ),
+            provider_status=(
+                str(response["status"]) if response.get("status") is not None else None
+            ),
+            returned_state={
+                key: response[key]
+                for key in ("title", "notes", "due", "status", "parent")
+                if response.get(key) is not None
+            },
         )
 
     async def _on_external_change(self, envelope: ChangeEnvelope) -> None:

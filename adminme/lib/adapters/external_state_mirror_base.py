@@ -80,6 +80,9 @@ class WriteResult:
     applied: bool
     external_id: str | None = None
     suppressed: bool = False
+    provider_revision: str | None = None
+    provider_status: str | None = None
+    returned_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

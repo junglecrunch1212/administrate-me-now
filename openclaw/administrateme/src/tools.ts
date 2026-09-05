@@ -509,6 +509,62 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: "/api/openclaw/v1/tools/execute-pending-provider-action",
     },
     {
+      name: "administrateme_prepare_google_tasks_create_once",
+      description:
+        "Prepare only the exact member-approved production-v2 Google Tasks creation envelope.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          command_id: Type.String({ minLength: 1, maxLength: 240 }),
+          domain_approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+          expected_approval_fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+          task_content: Type.Object(
+            {
+              title: Type.String({ minLength: 1, maxLength: 1024 }),
+              notes: Type.Optional(Type.String()),
+              due: Type.Optional(Type.String()),
+              status: Type.Optional(Type.Literal("needsAction")),
+              parent: Type.Optional(Type.String()),
+              previous: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/google-tasks-create/prepare",
+    },
+    {
+      name: "administrateme_execute_google_tasks_create_once",
+      description:
+        "Execute the exact production-v2 Google Tasks create command once after independent allow-once approval.",
+      parameters: Type.Object(
+        {
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          context_scope: Type.Optional(ServiceContextScope),
+          command_id: Type.String({ minLength: 1, maxLength: 240 }),
+          expected_last_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+          expected_approval_fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/google-tasks-create/execute",
+    },
+    {
+      name: "administrateme_google_tasks_create_state",
+      description:
+        "Read secret-safe terminal, later-observation, and reconciliation state for one B03 command.",
+      parameters: Type.Object(
+        {
+          context_scope: Type.Optional(ServiceContextScope),
+          command_id: Type.String({ minLength: 1, maxLength: 240 }),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/google-tasks-create/state",
+    },
+    {
       name: "administrateme_skill",
       description: "Run one Phase 3 AdministrateMe skill through OpenClaw-owned model routing.",
       parameters: Type.Object(

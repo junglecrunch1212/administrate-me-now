@@ -51,8 +51,21 @@ from adminme.lib.instance_config import (
 from adminme.lib.observation import (
     ObservationManager,
     OutboundAuditContext,
+    ScopedOutboundAdmission,
     reset_outbound_audit_context,
     set_outbound_audit_context,
+)
+from adminme.google_tasks_execution import (
+    ADAPTER_IDENTITY as B03_ADAPTER_IDENTITY,
+    DELEGATION_PERMISSION as B03_DELEGATION_PERMISSION,
+    EXECUTION_POLICY_VERSION as B03_POLICY_VERSION,
+    OPERATION as B03_OPERATION,
+    PROVIDER as B03_PROVIDER,
+    canonical_sha256 as b03_canonical_sha256,
+    canonical_task_content as b03_canonical_task_content,
+    returned_state_fingerprint as b03_returned_state_fingerprint,
+    task_content_fingerprint as b03_task_content_fingerprint,
+    public_envelope_state as b03_public_envelope_state,
 )
 from adminme.lib.adapters import OutboundMessage, WriteOperation
 from adminme.lib.session import Session, build_internal_session
@@ -76,6 +89,7 @@ from adminme.provider_bindings import (
     validate_provider_bindings,
 )
 from adminme.service_identities import (
+    COS_AUTOMATION_OPERATOR_ID,
     COS_PARTY_ID,
     COS_SERVICE_PRINCIPAL_ID,
     ServiceChannelAccount,
@@ -103,6 +117,7 @@ from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.reconciliation import ReconciliationAdmissionEvaluator
 from adminme.settings_control import SettingsControlStore
 from adminme.messages_reply_reconciliation import MessagesReplyReconciler
+from adminme.google_tasks_execution_reconciliation import GoogleTasksExecutionReconciler
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from adminme.source_policy import source_policy_event_types
 from adminme.source_policy_shadow import SourcePolicyShadowEvaluator
@@ -301,7 +316,13 @@ class RuntimeSettings:
         if self.deployment_evidence_required:
             validate_bridge_record_set(self.bridge_enrollments)
         bindings: tuple[ProviderBinding, ...] = ()
-        if self.deployment_evidence_required:
+        b03_binding_declared = any(
+            isinstance(entry, dict)
+            and isinstance(entry.get("config"), dict)
+            and entry["config"].get("b03_google_tasks_create") is not None
+            for entry in adapters
+        )
+        if self.deployment_evidence_required or b03_binding_declared:
             bindings = validate_provider_bindings(
                 self.adapter_config,
                 member_roles=self.member_roles,
@@ -684,6 +705,9 @@ class AdministrateMeRuntime:
         self.openclaw_approval_store: OpenClawApprovalStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.fixture_action_adapter: FixtureDelegatedActionAdapter | None = None
+        self.google_tasks_execution_reconciler: (
+            GoogleTasksExecutionReconciler | None
+        ) = None
         self.direct_intake: DirectIntakeProcessor | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
@@ -761,6 +785,9 @@ class AdministrateMeRuntime:
                 channels=self.settings.service_channel_accounts,
             )
             self.messages_reply_reconciler = MessagesReplyReconciler(
+                self.event_log, self.events
+            )
+            self.google_tasks_execution_reconciler = GoogleTasksExecutionReconciler(
                 self.event_log, self.events
             )
             await self.settings_control.replay_source_policy_v2_events(self.event_log)
@@ -964,6 +991,19 @@ class AdministrateMeRuntime:
                 ["messaging.sent"],
                 self.messages_reply_reconciler.handle,
                 consumer_version=self.messages_reply_reconciler.CONSUMER_VERSION,
+                replay_on_version_change=True,
+            )
+            self.bus.subscribe(
+                "google-tasks-create-v2:reconciliation",
+                [
+                    "list_item.added",
+                    "list_item.updated",
+                    "list_item.completed",
+                    "list_item.uncompleted",
+                    "list_item.deleted",
+                ],
+                self.google_tasks_execution_reconciler.handle,
+                consumer_version=self.google_tasks_execution_reconciler.CONSUMER_VERSION,
                 replay_on_version_change=True,
             )
 
@@ -1400,6 +1440,18 @@ class AdministrateMeRuntime:
         now = EventEnvelope.now_utc_iso()
         result_type = "external_sync.write_completed"
         provider_called = False
+        applied = False
+        suppressed = False
+        external_id: str | None = None
+        result_provider_revision: str | None = None
+        result_body: dict[str, Any] = {}
+        details = (
+            payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        )
+        b03 = bool(details.get("b03_production_v2"))
+        b03_contact_event_id: str | None = None
+        b03_provider_result_event_id: str | None = None
+        b03_binding: ProviderBinding | None = None
         is_v2 = int(event.get("schema_version") or 1) >= 2
         content_fingerprint = str(
             payload.get("request_fingerprint")
@@ -1432,6 +1484,207 @@ class AdministrateMeRuntime:
                 )
             )
         try:
+            if b03:
+                assert self.event_log is not None
+                if (
+                    provider != B03_PROVIDER
+                    or payload.get("operation") != B03_OPERATION
+                    or details.get("adapter_identity") != B03_ADAPTER_IDENTITY
+                    or details.get("represented_cos") != COS_SERVICE_PRINCIPAL_ID
+                    or details.get("actual_operator") != COS_AUTOMATION_OPERATOR_ID
+                    or details.get("provider_owner") != COS_SERVICE_PRINCIPAL_ID
+                    or details.get("maximum_effect_count") != 1
+                ):
+                    raise DeploymentReadinessBlocked("B03 command coordinate changed")
+                desired = b03_canonical_task_content(
+                    {
+                        key: details[key]
+                        for key in (
+                            "title",
+                            "notes",
+                            "due",
+                            "status",
+                            "parent",
+                            "previous",
+                        )
+                        if key in details
+                    }
+                )
+                if b03_task_content_fingerprint(desired) != content_fingerprint:
+                    raise DeploymentReadinessBlocked(
+                        "B03 task content fingerprint changed"
+                    )
+                exact_coordinate = (
+                    str(details.get("resource_owner")),
+                    str(details.get("provider_owner")),
+                    str(details.get("represented_cos")),
+                    str(details.get("context_scope")),
+                    str(details.get("on_behalf_of")),
+                    B03_PROVIDER,
+                    str(payload.get("provider_account_id") or "").casefold(),
+                    str(details.get("adapter_identity")),
+                    str(details.get("tasklist_id")),
+                    B03_OPERATION,
+                )
+                b03_matches = [
+                    binding
+                    for binding in self.settings.provider_bindings
+                    if binding.b03_dispatch_coordinate == exact_coordinate
+                ]
+                if len(b03_matches) != 1:
+                    raise DeploymentReadinessBlocked(
+                        f"B03 route expected one full owner/destination binding, found {len(b03_matches)}"
+                    )
+                b03_binding = b03_matches[0]
+                prior_terminal = await self.event_log.get_by_idempotency(
+                    str(event["tenant_id"]), f"b03-terminal:{payload['command_id']}"
+                )
+                if prior_terminal is not None:
+                    return
+                prior_contact = await self.event_log.get_by_idempotency(
+                    str(event["tenant_id"]), f"b03-contact:{payload['command_id']}"
+                )
+                if prior_contact is not None:
+                    prior_provider_result = await self.event_log.get_by_idempotency(
+                        str(event["tenant_id"]),
+                        f"b03-provider-result:{payload['command_id']}",
+                    )
+                    recovered = (
+                        prior_provider_result
+                        if prior_provider_result is not None
+                        and prior_provider_result["payload"].get(
+                            "execution_envelope_id"
+                        )
+                        == details.get("execution_envelope_id")
+                        and prior_provider_result["payload"].get(
+                            "contact_attempt_event_id"
+                        )
+                        == prior_contact["event_id"]
+                        and prior_provider_result["payload"].get(
+                            "desired_state_fingerprint"
+                        )
+                        == content_fingerprint
+                        and prior_provider_result["payload"].get(
+                            "provider_account_coordinate"
+                        )
+                        == payload.get("provider_account_id")
+                        and prior_provider_result["payload"].get("task_list_id")
+                        == details.get("tasklist_id")
+                        else None
+                    )
+                    recovered_at = EventEnvelope.now_utc_iso()
+                    await self._require_events().write(
+                        EventEnvelope(
+                            event_at_ms=int(time.time() * 1000),
+                            tenant_id=str(event["tenant_id"]),
+                            type="cos.google_tasks_execution.terminal",
+                            schema_version=2,
+                            occurred_at=recovered_at,
+                            source_adapter="external-sync-central-dispatcher",
+                            source_account_id=str(payload["provider_account_id"]),
+                            owner_scope=str(event["owner_scope"]),
+                            visibility_scope=str(event["visibility_scope"]),
+                            sensitivity=event["sensitivity"],
+                            causation_id=str(prior_contact["event_id"]),
+                            idempotency_key=f"b03-terminal:{payload['command_id']}",
+                            raw_ref=f"content-sha256:{content_fingerprint}",
+                            payload={
+                                "command_id": payload["command_id"],
+                                "execution_envelope_id": details[
+                                    "execution_envelope_id"
+                                ],
+                                "command_event_id": event["event_id"],
+                                "contact_attempt_event_id": prior_contact["event_id"],
+                                "provider_result_event_id": (
+                                    recovered["event_id"] if recovered else None
+                                ),
+                                "outcome": (
+                                    "success"
+                                    if recovered
+                                    else "ambiguous_after_possible_contact"
+                                ),
+                                "provider": B03_PROVIDER,
+                                "provider_account_coordinate": payload[
+                                    "provider_account_id"
+                                ],
+                                "task_list_id": details["tasklist_id"],
+                                "native_task_id": (
+                                    recovered["payload"]["native_task_id"]
+                                    if recovered
+                                    else None
+                                ),
+                                "provider_revision": (
+                                    recovered["payload"].get("provider_revision")
+                                    if recovered
+                                    else None
+                                ),
+                                "provider_task_status": (
+                                    recovered["payload"].get("provider_task_status")
+                                    if recovered
+                                    else None
+                                ),
+                                "desired_state_fingerprint": content_fingerprint,
+                                "returned_state_fingerprint": (
+                                    recovered["payload"]["returned_state_fingerprint"]
+                                    if recovered
+                                    else None
+                                ),
+                                "provider_contact_at": prior_contact["payload"][
+                                    "committed_at"
+                                ],
+                                "terminal_at": recovered_at,
+                                "provider_called": True,
+                                "applied": bool(recovered),
+                                "suppressed": False,
+                                "effect_count": 1 if recovered else 0,
+                                "retry_permitted": False,
+                                "reason_code": (
+                                    None
+                                    if recovered
+                                    else "restart_or_redelivery_after_contact_without_terminal_result"
+                                ),
+                            },
+                        )
+                    )
+                    return
+                if self.projections is None:
+                    raise DeploymentReadinessBlocked(
+                        "B03 execution projection is unavailable before provider contact"
+                    )
+                execution_row = (
+                    self.projections.connection("tasks")
+                    .execute(
+                        "SELECT * FROM cos_google_tasks_execution_v2 "
+                        "WHERE tenant_id=? AND command_id=?",
+                        (str(event["tenant_id"]), str(payload["command_id"])),
+                    )
+                    .fetchone()
+                )
+                if (
+                    execution_row is None
+                    or execution_row["state"] != "approved"
+                    or execution_row["used_at"] is not None
+                    or execution_row["revoked_at"] is not None
+                    or execution_row["contact_attempt_event_id"] is not None
+                    or execution_row["terminal_result_event_id"] is not None
+                    or execution_row["envelope_id"]
+                    != details.get("execution_envelope_id")
+                    or execution_row["envelope_revision"]
+                    != details.get("execution_envelope_revision")
+                    or execution_row["domain_approval_event_id"]
+                    != payload.get("domain_approval_event_id")
+                    or execution_row["openclaw_approval_event_id"]
+                    != payload.get("openclaw_approval_event_id")
+                    or execution_row["content_fingerprint"] != content_fingerprint
+                    or execution_row["expires_at"] != details.get("expires_at")
+                    or datetime.fromisoformat(
+                        str(execution_row["expires_at"]).replace("Z", "+00:00")
+                    )
+                    <= datetime.now(timezone.utc)
+                ):
+                    raise DeploymentReadinessBlocked(
+                        "B03 envelope is no longer exact, current, unused, and approved"
+                    )
             if self.settings.deployment_evidence_required:
                 observation_active = (
                     await self.observation.is_active()
@@ -1459,7 +1712,13 @@ class AdministrateMeRuntime:
                     (
                         binding
                         for binding in self.settings.provider_bindings
-                        if binding.member_id == payload.get("member_id")
+                        if (
+                            (b03 and binding is b03_binding)
+                            or (
+                                not b03
+                                and binding.member_id == payload.get("member_id")
+                            )
+                        )
                         and binding.provider_account_id.casefold()
                         == str(payload.get("provider_account_id") or "").casefold()
                         and provider_kind_token in binding.kind.casefold()
@@ -1470,12 +1729,102 @@ class AdministrateMeRuntime:
                     raise DeploymentReadinessBlocked(
                         "provider command has no exact reviewed member/account binding"
                     )
+            if b03:
+                admission_payload = {
+                    "command_id": payload["command_id"],
+                    "execution_envelope_id": details["execution_envelope_id"],
+                    "execution_envelope_revision": details[
+                        "execution_envelope_revision"
+                    ],
+                    "initiating_event_id": event["event_id"],
+                    "domain_approval_event_id": payload["domain_approval_event_id"],
+                    "openclaw_approval_event_id": payload["openclaw_approval_event_id"],
+                    "provider": B03_PROVIDER,
+                    "provider_account_coordinate": payload["provider_account_id"],
+                    "operation": B03_OPERATION,
+                    "destination_task_list_coordinate": details["tasklist_id"],
+                    "content_fingerprint": content_fingerprint,
+                    "owner_scope": event["owner_scope"],
+                    "visibility_scope": event["visibility_scope"],
+                    "expires_at": details["expires_at"],
+                    "maximum_effect_count": 1,
+                }
+                committed_at = EventEnvelope.now_utc_iso()
+                b03_contact_event_id = await self._require_events().write(
+                    EventEnvelope(
+                        event_at_ms=int(time.time() * 1000),
+                        tenant_id=str(event["tenant_id"]),
+                        type="cos.google_tasks_execution.contact_attempt_committed",
+                        schema_version=2,
+                        occurred_at=committed_at,
+                        source_adapter="external-sync-central-dispatcher",
+                        source_account_id=str(payload["provider_account_id"]),
+                        owner_scope=str(event["owner_scope"]),
+                        visibility_scope=str(event["visibility_scope"]),
+                        sensitivity=event["sensitivity"],
+                        causation_id=str(event["event_id"]),
+                        idempotency_key=f"b03-contact:{payload['command_id']}",
+                        raw_ref=f"content-sha256:{content_fingerprint}",
+                        payload={
+                            **admission_payload,
+                            "scoped_admission_fingerprint": b03_canonical_sha256(
+                                admission_payload
+                            ),
+                            "committed_at": committed_at,
+                            "retry_permitted": False,
+                        },
+                    )
+                )
+                if audit_token is not None:
+                    reset_outbound_audit_context(audit_token)
+                audit_token = set_outbound_audit_context(
+                    OutboundAuditContext(
+                        initiating_command_id=str(payload["command_id"]),
+                        initiating_event_id=str(event["event_id"]),
+                        domain_approval_event_id=str(
+                            payload["domain_approval_event_id"]
+                        ),
+                        openclaw_approval_event_id=str(
+                            payload["openclaw_approval_event_id"]
+                        ),
+                        provider=B03_PROVIDER,
+                        provider_account_id=str(payload["provider_account_id"]),
+                        operation=B03_OPERATION,
+                        content_fingerprint=content_fingerprint,
+                        owner_scope=str(event["owner_scope"]),
+                        visibility_scope=str(event["visibility_scope"]),
+                        sensitivity=str(event["sensitivity"]),
+                        scoped_admission=ScopedOutboundAdmission(
+                            command_id=str(payload["command_id"]),
+                            initiating_event_id=str(event["event_id"]),
+                            execution_envelope_id=str(details["execution_envelope_id"]),
+                            execution_envelope_revision=int(
+                                details["execution_envelope_revision"]
+                            ),
+                            domain_approval_event_id=str(
+                                payload["domain_approval_event_id"]
+                            ),
+                            openclaw_approval_event_id=str(
+                                payload["openclaw_approval_event_id"]
+                            ),
+                            provider=B03_PROVIDER,
+                            provider_account_id=str(payload["provider_account_id"]),
+                            operation=B03_OPERATION,
+                            destination_id=str(details["tasklist_id"]),
+                            content_fingerprint=content_fingerprint,
+                            owner_scope=str(event["owner_scope"]),
+                            visibility_scope=str(event["visibility_scope"]),
+                            expires_at=str(details["expires_at"]),
+                            maximum_effect_count=1,
+                            contact_attempt_event_id=b03_contact_event_id,
+                        ),
+                    )
+                )
             fixture_delegated = (
                 provider == "fixture"
                 and isinstance(payload.get("payload"), dict)
                 and payload["payload"].get("delegated_action") is True
             )
-            result_provider_revision: str | None = None
             if fixture_delegated:
                 if self.fixture_action_adapter is None:
                     raise LookupError("fixture delegated-action adapter is unavailable")
@@ -1573,12 +1922,22 @@ class AdministrateMeRuntime:
                         target_external_id=payload.get("target_external_id"),
                         payload=dict(payload.get("payload") or {}),
                     ),
+                    exact_coordinate=(
+                        b03_binding.b03_dispatch_coordinate
+                        if b03 and b03_binding is not None
+                        else None
+                    ),
                 )
                 applied = result.applied
                 suppressed = result.suppressed
                 provider_called = not result.suppressed
                 external_id = result.external_id
-                result_body = {"applied": applied}
+                result_provider_revision = result.provider_revision
+                result_body = {
+                    "applied": applied,
+                    "provider_status": result.provider_status,
+                    "returned_state": result.returned_state,
+                }
             result_payload: dict[str, Any] = {
                 "command_id": payload["command_id"],
                 "member_id": payload["member_id"],
@@ -1612,12 +1971,130 @@ class AdministrateMeRuntime:
                 "message": f"{type(exc).__name__}: {exc}",
                 "retryable": not isinstance(
                     exc, (DeploymentReadinessBlocked, LookupError, ValueError)
-                ),
+                )
+                and not b03,
                 "failed_at": now,
             }
         finally:
             if audit_token is not None:
                 reset_outbound_audit_context(audit_token)
+        if b03:
+            terminal_at = EventEnvelope.now_utc_iso()
+            returned_state = (
+                result_body.get("returned_state", {})
+                if isinstance(result_body, dict)
+                else {}
+            )
+            if (
+                result_type == "external_sync.write_completed"
+                and applied
+                and not suppressed
+                and external_id
+                and b03_contact_event_id
+            ):
+                b03_provider_result_event_id = await self._require_events().write(
+                    EventEnvelope(
+                        event_at_ms=int(time.time() * 1000),
+                        tenant_id=str(event["tenant_id"]),
+                        type="cos.google_tasks_execution.provider_result_received",
+                        schema_version=2,
+                        occurred_at=terminal_at,
+                        source_adapter="external-sync-central-dispatcher",
+                        source_account_id=str(payload["provider_account_id"]),
+                        owner_scope=str(event["owner_scope"]),
+                        visibility_scope=str(event["visibility_scope"]),
+                        sensitivity=event["sensitivity"],
+                        causation_id=b03_contact_event_id,
+                        idempotency_key=f"b03-provider-result:{payload['command_id']}",
+                        raw_ref=f"content-sha256:{content_fingerprint}",
+                        payload={
+                            "command_id": payload["command_id"],
+                            "execution_envelope_id": details["execution_envelope_id"],
+                            "command_event_id": event["event_id"],
+                            "contact_attempt_event_id": b03_contact_event_id,
+                            "provider": B03_PROVIDER,
+                            "provider_account_coordinate": payload[
+                                "provider_account_id"
+                            ],
+                            "task_list_id": details["tasklist_id"],
+                            "native_task_id": external_id,
+                            "provider_revision": result_provider_revision,
+                            "provider_task_status": result_body.get("provider_status"),
+                            "desired_state_fingerprint": content_fingerprint,
+                            "returned_state_fingerprint": b03_returned_state_fingerprint(
+                                returned_state
+                            ),
+                            "provider_contact_at": now,
+                            "result_received_at": terminal_at,
+                            "applied": True,
+                            "effect_count": 1,
+                            "retry_permitted": False,
+                        },
+                    )
+                )
+                b03_outcome = "success"
+                effect_count = 1
+            elif b03_contact_event_id is not None:
+                b03_outcome = "ambiguous_after_possible_contact"
+                effect_count = 0
+            else:
+                b03_outcome = "failure_before_contact"
+                effect_count = 0
+            await self._require_events().write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=str(event["tenant_id"]),
+                    type="cos.google_tasks_execution.terminal",
+                    schema_version=2,
+                    occurred_at=terminal_at,
+                    source_adapter="external-sync-central-dispatcher",
+                    source_account_id=str(payload["provider_account_id"]),
+                    owner_scope=str(event["owner_scope"]),
+                    visibility_scope=str(event["visibility_scope"]),
+                    sensitivity=event["sensitivity"],
+                    causation_id=b03_contact_event_id or str(event["event_id"]),
+                    idempotency_key=f"b03-terminal:{payload['command_id']}",
+                    raw_ref=f"content-sha256:{content_fingerprint}",
+                    payload={
+                        "command_id": payload["command_id"],
+                        "execution_envelope_id": details["execution_envelope_id"],
+                        "command_event_id": event["event_id"],
+                        "contact_attempt_event_id": b03_contact_event_id,
+                        "provider_result_event_id": b03_provider_result_event_id,
+                        "outcome": b03_outcome,
+                        "provider": B03_PROVIDER,
+                        "provider_account_coordinate": payload["provider_account_id"],
+                        "task_list_id": details["tasklist_id"],
+                        "native_task_id": external_id
+                        if b03_outcome == "success"
+                        else None,
+                        "provider_revision": result_provider_revision,
+                        "provider_task_status": result_body.get("provider_status")
+                        if isinstance(result_body, dict)
+                        else None,
+                        "desired_state_fingerprint": content_fingerprint,
+                        "returned_state_fingerprint": (
+                            b03_returned_state_fingerprint(returned_state)
+                            if b03_outcome == "success"
+                            else None
+                        ),
+                        "provider_contact_at": now if b03_contact_event_id else None,
+                        "terminal_at": terminal_at,
+                        "provider_called": bool(b03_contact_event_id),
+                        "applied": b03_outcome == "success",
+                        "suppressed": bool(suppressed)
+                        if "suppressed" in locals()
+                        else False,
+                        "effect_count": effect_count,
+                        "retry_permitted": False,
+                        "reason_code": (
+                            None
+                            if b03_outcome == "success"
+                            else result_payload.get("message", b03_outcome)
+                        ),
+                    },
+                )
+            )
         if is_v2:
             result_payload.update(
                 {
@@ -2131,6 +2608,35 @@ class AdministrateMeRuntime:
                 "delivery_owner": "openclaw",
             },
         )
+        b03_bindings = [
+            binding
+            for binding in self.settings.provider_bindings
+            if binding.write_binding_state == "trial"
+        ]
+        self.capabilities["action:google-tasks-create-production-v2"] = (
+            CapabilityRecord(
+                name="google_tasks_create",
+                kind="single_use_provider_action",
+                state="observation_only" if len(b03_bindings) == 1 else "disabled",
+                reason=(
+                    "one reviewed trial binding; every command still requires its exact envelope and two approvals"
+                    if len(b03_bindings) == 1
+                    else "no single reviewed B03 trial binding is active"
+                ),
+                details={
+                    "execution_policy_version": B03_POLICY_VERSION,
+                    "operation": B03_OPERATION,
+                    "maximum_effect_count": 1,
+                    "binding_match_count": len(b03_bindings),
+                    "global_observation_mode_active": self._observation_active,
+                    "scoped_admission_required": True,
+                    "remaining_google_tasks_mutations": "prohibited",
+                    "gmail_writes": "prohibited",
+                    "calendar_writes": "prohibited",
+                    "content_exposed": False,
+                },
+            )
+        )
         configured_chat_members = len(self.settings.member_chat_enabled_members)
         if configured_chat_members == 0:
             chat_state: CapabilityState = "disabled"
@@ -2427,6 +2933,183 @@ class AdministrateMeRuntime:
             openclaw_age is not None
             and openclaw_age <= self.OPENCLAW_HEARTBEAT_MAX_STALE_SECONDS
         )
+        b03_row: dict[str, Any] | None = None
+        if self.projections is not None:
+            raw = (
+                self.projections.connection("tasks")
+                .execute(
+                    "SELECT * FROM cos_google_tasks_execution_v2 WHERE tenant_id=? "
+                    "ORDER BY valid_from DESC, command_id LIMIT 1",
+                    (self.settings.instance.tenant_id,),
+                )
+                .fetchone()
+            )
+            b03_row = dict(raw) if raw is not None else None
+        b03_status = b03_public_envelope_state(b03_row)
+        required_b03 = b03_row is not None
+        b03_binding_count = 0
+        delegation_current = False
+        agreement_current = False
+        envelope_current = False
+        single_use_available = False
+        if b03_row is not None:
+            expected_binding_coordinate = (
+                str(b03_row["resource_owner"]),
+                str(b03_row["provider_owner"]),
+                str(b03_row["represented_cos"]),
+                str(b03_row["context_scope"]),
+                str(b03_row["on_behalf_of"]),
+                str(b03_row["provider"]),
+                str(b03_row["provider_account"]).casefold(),
+                str(b03_row["adapter_identity"]),
+                str(b03_row["destination_task_list"]),
+                B03_OPERATION,
+            )
+            b03_binding_count = sum(
+                binding.b03_dispatch_coordinate == expected_binding_coordinate
+                for binding in self.settings.provider_bindings
+            )
+            current = datetime.now(timezone.utc)
+            envelope_current = bool(
+                b03_row.get("revoked_at") is None
+                and datetime.fromisoformat(
+                    str(b03_row["valid_from"]).replace("Z", "+00:00")
+                )
+                <= current
+                < datetime.fromisoformat(
+                    str(b03_row["expires_at"]).replace("Z", "+00:00")
+                )
+            )
+            single_use_available = b03_row.get("used_at") is None
+            if self.projections is not None:
+                parties = self.projections.connection("parties")
+                grant = parties.execute(
+                    "SELECT * FROM service_delegation_grants "
+                    "WHERE tenant_id=? AND grant_id=?",
+                    (
+                        self.settings.instance.tenant_id,
+                        b03_row["authority_grant_id"],
+                    ),
+                ).fetchone()
+                if grant is not None:
+                    approvals = {
+                        str(row["approved_by_member_id"])
+                        for row in parties.execute(
+                            "SELECT approved_by_member_id FROM service_delegation_approvals "
+                            "WHERE tenant_id=? AND grant_id=?",
+                            (
+                                self.settings.instance.tenant_id,
+                                b03_row["authority_grant_id"],
+                            ),
+                        ).fetchall()
+                    }
+                    required_approvals = set(
+                        json.loads(str(grant["required_approvals_json"]))
+                    )
+                    permissions = set(json.loads(str(grant["permissions_json"])))
+                    grant_expiry = (
+                        datetime.fromisoformat(
+                            str(grant["expires_at"]).replace("Z", "+00:00")
+                        )
+                        if grant["expires_at"]
+                        else None
+                    )
+                    delegation_current = bool(
+                        grant["revoked_at"] is None
+                        and (grant_expiry is None or grant_expiry > current)
+                        and required_approvals == approvals
+                        and B03_DELEGATION_PERMISSION in permissions
+                        and grant["context_scope"] == b03_row["context_scope"]
+                        and grant["resource_owner_principal_id"]
+                        == b03_row["resource_owner"]
+                    )
+                agreement = parties.execute(
+                    "SELECT * FROM operating_agreements "
+                    "WHERE tenant_id=? AND agreement_id=? "
+                    "ORDER BY revision DESC LIMIT 1",
+                    (
+                        self.settings.instance.tenant_id,
+                        b03_row["operating_agreement_id"],
+                    ),
+                ).fetchone()
+                if agreement is not None:
+                    effective_from = (
+                        datetime.fromisoformat(
+                            str(agreement["effective_from"]).replace("Z", "+00:00")
+                        )
+                        if agreement["effective_from"]
+                        else None
+                    )
+                    agreement_expiry = (
+                        datetime.fromisoformat(
+                            str(agreement["expires_at"]).replace("Z", "+00:00")
+                        )
+                        if agreement["expires_at"]
+                        else None
+                    )
+                    rule = json.loads(str(agreement["rule_json"]))
+                    trust = rule.get("trust_scope") or {}
+                    ceilings = rule.get("ceilings") or {}
+                    agreement_current = bool(
+                        agreement["state"] == "active"
+                        and (effective_from is None or effective_from <= current)
+                        and (agreement_expiry is None or agreement_expiry > current)
+                        and rule.get("represented_service_principal_id")
+                        == b03_row["represented_cos"]
+                        and b03_row["provider_account"]
+                        in set(rule.get("provider_account_references") or [])
+                        and b03_row["destination_task_list"]
+                        in set(rule.get("destination_ids") or [])
+                        and "google_tasks_create"
+                        in set(trust.get("capability_ids") or [])
+                        and B03_OPERATION in set(trust.get("action_verbs") or [])
+                        and rule.get("independent_openclaw_approval_required") is True
+                        and ceilings.get("maximum_frequency_count") == 1
+                    )
+        else:
+            b03_binding_count = sum(
+                binding.write_binding_state == "trial"
+                for binding in self.settings.provider_bindings
+            )
+        b03_prerequisites = {
+            "exact_binding": b03_binding_count == 1,
+            "exact_coordinate": bool(
+                b03_row
+                and b03_row.get("execution_policy_version") == B03_POLICY_VERSION
+                and b03_row.get("action_class") == "google_tasks_create"
+                and b03_row.get("represented_cos") == COS_SERVICE_PRINCIPAL_ID
+                and b03_row.get("actual_operator") == COS_AUTOMATION_OPERATOR_ID
+                and b03_row.get("provider") == B03_PROVIDER
+                and b03_row.get("adapter_identity") == B03_ADAPTER_IDENTITY
+                and int(b03_row.get("maximum_effect_count") or 0) == 1
+            ),
+            "current_delegation": delegation_current,
+            "effective_operating_agreement": agreement_current,
+            "envelope_current": envelope_current,
+            "single_use_available": single_use_available,
+            "global_observation_active": observation_active,
+            "domain_approval": bool(
+                b03_row and b03_row.get("domain_approval_event_id")
+            ),
+            "openclaw_approval": bool(
+                b03_row and b03_row.get("openclaw_approval_event_id")
+            ),
+            "openclaw_runtime": self.effective_openclaw_state() == "healthy",
+            "idempotency": bool(b03_row and b03_row.get("idempotency_key")),
+            "terminal_path": self.events is not None,
+            "observation_path": self.google_tasks_execution_reconciler is not None,
+            "reconciliation_path": self.google_tasks_execution_reconciler is not None,
+        }
+        b03_status["doctor"] = {
+            "state": (
+                "not_configured"
+                if not required_b03
+                else "ready"
+                if all(b03_prerequisites.values())
+                else "degraded"
+            ),
+            "prerequisites": b03_prerequisites,
+        }
         return {
             "status": state,
             # ``ready`` remains the backward-compatible service/readiness bit.
@@ -2465,6 +3148,14 @@ class AdministrateMeRuntime:
                     self.adapters.inventory() if self.adapters is not None else {}
                 ),
             ),
+            "google_tasks_create_trial": b03_status,
+            "member_bridge_count": len(self.settings.bridge_enrollments),
+            "messages_read_enrollment": "not_enrolled"
+            if not self.settings.bridge_enrollments
+            else "configuration_present",
+            "messages_reply": "disabled"
+            if not self.settings.bridge_enrollments
+            else "per_member_controlled",
             "capabilities": {
                 key: value.public() for key, value in sorted(self.capabilities.items())
             },
