@@ -20,6 +20,7 @@ from adminme.events.log import EventLog
 from adminme.historical_attribution import audit_historical_attribution
 from adminme.provider_bindings import validate_provider_bindings
 from adminme.source_assurance import audit_source_assurance
+from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths, ensure_within
 from bootstrap.provider_binding_transition import (
     NoEligibleProviderBindingTransitionError,
@@ -145,10 +146,30 @@ async def export_htr10_audits(
         and isinstance(row.get("member_id"), str)
         and isinstance(row.get("role"), str)
     }
+    member_ids = set(roles)
+    member_ids.update(
+        str(row["member_id"])
+        for row in mapping.get("members", [])
+        if isinstance(row, dict) and isinstance(row.get("member_id"), str)
+    )
+    household_party_ids = set(member_ids)
+    household_party_ids.update(
+        str(row["party_id"])
+        for row in mapping.get("parties", [])
+        if isinstance(row, dict) and isinstance(row.get("party_id"), str)
+    )
+    service_principals, _service_channels = validate_service_identity_config(
+        reviewed_config.get("service_identities"),
+        member_ids=member_ids,
+        household_party_ids=household_party_ids,
+    )
     bindings = validate_provider_bindings(
         reviewed_config,
         member_roles=roles,
         household_mapping=mapping,
+        service_principal_ids={
+            principal.service_principal_id for principal in service_principals
+        },
     )
     diagnostics = ServiceManager(paths, test_mode=test_mode).runtime_diagnostics()
     if not isinstance(diagnostics, dict) or not (

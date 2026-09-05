@@ -53,8 +53,7 @@ async def audit_historical_attribution(
         matching_bindings = [
             binding
             for binding in bindings
-            if binding.owner_kind == "member"
-            and owner_scope == f"private:{binding.member_id}"
+            if owner_scope == binding.owner_scope
         ]
         matching_coordinates = {
             (binding.owner_kind, binding.owner_id, binding.workspace)

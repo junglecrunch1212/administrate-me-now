@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from adminme.provider_bindings import validate_provider_bindings
+from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.google_oauth_contract import (
     GOOGLE_READONLY_ADAPTER_SCOPES,
@@ -268,6 +269,28 @@ def _permission_scope(kind: str, config: Mapping[str, Any]) -> list[str]:
     raise ProviderBindingTransitionError("unsupported provider-binding migration kind")
 
 
+def _service_principal_ids(
+    source: Mapping[str, Any], household_mapping: Mapping[str, Any]
+) -> set[str]:
+    member_ids = {
+        str(member["member_id"])
+        for member in household_mapping.get("members", [])
+        if isinstance(member, dict) and isinstance(member.get("member_id"), str)
+    }
+    household_party_ids = set(member_ids)
+    household_party_ids.update(
+        str(party["party_id"])
+        for party in household_mapping.get("parties", [])
+        if isinstance(party, dict) and isinstance(party.get("party_id"), str)
+    )
+    principals, _channels = validate_service_identity_config(
+        source.get("service_identities"),
+        member_ids=member_ids,
+        household_party_ids=household_party_ids,
+    )
+    return {principal.service_principal_id for principal in principals}
+
+
 def _provenance(config: Mapping[str, Any]) -> str:
     oauth = config.get("oauth_credentials_ref")
     service = config.get("service_account_key_ref")
@@ -297,6 +320,12 @@ def _workspace_by_owner_account(
         config = item.get("config")
         if not isinstance(config, dict):
             raise ProviderBindingTransitionError("legacy adapter config is malformed")
+        if _BINDING_FIELDS.issubset(config):
+            # Already-bound adapters are validated as part of the complete
+            # prepared inventory below.  In particular, service-owned Google
+            # adapters intentionally have a service principal instead of a
+            # member owner and are not legacy member bindings to migrate.
+            continue
         member = config.get("member_id")
         if not isinstance(member, str) or not member.strip():
             raise ProviderBindingTransitionError(
@@ -318,6 +347,7 @@ def _workspace_by_owner_account(
         if item.get("enabled") is not False
         and str(item.get("kind") or "").removeprefix("adapter:") in _GOOGLE_KINDS
         and isinstance(item.get("config"), dict)
+        and not _BINDING_FIELDS.issubset(item["config"])
     }:
         workspaces = candidates.get(coordinate, set())
         if len(workspaces) != 1:
@@ -485,6 +515,8 @@ def prepare_provider_binding_transition(
         config = item.get("config")
         if not isinstance(config, dict):
             raise ProviderBindingTransitionError("legacy adapter config is malformed")
+        if _BINDING_FIELDS.issubset(config):
+            continue
         member = str(config.get("member_id") or "")
         account = _account_coordinate(config)
         desired: dict[str, Any] = {
@@ -572,6 +604,7 @@ def prepare_provider_binding_transition(
         prepared,
         member_roles=roles,
         household_mapping=dict(household_mapping),
+        service_principal_ids=_service_principal_ids(prepared, household_mapping),
     )
     enabled_google = sum(
         item.get("enabled") is not False
