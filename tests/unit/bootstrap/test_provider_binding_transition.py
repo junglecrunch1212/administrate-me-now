@@ -117,9 +117,7 @@ def test_transition_ignores_already_bound_service_owned_google_adapters() -> Non
             "config": {
                 "provider_account_id": "service-account@invalid.example",
                 "workspace": "service",
-                "permission_scope": [
-                    "https://www.googleapis.com/auth/tasks.readonly"
-                ],
+                "permission_scope": ["https://www.googleapis.com/auth/tasks.readonly"],
                 "binding_provenance": "service-account-delegation",
                 "ownership_attested": True,
                 "service_account_key_ref": "op://fixture/service-account",

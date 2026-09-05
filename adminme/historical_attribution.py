@@ -51,9 +51,7 @@ async def audit_historical_attribution(
         event_type = str(event.get("type") or "")
         bindings = bindings_by_account.get(account.casefold(), [])
         matching_bindings = [
-            binding
-            for binding in bindings
-            if owner_scope == binding.owner_scope
+            binding for binding in bindings if owner_scope == binding.owner_scope
         ]
         matching_coordinates = {
             (binding.owner_kind, binding.owner_id, binding.workspace)
