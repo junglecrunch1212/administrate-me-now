@@ -267,7 +267,9 @@ def validate_provider_bindings(
         provenance = adapter_config.get("binding_provenance")
         b03 = adapter_config.get("b03_google_tasks_create")
         if b03 is not None and not isinstance(b03, dict):
-            raise ValueError(f"enabled provider adapter {index} has invalid B03 binding")
+            raise ValueError(
+                f"enabled provider adapter {index} has invalid B03 binding"
+            )
         member_owner = isinstance(member_id, str) and bool(member_id.strip())
         service_owner = isinstance(service_principal_id, str) and bool(
             service_principal_id.strip()
@@ -371,14 +373,21 @@ def validate_provider_bindings(
                     "resource_owner_principal_id",
                     "review_provenance",
                 )
-                if any(not isinstance(b03.get(key), str) or not b03[key] for key in exact_text):
+                if any(
+                    not isinstance(b03.get(key), str) or not b03[key]
+                    for key in exact_text
+                ):
                     raise ValueError(
                         f"enabled provider adapter {index} has an incomplete B03 coordinate"
                     )
                 if b03["provider_account_id"].casefold() != account_id.casefold():
-                    raise ValueError("B03 provider account coordinate disagrees with binding")
+                    raise ValueError(
+                        "B03 provider account coordinate disagrees with binding"
+                    )
                 if b03["context_scope"] not in {"member_private", "household_shared"}:
-                    raise ValueError("B03 binding requires an exact member or household scope")
+                    raise ValueError(
+                        "B03 binding requires an exact member or household scope"
+                    )
                 if b03["context_scope"] == "member_private" and (
                     b03["resource_owner_principal_id"] != b03["on_behalf_of"]
                 ):
@@ -388,11 +397,20 @@ def validate_provider_bindings(
                 ):
                     raise ValueError("B03 household resource owner is misaligned")
                 if frozenset(permission_scope) != {GOOGLE_TASKS_WRITE_SCOPE}:
-                    raise ValueError("B03 binding requires only the reviewed Google Tasks scope")
-                if adapter_config.get("read_only") is not False or adapter_config.get("enable_writes") is not True:
-                    raise ValueError("B03 trial binding must explicitly enable only its governed write")
+                    raise ValueError(
+                        "B03 binding requires only the reviewed Google Tasks scope"
+                    )
+                if (
+                    adapter_config.get("read_only") is not False
+                    or adapter_config.get("enable_writes") is not True
+                ):
+                    raise ValueError(
+                        "B03 trial binding must explicitly enable only its governed write"
+                    )
                 if not isinstance(b03.get("revision"), int) or b03["revision"] < 1:
-                    raise ValueError("B03 binding requires a positive reviewed revision")
+                    raise ValueError(
+                        "B03 binding requires a positive reviewed revision"
+                    )
             if provenance != "service-account-delegation" or not isinstance(
                 adapter_config.get("service_account_key_ref"), str
             ):

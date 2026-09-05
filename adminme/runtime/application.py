@@ -705,7 +705,9 @@ class AdministrateMeRuntime:
         self.openclaw_approval_store: OpenClawApprovalStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.fixture_action_adapter: FixtureDelegatedActionAdapter | None = None
-        self.google_tasks_execution_reconciler: GoogleTasksExecutionReconciler | None = None
+        self.google_tasks_execution_reconciler: (
+            GoogleTasksExecutionReconciler | None
+        ) = None
         self.direct_intake: DirectIntakeProcessor | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
@@ -1443,7 +1445,9 @@ class AdministrateMeRuntime:
         external_id: str | None = None
         result_provider_revision: str | None = None
         result_body: dict[str, Any] = {}
-        details = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        details = (
+            payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        )
         b03 = bool(details.get("b03_production_v2"))
         b03_contact_event_id: str | None = None
         b03_provider_result_event_id: str | None = None
@@ -1495,12 +1499,21 @@ class AdministrateMeRuntime:
                 desired = b03_canonical_task_content(
                     {
                         key: details[key]
-                        for key in ("title", "notes", "due", "status", "parent", "previous")
+                        for key in (
+                            "title",
+                            "notes",
+                            "due",
+                            "status",
+                            "parent",
+                            "previous",
+                        )
                         if key in details
                     }
                 )
                 if b03_task_content_fingerprint(desired) != content_fingerprint:
-                    raise DeploymentReadinessBlocked("B03 task content fingerprint changed")
+                    raise DeploymentReadinessBlocked(
+                        "B03 task content fingerprint changed"
+                    )
                 exact_coordinate = (
                     str(details.get("resource_owner")),
                     str(details.get("provider_owner")),
@@ -1539,7 +1552,9 @@ class AdministrateMeRuntime:
                     recovered = (
                         prior_provider_result
                         if prior_provider_result is not None
-                        and prior_provider_result["payload"].get("execution_envelope_id")
+                        and prior_provider_result["payload"].get(
+                            "execution_envelope_id"
+                        )
                         == details.get("execution_envelope_id")
                         and prior_provider_result["payload"].get(
                             "contact_attempt_event_id"
@@ -1575,7 +1590,9 @@ class AdministrateMeRuntime:
                             raw_ref=f"content-sha256:{content_fingerprint}",
                             payload={
                                 "command_id": payload["command_id"],
-                                "execution_envelope_id": details["execution_envelope_id"],
+                                "execution_envelope_id": details[
+                                    "execution_envelope_id"
+                                ],
                                 "command_event_id": event["event_id"],
                                 "contact_attempt_event_id": prior_contact["event_id"],
                                 "provider_result_event_id": (
@@ -1587,7 +1604,9 @@ class AdministrateMeRuntime:
                                     else "ambiguous_after_possible_contact"
                                 ),
                                 "provider": B03_PROVIDER,
-                                "provider_account_coordinate": payload["provider_account_id"],
+                                "provider_account_coordinate": payload[
+                                    "provider_account_id"
+                                ],
                                 "task_list_id": details["tasklist_id"],
                                 "native_task_id": (
                                     recovered["payload"]["native_task_id"]
@@ -1610,7 +1629,9 @@ class AdministrateMeRuntime:
                                     if recovered
                                     else None
                                 ),
-                                "provider_contact_at": prior_contact["payload"]["committed_at"],
+                                "provider_contact_at": prior_contact["payload"][
+                                    "committed_at"
+                                ],
                                 "terminal_at": recovered_at,
                                 "provider_called": True,
                                 "applied": bool(recovered),
@@ -1630,11 +1651,15 @@ class AdministrateMeRuntime:
                     raise DeploymentReadinessBlocked(
                         "B03 execution projection is unavailable before provider contact"
                     )
-                execution_row = self.projections.connection("tasks").execute(
-                    "SELECT * FROM cos_google_tasks_execution_v2 "
-                    "WHERE tenant_id=? AND command_id=?",
-                    (str(event["tenant_id"]), str(payload["command_id"])),
-                ).fetchone()
+                execution_row = (
+                    self.projections.connection("tasks")
+                    .execute(
+                        "SELECT * FROM cos_google_tasks_execution_v2 "
+                        "WHERE tenant_id=? AND command_id=?",
+                        (str(event["tenant_id"]), str(payload["command_id"])),
+                    )
+                    .fetchone()
+                )
                 if (
                     execution_row is None
                     or execution_row["state"] != "approved"
@@ -1642,7 +1667,8 @@ class AdministrateMeRuntime:
                     or execution_row["revoked_at"] is not None
                     or execution_row["contact_attempt_event_id"] is not None
                     or execution_row["terminal_result_event_id"] is not None
-                    or execution_row["envelope_id"] != details.get("execution_envelope_id")
+                    or execution_row["envelope_id"]
+                    != details.get("execution_envelope_id")
                     or execution_row["envelope_revision"]
                     != details.get("execution_envelope_revision")
                     or execution_row["domain_approval_event_id"]
@@ -1688,7 +1714,10 @@ class AdministrateMeRuntime:
                         for binding in self.settings.provider_bindings
                         if (
                             (b03 and binding is b03_binding)
-                            or (not b03 and binding.member_id == payload.get("member_id"))
+                            or (
+                                not b03
+                                and binding.member_id == payload.get("member_id")
+                            )
                         )
                         and binding.provider_account_id.casefold()
                         == str(payload.get("provider_account_id") or "").casefold()
@@ -1704,7 +1733,9 @@ class AdministrateMeRuntime:
                 admission_payload = {
                     "command_id": payload["command_id"],
                     "execution_envelope_id": details["execution_envelope_id"],
-                    "execution_envelope_revision": details["execution_envelope_revision"],
+                    "execution_envelope_revision": details[
+                        "execution_envelope_revision"
+                    ],
                     "initiating_event_id": event["event_id"],
                     "domain_approval_event_id": payload["domain_approval_event_id"],
                     "openclaw_approval_event_id": payload["openclaw_approval_event_id"],
@@ -1736,7 +1767,9 @@ class AdministrateMeRuntime:
                         raw_ref=f"content-sha256:{content_fingerprint}",
                         payload={
                             **admission_payload,
-                            "scoped_admission_fingerprint": b03_canonical_sha256(admission_payload),
+                            "scoped_admission_fingerprint": b03_canonical_sha256(
+                                admission_payload
+                            ),
                             "committed_at": committed_at,
                             "retry_permitted": False,
                         },
@@ -1748,8 +1781,12 @@ class AdministrateMeRuntime:
                     OutboundAuditContext(
                         initiating_command_id=str(payload["command_id"]),
                         initiating_event_id=str(event["event_id"]),
-                        domain_approval_event_id=str(payload["domain_approval_event_id"]),
-                        openclaw_approval_event_id=str(payload["openclaw_approval_event_id"]),
+                        domain_approval_event_id=str(
+                            payload["domain_approval_event_id"]
+                        ),
+                        openclaw_approval_event_id=str(
+                            payload["openclaw_approval_event_id"]
+                        ),
                         provider=B03_PROVIDER,
                         provider_account_id=str(payload["provider_account_id"]),
                         operation=B03_OPERATION,
@@ -1761,9 +1798,15 @@ class AdministrateMeRuntime:
                             command_id=str(payload["command_id"]),
                             initiating_event_id=str(event["event_id"]),
                             execution_envelope_id=str(details["execution_envelope_id"]),
-                            execution_envelope_revision=int(details["execution_envelope_revision"]),
-                            domain_approval_event_id=str(payload["domain_approval_event_id"]),
-                            openclaw_approval_event_id=str(payload["openclaw_approval_event_id"]),
+                            execution_envelope_revision=int(
+                                details["execution_envelope_revision"]
+                            ),
+                            domain_approval_event_id=str(
+                                payload["domain_approval_event_id"]
+                            ),
+                            openclaw_approval_event_id=str(
+                                payload["openclaw_approval_event_id"]
+                            ),
                             provider=B03_PROVIDER,
                             provider_account_id=str(payload["provider_account_id"]),
                             operation=B03_OPERATION,
@@ -1970,7 +2013,9 @@ class AdministrateMeRuntime:
                             "command_event_id": event["event_id"],
                             "contact_attempt_event_id": b03_contact_event_id,
                             "provider": B03_PROVIDER,
-                            "provider_account_coordinate": payload["provider_account_id"],
+                            "provider_account_coordinate": payload[
+                                "provider_account_id"
+                            ],
                             "task_list_id": details["tasklist_id"],
                             "native_task_id": external_id,
                             "provider_revision": result_provider_revision,
@@ -2020,9 +2065,13 @@ class AdministrateMeRuntime:
                         "provider": B03_PROVIDER,
                         "provider_account_coordinate": payload["provider_account_id"],
                         "task_list_id": details["tasklist_id"],
-                        "native_task_id": external_id if b03_outcome == "success" else None,
+                        "native_task_id": external_id
+                        if b03_outcome == "success"
+                        else None,
                         "provider_revision": result_provider_revision,
-                        "provider_task_status": result_body.get("provider_status") if isinstance(result_body, dict) else None,
+                        "provider_task_status": result_body.get("provider_status")
+                        if isinstance(result_body, dict)
+                        else None,
                         "desired_state_fingerprint": content_fingerprint,
                         "returned_state_fingerprint": (
                             b03_returned_state_fingerprint(returned_state)
@@ -2033,11 +2082,15 @@ class AdministrateMeRuntime:
                         "terminal_at": terminal_at,
                         "provider_called": bool(b03_contact_event_id),
                         "applied": b03_outcome == "success",
-                        "suppressed": bool(suppressed) if "suppressed" in locals() else False,
+                        "suppressed": bool(suppressed)
+                        if "suppressed" in locals()
+                        else False,
                         "effect_count": effect_count,
                         "retry_permitted": False,
                         "reason_code": (
-                            None if b03_outcome == "success" else result_payload.get("message", b03_outcome)
+                            None
+                            if b03_outcome == "success"
+                            else result_payload.get("message", b03_outcome)
                         ),
                     },
                 )
@@ -2560,27 +2613,29 @@ class AdministrateMeRuntime:
             for binding in self.settings.provider_bindings
             if binding.write_binding_state == "trial"
         ]
-        self.capabilities["action:google-tasks-create-production-v2"] = CapabilityRecord(
-            name="google_tasks_create",
-            kind="single_use_provider_action",
-            state="observation_only" if len(b03_bindings) == 1 else "disabled",
-            reason=(
-                "one reviewed trial binding; every command still requires its exact envelope and two approvals"
-                if len(b03_bindings) == 1
-                else "no single reviewed B03 trial binding is active"
-            ),
-            details={
-                "execution_policy_version": B03_POLICY_VERSION,
-                "operation": B03_OPERATION,
-                "maximum_effect_count": 1,
-                "binding_match_count": len(b03_bindings),
-                "global_observation_mode_active": self._observation_active,
-                "scoped_admission_required": True,
-                "remaining_google_tasks_mutations": "prohibited",
-                "gmail_writes": "prohibited",
-                "calendar_writes": "prohibited",
-                "content_exposed": False,
-            },
+        self.capabilities["action:google-tasks-create-production-v2"] = (
+            CapabilityRecord(
+                name="google_tasks_create",
+                kind="single_use_provider_action",
+                state="observation_only" if len(b03_bindings) == 1 else "disabled",
+                reason=(
+                    "one reviewed trial binding; every command still requires its exact envelope and two approvals"
+                    if len(b03_bindings) == 1
+                    else "no single reviewed B03 trial binding is active"
+                ),
+                details={
+                    "execution_policy_version": B03_POLICY_VERSION,
+                    "operation": B03_OPERATION,
+                    "maximum_effect_count": 1,
+                    "binding_match_count": len(b03_bindings),
+                    "global_observation_mode_active": self._observation_active,
+                    "scoped_admission_required": True,
+                    "remaining_google_tasks_mutations": "prohibited",
+                    "gmail_writes": "prohibited",
+                    "calendar_writes": "prohibited",
+                    "content_exposed": False,
+                },
+            )
         )
         configured_chat_members = len(self.settings.member_chat_enabled_members)
         if configured_chat_members == 0:
@@ -2880,11 +2935,15 @@ class AdministrateMeRuntime:
         )
         b03_row: dict[str, Any] | None = None
         if self.projections is not None:
-            raw = self.projections.connection("tasks").execute(
-                "SELECT * FROM cos_google_tasks_execution_v2 WHERE tenant_id=? "
-                "ORDER BY valid_from DESC, command_id LIMIT 1",
-                (self.settings.instance.tenant_id,),
-            ).fetchone()
+            raw = (
+                self.projections.connection("tasks")
+                .execute(
+                    "SELECT * FROM cos_google_tasks_execution_v2 WHERE tenant_id=? "
+                    "ORDER BY valid_from DESC, command_id LIMIT 1",
+                    (self.settings.instance.tenant_id,),
+                )
+                .fetchone()
+            )
             b03_row = dict(raw) if raw is not None else None
         b03_status = b03_public_envelope_state(b03_row)
         required_b03 = b03_row is not None
@@ -3029,8 +3088,12 @@ class AdministrateMeRuntime:
             "envelope_current": envelope_current,
             "single_use_available": single_use_available,
             "global_observation_active": observation_active,
-            "domain_approval": bool(b03_row and b03_row.get("domain_approval_event_id")),
-            "openclaw_approval": bool(b03_row and b03_row.get("openclaw_approval_event_id")),
+            "domain_approval": bool(
+                b03_row and b03_row.get("domain_approval_event_id")
+            ),
+            "openclaw_approval": bool(
+                b03_row and b03_row.get("openclaw_approval_event_id")
+            ),
             "openclaw_runtime": self.effective_openclaw_state() == "healthy",
             "idempotency": bool(b03_row and b03_row.get("idempotency_key")),
             "terminal_path": self.events is not None,

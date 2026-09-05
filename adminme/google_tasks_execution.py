@@ -27,7 +27,9 @@ ADAPTER_IDENTITY = "tasks-google-tasks"
 GOOGLE_TASKS_WRITE_SCOPE = "https://www.googleapis.com/auth/tasks"
 DELEGATION_PERMISSION = "execute_google_tasks_create_trial"
 MAX_EFFECT_COUNT = 1
-TASK_CONTENT_FIELDS = frozenset({"title", "notes", "due", "status", "parent", "previous"})
+TASK_CONTENT_FIELDS = frozenset(
+    {"title", "notes", "due", "status", "parent", "previous"}
+)
 PROHIBITED_OPERATIONS = (
     "update_task",
     "complete_task",
@@ -77,17 +79,25 @@ def canonical_task_content(value: Mapping[str, Any]) -> dict[str, Any]:
 
     unknown = set(value) - TASK_CONTENT_FIELDS
     if unknown:
-        raise B03PolicyError(f"Google Tasks create content has unapproved fields: {sorted(unknown)}")
+        raise B03PolicyError(
+            f"Google Tasks create content has unapproved fields: {sorted(unknown)}"
+        )
     title = value.get("title")
     if not isinstance(title, str) or not title.strip():
         raise B03PolicyError("Google Tasks create requires a non-empty title")
     if len(title) > 1024:
         raise B03PolicyError("Google Tasks title exceeds the reviewed limit")
-    if "notes" in value and value["notes"] is not None and not isinstance(value["notes"], str):
+    if (
+        "notes" in value
+        and value["notes"] is not None
+        and not isinstance(value["notes"], str)
+    ):
         raise B03PolicyError("Google Tasks notes must be text or null")
     for key in ("due", "parent", "previous"):
-        if key in value and value[key] is not None and (
-            not isinstance(value[key], str) or not value[key]
+        if (
+            key in value
+            and value[key] is not None
+            and (not isinstance(value[key], str) or not value[key])
         ):
             raise B03PolicyError(f"Google Tasks {key} must be non-empty text or null")
     if "status" in value and value["status"] not in {None, "needsAction"}:
@@ -152,9 +162,15 @@ class ExecutionCoordinate:
             raise B03PolicyError("wrong provider or adapter")
         if self.context_scope not in {"member_private", "household_shared"}:
             raise B03PolicyError("wrong member or household scope")
-        if self.context_scope == "member_private" and self.resource_owner != self.on_behalf_of:
+        if (
+            self.context_scope == "member_private"
+            and self.resource_owner != self.on_behalf_of
+        ):
             raise B03PolicyError("member-private resource owner mismatch")
-        if self.context_scope == "household_shared" and self.resource_owner != "shared:household":
+        if (
+            self.context_scope == "household_shared"
+            and self.resource_owner != "shared:household"
+        ):
             raise B03PolicyError("household-shared resource owner mismatch")
         if self.maximum_effect_count != MAX_EFFECT_COUNT:
             raise B03PolicyError("B03 permits no more than one effect")
@@ -162,7 +178,9 @@ class ExecutionCoordinate:
         expires_at = parse_time(self.expires_at)
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         if expires_at <= valid_from or current < valid_from or current >= expires_at:
-            raise B03PolicyError("execution envelope is outside its approved trial window")
+            raise B03PolicyError(
+                "execution envelope is outside its approved trial window"
+            )
 
     def approval_material(self) -> dict[str, Any]:
         """The coordinates both independent approvals must bind."""
@@ -213,7 +231,9 @@ def returned_state_fingerprint(response: Mapping[str, Any]) -> str:
     )
 
 
-def public_envelope_state(row: Mapping[str, Any] | None, *, now: datetime | None = None) -> dict[str, Any]:
+def public_envelope_state(
+    row: Mapping[str, Any] | None, *, now: datetime | None = None
+) -> dict[str, Any]:
     """Return the content-free Settings/Doctor view for the exact envelope."""
 
     if row is None:
@@ -228,7 +248,13 @@ def public_envelope_state(row: Mapping[str, Any] | None, *, now: datetime | None
         }
     current = now or datetime.now(timezone.utc)
     expired = parse_time(str(row["expires_at"])) <= current.astimezone(timezone.utc)
-    state = "revoked" if row.get("revoked_at") else "expired" if expired else str(row["state"])
+    state = (
+        "revoked"
+        if row.get("revoked_at")
+        else "expired"
+        if expired
+        else str(row["state"])
+    )
     return {
         "contract": EXECUTION_POLICY_VERSION,
         "support": "production-v2",
@@ -244,8 +270,12 @@ def public_envelope_state(row: Mapping[str, Any] | None, *, now: datetime | None
         "state": state,
         "used": bool(row.get("used_at")),
         "revoked": bool(row.get("revoked_at")),
-        "domain_approval_state": "approved" if row.get("domain_approval_event_id") else "missing",
-        "openclaw_approval_state": "approved" if row.get("openclaw_approval_event_id") else "missing",
+        "domain_approval_state": "approved"
+        if row.get("domain_approval_event_id")
+        else "missing",
+        "openclaw_approval_state": "approved"
+        if row.get("openclaw_approval_event_id")
+        else "missing",
         "provider_contact_state": row.get("provider_contact_state") or "not_contacted",
         "terminal_result_state": row.get("terminal_result_state") or "missing",
         "later_observation_state": row.get("observation_state") or "missing",

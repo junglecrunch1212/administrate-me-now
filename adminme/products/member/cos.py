@@ -1429,7 +1429,9 @@ def _b03_operating_agreement(
         ):
             matches.append(agreement)
     if len(matches) != 1:
-        raise HTTPException(403, "one exact effective B03 operating agreement is required")
+        raise HTTPException(
+            403, "one exact effective B03 operating agreement is required"
+        )
     return matches[0]
 
 
@@ -1446,11 +1448,17 @@ async def approve_google_tasks_create_trial(
     if runtime.events is None or runtime.projections is None:
         raise HTTPException(503, "B03 execution authority is unavailable")
     if body.context_scope == "member_private":
-        if body.on_behalf_of != session.auth_member_id or body.resource_owner != session.auth_member_id:
+        if (
+            body.on_behalf_of != session.auth_member_id
+            or body.resource_owner != session.auth_member_id
+        ):
             raise HTTPException(403, "B03 member scope must be the approving member")
         owner_scope = f"private:{session.auth_member_id}"
     else:
-        if body.resource_owner != "shared:household" or body.on_behalf_of != "shared:household":
+        if (
+            body.resource_owner != "shared:household"
+            or body.on_behalf_of != "shared:household"
+        ):
             raise HTTPException(403, "B03 household scope is misaligned")
         owner_scope = "shared:household"
     _member_execution_grant(
@@ -1611,7 +1619,10 @@ async def revoke_google_tasks_create_execution(
         raise HTTPException(404, "B03 command not found")
     if action["last_event_id"] != body.expected_last_event_id:
         raise HTTPException(409, "B03 execution changed")
-    if action["context_scope"] == "member_private" and action["on_behalf_of"] != session.auth_member_id:
+    if (
+        action["context_scope"] == "member_private"
+        and action["on_behalf_of"] != session.auth_member_id
+    ):
         raise HTTPException(403, "only the exact member owner may revoke B03 authority")
     now = EventEnvelope.now_utc_iso()
     event_id = await runtime.events.write(

@@ -153,18 +153,38 @@ def apply_google_tasks_execution_prepared(
            ) VALUES (?, ?, 'held_for_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
         (
-            envelope["tenant_id"], p["command_id"], p["execution_policy_version"],
-            p["action_class"], p["execution_envelope_id"], p["execution_envelope_revision"],
-            p["represented_cos"], p["actual_operator"], p["active_context"],
-            p["on_behalf_of"], p["authority_basis"], p["operating_agreement_id"],
-            p["resource_owner"], p["provider_owner"], p["provider"],
-            p["provider_account_coordinate"], p["adapter_identity"],
-            p["destination_task_list_coordinate"], p["approved_task_content_fingerprint"],
+            envelope["tenant_id"],
+            p["command_id"],
+            p["execution_policy_version"],
+            p["action_class"],
+            p["execution_envelope_id"],
+            p["execution_envelope_revision"],
+            p["represented_cos"],
+            p["actual_operator"],
+            p["active_context"],
+            p["on_behalf_of"],
+            p["authority_basis"],
+            p["operating_agreement_id"],
+            p["resource_owner"],
+            p["provider_owner"],
+            p["provider"],
+            p["provider_account_coordinate"],
+            p["adapter_identity"],
+            p["destination_task_list_coordinate"],
+            p["approved_task_content_fingerprint"],
             p["approval_fingerprint"],
-            json.dumps(p["desired_task_content"], sort_keys=True, separators=(",", ":")),
-            p["domain_approval_event_id"], envelope["event_id"], p["valid_from"],
-            p["expires_at"], p["idempotency_key"], p["maximum_effect_count"],
-            envelope["event_id"], envelope["owner_scope"], envelope["visibility_scope"],
+            json.dumps(
+                p["desired_task_content"], sort_keys=True, separators=(",", ":")
+            ),
+            p["domain_approval_event_id"],
+            envelope["event_id"],
+            p["valid_from"],
+            p["expires_at"],
+            p["idempotency_key"],
+            p["maximum_effect_count"],
+            envelope["event_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
             envelope["sensitivity"],
         ),
     )
@@ -179,9 +199,16 @@ def apply_google_tasks_execution_openclaw_approved(
         "UPDATE cos_google_tasks_execution_v2 SET openclaw_approval_event_id=?, "
         "approval_fingerprint=?, last_event_id=? WHERE tenant_id=? AND command_id=? "
         "AND envelope_id=? AND envelope_revision=? AND domain_approval_event_id=?",
-        (p["openclaw_approval_event_id"], p["approval_fingerprint"], envelope["event_id"],
-         envelope["tenant_id"], p["command_id"], p["execution_envelope_id"],
-         p["execution_envelope_revision"], p["domain_approval_event_id"]),
+        (
+            p["openclaw_approval_event_id"],
+            p["approval_fingerprint"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+            p["execution_envelope_id"],
+            p["execution_envelope_revision"],
+            p["domain_approval_event_id"],
+        ),
     )
     if conn.execute("SELECT changes()").fetchone()[0]:
         _b03_state(conn, envelope, "approved", str(p["approved_at"]))
@@ -195,8 +222,13 @@ def apply_google_tasks_execution_contact_committed(
         "UPDATE cos_google_tasks_execution_v2 SET contact_attempt_event_id=?, "
         "provider_contact_state='contact_attempt_committed', used_at=?, last_event_id=? "
         "WHERE tenant_id=? AND command_id=? AND contact_attempt_event_id IS NULL",
-        (envelope["event_id"], p["committed_at"], envelope["event_id"],
-         envelope["tenant_id"], p["command_id"]),
+        (
+            envelope["event_id"],
+            p["committed_at"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
     )
     if conn.execute("SELECT changes()").fetchone()[0]:
         _b03_state(conn, envelope, "contact_attempt_committed", str(p["committed_at"]))
@@ -245,9 +277,16 @@ def apply_google_tasks_execution_terminal(
         "terminal_result_state=?, native_task_id=?, provider_revision=?, "
         "provider_effect_count=?, last_event_id=? WHERE tenant_id=? AND command_id=? "
         "AND terminal_result_event_id IS NULL",
-        (envelope["event_id"], p["outcome"], p.get("native_task_id"),
-         p.get("provider_revision"), p["effect_count"], envelope["event_id"],
-         envelope["tenant_id"], p["command_id"]),
+        (
+            envelope["event_id"],
+            p["outcome"],
+            p.get("native_task_id"),
+            p.get("provider_revision"),
+            p["effect_count"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
     )
     if conn.execute("SELECT changes()").fetchone()[0]:
         _b03_state(conn, envelope, state, str(p["terminal_at"]))
@@ -261,8 +300,13 @@ def apply_google_tasks_execution_observed(
         "UPDATE cos_google_tasks_execution_v2 SET observation_event_id=?, "
         "observation_state='later_observation_received', provider_revision=?, "
         "last_event_id=? WHERE tenant_id=? AND command_id=?",
-        (envelope["event_id"], p.get("provider_revision"), envelope["event_id"],
-         envelope["tenant_id"], p["command_id"]),
+        (
+            envelope["event_id"],
+            p.get("provider_revision"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
     )
     _b03_state(conn, envelope, "later_observation_received", str(p["observed_at"]))
 
@@ -275,8 +319,13 @@ def apply_google_tasks_execution_reconciled(
     conn.execute(
         "UPDATE cos_google_tasks_execution_v2 SET reconciliation_event_id=?, "
         "reconciliation_state=?, last_event_id=? WHERE tenant_id=? AND command_id=?",
-        (envelope["event_id"], p["outcome"], envelope["event_id"],
-         envelope["tenant_id"], p["command_id"]),
+        (
+            envelope["event_id"],
+            p["outcome"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+        ),
     )
     _b03_state(conn, envelope, state, str(p["reconciled_at"]))
 
@@ -288,8 +337,14 @@ def apply_google_tasks_execution_revoked(
     conn.execute(
         "UPDATE cos_google_tasks_execution_v2 SET revoked_at=?, last_event_id=? "
         "WHERE tenant_id=? AND command_id=? AND envelope_id=? AND envelope_revision=?",
-        (p["revoked_at"], envelope["event_id"], envelope["tenant_id"], p["command_id"],
-         p["execution_envelope_id"], p["execution_envelope_revision"]),
+        (
+            p["revoked_at"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["command_id"],
+            p["execution_envelope_id"],
+            p["execution_envelope_revision"],
+        ),
     )
     _b03_state(conn, envelope, "revoked", str(p["revoked_at"]))
 

@@ -52,8 +52,7 @@ class GoogleTasksExecutionPreparedV2(_Strict):
     @model_validator(mode="after")
     def _window(self) -> "GoogleTasksExecutionPreparedV2":
         if not (
-            self.valid_from < self.expires_at
-            and self.created_at < self.expires_at
+            self.valid_from < self.expires_at and self.created_at < self.expires_at
         ):
             raise ValueError("B03 execution window is invalid")
         return self
@@ -162,7 +161,9 @@ class GoogleTasksExecutionTerminalV2(_Strict):
     provider_revision: str | None = Field(default=None, max_length=1000)
     provider_task_status: str | None = Field(default=None, max_length=120)
     desired_state_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    returned_state_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    returned_state_fingerprint: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
     provider_contact_at: AwareDatetime | None = None
     terminal_at: AwareDatetime
     provider_called: bool
@@ -180,7 +181,9 @@ class GoogleTasksExecutionTerminalV2(_Strict):
             or not self.applied
             or self.effect_count != 1
         ):
-            raise ValueError("successful B03 result requires one provider-native effect")
+            raise ValueError(
+                "successful B03 result requires one provider-native effect"
+            )
         if self.outcome == "failure_before_contact" and self.provider_called:
             raise ValueError("pre-contact failure cannot report provider contact")
         if self.effect_count and not self.provider_called:
@@ -210,9 +213,13 @@ class GoogleTasksExecutionReconciledV2(_Strict):
     execution_envelope_id: str = Field(min_length=1, max_length=240)
     terminal_result_event_id: str | None = Field(default=None, max_length=240)
     observation_event_id: str | None = Field(default=None, max_length=240)
-    outcome: Literal["matched", "missing", "drifted", "conflicted", "ambiguous", "failed"]
+    outcome: Literal[
+        "matched", "missing", "drifted", "conflicted", "ambiguous", "failed"
+    ]
     desired_state_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    observed_state_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    observed_state_fingerprint: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
     duplicate_provider_objects: int = Field(default=0, ge=0)
     reason_code: str = Field(min_length=1, max_length=500)
     reconciled_at: AwareDatetime
@@ -226,7 +233,9 @@ class GoogleTasksExecutionReconciledV2(_Strict):
             or self.duplicate_provider_objects
             or self.observed_state_fingerprint != self.desired_state_fingerprint
         ):
-            raise ValueError("matched reconciliation requires one independent exact observation")
+            raise ValueError(
+                "matched reconciliation requires one independent exact observation"
+            )
         return self
 
 
@@ -240,15 +249,41 @@ class GoogleTasksExecutionRevokedV2(_Strict):
     provider_effect_count: Literal[0] = 0
 
 
-registry.register("cos.google_tasks_execution.prepared", 2, GoogleTasksExecutionPreparedV2)
-registry.register("cos.google_tasks_execution.domain_approved", 2, GoogleTasksExecutionDomainApprovedV2)
-registry.register("cos.google_tasks_execution.openclaw_approved", 2, GoogleTasksExecutionOpenClawApprovedV2)
-registry.register("cos.google_tasks_execution.contact_attempt_committed", 2, GoogleTasksExecutionContactCommittedV2)
-registry.register("cos.google_tasks_execution.provider_result_received", 2, GoogleTasksExecutionProviderResultReceivedV2)
-registry.register("cos.google_tasks_execution.terminal", 2, GoogleTasksExecutionTerminalV2)
-registry.register("cos.google_tasks_execution.observed", 2, GoogleTasksExecutionObservedV2)
-registry.register("cos.google_tasks_execution.reconciled", 2, GoogleTasksExecutionReconciledV2)
-registry.register("cos.google_tasks_execution.revoked", 2, GoogleTasksExecutionRevokedV2)
+registry.register(
+    "cos.google_tasks_execution.prepared", 2, GoogleTasksExecutionPreparedV2
+)
+registry.register(
+    "cos.google_tasks_execution.domain_approved",
+    2,
+    GoogleTasksExecutionDomainApprovedV2,
+)
+registry.register(
+    "cos.google_tasks_execution.openclaw_approved",
+    2,
+    GoogleTasksExecutionOpenClawApprovedV2,
+)
+registry.register(
+    "cos.google_tasks_execution.contact_attempt_committed",
+    2,
+    GoogleTasksExecutionContactCommittedV2,
+)
+registry.register(
+    "cos.google_tasks_execution.provider_result_received",
+    2,
+    GoogleTasksExecutionProviderResultReceivedV2,
+)
+registry.register(
+    "cos.google_tasks_execution.terminal", 2, GoogleTasksExecutionTerminalV2
+)
+registry.register(
+    "cos.google_tasks_execution.observed", 2, GoogleTasksExecutionObservedV2
+)
+registry.register(
+    "cos.google_tasks_execution.reconciled", 2, GoogleTasksExecutionReconciledV2
+)
+registry.register(
+    "cos.google_tasks_execution.revoked", 2, GoogleTasksExecutionRevokedV2
+)
 
 
 __all__ = [name for name in globals() if name.startswith("GoogleTasksExecution")]

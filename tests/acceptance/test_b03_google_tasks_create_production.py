@@ -173,8 +173,16 @@ def _settings(instance: Path) -> tuple[RuntimeSettings, dict[str, Any]]:
         household_mapping={
             "schema_version": 2,
             "household_label": "B03 fixture household",
-            "members": [{"member_id": MEMBER, "label": "B03 adult", "role": "principal"}],
-            "memberships": [{"membership_id": "b03-membership", "party_id": MEMBER, "role": "principal"}],
+            "members": [
+                {"member_id": MEMBER, "label": "B03 adult", "role": "principal"}
+            ],
+            "memberships": [
+                {
+                    "membership_id": "b03-membership",
+                    "party_id": MEMBER,
+                    "role": "principal",
+                }
+            ],
             "relationships": [],
         },
         adapter_config=adapter_config,
@@ -280,10 +288,14 @@ def _allow_once(client: TestClient, params: dict[str, Any]) -> str:
 def _wait_row(runtime: Any, command_id: str, state: str) -> dict[str, Any]:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        row = runtime.projections.connection("tasks").execute(
-            "SELECT * FROM cos_google_tasks_execution_v2 WHERE tenant_id=? AND command_id=?",
-            (runtime.settings.instance.tenant_id, command_id),
-        ).fetchone()
+        row = (
+            runtime.projections.connection("tasks")
+            .execute(
+                "SELECT * FROM cos_google_tasks_execution_v2 WHERE tenant_id=? AND command_id=?",
+                (runtime.settings.instance.tenant_id, command_id),
+            )
+            .fetchone()
+        )
         if row is not None and row["state"] == state:
             return dict(row)
         time.sleep(0.01)
@@ -360,7 +372,10 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         assert health.status_code == 200, health.text
         now = datetime.now(timezone.utc)
         command_id = "b03-command-one"
-        task_content = {"title": "Fixture exact task", "notes": "B03 process acceptance"}
+        task_content = {
+            "title": "Fixture exact task",
+            "notes": "B03 process acceptance",
+        }
         domain_request = {
             "request_id": "b03-domain-approval",
             "command_id": command_id,
@@ -655,14 +670,31 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         assert diagnostics["member_bridge_count"] == 0
         assert diagnostics["messages_read_enrollment"] == "not_enrolled"
         assert diagnostics["messages_reply"] == "disabled"
-        events = client.portal.call(
-            lambda: _collect_events(runtime)
-        )
+        events = client.portal.call(lambda: _collect_events(runtime))
         assert sum(event["type"] == "external.sent" for event in events) == 1
-        assert sum(event["type"] == "cos.google_tasks_execution.contact_attempt_committed" for event in events) == 1
-        assert sum(event["type"] == "cos.google_tasks_execution.provider_result_received" for event in events) == 1
-        assert all(event["payload"].get("provider_effect_count", 0) == 0 for event in events if event["type"] == "cos.google_tasks_execution.reconciled")
-        assert task_content_fingerprint(task_content) == domain.json()["content_fingerprint"]
+        assert (
+            sum(
+                event["type"] == "cos.google_tasks_execution.contact_attempt_committed"
+                for event in events
+            )
+            == 1
+        )
+        assert (
+            sum(
+                event["type"] == "cos.google_tasks_execution.provider_result_received"
+                for event in events
+            )
+            == 1
+        )
+        assert all(
+            event["payload"].get("provider_effect_count", 0) == 0
+            for event in events
+            if event["type"] == "cos.google_tasks_execution.reconciled"
+        )
+        assert (
+            task_content_fingerprint(task_content)
+            == domain.json()["content_fingerprint"]
+        )
 
         prepared_template = next(
             event
@@ -682,8 +714,7 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         provider_result_template = next(
             event
             for event in events
-            if event["type"]
-            == "cos.google_tasks_execution.provider_result_received"
+            if event["type"] == "cos.google_tasks_execution.provider_result_received"
         )
         command_template = next(
             event
@@ -718,7 +749,9 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
             client.portal.call(runtime.wait_for_projection, "tasks", event_id)
             return event_id
 
-        def seed_approved_recovery(command: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        def seed_approved_recovery(
+            command: str,
+        ) -> tuple[dict[str, Any], dict[str, Any]]:
             envelope_id = f"envelope:{command}"
             domain_event_id = f"domain:{command}"
             openclaw_event_id = f"openclaw:{command}"
@@ -800,7 +833,12 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
             {
                 key: value
                 for key, value in contact_material.items()
-                if key not in {"scoped_admission_fingerprint", "committed_at", "retry_permitted"}
+                if key
+                not in {
+                    "scoped_admission_fingerprint",
+                    "committed_at",
+                    "retry_permitted",
+                }
             }
         )
         append_projection_event(
@@ -829,9 +867,7 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         recovered_contact_payload.update(
             {
                 "command_id": recovered_command,
-                "execution_envelope_id": recovered_prepared[
-                    "execution_envelope_id"
-                ],
+                "execution_envelope_id": recovered_prepared["execution_envelope_id"],
                 "domain_approval_event_id": recovered_prepared[
                     "domain_approval_event_id"
                 ],
@@ -860,9 +896,7 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         recovered_provider_result.update(
             {
                 "command_id": recovered_command,
-                "execution_envelope_id": recovered_prepared[
-                    "execution_envelope_id"
-                ],
+                "execution_envelope_id": recovered_prepared["execution_envelope_id"],
                 "command_event_id": f"pre-crash-command:{recovered_command}",
                 "contact_attempt_event_id": recovered_contact_event_id,
             }
@@ -916,7 +950,9 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         assert terminal_event is not None
         assert terminal_event["payload"]["outcome"] == "failure_before_contact"
         assert terminal_event["payload"]["provider_called"] is False
-        assert _wait_row(runtime, revoked_command, "revoked")["provider_effect_count"] == 0
+        assert (
+            _wait_row(runtime, revoked_command, "revoked")["provider_effect_count"] == 0
+        )
         assert len(fake.effects) == 1
 
     restarted_settings, restarted_task_config = _settings(instance)
@@ -933,17 +969,26 @@ def test_b03_one_effect_later_observation_reconciliation_and_revocation(
         assert replayed_success["terminal_result_event_id"] is not None
         assert replayed_success["provider_result_event_id"] is not None
         assert replayed_success["provider_effect_count"] == 1
-        assert _wait_row(
-            restarted_runtime,
-            ambiguous_command,
-            "ambiguous_result_after_possible_contact",
-        )["provider_effect_count"] == 0
-        assert _wait_row(
-            restarted_runtime, recovered_command, "terminal_success"
-        )["provider_effect_count"] == 1
-        assert _wait_row(restarted_runtime, revoked_command, "revoked")[
-            "provider_effect_count"
-        ] == 0
+        assert (
+            _wait_row(
+                restarted_runtime,
+                ambiguous_command,
+                "ambiguous_result_after_possible_contact",
+            )["provider_effect_count"]
+            == 0
+        )
+        assert (
+            _wait_row(restarted_runtime, recovered_command, "terminal_success")[
+                "provider_effect_count"
+            ]
+            == 1
+        )
+        assert (
+            _wait_row(restarted_runtime, revoked_command, "revoked")[
+                "provider_effect_count"
+            ]
+            == 0
+        )
         replayed_events = restarted_client.portal.call(
             lambda: _collect_events(restarted_runtime)
         )

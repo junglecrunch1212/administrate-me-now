@@ -1786,7 +1786,9 @@ def _require_current_b03_agreement(
         ):
             matches.append(agreement)
     if len(matches) != 1:
-        raise HTTPException(403, "exact B03 operating agreement is missing or ineffective")
+        raise HTTPException(
+            403, "exact B03 operating agreement is missing or ineffective"
+        )
 
 
 def _b03_binding_matches(runtime: Any, coordinate: B03ExecutionCoordinate) -> list[Any]:
@@ -1851,9 +1853,10 @@ async def prepare_google_tasks_create(
     ):
         raise HTTPException(403, "B03 member or resource-owner coordinate changed")
     now = datetime.now(timezone.utc)
-    if datetime.fromisoformat(str(p["valid_from"]).replace("Z", "+00:00")) > now or datetime.fromisoformat(
-        str(p["expires_at"]).replace("Z", "+00:00")
-    ) <= now:
+    if (
+        datetime.fromisoformat(str(p["valid_from"]).replace("Z", "+00:00")) > now
+        or datetime.fromisoformat(str(p["expires_at"]).replace("Z", "+00:00")) <= now
+    ):
         raise HTTPException(403, "B03 domain approval expired or is not yet valid")
     coordinate = B03ExecutionCoordinate(
         command_id=body.command_id,
@@ -1984,7 +1987,9 @@ async def execute_google_tasks_create(
     if action is None:
         raise HTTPException(404, "B03 command not found")
     if runtime.effective_openclaw_state() != "healthy":
-        raise HTTPException(403, "independent OpenClaw runtime is unavailable or degraded")
+        raise HTTPException(
+            403, "independent OpenClaw runtime is unavailable or degraded"
+        )
     if action.get("contact_attempt_event_id") or action.get("used_at"):
         raise HTTPException(409, "B03 envelope was already used; retry is refused")
     if action.get("revoked_at"):
@@ -2002,7 +2007,8 @@ async def execute_google_tasks_create(
         or action.get("adapter_identity") != B03_ADAPTER_IDENTITY
         or action.get("maximum_effect_count") != 1
         or action.get("provider_effect_count") != 0
-        or datetime.fromisoformat(str(action["expires_at"]).replace("Z", "+00:00")) <= now
+        or datetime.fromisoformat(str(action["expires_at"]).replace("Z", "+00:00"))
+        <= now
     ):
         raise HTTPException(403, "B03 envelope is changed, expired, or ineligible")
     coordinate = B03ExecutionCoordinate(
@@ -2052,7 +2058,14 @@ async def execute_google_tasks_create(
         domain_governance=(True, "exact_b03_domain_approval"),
     )
     if not decision.pass_:
-        raise HTTPException(403, {"code": "write_denied", "layer": decision.layer_failed, "reason": decision.reason})
+        raise HTTPException(
+            403,
+            {
+                "code": "write_denied",
+                "layer": decision.layer_failed,
+                "reason": decision.reason,
+            },
+        )
     openclaw_event_id = await _consume_openclaw_approval(
         request,
         session,
@@ -2062,10 +2075,15 @@ async def execute_google_tasks_create(
         action=B03_OPERATION,
         causation_id=str(action["domain_approval_event_id"]),
     )
-    if b03_task_content_fingerprint(
-        b03_canonical_task_content(dict(action["desired_task_content"]))
-    ) != action["content_fingerprint"]:
-        raise HTTPException(403, "B03 final privacy/content guard rejected changed content")
+    if (
+        b03_task_content_fingerprint(
+            b03_canonical_task_content(dict(action["desired_task_content"]))
+        )
+        != action["content_fingerprint"]
+    ):
+        raise HTTPException(
+            403, "B03 final privacy/content guard rejected changed content"
+        )
     approval_event_id, _ = await _append(
         runtime,
         session,

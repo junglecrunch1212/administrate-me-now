@@ -69,7 +69,8 @@ def test_exact_execution_coordinate_fails_closed(field: str, value: object) -> N
 
 def test_expired_execution_coordinate_fails_closed() -> None:
     coordinate = replace(
-        _coordinate(), expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        _coordinate(),
+        expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
     )
     with pytest.raises(B03PolicyError, match="trial window"):
         coordinate.validate()
@@ -86,7 +87,9 @@ def test_expired_execution_coordinate_fails_closed() -> None:
         {"title": "same", "notes": "same", "status": "needsAction"},
     ],
 )
-def test_every_approved_task_field_changes_fingerprint(mutation: dict[str, object]) -> None:
+def test_every_approved_task_field_changes_fingerprint(
+    mutation: dict[str, object],
+) -> None:
     assert task_content_fingerprint(mutation) != task_content_fingerprint(
         {"title": "same", "notes": "same"}
     )
@@ -136,19 +139,29 @@ def test_scoped_observation_admission_is_exact_and_single_effect() -> None:
         contact_attempt_event_id="contact-attempt-1",
     )
     assert admission.admits(
-        audit, action="tasks.create_task", target_identifier=coordinate.destination_task_list
+        audit,
+        action="tasks.create_task",
+        target_identifier=coordinate.destination_task_list,
     )
     assert not replace(admission, command_id="command-2").admits(
-        audit, action="tasks.create_task", target_identifier=coordinate.destination_task_list
+        audit,
+        action="tasks.create_task",
+        target_identifier=coordinate.destination_task_list,
     )
     assert not replace(admission, destination_id="list-b").admits(
-        audit, action="tasks.create_task", target_identifier=coordinate.destination_task_list
+        audit,
+        action="tasks.create_task",
+        target_identifier=coordinate.destination_task_list,
     )
     assert not replace(admission, maximum_effect_count=2).admits(
-        audit, action="tasks.create_task", target_identifier=coordinate.destination_task_list
+        audit,
+        action="tasks.create_task",
+        target_identifier=coordinate.destination_task_list,
     )
     assert not admission.admits(
-        audit, action="tasks.update_task", target_identifier=coordinate.destination_task_list
+        audit,
+        action="tasks.update_task",
+        target_identifier=coordinate.destination_task_list,
     )
 
 
@@ -233,7 +246,9 @@ def test_b03_binding_rejects_multiple_full_coordinate_matches() -> None:
     duplicate = copy.deepcopy(config["adapters"][0])  # type: ignore[index]
     duplicate["id"] = "b03-tasks-duplicate"
     config["adapters"].append(duplicate)  # type: ignore[union-attr]
-    with pytest.raises(ValueError, match="duplicate full owner/account/adapter coordinate"):
+    with pytest.raises(
+        ValueError, match="duplicate full owner/account/adapter coordinate"
+    ):
         validate_provider_bindings(
             config,  # type: ignore[arg-type]
             member_roles={"member-a": "principal"},

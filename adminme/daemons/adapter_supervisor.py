@@ -215,7 +215,10 @@ class AdapterSupervisor:
             if exact_coordinate is None:
                 if configured_account not in (None, "", provider_account_id):
                     continue
-            elif str(configured_account or "").casefold() != provider_account_id.casefold():
+            elif (
+                str(configured_account or "").casefold()
+                != provider_account_id.casefold()
+            ):
                 continue
             if callable(getattr(adapter, "apply_write", None)):
                 candidates.append(adapter)

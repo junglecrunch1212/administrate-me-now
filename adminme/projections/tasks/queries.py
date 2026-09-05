@@ -606,7 +606,11 @@ def list_google_tasks_executions(
     return [
         item
         for row in rows
-        if (item := get_google_tasks_execution(conn, session, command_id=str(row["command_id"])))
+        if (
+            item := get_google_tasks_execution(
+                conn, session, command_id=str(row["command_id"])
+            )
+        )
         is not None
     ]
 

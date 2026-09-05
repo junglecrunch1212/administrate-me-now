@@ -41,9 +41,7 @@ class GoogleTasksExecutionReconciler:
             == str(p.get("provider_account_id", "")).casefold()
             and event["payload"].get("task_list_id") == p.get("list_external_id")
         ]
-        prepared_events = await self._events_of(
-            "cos.google_tasks_execution.prepared"
-        )
+        prepared_events = await self._events_of("cos.google_tasks_execution.prepared")
         eligible: list[
             tuple[
                 dict[str, Any],
@@ -73,8 +71,7 @@ class GoogleTasksExecutionReconciler:
             )
             if (
                 observation["visibility_scope"] != expected_visibility
-                or p.get("service_principal_id")
-                != prepared_payload["provider_owner"]
+                or p.get("service_principal_id") != prepared_payload["provider_owner"]
             ):
                 continue
             desired_candidate = dict(prepared_payload["desired_task_content"])
@@ -93,8 +90,7 @@ class GoogleTasksExecutionReconciler:
             if (
                 terminal_candidate["payload"].get("native_task_id")
                 != p.get("item_external_id")
-                and observed_candidate_fingerprint
-                != desired_candidate_fingerprint
+                and observed_candidate_fingerprint != desired_candidate_fingerprint
             ):
                 continue
             eligible.append(
@@ -164,13 +160,25 @@ class GoogleTasksExecutionReconciler:
             matching_object_ids - {str(terminal["payload"]["native_task_id"])}
         )
         if duplicate_count:
-            outcome, reason = "conflicted", "multiple_provider_objects_match_one_approved_effect"
+            outcome, reason = (
+                "conflicted",
+                "multiple_provider_objects_match_one_approved_effect",
+            )
         elif observation["type"] == "list_item.deleted":
-            outcome, reason = "missing", "normal_source_observed_provider_object_deleted"
+            outcome, reason = (
+                "missing",
+                "normal_source_observed_provider_object_deleted",
+            )
         elif observed_fingerprint == desired_fingerprint:
-            outcome, reason = "matched", "independent_normal_source_matches_approved_effect"
+            outcome, reason = (
+                "matched",
+                "independent_normal_source_matches_approved_effect",
+            )
         else:
-            outcome, reason = "drifted", "normal_source_state_differs_from_approved_effect"
+            outcome, reason = (
+                "drifted",
+                "normal_source_state_differs_from_approved_effect",
+            )
         now = datetime.now(timezone.utc).isoformat()
         observation_event_id = await self._events.write(
             EventEnvelope(
@@ -189,7 +197,9 @@ class GoogleTasksExecutionReconciler:
                 raw_ref=f"content-sha256:{observed_fingerprint}",
                 payload={
                     "command_id": command_id,
-                    "execution_envelope_id": terminal["payload"]["execution_envelope_id"],
+                    "execution_envelope_id": terminal["payload"][
+                        "execution_envelope_id"
+                    ],
                     "terminal_result_event_id": terminal["event_id"],
                     "source_event_id": observation["event_id"],
                     "provider": "google_tasks",
@@ -222,7 +232,9 @@ class GoogleTasksExecutionReconciler:
                 raw_ref=f"content-sha256:{observed_fingerprint}",
                 payload={
                     "command_id": command_id,
-                    "execution_envelope_id": terminal["payload"]["execution_envelope_id"],
+                    "execution_envelope_id": terminal["payload"][
+                        "execution_envelope_id"
+                    ],
                     "terminal_result_event_id": terminal["event_id"],
                     "observation_event_id": observation_event_id,
                     "outcome": outcome,
