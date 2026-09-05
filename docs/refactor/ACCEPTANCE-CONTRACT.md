@@ -1,5 +1,12 @@
 # Release acceptance contract
 
+B03 single-use Google Tasks creation amendment (2026-09-05): the production-v2
+acceptance delta is governed by
+[`B03-SINGLE-USE-GOOGLE-TASKS-CREATE.md`](B03-SINGLE-USE-GOOGLE-TASKS-CREATE.md).
+Its Phase A evidence is credential-free and performs no live provider effect.
+It does not authorize Phase B deployment, provider-scope changes, credential
+changes, or creation of a real Google task.
+
 G10 Apple Messages bridge-ingestion amendment (2026-09-03): AC-58 is Phase A,
 credential-free production-composition and deterministic transport-fixture
 evidence. It uses no family Mac, Apple account, Messages database, provider

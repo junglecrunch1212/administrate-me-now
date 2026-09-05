@@ -1748,6 +1748,7 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("cos.work.", "cos_work"),
     ("cos.execution_envelope.", "delegated_execution"),
     ("cos.delegated_action.", "delegated_execution"),
+    ("cos.google_tasks_execution.", "delegated_execution"),
     ("coordination.", "coordination"),
     ("operating_agreement.", "operating_agreement"),
     ("direct_intake.", "source_routing"),

@@ -23,6 +23,14 @@ approval; AdministrateMe then applies its own authorization. Dashboard calls
 also require `client.authenticatedUserId`; an operator bearer by itself is not
 an actor identity.
 
+The production-v2 Google Tasks surface is deliberately three narrow tools:
+prepare one exact member-approved `google_tasks_create` command, execute that
+same command once, and read its terminal/observation/reconciliation state. It
+is not a generic Google Tasks writer. The execute tool's allow-once receipt is
+bound to the command, envelope, account, pre-existing task list, content
+fingerprint, expiry, and effect ceiling; AdministrateMe independently rechecks
+the domain approval and consumes a scoped observation admission.
+
 The bridge ignores every ordinary conversation turn. It forwards content only
 when the configured channel is allowlisted and host metadata includes an
 explicit `{administrateme: {consent: true, eventKind, sensitivity}}` marker.

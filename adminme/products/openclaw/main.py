@@ -48,6 +48,18 @@ from adminme.messages_reply import (
     canonical_sha256,
     participant_ids,
 )
+from adminme.google_tasks_execution import (
+    ACTION_CLASS as B03_ACTION_CLASS,
+    ADAPTER_IDENTITY as B03_ADAPTER_IDENTITY,
+    DELEGATION_PERMISSION as B03_PERMISSION,
+    EXECUTION_POLICY_VERSION as B03_POLICY_VERSION,
+    OPERATION as B03_OPERATION,
+    PROVIDER as B03_PROVIDER,
+    ExecutionCoordinate as B03ExecutionCoordinate,
+    canonical_task_content as b03_canonical_task_content,
+    public_envelope_state as b03_public_envelope_state,
+    task_content_fingerprint as b03_task_content_fingerprint,
+)
 from adminme.openclaw_topology import binding_fingerprints, member_agent_id
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
@@ -60,6 +72,7 @@ from adminme.products.openclaw.constants import (
     PLUGIN_ID,
 )
 from adminme.projections.tasks.queries import (
+    get_google_tasks_execution,
     get_delegated_action,
     get_task,
     list_coordination_records,
@@ -519,6 +532,28 @@ class DelegatedActionObserveRequest(ContextRequest):
     context_scope: Literal["member_private", "household_shared"] = "member_private"
     action_id: str = Field(min_length=1, max_length=240)
     expected_last_event_id: str = Field(min_length=1, max_length=240)
+
+
+class GoogleTasksCreatePrepareRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    command_id: str = Field(min_length=1, max_length=240)
+    domain_approval_event_id: str = Field(min_length=1, max_length=240)
+    expected_approval_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_content: dict[str, Any]
+
+
+class GoogleTasksCreateExecuteRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    command_id: str = Field(min_length=1, max_length=240)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    expected_approval_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class GoogleTasksCreateStateRequest(ContextRequest):
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    command_id: str = Field(min_length=1, max_length=240)
 
 
 class HealthReport(BaseModel):
@@ -1717,6 +1752,445 @@ def _operator_id(kind: str) -> str:
         if kind == "openclaw_automation"
         else "operator:fixture:individual-human"
     )
+
+
+def _require_current_b03_agreement(
+    runtime: Any, session: Session, action: dict[str, Any]
+) -> None:
+    agreements = effective_operating_agreements(
+        runtime.projections.connection("parties"),
+        session,
+        as_of_iso=EventEnvelope.now_utc_iso(),
+    )
+    matches = []
+    for agreement in agreements:
+        if agreement.get("agreement_id") != action.get("operating_agreement_id"):
+            continue
+        rule = agreement.get("rule") or {}
+        trust = rule.get("trust_scope") or {}
+        ceilings = rule.get("ceilings") or {}
+        if (
+            agreement.get("authority_scope") == action.get("context_scope")
+            and rule.get("represented_service_principal_id") == COS_SERVICE_PRINCIPAL_ID
+            and B03_PROVIDER in set(rule.get("provider_ids") or [])
+            and action.get("provider_account")
+            in set(rule.get("provider_account_references") or [])
+            and action.get("destination_task_list")
+            in set(rule.get("destination_ids") or [])
+            and B03_ACTION_CLASS in set(trust.get("capability_ids") or [])
+            and B03_OPERATION in set(trust.get("action_verbs") or [])
+            and trust.get("stage") == "supervised_trial"
+            and rule.get("independent_openclaw_approval_required") is True
+            and ceilings.get("maximum_frequency_count") == 1
+            and ceilings.get("frequency_period") == "occurrence"
+        ):
+            matches.append(agreement)
+    if len(matches) != 1:
+        raise HTTPException(403, "exact B03 operating agreement is missing or ineffective")
+
+
+def _b03_binding_matches(runtime: Any, coordinate: B03ExecutionCoordinate) -> list[Any]:
+    return [
+        binding
+        for binding in runtime.settings.provider_bindings
+        if binding.b03_dispatch_coordinate == coordinate.dispatch_coordinate
+    ]
+
+
+@router.post("/tools/google-tasks-create/prepare", status_code=201)
+async def prepare_google_tasks_create(
+    body: GoogleTasksCreatePrepareRequest, request: Request
+) -> dict[str, Any]:
+    """Prepare the one production-v2 action from member-controlled approval."""
+
+    session = _session(
+        request,
+        body.provenance,
+        required_permission=cast(DelegationPermission, B03_PERMISSION),
+        context_scope=body.context_scope,
+    )
+    _require_adult(session)
+    runtime = _runtime(request)
+    context = session.service_context
+    if context is None or runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "B03 production execution is unavailable")
+    approval_event = await runtime.event_log.get(body.domain_approval_event_id)
+    if (
+        approval_event is None
+        or approval_event.get("tenant_id") != session.tenant_id
+        or approval_event.get("type") != "cos.google_tasks_execution.domain_approved"
+        or int(approval_event.get("schema_version") or 0) != 2
+        or approval_event.get("visibility_scope") not in session.allowed_scopes
+    ):
+        raise HTTPException(403, "exact AdministrateMe domain approval is unavailable")
+    p = dict(approval_event["payload"])
+    desired = b03_canonical_task_content(body.task_content)
+    desired_fingerprint = b03_task_content_fingerprint(desired)
+    if (
+        p.get("command_id") != body.command_id
+        or p.get("approval_fingerprint") != body.expected_approval_fingerprint
+        or p.get("approved_task_content_fingerprint") != desired_fingerprint
+        or p.get("desired_task_content") != desired
+        or p.get("active_context") != body.context_scope
+        or p.get("authority_grant_id") != context.authority_grant_id
+        or p.get("represented_cos") != COS_SERVICE_PRINCIPAL_ID
+        or p.get("actual_operator") != COS_AUTOMATION_OPERATOR_ID
+        or p.get("provider_owner") != COS_SERVICE_PRINCIPAL_ID
+        or p.get("provider") != B03_PROVIDER
+        or p.get("adapter_identity") != B03_ADAPTER_IDENTITY
+        or p.get("maximum_effect_count") != 1
+        or p.get("used") is not False
+        or p.get("revoked") is not False
+    ):
+        raise HTTPException(403, "B03 domain approval coordinates do not match")
+    if body.context_scope == "member_private" and (
+        p.get("on_behalf_of") != session.auth_member_id
+        or p.get("resource_owner") != session.auth_member_id
+        or context.context_member_id != session.auth_member_id
+        or context.resource_owner_principal_id != session.auth_member_id
+    ):
+        raise HTTPException(403, "B03 member or resource-owner coordinate changed")
+    now = datetime.now(timezone.utc)
+    if datetime.fromisoformat(str(p["valid_from"]).replace("Z", "+00:00")) > now or datetime.fromisoformat(
+        str(p["expires_at"]).replace("Z", "+00:00")
+    ) <= now:
+        raise HTTPException(403, "B03 domain approval expired or is not yet valid")
+    coordinate = B03ExecutionCoordinate(
+        command_id=body.command_id,
+        initiating_event_id="pending-prepared-event",
+        envelope_id=str(p["execution_envelope_id"]),
+        envelope_revision=int(p["execution_envelope_revision"]),
+        represented_cos=str(p["represented_cos"]),
+        actual_operator=str(p["actual_operator"]),
+        context_scope=str(p["active_context"]),
+        on_behalf_of=str(p["on_behalf_of"]),
+        authority_grant_id=str(p["authority_grant_id"]),
+        operating_agreement_id=str(p["operating_agreement_id"]),
+        resource_owner=str(p["resource_owner"]),
+        provider_owner=str(p["provider_owner"]),
+        provider=str(p["provider"]),
+        provider_account=str(p["provider_account_coordinate"]),
+        adapter_identity=str(p["adapter_identity"]),
+        destination_task_list=str(p["destination_task_list_coordinate"]),
+        content_fingerprint=desired_fingerprint,
+        domain_approval_event_id=body.domain_approval_event_id,
+        openclaw_approval_event_id="pending-openclaw-approval",
+        valid_from=str(p["valid_from"]),
+        expires_at=str(p["expires_at"]),
+        idempotency_key=f"google-tasks-create:{body.command_id}",
+    )
+    coordinate.validate(now=now)
+    if len(_b03_binding_matches(runtime, coordinate)) != 1:
+        raise HTTPException(403, "B03 provider route is missing or ambiguous")
+    agreement_action = {
+        "operating_agreement_id": p["operating_agreement_id"],
+        "context_scope": p["active_context"],
+        "provider_account": p["provider_account_coordinate"],
+        "destination_task_list": p["destination_task_list_coordinate"],
+    }
+    _require_current_b03_agreement(runtime, session, agreement_action)
+    prepared_payload = {
+        "execution_policy_version": B03_POLICY_VERSION,
+        "action_class": B03_ACTION_CLASS,
+        "command_id": body.command_id,
+        "execution_envelope_id": p["execution_envelope_id"],
+        "execution_envelope_revision": p["execution_envelope_revision"],
+        "represented_cos": p["represented_cos"],
+        "actual_operator": p["actual_operator"],
+        "active_context": p["active_context"],
+        "on_behalf_of": p["on_behalf_of"],
+        "authority_basis": p["authority_grant_id"],
+        "operating_agreement_id": p["operating_agreement_id"],
+        "resource_owner": p["resource_owner"],
+        "provider_owner": p["provider_owner"],
+        "provider": B03_PROVIDER,
+        "provider_account_coordinate": p["provider_account_coordinate"],
+        "adapter_identity": B03_ADAPTER_IDENTITY,
+        "destination_task_list_coordinate": p["destination_task_list_coordinate"],
+        "approved_task_content_fingerprint": desired_fingerprint,
+        "approval_fingerprint": p["approval_fingerprint"],
+        "desired_task_content": desired,
+        "domain_approval_event_id": body.domain_approval_event_id,
+        "openclaw_approval_event_id": None,
+        "created_at": now.isoformat(),
+        "valid_from": p["valid_from"],
+        "expires_at": p["expires_at"],
+        "revoked": False,
+        "used": False,
+        "idempotency_key": coordinate.idempotency_key,
+        "provider_contact_state": "not_contacted",
+        "terminal_result_state": "missing",
+        "later_observation_state": "missing",
+        "reconciliation_state": "not_applicable",
+        "maximum_effect_count": 1,
+        "provider_effect_count": 0,
+    }
+    event_id, duplicate = await _append(
+        runtime,
+        session,
+        event_type="cos.google_tasks_execution.prepared",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=str(approval_event["owner_scope"]),
+        visibility_scope=str(approval_event["visibility_scope"]),
+        sensitivity=cast(Sensitivity, approval_event["sensitivity"]),
+        payload=prepared_payload,
+        request_id=body.request_id,
+        causation_id=body.domain_approval_event_id,
+        request_fingerprint=body.expected_approval_fingerprint,
+        schema_version=2,
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.google-tasks-create.prepare",
+        result_event_ids=[event_id],
+    )
+    return {
+        "command_id": body.command_id,
+        "event_id": event_id,
+        "duplicate": duplicate,
+        "state": "held_for_approval",
+        "execution_policy_version": B03_POLICY_VERSION,
+        "action_class": B03_ACTION_CLASS,
+        "content_fingerprint": desired_fingerprint,
+        "domain_approval_event_id": body.domain_approval_event_id,
+        "openclaw_approval_state": "required",
+        "provider_effect_count": 0,
+    }
+
+
+@router.post("/tools/google-tasks-create/execute", status_code=202)
+async def execute_google_tasks_create(
+    body: GoogleTasksCreateExecuteRequest, request: Request
+) -> dict[str, Any]:
+    """Dispatch once after governance and an independent allow-once receipt."""
+
+    session = _session(
+        request,
+        body.provenance,
+        required_permission=cast(DelegationPermission, B03_PERMISSION),
+        context_scope=body.context_scope,
+    )
+    _require_adult(session)
+    runtime = _runtime(request)
+    context = session.service_context
+    if context is None or runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "B03 production execution is unavailable")
+    action = get_google_tasks_execution(
+        runtime.projections.connection("tasks"), session, command_id=body.command_id
+    )
+    if action is None:
+        raise HTTPException(404, "B03 command not found")
+    if runtime.effective_openclaw_state() != "healthy":
+        raise HTTPException(403, "independent OpenClaw runtime is unavailable or degraded")
+    if action.get("contact_attempt_event_id") or action.get("used_at"):
+        raise HTTPException(409, "B03 envelope was already used; retry is refused")
+    if action.get("revoked_at"):
+        raise HTTPException(403, "B03 envelope was revoked")
+    now = datetime.now(timezone.utc)
+    if (
+        action.get("state") != "held_for_approval"
+        or action.get("last_event_id") != body.expected_last_event_id
+        or action.get("approval_fingerprint") != body.expected_approval_fingerprint
+        or action.get("authority_grant_id") != context.authority_grant_id
+        or action.get("actual_operator") != COS_AUTOMATION_OPERATOR_ID
+        or action.get("represented_cos") != COS_SERVICE_PRINCIPAL_ID
+        or action.get("provider_owner") != COS_SERVICE_PRINCIPAL_ID
+        or action.get("provider") != B03_PROVIDER
+        or action.get("adapter_identity") != B03_ADAPTER_IDENTITY
+        or action.get("maximum_effect_count") != 1
+        or action.get("provider_effect_count") != 0
+        or datetime.fromisoformat(str(action["expires_at"]).replace("Z", "+00:00")) <= now
+    ):
+        raise HTTPException(403, "B03 envelope is changed, expired, or ineligible")
+    coordinate = B03ExecutionCoordinate(
+        command_id=str(action["command_id"]),
+        initiating_event_id=str(action["initiating_event_id"]),
+        envelope_id=str(action["envelope_id"]),
+        envelope_revision=int(action["envelope_revision"]),
+        represented_cos=str(action["represented_cos"]),
+        actual_operator=str(action["actual_operator"]),
+        context_scope=str(action["context_scope"]),
+        on_behalf_of=str(action["on_behalf_of"]),
+        authority_grant_id=str(action["authority_grant_id"]),
+        operating_agreement_id=str(action["operating_agreement_id"]),
+        resource_owner=str(action["resource_owner"]),
+        provider_owner=str(action["provider_owner"]),
+        provider=str(action["provider"]),
+        provider_account=str(action["provider_account"]),
+        adapter_identity=str(action["adapter_identity"]),
+        destination_task_list=str(action["destination_task_list"]),
+        content_fingerprint=str(action["content_fingerprint"]),
+        domain_approval_event_id=str(action["domain_approval_event_id"]),
+        openclaw_approval_event_id="pending-openclaw-approval",
+        valid_from=str(action["valid_from"]),
+        expires_at=str(action["expires_at"]),
+        idempotency_key=str(action["idempotency_key"]),
+    )
+    coordinate.validate(now=now)
+    if len(_b03_binding_matches(runtime, coordinate)) != 1:
+        raise HTTPException(403, "B03 provider route is missing or ambiguous")
+    _require_current_b03_agreement(runtime, session, action)
+    governance_payload = {
+        "command_id": body.command_id,
+        "action_class": B03_ACTION_CLASS,
+        "provider": B03_PROVIDER,
+        "operation": B03_OPERATION,
+        "provider_account_class": "service-owned",
+        "destination_class": "pre-existing dedicated task list",
+        "content_fingerprint": action["content_fingerprint"],
+        "maximum_effect_count": 1,
+    }
+    if runtime.guarded_write is None:
+        raise HTTPException(503, "write authorization unavailable")
+    decision = await runtime.guarded_write.check(
+        session,
+        "external_sync.write_requested",
+        governance_payload,
+        domain_governance=(True, "exact_b03_domain_approval"),
+    )
+    if not decision.pass_:
+        raise HTTPException(403, {"code": "write_denied", "layer": decision.layer_failed, "reason": decision.reason})
+    openclaw_event_id = await _consume_openclaw_approval(
+        request,
+        session,
+        body.provenance,
+        body,
+        tool_name="administrateme_execute_google_tasks_create_once",
+        action=B03_OPERATION,
+        causation_id=str(action["domain_approval_event_id"]),
+    )
+    if b03_task_content_fingerprint(
+        b03_canonical_task_content(dict(action["desired_task_content"]))
+    ) != action["content_fingerprint"]:
+        raise HTTPException(403, "B03 final privacy/content guard rejected changed content")
+    approval_event_id, _ = await _append(
+        runtime,
+        session,
+        event_type="cos.google_tasks_execution.openclaw_approved",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=str(action["owner_scope"]),
+        visibility_scope=str(action["visibility_scope"]),
+        sensitivity=cast(Sensitivity, action["sensitivity"]),
+        payload={
+            "command_id": body.command_id,
+            "execution_envelope_id": action["envelope_id"],
+            "execution_envelope_revision": action["envelope_revision"],
+            "domain_approval_event_id": action["domain_approval_event_id"],
+            "openclaw_approval_event_id": openclaw_event_id,
+            "approval_fingerprint": body.expected_approval_fingerprint,
+            "approved_at": now.isoformat(),
+            "expires_at": action["expires_at"],
+            "maximum_effect_count": 1,
+        },
+        request_id=f"{body.request_id}:approval",
+        causation_id=openclaw_event_id,
+        request_fingerprint=body.expected_approval_fingerprint,
+        schema_version=2,
+    )
+    await runtime.wait_for_projection("tasks", approval_event_id)
+    command_payload = {
+        "command_id": body.command_id,
+        "member_id": session.auth_member_id,
+        "provider": B03_PROVIDER,
+        "provider_account_id": action["provider_account"],
+        "operation": B03_OPERATION,
+        "target_external_id": None,
+        "expected_provider_revision": None,
+        "payload": {
+            **dict(action["desired_task_content"]),
+            "tasklist_id": action["destination_task_list"],
+            "b03_production_v2": True,
+            "execution_envelope_id": action["envelope_id"],
+            "execution_envelope_revision": action["envelope_revision"],
+            "represented_cos": action["represented_cos"],
+            "actual_operator": action["actual_operator"],
+            "context_scope": action["context_scope"],
+            "on_behalf_of": action["on_behalf_of"],
+            "resource_owner": action["resource_owner"],
+            "provider_owner": action["provider_owner"],
+            "adapter_identity": action["adapter_identity"],
+            "content_fingerprint": action["content_fingerprint"],
+            "maximum_effect_count": 1,
+            "expires_at": action["expires_at"],
+        },
+        "requested_at": now.isoformat(),
+        "domain_approval_event_id": action["domain_approval_event_id"],
+        "openclaw_approval_event_id": openclaw_event_id,
+        "request_fingerprint": action["content_fingerprint"],
+        "privacy_guard_version": "google-tasks-create-content-guard-v2",
+        "origin_proposal_id": body.command_id,
+    }
+    command_event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="external_sync.write_requested",
+            schema_version=2,
+            occurred_at=now.isoformat(),
+            source_adapter="openclaw-plugin",
+            source_account_id=body.provenance.account_id or body.provenance.channel_id,
+            owner_scope=str(action["owner_scope"]),
+            visibility_scope=str(action["visibility_scope"]),
+            sensitivity=cast(Sensitivity, action["sensitivity"]),
+            correlation_id=session.correlation_id,
+            causation_id=approval_event_id,
+            actor_identity=COS_SERVICE_PRINCIPAL_ID,
+            idempotency_key=f"b03-provider-command:{body.command_id}",
+            raw_ref=f"content-sha256:{action['content_fingerprint']}",
+            payload=command_payload,
+        )
+    )
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.google-tasks-create.execute",
+        result_event_ids=[approval_event_id, command_event_id],
+    )
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "command_id": body.command_id,
+        "event_id": command_event_id,
+        "domain_approval_event_id": action["domain_approval_event_id"],
+        "openclaw_approval_event_id": openclaw_event_id,
+        "state": "approved",
+        "maximum_effect_count": 1,
+    }
+
+
+@router.post("/tools/google-tasks-create/state")
+async def google_tasks_create_state(
+    body: GoogleTasksCreateStateRequest, request: Request
+) -> dict[str, Any]:
+    session = _session(
+        request,
+        body.provenance,
+        required_permission=cast(DelegationPermission, B03_PERMISSION),
+        context_scope=body.context_scope,
+    )
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "B03 execution projection is unavailable")
+    action = get_google_tasks_execution(
+        runtime.projections.connection("tasks"), session, command_id=body.command_id
+    )
+    if action is None:
+        raise HTTPException(404, "B03 command not found")
+    public = b03_public_envelope_state(action)
+    public.update(
+        {
+            "command_id": body.command_id,
+            "terminal_result_event_id": action.get("terminal_result_event_id"),
+            "observation_event_id": action.get("observation_event_id"),
+            "reconciliation_event_id": action.get("reconciliation_event_id"),
+            "provider_effect_count": action.get("provider_effect_count", 0),
+        }
+    )
+    return public
 
 
 @router.post("/tools/delegated-actions/prepare", status_code=201)

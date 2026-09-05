@@ -129,6 +129,7 @@ class OpenClawToolCallRecordedV2(BaseModel):
             "coordinate_household_work",
             "prepare_external_actions",
             "execute_fixture_actions",
+            "execute_google_tasks_create_trial",
         ]
     ] = Field(default_factory=list)
     openclaw_actor_id: str = Field(min_length=1)

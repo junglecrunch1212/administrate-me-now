@@ -44,6 +44,7 @@ DelegationPermission = Literal[
     "coordinate_household_work",
     "prepare_external_actions",
     "execute_fixture_actions",
+    "execute_google_tasks_create_trial",
 ]
 ApprovalQuorum = Literal["service_self", "member_owner", "all_adult_principals"]
 

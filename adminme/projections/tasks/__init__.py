@@ -15,7 +15,7 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 7
+    version = 8
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "task.created",
@@ -54,6 +54,14 @@ class TasksProjection(Projection):
         "cos.delegated_action.canonical_outcome_returned",
         "cos.delegated_action.reconciled",
         "cos.delegated_action.withdrawn",
+        "cos.google_tasks_execution.prepared",
+        "cos.google_tasks_execution.openclaw_approved",
+        "cos.google_tasks_execution.contact_attempt_committed",
+        "cos.google_tasks_execution.provider_result_received",
+        "cos.google_tasks_execution.terminal",
+        "cos.google_tasks_execution.observed",
+        "cos.google_tasks_execution.reconciled",
+        "cos.google_tasks_execution.revoked",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

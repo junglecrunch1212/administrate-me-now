@@ -14,6 +14,12 @@ from collections.abc import Mapping, Set
 from typing import Any, Iterable
 
 from adminme.service_identities import service_private_scope
+from adminme.google_tasks_execution import (
+    ACTION_CLASS as B03_ACTION_CLASS,
+    ADAPTER_IDENTITY as B03_ADAPTER_IDENTITY,
+    GOOGLE_TASKS_WRITE_SCOPE,
+    OPERATION as B03_OPERATION,
+)
 
 
 WORKSPACES = frozenset({"personal", "work", "service"})
@@ -65,6 +71,15 @@ class ProviderBinding:
     workspace: str
     permission_scope: tuple[str, ...]
     binding_provenance: str
+    represented_service_principal_id: str | None = None
+    context_scope: str | None = None
+    on_behalf_of: str | None = None
+    resource_owner_principal_id: str | None = None
+    destination_id: str | None = None
+    permitted_operations: tuple[str, ...] = ()
+    write_binding_state: str = "read_only"
+    binding_revision: int = 1
+    review_provenance: str | None = None
 
     @property
     def coordinate(self) -> tuple[str, str, str, str, str]:
@@ -99,7 +114,30 @@ class ProviderBinding:
             "permission_count": len(self.permission_scope),
             "binding_provenance": self.binding_provenance,
             "content_exposed": False,
+            "write_binding_state": self.write_binding_state,
+            "permitted_operations": list(self.permitted_operations),
+            "destination_class": (
+                "pre-existing dedicated task list" if self.destination_id else None
+            ),
+            "revision": self.binding_revision,
         }
+
+    @property
+    def b03_dispatch_coordinate(self) -> tuple[str, ...] | None:
+        if self.write_binding_state != "trial":
+            return None
+        return (
+            str(self.resource_owner_principal_id),
+            self.owner_id,
+            str(self.represented_service_principal_id),
+            str(self.context_scope),
+            str(self.on_behalf_of),
+            "google_tasks",
+            self.provider_account_id.casefold(),
+            self.kind,
+            str(self.destination_id),
+            B03_OPERATION,
+        )
 
 
 def _provider_family(kind: str) -> str:
@@ -227,6 +265,9 @@ def validate_provider_bindings(
         workspace = adapter_config.get("workspace")
         permission_scope = adapter_config.get("permission_scope")
         provenance = adapter_config.get("binding_provenance")
+        b03 = adapter_config.get("b03_google_tasks_create")
+        if b03 is not None and not isinstance(b03, dict):
+            raise ValueError(f"enabled provider adapter {index} has invalid B03 binding")
         member_owner = isinstance(member_id, str) and bool(member_id.strip())
         service_owner = isinstance(service_principal_id, str) and bool(
             service_principal_id.strip()
@@ -291,21 +332,67 @@ def validate_provider_bindings(
                 raise ValueError(
                     f"enabled provider adapter {index} requires service workspace"
                 )
-            reviewed_scopes = SERVICE_OWNER_READONLY_SCOPES[kind]
-            if frozenset(permission_scope) != reviewed_scopes:
-                raise ValueError(
-                    f"enabled provider adapter {index} exceeds the reviewed "
-                    "service-owner read scope"
+            if b03 is None:
+                reviewed_scopes = SERVICE_OWNER_READONLY_SCOPES[kind]
+                if frozenset(permission_scope) != reviewed_scopes:
+                    raise ValueError(
+                        f"enabled provider adapter {index} exceeds the reviewed "
+                        "service-owner read scope"
+                    )
+                if adapter_config.get("read_only") is not True:
+                    raise ValueError(
+                        f"enabled provider adapter {index} requires read_only=true "
+                        "for service ownership"
+                    )
+                if adapter_config.get("enable_writes") is True:
+                    raise ValueError(
+                        f"enabled provider adapter {index} cannot enable service writes"
+                    )
+            else:
+                required = {
+                    "action_class": B03_ACTION_CLASS,
+                    "represented_service_principal_id": service_principal_id,
+                    "permitted_operation": B03_OPERATION,
+                    "required_permission_scope": GOOGLE_TASKS_WRITE_SCOPE,
+                    "state": "trial",
+                    "destination_preexisting": True,
+                }
+                if kind != B03_ADAPTER_IDENTITY or any(
+                    b03.get(key) != value for key, value in required.items()
+                ):
+                    raise ValueError(
+                        f"enabled provider adapter {index} has an unreviewed B03 coordinate"
+                    )
+                exact_text = (
+                    "provider_account_id",
+                    "destination_task_list_id",
+                    "context_scope",
+                    "on_behalf_of",
+                    "resource_owner_principal_id",
+                    "review_provenance",
                 )
-            if adapter_config.get("read_only") is not True:
-                raise ValueError(
-                    f"enabled provider adapter {index} requires read_only=true "
-                    "for service ownership"
-                )
-            if adapter_config.get("enable_writes") is True:
-                raise ValueError(
-                    f"enabled provider adapter {index} cannot enable service writes"
-                )
+                if any(not isinstance(b03.get(key), str) or not b03[key] for key in exact_text):
+                    raise ValueError(
+                        f"enabled provider adapter {index} has an incomplete B03 coordinate"
+                    )
+                if b03["provider_account_id"].casefold() != account_id.casefold():
+                    raise ValueError("B03 provider account coordinate disagrees with binding")
+                if b03["context_scope"] not in {"member_private", "household_shared"}:
+                    raise ValueError("B03 binding requires an exact member or household scope")
+                if b03["context_scope"] == "member_private" and (
+                    b03["resource_owner_principal_id"] != b03["on_behalf_of"]
+                ):
+                    raise ValueError("B03 member-private resource owner is misaligned")
+                if b03["context_scope"] == "household_shared" and (
+                    b03["resource_owner_principal_id"] != "shared:household"
+                ):
+                    raise ValueError("B03 household resource owner is misaligned")
+                if frozenset(permission_scope) != {GOOGLE_TASKS_WRITE_SCOPE}:
+                    raise ValueError("B03 binding requires only the reviewed Google Tasks scope")
+                if adapter_config.get("read_only") is not False or adapter_config.get("enable_writes") is not True:
+                    raise ValueError("B03 trial binding must explicitly enable only its governed write")
+                if not isinstance(b03.get("revision"), int) or b03["revision"] < 1:
+                    raise ValueError("B03 binding requires a positive reviewed revision")
             if provenance != "service-account-delegation" or not isinstance(
                 adapter_config.get("service_account_key_ref"), str
             ):
@@ -330,6 +417,19 @@ def validate_provider_bindings(
                     sorted(item.strip() for item in permission_scope)
                 ),
                 binding_provenance=str(provenance),
+                represented_service_principal_id=(
+                    str(b03["represented_service_principal_id"]) if b03 else None
+                ),
+                context_scope=str(b03["context_scope"]) if b03 else None,
+                on_behalf_of=str(b03["on_behalf_of"]) if b03 else None,
+                resource_owner_principal_id=(
+                    str(b03["resource_owner_principal_id"]) if b03 else None
+                ),
+                destination_id=str(b03["destination_task_list_id"]) if b03 else None,
+                permitted_operations=(B03_OPERATION,) if b03 else (),
+                write_binding_state="trial" if b03 else "read_only",
+                binding_revision=int(b03["revision"]) if b03 else 1,
+                review_provenance=str(b03["review_provenance"]) if b03 else None,
             )
         )
 

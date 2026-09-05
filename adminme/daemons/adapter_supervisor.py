@@ -169,6 +169,7 @@ class AdapterSupervisor:
         member_id: str,
         provider_account_id: str,
         operation: WriteOperation,
+        exact_coordinate: tuple[str, ...] | None = None,
     ) -> WriteResult:
         """Route a typed command to exactly one matching provider instance."""
 
@@ -185,14 +186,36 @@ class AdapterSupervisor:
             config = getattr(adapter, "_config", {})
             if expected_name and getattr(adapter, "name", None) != expected_name:
                 continue
-            if config.get("member_id") not in (None, "", member_id):
-                continue
+            if exact_coordinate is None:
+                if config.get("member_id") not in (None, "", member_id):
+                    continue
+            else:
+                b03 = config.get("b03_google_tasks_create")
+                if not isinstance(b03, dict):
+                    continue
+                candidate = (
+                    str(b03.get("resource_owner_principal_id")),
+                    str(config.get("service_principal_id")),
+                    str(b03.get("represented_service_principal_id")),
+                    str(b03.get("context_scope")),
+                    str(b03.get("on_behalf_of")),
+                    provider,
+                    str(config.get("provider_account_id") or "").casefold(),
+                    str(getattr(adapter, "name", "")),
+                    str(b03.get("destination_task_list_id")),
+                    operation.kind,
+                )
+                if candidate != exact_coordinate:
+                    continue
             configured_account = (
                 config.get("provider_account_id")
                 or config.get("subject_email")
                 or config.get("user_email")
             )
-            if configured_account not in (None, "", provider_account_id):
+            if exact_coordinate is None:
+                if configured_account not in (None, "", provider_account_id):
+                    continue
+            elif str(configured_account or "").casefold() != provider_account_id.casefold():
                 continue
             if callable(getattr(adapter, "apply_write", None)):
                 candidates.append(adapter)

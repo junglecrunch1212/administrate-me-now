@@ -136,7 +136,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(19);
+    expect([...runtime.tools]).toHaveLength(22);
     expect([...runtime.commands]).toHaveLength(8);
     expect([...runtime.gateways]).toHaveLength(14);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
@@ -220,7 +220,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(19);
+    expect([...runtime.tools]).toHaveLength(22);
     expect(runtime.services).toHaveLength(0);
   });
 

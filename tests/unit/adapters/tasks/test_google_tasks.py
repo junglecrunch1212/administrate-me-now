@@ -53,6 +53,7 @@ from adminme.adapters.base import AdapterContext
 from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.events.registry import registry
 from adminme.events.schemas.lists import ListItemAddedV1, ListItemV3
+from adminme.google_tasks_execution import task_content_fingerprint
 from adminme.lib.adapters import (
     ExternalStateMirrorAdapter,
     WriteCapabilityError,
@@ -360,6 +361,61 @@ async def test_read_only_instance_uses_exact_scope_and_denies_declared_writes() 
     with pytest.raises(WriteCapabilityError):
         await adapter.apply_write(
             WriteOperation(kind="create_task", target_external_id=None, payload={})
+        )
+
+
+async def test_b03_instance_exposes_only_exact_fingerprinted_create() -> None:
+    content = {"title": "Exact trial task", "notes": "One effect"}
+    adapter = GoogleTasksAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "provider_account_id": "provider-account-b03",
+            "service_principal_id": "service-principal:chief-of-staff",
+            "workspace": "service",
+            "tasklist_id": "existing-b03-list",
+            "permission_scope": ["https://www.googleapis.com/auth/tasks"],
+            "read_only": False,
+            "enable_writes": True,
+            "b03_google_tasks_create": {
+                "destination_task_list_id": "existing-b03-list",
+            },
+        }
+    )
+    adapter._service = _FakeTasksService()
+
+    assert adapter.write_capabilities == ["create_task"]
+    with pytest.raises(WriteCapabilityError):
+        await adapter.apply_write(
+            WriteOperation(
+                kind="update_task",
+                target_external_id="existing-task",
+                payload={"tasklist_id": "existing-b03-list", "title": "changed"},
+            )
+        )
+    with pytest.raises(WriteCapabilityError, match="exact approved create"):
+        await adapter.apply_write(
+            WriteOperation(
+                kind="create_task",
+                target_external_id=None,
+                payload={
+                    **content,
+                    "tasklist_id": "existing-b03-list",
+                    "content_fingerprint": task_content_fingerprint(content),
+                },
+            )
+        )
+    with pytest.raises(WriteCapabilityError, match="exact approved create"):
+        await adapter.apply_write(
+            WriteOperation(
+                kind="create_task",
+                target_external_id=None,
+                payload={
+                    **content,
+                    "b03_production_v2": True,
+                    "tasklist_id": "wrong-list",
+                    "content_fingerprint": task_content_fingerprint(content),
+                },
+            )
         )
 
 

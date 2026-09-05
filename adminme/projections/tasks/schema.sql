@@ -401,3 +401,74 @@ CREATE TABLE IF NOT EXISTS cos_delegated_action_state_history (
     changed_at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, action_id, source_event_id, state)
 );
+
+-- B03 is a separate production-v2 contract.  Never fold these rows into the
+-- fixture-v1 delegated tables: historical fixture replay must remain byte-for-
+-- byte semantically identical.
+CREATE TABLE IF NOT EXISTS cos_google_tasks_execution_v2 (
+    tenant_id TEXT NOT NULL,
+    command_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    execution_policy_version TEXT NOT NULL,
+    action_class TEXT NOT NULL,
+    envelope_id TEXT NOT NULL,
+    envelope_revision INTEGER NOT NULL,
+    represented_cos TEXT NOT NULL,
+    actual_operator TEXT NOT NULL,
+    context_scope TEXT NOT NULL,
+    on_behalf_of TEXT NOT NULL,
+    authority_grant_id TEXT NOT NULL,
+    operating_agreement_id TEXT NOT NULL,
+    resource_owner TEXT NOT NULL,
+    provider_owner TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account TEXT NOT NULL,
+    adapter_identity TEXT NOT NULL,
+    destination_task_list TEXT NOT NULL,
+    content_fingerprint TEXT NOT NULL,
+    desired_task_content_json TEXT NOT NULL,
+    domain_approval_event_id TEXT NOT NULL,
+    openclaw_approval_event_id TEXT,
+    approval_fingerprint TEXT,
+    initiating_event_id TEXT NOT NULL,
+    contact_attempt_event_id TEXT,
+    provider_result_event_id TEXT,
+    terminal_result_event_id TEXT,
+    observation_event_id TEXT,
+    reconciliation_event_id TEXT,
+    native_task_id TEXT,
+    provider_revision TEXT,
+    provider_contact_state TEXT NOT NULL DEFAULT 'not_contacted',
+    terminal_result_state TEXT NOT NULL DEFAULT 'missing',
+    observation_state TEXT NOT NULL DEFAULT 'missing',
+    reconciliation_state TEXT NOT NULL DEFAULT 'not_applicable',
+    valid_from TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    maximum_effect_count INTEGER NOT NULL,
+    provider_effect_count INTEGER NOT NULL DEFAULT 0,
+    used_at TEXT,
+    revoked_at TEXT,
+    last_event_id TEXT NOT NULL,
+    owner_scope TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    sensitivity TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, command_id),
+    UNIQUE (tenant_id, envelope_id, envelope_revision),
+    UNIQUE (tenant_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cos_google_tasks_execution_native
+    ON cos_google_tasks_execution_v2(
+        tenant_id, provider, provider_account, destination_task_list,
+        native_task_id
+    );
+
+CREATE TABLE IF NOT EXISTS cos_google_tasks_execution_history_v2 (
+    tenant_id TEXT NOT NULL,
+    command_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, command_id, source_event_id, state)
+);

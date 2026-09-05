@@ -29,19 +29,37 @@ from adminme.delegated_execution import (
 from adminme.lib.session import Session
 from adminme.products.auth import require_principal, session_from_request
 from adminme.projections.parties.queries import (
+    effective_operating_agreements,
     get_operating_agreement,
     list_operating_agreements,
     list_service_delegations,
 )
+from adminme.google_tasks_execution import (
+    ACTION_CLASS as B03_ACTION_CLASS,
+    ADAPTER_IDENTITY as B03_ADAPTER_IDENTITY,
+    DELEGATION_PERMISSION as B03_PERMISSION,
+    MAX_EFFECT_COUNT as B03_MAX_EFFECT_COUNT,
+    OPERATION as B03_OPERATION,
+    PROVIDER as B03_PROVIDER,
+    canonical_sha256,
+    canonical_task_content,
+    task_content_fingerprint,
+)
 from adminme.projections.tasks.queries import (
     coordination_conflicts,
     get_delegated_action,
+    get_google_tasks_execution,
+    list_google_tasks_executions,
     get_coordination_record,
     list_delegated_actions,
     list_execution_envelopes,
     list_coordination_records,
 )
-from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
+from adminme.service_identities import (
+    COS_AUTOMATION_OPERATOR_ID,
+    COS_PARTY_ID,
+    COS_SERVICE_PRINCIPAL_ID,
+)
 
 
 router = APIRouter(prefix="/api/member/v1/cos", tags=["member-cos"])
@@ -64,8 +82,9 @@ class DelegationRequest(BaseModel):
             "coordinate_household_work",
             "prepare_external_actions",
             "execute_fixture_actions",
+            "execute_google_tasks_create_trial",
         ]
-    ] = Field(min_length=1, max_length=7)
+    ] = Field(min_length=1, max_length=8)
     expires_at: AwareDatetime | None = None
 
 
@@ -225,6 +244,39 @@ class DelegatedActionWithdrawalRequest(BaseModel):
     reason_code: Literal["member_request", "superseded", "no_longer_needed", "other"]
 
 
+class GoogleTasksTrialApprovalRequest(BaseModel):
+    """Member-controlled domain approval for one production-v2 command."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    command_id: str = Field(min_length=1, max_length=240)
+    execution_envelope_id: str = Field(min_length=1, max_length=240)
+    execution_envelope_revision: int = Field(ge=1)
+    authority_grant_id: str = Field(min_length=1, max_length=240)
+    operating_agreement_id: str = Field(min_length=1, max_length=240)
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    on_behalf_of: str = Field(min_length=1, max_length=240)
+    resource_owner: str = Field(min_length=1, max_length=240)
+    provider_account_coordinate: str = Field(min_length=1, max_length=500)
+    destination_task_list_coordinate: str = Field(min_length=1, max_length=500)
+    task_content: dict[str, Any]
+    valid_from: AwareDatetime
+    expires_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def _window(self) -> "GoogleTasksTrialApprovalRequest":
+        if self.expires_at <= self.valid_from:
+            raise ValueError("B03 trial expiry must follow its start")
+        return self
+
+
+class GoogleTasksTrialRevocationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    reason_code: str = Field(min_length=1, max_length=500)
+
+
 def _runtime(request: Request) -> Any:
     return request.app.state.runtime
 
@@ -242,6 +294,7 @@ def _envelope(
     payload: dict[str, Any],
     request_id: str,
     owner_scope: str,
+    schema_version: int = 1,
 ) -> EventEnvelope:
     fingerprint = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -250,7 +303,7 @@ def _envelope(
         event_at_ms=int(time.time() * 1000),
         tenant_id=session.tenant_id,
         type=event_type,
-        schema_version=1,
+        schema_version=schema_version,
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter="member-cos-authority",
         source_account_id=session.auth_member_id,
@@ -1334,6 +1387,253 @@ async def execution_envelopes(request: Request, session: SessionDep) -> dict[str
         "openclaw_permission_included": False,
         "provider_execution_scope": "fixture_only",
     }
+
+
+def _b03_operating_agreement(
+    runtime: Any,
+    session: Session,
+    *,
+    agreement_id: str,
+    account: str,
+    destination: str,
+    context_scope: str,
+) -> dict[str, Any]:
+    agreements = effective_operating_agreements(
+        runtime.projections.connection("parties"),
+        session,
+        as_of_iso=EventEnvelope.now_utc_iso(),
+    )
+    matches: list[dict[str, Any]] = []
+    for agreement in agreements:
+        if agreement.get("agreement_id") != agreement_id:
+            continue
+        rule = agreement.get("rule") or {}
+        trust = rule.get("trust_scope") or {}
+        ceilings = rule.get("ceilings") or {}
+        if (
+            agreement.get("authority_scope") == context_scope
+            and rule.get("represented_service_principal_id") == COS_SERVICE_PRINCIPAL_ID
+            and COS_SERVICE_PRINCIPAL_ID in set(rule.get("acting_principal_ids") or [])
+            and COS_SERVICE_PRINCIPAL_ID
+            in set(rule.get("provider_account_owner_principal_ids") or [])
+            and B03_PROVIDER in set(rule.get("provider_ids") or [])
+            and account in set(rule.get("provider_account_references") or [])
+            and destination in set(rule.get("destination_ids") or [])
+            and B03_ACTION_CLASS in set(trust.get("capability_ids") or [])
+            and B03_OPERATION in set(trust.get("action_verbs") or [])
+            and trust.get("stage") == "supervised_trial"
+            and rule.get("independent_openclaw_approval_required") is True
+            and ceilings.get("maximum_frequency_count") == 1
+            and ceilings.get("frequency_period") == "occurrence"
+            and destination in set(ceilings.get("permitted_destination_ids") or [])
+        ):
+            matches.append(agreement)
+    if len(matches) != 1:
+        raise HTTPException(403, "one exact effective B03 operating agreement is required")
+    return matches[0]
+
+
+@router.post("/google-tasks-create/trial-approvals", status_code=201)
+async def approve_google_tasks_create_trial(
+    body: GoogleTasksTrialApprovalRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Grant domain approval only; OpenClaw approval remains independent."""
+
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "B03 execution authority is unavailable")
+    if body.context_scope == "member_private":
+        if body.on_behalf_of != session.auth_member_id or body.resource_owner != session.auth_member_id:
+            raise HTTPException(403, "B03 member scope must be the approving member")
+        owner_scope = f"private:{session.auth_member_id}"
+    else:
+        if body.resource_owner != "shared:household" or body.on_behalf_of != "shared:household":
+            raise HTTPException(403, "B03 household scope is misaligned")
+        owner_scope = "shared:household"
+    _member_execution_grant(
+        runtime,
+        session,
+        grant_id=body.authority_grant_id,
+        permission=B03_PERMISSION,
+    )
+    _b03_operating_agreement(
+        runtime,
+        session,
+        agreement_id=body.operating_agreement_id,
+        account=body.provider_account_coordinate,
+        destination=body.destination_task_list_coordinate,
+        context_scope=body.context_scope,
+    )
+    exact_coordinate = (
+        body.resource_owner,
+        COS_SERVICE_PRINCIPAL_ID,
+        COS_SERVICE_PRINCIPAL_ID,
+        body.context_scope,
+        body.on_behalf_of,
+        B03_PROVIDER,
+        body.provider_account_coordinate.casefold(),
+        B03_ADAPTER_IDENTITY,
+        body.destination_task_list_coordinate,
+        B03_OPERATION,
+    )
+    binding_matches = [
+        binding
+        for binding in runtime.settings.provider_bindings
+        if binding.b03_dispatch_coordinate == exact_coordinate
+    ]
+    if len(binding_matches) != 1:
+        raise HTTPException(403, "one exact reviewed B03 provider binding is required")
+    now = datetime.now(timezone.utc)
+    if body.valid_from < now - timedelta(seconds=30) or body.expires_at <= now:
+        raise HTTPException(422, "B03 trial window is not current")
+    if body.expires_at > now + timedelta(days=1):
+        raise HTTPException(422, "B03 trial window must expire within one day")
+    desired = canonical_task_content(body.task_content)
+    content_fingerprint = task_content_fingerprint(desired)
+    approval_material = {
+        "command_id": body.command_id,
+        "action_class": B03_ACTION_CLASS,
+        "represented_cos": COS_SERVICE_PRINCIPAL_ID,
+        "context_scope": body.context_scope,
+        "on_behalf_of": body.on_behalf_of,
+        "provider": B03_PROVIDER,
+        "provider_account": body.provider_account_coordinate,
+        "destination_task_list": body.destination_task_list_coordinate,
+        "content_fingerprint": content_fingerprint,
+        "expires_at": body.expires_at.isoformat(),
+        "maximum_effect_count": B03_MAX_EFFECT_COUNT,
+    }
+    payload = {
+        "command_id": body.command_id,
+        "execution_envelope_id": body.execution_envelope_id,
+        "execution_envelope_revision": body.execution_envelope_revision,
+        "action_class": B03_ACTION_CLASS,
+        "represented_cos": COS_SERVICE_PRINCIPAL_ID,
+        "actual_operator": COS_AUTOMATION_OPERATOR_ID,
+        "active_context": body.context_scope,
+        "on_behalf_of": body.on_behalf_of,
+        "authority_grant_id": body.authority_grant_id,
+        "operating_agreement_id": body.operating_agreement_id,
+        "resource_owner": body.resource_owner,
+        "provider_owner": COS_SERVICE_PRINCIPAL_ID,
+        "provider": B03_PROVIDER,
+        "provider_account_coordinate": body.provider_account_coordinate,
+        "adapter_identity": B03_ADAPTER_IDENTITY,
+        "destination_task_list_coordinate": body.destination_task_list_coordinate,
+        "approved_task_content_fingerprint": content_fingerprint,
+        "desired_task_content": desired,
+        "approval_fingerprint": canonical_sha256(approval_material),
+        "approved_by_member_id": session.auth_member_id,
+        "approved_at": now.isoformat(),
+        "valid_from": body.valid_from.isoformat(),
+        "expires_at": body.expires_at.isoformat(),
+        "maximum_effect_count": 1,
+        "permission": B03_PERMISSION,
+        "single_use": True,
+        "revoked": False,
+        "used": False,
+    }
+    event_id = await runtime.events.write(
+        _envelope(
+            session,
+            event_type="cos.google_tasks_execution.domain_approved",
+            payload=payload,
+            request_id=body.request_id,
+            owner_scope=owner_scope,
+            schema_version=2,
+        )
+    )
+    return {
+        "event_id": event_id,
+        "command_id": body.command_id,
+        "execution_envelope_id": body.execution_envelope_id,
+        "content_fingerprint": content_fingerprint,
+        "approval_fingerprint": payload["approval_fingerprint"],
+        "openclaw_approval_included": False,
+        "maximum_effect_count": 1,
+        "provider_effect_count": 0,
+    }
+
+
+@router.get("/google-tasks-create/executions")
+async def google_tasks_create_executions(
+    request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "B03 execution projection is unavailable")
+    rows = list_google_tasks_executions(
+        runtime.projections.connection("tasks"), session
+    )
+    return {
+        "contract": "google-tasks-create-production-v2",
+        "action_class": B03_ACTION_CLASS,
+        "items": [
+            {
+                "command_id": row["command_id"],
+                "state": row["state"],
+                "envelope_revision": row["envelope_revision"],
+                "valid_from": row["valid_from"],
+                "expires_at": row["expires_at"],
+                "provider_contact_state": row["provider_contact_state"],
+                "terminal_result_state": row["terminal_result_state"],
+                "observation_state": row["observation_state"],
+                "reconciliation_state": row["reconciliation_state"],
+                "provider_effect_count": row["provider_effect_count"],
+                "content_exposed": False,
+            }
+            for row in rows
+        ],
+        "global_observation_mode_required": True,
+        "remaining_operations": "read_only_or_prohibited",
+    }
+
+
+@router.post("/google-tasks-create/executions/{command_id}/revoke")
+async def revoke_google_tasks_create_execution(
+    command_id: str,
+    body: GoogleTasksTrialRevocationRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_principal(session)
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "B03 execution authority is unavailable")
+    action = get_google_tasks_execution(
+        runtime.projections.connection("tasks"), session, command_id=command_id
+    )
+    if action is None:
+        raise HTTPException(404, "B03 command not found")
+    if action["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "B03 execution changed")
+    if action["context_scope"] == "member_private" and action["on_behalf_of"] != session.auth_member_id:
+        raise HTTPException(403, "only the exact member owner may revoke B03 authority")
+    now = EventEnvelope.now_utc_iso()
+    event_id = await runtime.events.write(
+        _envelope(
+            session,
+            event_type="cos.google_tasks_execution.revoked",
+            payload={
+                "command_id": command_id,
+                "execution_envelope_id": action["envelope_id"],
+                "execution_envelope_revision": action["envelope_revision"],
+                "revoked_by": session.auth_member_id,
+                "revoked_at": now,
+                "reason_code": body.reason_code,
+                "provider_effect_count": 0,
+            },
+            request_id=body.request_id,
+            owner_scope=str(action["owner_scope"]),
+            schema_version=2,
+        )
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    return {"event_id": event_id, "command_id": command_id, "state": "revoked"}
 
 
 @router.post("/execution-envelopes", status_code=201)

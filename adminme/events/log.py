@@ -167,6 +167,7 @@ class EventLog:
         (2, "0002_full_envelope.sql"),
         (3, "0003_idempotency_keys.sql"),
         (4, "0004_source_assurance_covering_index.sql"),
+        (5, "0005_b03_execution_recovery.sql"),
     )
 
     def __init__(
