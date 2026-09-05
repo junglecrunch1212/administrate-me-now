@@ -16,6 +16,7 @@ from bootstrap.google_oauth_contract import (
     member_google_secret_name,
 )
 from bootstrap.provider_binding_transition import (
+    NoEligibleProviderBindingTransitionError,
     ProviderBindingTransitionError,
     discover_readonly_google_enrollment,
     prepare_provider_binding_transition,
@@ -106,6 +107,67 @@ def test_transition_adds_only_binding_metadata_and_preserves_capabilities() -> N
     assert all(row["ownership_attested"] is True for row in rows.values())
     assert transition.public()["credentials_changed"] is False
     assert transition.public()["capabilities_changed"] is False
+
+
+def test_transition_ignores_already_bound_service_owned_google_adapters() -> None:
+    source = _legacy()
+    source["adapters"].append(
+        {
+            "kind": "tasks-google-tasks",
+            "config": {
+                "provider_account_id": "service-account@invalid.example",
+                "workspace": "service",
+                "permission_scope": ["https://www.googleapis.com/auth/tasks.readonly"],
+                "binding_provenance": "service-account-delegation",
+                "ownership_attested": True,
+                "service_account_key_ref": "op://fixture/service-account",
+                "service_principal_id": "service-principal:chief-of-staff",
+                "read_only": True,
+                "tasklist_id": "@default",
+            },
+        }
+    )
+
+    transition = prepare_provider_binding_transition(
+        source,
+        household_mapping=_mapping(),
+        ownership_reviewed=True,
+    )
+
+    assert transition.migrated_adapter_count == 3
+    assert transition.prepared["adapters"][-1] == source["adapters"][-1]
+
+
+def test_transition_reports_no_change_for_bound_service_owned_inventory() -> None:
+    source = {
+        "adapters": [
+            {
+                "kind": "tasks-google-tasks",
+                "config": {
+                    "provider_account_id": "service-account@invalid.example",
+                    "workspace": "service",
+                    "permission_scope": [
+                        "https://www.googleapis.com/auth/tasks.readonly"
+                    ],
+                    "binding_provenance": "service-account-delegation",
+                    "ownership_attested": True,
+                    "service_account_key_ref": "op://fixture/service-account",
+                    "service_principal_id": "service-principal:chief-of-staff",
+                    "read_only": True,
+                    "tasklist_id": "@default",
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(
+        NoEligibleProviderBindingTransitionError, match="no eligible changes"
+    ):
+        prepare_provider_binding_transition(
+            source,
+            household_mapping=_mapping(),
+            ownership_reviewed=True,
+        )
 
 
 def test_transition_requires_owner_review_and_rejects_ambiguity() -> None:
