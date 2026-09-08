@@ -855,10 +855,11 @@ def _insert(
         ),
     )
     conn.execute(
-        """UPDATE triage_items SET human_lane=?, proposal_event_id=?
+        """UPDATE triage_items SET human_lane=?, proposal_event_id=?, content_revision_event_id=?
              WHERE tenant_id=? AND proposal_id=?""",
         (
             human_triage_lane(proposal_payload),
+            envelope["event_id"],
             envelope["event_id"],
             envelope["tenant_id"],
             proposal_id,
@@ -1184,6 +1185,7 @@ def _apply_enriched(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> No
             "duplicate_of_proposal_id=?",
             "existing_object_kind=?",
             "existing_object_id=?",
+            "content_revision_event_id=?",
             "last_event_id=?",
         )
     )
@@ -1193,6 +1195,7 @@ def _apply_enriched(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> No
             str(duplicate[0]) if duplicate is not None else None,
             str(existing[0]) if existing is not None else None,
             str(existing[1]) if existing is not None else None,
+            envelope["event_id"],
             envelope["event_id"],
         )
     )
@@ -1218,14 +1221,21 @@ def _resolve(
     resolution_reason: str | None = None,
     allow_pending_interpretation: bool = False,
     expected_last_event_id: str | None = None,
+    expected_content_revision_event_id: str | None = None,
 ) -> None:
     conn.execute(
         """UPDATE triage_items
               SET state=?, resolved_at=?, resolved_by=?,
                   materialized_event_ids_json=?, resolution_reason=?, last_event_id=?
             WHERE tenant_id=? AND proposal_id=?
-              AND (state='pending_review' OR (?=1 AND state='pending_interpretation'))
+              AND (state='pending_review' OR (?=1 AND state='pending_interpretation')
+                OR (? IS NOT NULL AND state='dismissed'
+                    AND resolved_by='system:cross-source-reconciliation'
+                    AND resolution_reason IN ('reconciliation:context_only',
+                        'reconciliation:source_policy_suppression','reconciliation:alert_only')
+                    AND management_state IN ('open','clarification','suppression_proposed')))
               AND (? IS NULL OR last_event_id=?)
+              AND (? IS NULL OR content_revision_event_id=?)
               AND last_event_id < ?""",
         (
             state,
@@ -1237,8 +1247,11 @@ def _resolve(
             envelope["tenant_id"],
             proposal_id,
             int(allow_pending_interpretation),
+            expected_content_revision_event_id,
             expected_last_event_id,
             expected_last_event_id,
+            expected_content_revision_event_id,
+            expected_content_revision_event_id,
             envelope["event_id"],
         ),
     )
@@ -1535,7 +1548,7 @@ def _apply_managed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> Non
                   management_reason_codes_json=?, snoozed_until=?,
                   existing_object_kind=?, existing_object_id=?,
                   duplicate_of_proposal_id=?,
-                  last_event_id=?
+                  content_revision_event_id=?, last_event_id=?
             WHERE tenant_id=? AND proposal_id=? AND last_event_id=?""",
         (
             title,
@@ -1550,6 +1563,7 @@ def _apply_managed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> Non
             existing_object_kind,
             existing_object_id,
             duplicate_of_proposal_id,
+            envelope["event_id"],
             envelope["event_id"],
             envelope["tenant_id"],
             payload["proposal_id"],
@@ -1889,7 +1903,12 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             allow_pending_interpretation=True,
             expected_last_event_id=(
                 str(payload["expected_last_event_id"])
-                if int(envelope.get("schema_version") or 1) >= 3
+                if int(envelope.get("schema_version") or 1) == 3
+                else None
+            ),
+            expected_content_revision_event_id=(
+                str(payload["expected_content_revision_event_id"])
+                if int(envelope.get("schema_version") or 1) >= 4
                 else None
             ),
         )

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -10,6 +12,7 @@ import httpx
 from adminme.events.log import EventLog
 from adminme.events.writer import EventSink
 from adminme.lib.skill_runner.wrapper import _Runtime
+from adminme.triage_intent import extract_message_fallback_candidates
 
 
 def _response(request: httpx.Request) -> httpx.Response:
@@ -64,6 +67,30 @@ def _response(request: httpx.Request) -> httpx.Response:
             if isinstance(message, dict)
         ]
 
+        def obligation_assessment(
+            source_id: str,
+            *,
+            purpose: str,
+            action_owner: str = "member",
+            qualifiers: tuple[tuple[str, str], ...] = (),
+        ) -> dict[str, Any]:
+            return {
+                "purpose": purpose,
+                "actionability": "unknown" if action_owner == "unknown" else "required",
+                "condition": None,
+                "condition_state": "not_applicable",
+                "beneficiary": None,
+                "date_role": "deadline"
+                if any(role == "date" for role, _ in qualifiers)
+                else "none",
+                "qualifying_evidence": [
+                    {"source_id": source_id, "role": role, "quote": quote}
+                    for role, quote in qualifiers
+                ],
+            }
+
+        current_alias = str(context_pack.get("current_source_id") or "m01")
+
         def contextual_candidate(
             quote: str,
             *,
@@ -105,6 +132,13 @@ def _response(request: httpx.Request) -> httpx.Response:
                     for message in context_messages
                     if message.get("relation") == "related"
                 ][:10],
+                "obligation_assessment": obligation_assessment(
+                    str(source["source_id"]),
+                    purpose="member_promise"
+                    if target_kind == "commitment"
+                    else "personal_request",
+                    action_owner=action_owner,
+                ),
             }
 
         if inputs.get("candidate_scope") == "primary_thread" and any(
@@ -170,6 +204,23 @@ def _response(request: httpx.Request) -> httpx.Response:
                     "reasons": ["fixture exact-evidence candidate"],
                 }
             ]
+            if fixture_kind == "recurrence" and "every Monday" in body_text:
+                candidates[0].update(
+                    {
+                        "evidence_source_id": current_alias,
+                        "action_owner": "member",
+                        "lifecycle_state": "open",
+                        "candidate": {
+                            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+                            "recurrence_text": "every Monday",
+                        },
+                        "obligation_assessment": obligation_assessment(
+                            current_alias,
+                            purpose="recurrence",
+                            qualifiers=(("recurrence", "every Monday"),),
+                        ),
+                    }
+                )
         elif "[fixture:recurring-bill]" in body_text:
             candidates = [
                 {
@@ -182,6 +233,14 @@ def _response(request: httpx.Request) -> httpx.Response:
                     },
                     "confidence": 0.97,
                     "reasons": ["explicit payment due action"],
+                    "evidence_source_id": current_alias,
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                    "obligation_assessment": obligation_assessment(
+                        current_alias,
+                        purpose="payment",
+                        qualifiers=(("date", "August 15, 2026 at 17:00 UTC"),),
+                    ),
                 },
                 {
                     "target_kind": "recurrence",
@@ -196,9 +255,74 @@ def _response(request: httpx.Request) -> httpx.Response:
                     },
                     "confidence": 0.96,
                     "reasons": ["explicit monthly cadence"],
+                    "evidence_source_id": current_alias,
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                    "obligation_assessment": obligation_assessment(
+                        current_alias,
+                        purpose="recurrence",
+                        qualifiers=(
+                            ("recurrence", "monthly"),
+                            ("date", "August 15, 2026 at 17:00 UTC"),
+                        ),
+                    ),
                 },
             ]
+        elif context_messages and inputs.get("candidate_scope") == "primary_thread":
+            # This credential-free transport simulates a language result for
+            # the fixture's literal asks. It is not production interpretation,
+            # and completed negative fixture examples remain explicitly empty.
+            negative = re.search(
+                r"\[fixture:no-candidate\]|\bno (?:action|payment|response)\b|"
+                r"\bautopay\b|\bpaid in full\b|\bzero balance\b|balance is \$0\b|"
+                r"\bif you have questions\b|\bif you (?:do not|don't) recognize\b",
+                body_text,
+                re.IGNORECASE,
+            )
+            current = next(
+                (
+                    message
+                    for message in context_messages
+                    if message.get("source_id") == current_alias
+                ),
+                None,
+            )
+            if current is not None and negative is None:
+                source_at = str(current.get("occurred_at") or "2026-01-01T00:00:00Z")
+                try:
+                    submitted_at = datetime.fromisoformat(
+                        source_at.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    submitted_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+                for extracted in extract_message_fallback_candidates(
+                    body_text,
+                    submitted_at=submitted_at,
+                    direction="outbound"
+                    if current.get("direction") == "outbound"
+                    else "inbound",
+                ):
+                    candidates.append(
+                        {
+                            "target_kind": extracted.target_kind,
+                            "title": extracted.title,
+                            "evidence_source_id": current_alias,
+                            "evidence_quote": extracted.title,
+                            "candidate": extracted.fields,
+                            "confidence": 0.97,
+                            "reasons": ["fixture exact authored action"],
+                            "action_owner": "member",
+                            "lifecycle_state": "open",
+                            "obligation_assessment": obligation_assessment(
+                                current_alias,
+                                purpose="member_promise"
+                                if extracted.target_kind == "commitment"
+                                else "personal_request",
+                            ),
+                        }
+                    )
         output = {
+            "assessment_contract": "personal-obligation-assessment-v1",
             "classification": "transactional" if candidates else "personal",
             "confidence": 0.99,
             "reasons": ["fixture household message"],

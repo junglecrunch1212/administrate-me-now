@@ -76,4 +76,11 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   await detail.locator(".triage-management > summary").click();
   record("Handling and future preference are separate member choices", await detail.getByRole("button", { name: "Already handled", exact: true }).count() === 1 && await detail.getByRole("button", { name: "Not useful", exact: true }).count() === 1 && await detail.locator("summary", { hasText: "Do this for similar messages" }).count() === 1, await detail.textContent());
   record("Triage shows grounded obligation evidence", (await detail.textContent()).includes("What the source supports"), await detail.textContent());
+  await page.getByRole("button", { name: /^Needs you,/ }).click();
+  const needed = await page.locator(".triage-master-list").textContent();
+  record("Needs you includes undated obligations and excludes possibilities", needed.includes("Fixture preparation source 2.") && !needed.includes("Fixture survey source 6."), needed);
+  await page.locator(".triage-more-views > summary").click();
+  await page.getByRole("button", { name: /^Other possibilities,/ }).click();
+  const possibilities = await page.locator(".triage-master-list").textContent();
+  record("Possibilities use the server attention view independently of date or confidence", possibilities.includes("Fixture survey source 6.") && !possibilities.includes("Fixture preparation source 2."), possibilities);
 }

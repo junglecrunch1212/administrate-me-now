@@ -156,7 +156,7 @@ async def seed_attention_sources(
                     "triage_route": "review",
                     "alert_route": "none",
                     "context_route": "metadata_only",
-                    "reason_codes": [],
+                    "reason_codes": ["fixture_review_policy"],
                 },
                 "source_coordinate": coordinate.model_dump(mode="json"),
                 "freshness": "current",

@@ -536,6 +536,10 @@ def test_approved_rule_narrows_matching_admission_and_suspension_restores_it() -
         "rule_id": "rule-learned",
         "narrow_only": True,
         "provider_effects": 0,
+        "rule_ids": [],
+        "reasons": [],
+        "expires_at": None,
+        "shadow": [],
     }
     assert (
         triage_page_for_member(conn, session, member_id=MEMBER, human_centered=True)[

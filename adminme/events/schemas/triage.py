@@ -452,6 +452,17 @@ class TriageItemSupersededV3(TriageItemSupersededV2):
     expected_last_event_id: str = Field(min_length=1, max_length=240)
 
 
+class TriageItemSupersededV4(TriageItemSupersededV2):
+    """Retire unchanged interpretation despite newer routing receipts.
+
+    A member content/management revision still defeats this compare-and-apply;
+    reconciliation and attention evaluation never acquire content authority.
+    """
+
+    model_config = {"extra": "forbid"}
+    expected_content_revision_event_id: str = Field(min_length=1, max_length=240)
+
+
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.proposed", 2, TriageItemProposedV2)
 registry.register("triage.item.proposed", 3, TriageItemProposedV3)
@@ -478,6 +489,7 @@ registry.register("triage.item.dismissed", 1, TriageItemDismissedV1)
 registry.register("triage.item.superseded", 1, TriageItemSupersededV1)
 registry.register("triage.item.superseded", 2, TriageItemSupersededV2)
 registry.register("triage.item.superseded", 3, TriageItemSupersededV3)
+registry.register("triage.item.superseded", 4, TriageItemSupersededV4)
 
 
 __all__ = [
@@ -494,6 +506,7 @@ __all__ = [
     "TriageItemSupersededV1",
     "TriageItemSupersededV2",
     "TriageItemSupersededV3",
+    "TriageItemSupersededV4",
     "TriageRouteV1",
     "TriageTargetKind",
     "TriageSourceSurface",

@@ -157,9 +157,15 @@ def ground_obligation_assessment(
     roles = {item.role for item in evidence}
     actionability = assessment.actionability
     if assessment.condition and "condition" not in roles:
-        actionability = "unknown"
+        return None
     if assessment.condition_state in {"unmet", "unknown"} and assessment.condition:
         actionability = "conditional"
+    elif actionability == "required" and assessment.condition_state == "unknown":
+        actionability = "unknown"
+    if roles.intersection({"negation", "completion"}):
+        # These roles explicitly qualify this action. Another action in the
+        # same receipt or conversation receives its own assessment.
+        actionability = "none"
     independent = (
         actionability == "required"
         and action_owner in {"member", "group_including_member"}

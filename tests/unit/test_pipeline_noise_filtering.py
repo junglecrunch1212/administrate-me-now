@@ -516,7 +516,7 @@ async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
             "superseded_at": "2026-08-08T12:00:00Z",
             "replacement_source_event_id": source["event_id"],
             "reason": "eligibility_rule_replaced",
-            "expected_last_event_id": proposal_event_id,
+            "expected_content_revision_event_id": proposal_event_id,
         }
     assert calls == []
 
@@ -610,8 +610,8 @@ async def test_legacy_sent_supersession_carries_stale_revision_through_race() ->
     assert log.calls.index(
         next(call for call in log.calls if call.event_id == enrichment_event_id)
     ) < log.calls.index(supersession_call)
-    assert supersession_call.envelope.schema_version == 3
-    assert supersession_call.envelope.payload["expected_last_event_id"] == (
+    assert supersession_call.envelope.schema_version == 4
+    assert supersession_call.envelope.payload["expected_content_revision_event_id"] == (
         proposal_event_id
     )
 
@@ -647,7 +647,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "7.0.0"
+    assert envelope.payload["skill_version"] == "8.0.0"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -671,7 +671,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "7.0.0"
+    assert envelope.payload["skill_version"] == "8.0.0"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -1111,7 +1111,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v22:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v23:")
 
 
 @pytest.mark.asyncio
@@ -1222,7 +1222,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v22:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v23:")
         for proposal in proposals
     )
 
@@ -1456,13 +1456,13 @@ async def test_v9_retires_only_untouched_generic_action_verb_proposals(
     ]
     assert bool(superseded) is not member_decided
     if superseded:
-        assert superseded[0].schema_version == 3
+        assert superseded[0].schema_version == 4
         assert superseded[0].payload == {
             "proposal_id": proposal_id,
             "superseded_at": "2026-08-08T12:00:00Z",
             "replacement_source_event_id": source_event_id,
             "reason": "eligibility_rule_replaced",
-            "expected_last_event_id": proposal_event_id,
+            "expected_content_revision_event_id": proposal_event_id,
         }
 
 
@@ -1635,7 +1635,7 @@ async def test_full_replay_defers_non_anchor_without_language_invocation() -> No
         call.envelope
         for call in log.calls
         if call.envelope.idempotency_key
-        == "triage:message-features:v22:thread-source-prior"
+        == "triage:message-features:v23:thread-source-prior"
     )
     assert assessment.payload["assessment_outcome"] == "no_candidate"
     assert assessment.payload["reason_codes"] == [
@@ -1651,7 +1651,7 @@ async def test_full_replay_defers_non_anchor_without_language_invocation() -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("contextualized", [False, True])
-async def test_v22_replay_keeps_or_replaces_still_eligible_same_source_fallback(
+async def test_v23_replay_keeps_or_replaces_still_eligible_same_source_fallback(
     contextualized: bool,
 ) -> None:
     source = _messaging_received_event(
@@ -1787,7 +1787,7 @@ async def test_v22_replay_keeps_or_replaces_still_eligible_same_source_fallback(
         call.envelope
         for call in log.calls
         if call.envelope.idempotency_key
-        == "triage:message-features:v22:trigger-eid-001"
+        == "triage:message-features:v23:trigger-eid-001"
     )
     assert current_assessment.payload["assessment_outcome"] == "eligible_candidates"
 

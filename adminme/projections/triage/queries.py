@@ -14,9 +14,11 @@ from adminme.candidate_policy import SOURCE_BY_ID
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
 from adminme.triage_management import (
+    HUMAN_TRIAGE_LANE_ORDER,
     attention_rule_expired,
     attention_values,
     current_disposition,
+    human_attention_view,
     proposed_disposition,
 )
 
@@ -183,6 +185,7 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         "eligibility_rule_replaced",
     }:
         result["state"] = "superseded"
+    result["attention_view"] = human_attention_view(result)
     return result
 
 
@@ -330,30 +333,42 @@ _LANE_ORDER = {
     "standard": 7,
 }
 
-_HUMAN_LANE_ORDER = {
-    "direct_instruction": 0,
-    "member_promise": 1,
-    "known_human_request": 2,
-    "scheduled_deadline": 3,
-    "waiting_follow_up": 4,
-    "clarification_conflict": 5,
-    "alerts_safety": 6,
-    "low_confidence_review": 7,
-}
+_HUMAN_LANE_ORDER = HUMAN_TRIAGE_LANE_ORDER
+
+
+def _effective_learned_policy_sql() -> str:
+    return """COALESCE((SELECT json_extract(expiry.value,'$.state')
+         FROM json_each(attention_expiry_schedule_json) AS expiry
+         WHERE julianday(json_extract(expiry.value,'$.at'))<=julianday('now')
+         ORDER BY julianday(json_extract(expiry.value,'$.at')) DESC LIMIT 1),
+         learned_policy_state)"""
+
+
+def _needs_you_sql() -> str:
+    verified = """(json_extract(interpretation_json,'$.contract')='triage-context-interpretation-v3'
+        AND json_extract(interpretation_json,'$.assessment_state')='verified'
+        AND COALESCE(json_extract(interpretation_json,'$.obligation_assessment.contract'),'personal-obligation-assessment-v1')='personal-obligation-assessment-v1'
+        AND COALESCE(json_extract(interpretation_json,'$.obligation_assessment.evidence_verified'),1)=1)"""
+    return f"""(EXISTS (SELECT 1 FROM json_each(priority_basis_json) AS basis
+          WHERE basis.value IN ('explicit_member_instruction','exact_member_commitment',
+             'known_human_actionable_request','verified_deadline','household_policy'))
+        OR source_kind='commitment_proposal'
+        OR {_effective_learned_policy_sql()}='clarification_required'
+        OR admission_decision='conflict_review'
+        OR COALESCE(({verified} AND json_extract(interpretation_json,
+             '$.obligation_assessment.independent_obligation')=1),0)
+        OR (admission_decision='unresolved' AND NOT COALESCE(({verified}
+             AND json_extract(interpretation_json,'$.obligation_assessment.purpose')='optional_opportunity'),0)))"""  # noqa: S608 - fixed typed lens predicates
 
 
 def _queue_state_sql(human_centered: bool) -> str:
     if not human_centered:
         return "AND state IN ('pending_interpretation','pending_review')"
-    return """AND reconciliation_active=1 AND (
+    return f"""AND reconciliation_active=1 AND (
         (state IN ('pending_interpretation','pending_review')
          AND admission_decision IN ('admit','conflict_review','unresolved')
          AND management_state IN ('open','clarification','suppression_proposed'))
-         AND COALESCE((SELECT json_extract(expiry.value,'$.state')
-              FROM json_each(attention_expiry_schedule_json) AS expiry
-              WHERE julianday(json_extract(expiry.value,'$.at'))<=julianday('now')
-              ORDER BY julianday(json_extract(expiry.value,'$.at')) DESC LIMIT 1),
-              learned_policy_state)!='context_only'
+         AND {_effective_learned_policy_sql()}!='context_only'
         OR admission_decision='alert_only'
         OR management_state='alert'
     )"""
@@ -539,7 +554,7 @@ def _cursor_decode(
     raise ValueError("invalid triage cursor")
 
 
-def _lens_where(lens: str) -> tuple[str, list[Any]]:
+def _lens_where(lens: str, *, human_centered: bool = False) -> tuple[str, list[Any]]:
     if lens == "alerts":
         return "AND (admission_decision='alert_only' OR management_state='alert')", []
     if lens == "needs_interpretation":
@@ -547,6 +562,8 @@ def _lens_where(lens: str) -> tuple[str, list[Any]]:
     if lens == "needs_details":
         return "AND review_state='needs_details'", []
     if lens == "low_signal":
+        if human_centered:
+            return f"AND NOT {_needs_you_sql()}", []
         return "AND queue_lane='standard'", []
     if lens == "recurring_exceptions":
         return "AND queue_lane='recurring_exception'", []
@@ -558,6 +575,8 @@ def _lens_where(lens: str) -> tuple[str, list[Any]]:
     if lens == "all_candidates":
         return "", []
     if lens == "ready":
+        if human_centered:
+            return f"AND {_needs_you_sql()}", []
         return "AND queue_lane!='standard'", []
     return "", []
 
@@ -631,7 +650,7 @@ def triage_page_for_member(
     )
     if decoded is not None and (decoded[0] != queue_revision or decoded[1] != view_key):
         raise ValueError("stale triage cursor")
-    lens_sql, lens_params = _lens_where(lens)
+    lens_sql, lens_params = _lens_where(lens, human_centered=human_centered)
     filter_sql = ""
     filter_params: list[Any] = []
     if source_id is not None:
@@ -827,7 +846,9 @@ def triage_page_for_member(
         "all_candidates",
         "alerts",
     ):
-        view_lens_sql, view_lens_params = _lens_where(view)
+        view_lens_sql, view_lens_params = _lens_where(
+            view, human_centered=human_centered
+        )
         view_disposition_sql = (
             ""
             if view in {"all_candidates", "alerts"}

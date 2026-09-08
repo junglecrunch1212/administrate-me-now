@@ -1209,7 +1209,7 @@ def test_stale_system_supersession_cannot_override_member_action(
 def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
     tmp_path: Path,
 ) -> None:
-    """Actual Gmail mapping reaches the v22 full-replay production runner."""
+    """Actual Gmail mapping reaches the v23 full-replay production runner."""
 
     instance = tmp_path / "replay-instance"
     instance.mkdir()
@@ -1314,7 +1314,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             for event in replay_assessments
             if event.get("causation_id") == first_id
             and event.get("idempotency_key")
-            == f"triage:message-features:v22:{first_id}"
+            == f"triage:message-features:v23:{first_id}"
         )
         assert deferred_first["payload"]["assessment_outcome"] == "no_candidate"
         assert deferred_first["payload"]["extractor_id"] == (
@@ -1357,7 +1357,9 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             "triage-context-interpretation-v1"
         )
         assert (
-            stable_fallback_supersessions[0]["payload"]["expected_last_event_id"]
+            stable_fallback_supersessions[0]["payload"][
+                "expected_content_revision_event_id"
+            ]
             == original_stable_proposal["event_id"]
         )
         assert replacement_stable_proposal["payload"]["interpretation"] is None
@@ -1377,7 +1379,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             stable_fallback_assessments, key=lambda event: event["event_id"]
         )
         assert current_stable_assessment["idempotency_key"] == (
-            f"triage:message-features:v22:{stable_fallback_source_id}"
+            f"triage:message-features:v23:{stable_fallback_source_id}"
         )
         client.portal.call(
             runtime.wait_for_projection,

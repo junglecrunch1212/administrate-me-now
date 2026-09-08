@@ -1316,7 +1316,16 @@ class NoiseFilteringPipeline:
                 and isinstance(interpretation, dict)
                 and interpretation.get("context_fingerprint")
                 == context_pack.fingerprint
+                and any(
+                    candidate.target_kind == payload.get("target_kind")
+                    and candidate.candidate_key == payload.get("candidate_key")
+                    and candidate.title == payload.get("title")
+                    and candidate.interpretation == interpretation
+                    for candidate in candidates
+                )
             ):
+                # Source context alone cannot prove an interpretation current:
+                # a new assessment contract may reject or change the same text.
                 continue
             prior_rules = {
                 str(value) for value in payload.get("eligibility_rule_ids") or []
@@ -1347,6 +1356,7 @@ class NoiseFilteringPipeline:
                 child.get("type")
                 in {
                     "triage.item.enriched",
+                    "triage.item.managed",
                     "triage.item.confirmed",
                     "triage.item.materialized",
                     "triage.item.dismissed",
@@ -1371,7 +1381,7 @@ class NoiseFilteringPipeline:
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
-                    schema_version=3,
+                    schema_version=4,
                     occurred_at=str(
                         event.get("recorded_at")
                         or event.get("occurred_at")
@@ -1395,7 +1405,7 @@ class NoiseFilteringPipeline:
                         ),
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
-                        "expected_last_event_id": prior["event_id"],
+                        "expected_content_revision_event_id": prior["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,
@@ -1461,6 +1471,7 @@ class NoiseFilteringPipeline:
                 child.get("type")
                 in {
                     "triage.item.enriched",
+                    "triage.item.managed",
                     "triage.item.confirmed",
                     "triage.item.materialized",
                     "triage.item.dismissed",
@@ -1478,7 +1489,7 @@ class NoiseFilteringPipeline:
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
-                    schema_version=3,
+                    schema_version=4,
                     occurred_at=superseded_at,
                     source_adapter="deterministic_candidate_eligibility",
                     source_account_id="pipeline",
@@ -1494,7 +1505,7 @@ class NoiseFilteringPipeline:
                         "superseded_at": superseded_at,
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
-                        "expected_last_event_id": proposal["event_id"],
+                        "expected_content_revision_event_id": proposal["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,
@@ -1536,6 +1547,7 @@ class NoiseFilteringPipeline:
                 child.get("type")
                 in {
                     "triage.item.enriched",
+                    "triage.item.managed",
                     "triage.item.confirmed",
                     "triage.item.materialized",
                     "triage.item.dismissed",
@@ -1553,7 +1565,7 @@ class NoiseFilteringPipeline:
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
-                    schema_version=3,
+                    schema_version=4,
                     occurred_at=superseded_at,
                     source_adapter="deterministic_candidate_eligibility",
                     source_account_id="pipeline",
@@ -1561,14 +1573,14 @@ class NoiseFilteringPipeline:
                     visibility_scope=event["visibility_scope"],
                     sensitivity=event.get("sensitivity", "normal"),
                     idempotency_key=(
-                        f"triage:message-retire-action-verb-v1:{proposal_id}"
+                        f"triage:message-retire-action-verb-v1:v4:{proposal_id}"
                     ),
                     payload={
                         "proposal_id": proposal_id,
                         "superseded_at": superseded_at,
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
-                        "expected_last_event_id": proposal["event_id"],
+                        "expected_content_revision_event_id": proposal["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,

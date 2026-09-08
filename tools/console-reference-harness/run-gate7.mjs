@@ -120,12 +120,14 @@ async function launchEdge() {
   for (const executablePath of [
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   ]) {
     try {
       await access(executablePath);
-      browserDescription = `${executablePath.includes("Google Chrome") ? "Google Chrome" : "Microsoft Edge"} via playwright-core@1.62.0`;
+      browserDescription = `${/chrome|chromium/i.test(executablePath) ? "Google Chrome / Chromium" : "Microsoft Edge"} via playwright-core@1.62.0`;
       console.log(`[Gate 7] Launching ${browserDescription}`);
       return await chromium.launch({
         args: deterministicRasterArgs,

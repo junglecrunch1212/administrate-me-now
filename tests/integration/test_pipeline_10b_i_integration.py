@@ -306,7 +306,7 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
         assert e["payload"]["confidence"] == 0.93
         assert e["payload"]["source_event_id"] == triggering_eid
         assert e["payload"]["skill_name"] == "classify_message_nature"
-        assert e["payload"]["skill_version"] == "7.0.0"
+        assert e["payload"]["skill_version"] == "8.0.0"
         semantic = [
             event
             for event in all_events

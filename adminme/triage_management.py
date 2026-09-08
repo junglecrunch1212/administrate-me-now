@@ -14,16 +14,20 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from adminme.obligation_assessment import assessment_from_interpretation
+
 
 HumanTriageLane = Literal[
     "direct_instruction",
     "member_promise",
     "known_human_request",
     "scheduled_deadline",
+    "ordinary_obligation",
     "waiting_follow_up",
     "clarification_conflict",
     "alerts_safety",
     "low_confidence_review",
+    "possible_opportunity",
 ]
 
 HUMAN_TRIAGE_LANE_ORDER: dict[str, int] = {
@@ -31,10 +35,12 @@ HUMAN_TRIAGE_LANE_ORDER: dict[str, int] = {
     "member_promise": 1,
     "known_human_request": 2,
     "scheduled_deadline": 3,
-    "waiting_follow_up": 4,
-    "clarification_conflict": 5,
-    "alerts_safety": 6,
-    "low_confidence_review": 7,
+    "ordinary_obligation": 4,
+    "waiting_follow_up": 5,
+    "clarification_conflict": 6,
+    "alerts_safety": 7,
+    "low_confidence_review": 8,
+    "possible_opportunity": 9,
 }
 
 ORDINARY_ADMISSION_DECISIONS = frozenset({"admit", "conflict_review", "unresolved"})
@@ -126,6 +132,15 @@ def human_triage_lane(
         return "scheduled_deadline"
     interpretation = _mapping(item.get("interpretation"))
     candidate = _mapping(item.get("candidate"))
+    if not interpretation and item.get("interpretation_json"):
+        interpretation = _mapping(json.loads(str(item["interpretation_json"])))
+    if not candidate and item.get("candidate_json"):
+        candidate = _mapping(json.loads(str(item["candidate_json"])))
+    assessment = (
+        assessment_from_interpretation(interpretation)
+        if interpretation.get("assessment_state") == "verified"
+        else None
+    )
     if interpretation.get("thread_state") in {"waiting_on_member", "waiting_on_other"}:
         return "waiting_follow_up"
     if any(
@@ -138,10 +153,20 @@ def human_triage_lane(
         )
     ):
         return "waiting_follow_up"
-    if decision in {"conflict_review", "unresolved"}:
+    if decision == "conflict_review":
+        return "clarification_conflict"
+    if (
+        assessment is not None
+        and assessment.purpose == "optional_opportunity"
+        and not assessment.independent_obligation
+    ):
+        return "possible_opportunity"
+    if decision == "unresolved":
         return "clarification_conflict"
     if interpretation.get("thread_state") in {"blocked", "unclear"}:
         return "clarification_conflict"
+    if assessment is not None and assessment.independent_obligation:
+        return "ordinary_obligation"
     if any(
         candidate.get(field) not in (None, "", [])
         for field in (
@@ -156,6 +181,71 @@ def human_triage_lane(
     ):
         return "scheduled_deadline"
     return "low_confidence_review"
+
+
+NEEDS_YOU_PRIORITY_BASES = frozenset(
+    {
+        "explicit_member_instruction",
+        "exact_member_commitment",
+        "known_human_actionable_request",
+        "verified_deadline",
+        "household_policy",
+    }
+)
+
+
+def human_attention_view(item: Mapping[str, Any]) -> str:
+    """Classify attention by admitted responsibility, never date availability.
+
+    This is the public counterpart of the modern SQL lens predicate. Legacy
+    flag-off views continue using their existing queue-lane filters.
+    """
+
+    decision = str(_reconciliation_value(item, None, "decision", "admit"))
+    management = str(
+        item.get("management_state")
+        or _mapping(item.get("management")).get("state")
+        or "open"
+    )
+    if decision == "alert_only" or management == "alert":
+        return "alerts"
+    learned = str(
+        item.get("learned_policy_state")
+        or _mapping(item.get("learned_policy")).get("state")
+        or "none"
+    )
+    if (
+        item.get("state") not in {"pending_interpretation", "pending_review"}
+        or management not in {"open", "clarification", "suppression_proposed"}
+        or decision not in ORDINARY_ADMISSION_DECISIONS
+        or item.get("decision_disposition", "decision") != "decision"
+        or learned == "context_only"
+    ):
+        return "history"
+    basis = set(_reconciliation_value(item, None, "priority_basis", []))
+    if (
+        basis & NEEDS_YOU_PRIORITY_BASES
+        or item.get("source_kind") == "commitment_proposal"
+    ):
+        return "needs_you"
+    if learned == "clarification_required" or decision == "conflict_review":
+        return "needs_you"
+    interpretation = _mapping(item.get("interpretation"))
+    if not interpretation and item.get("interpretation_json"):
+        interpretation = _mapping(json.loads(str(item["interpretation_json"])))
+    assessment = (
+        assessment_from_interpretation(interpretation)
+        if interpretation.get("assessment_state") == "verified"
+        else None
+    )
+    if assessment is not None and assessment.independent_obligation:
+        return "needs_you"
+    opportunity = (
+        assessment is not None and assessment.purpose == "optional_opportunity"
+    )
+    if decision == "unresolved" and not opportunity:
+        return "needs_you"
+    return "possibilities"
 
 
 def proposed_disposition(
@@ -449,7 +539,11 @@ def attention_values(item: Mapping[str, Any]) -> dict[str, str]:
     interpretation = _mapping(item.get("interpretation"))
     if not interpretation and item.get("interpretation_json"):
         interpretation = _mapping(json.loads(str(item["interpretation_json"])))
-    assessment = _mapping(interpretation.get("obligation_assessment"))
+    assessment = (
+        assessment_from_interpretation(interpretation)
+        if interpretation.get("assessment_state") == "verified"
+        else None
+    )
     coordinate = _mapping(_reconciliation_value(item, None, "source_coordinate", {}))
     values = {
         field: coordinate.get(field)
@@ -463,11 +557,7 @@ def attention_values(item: Mapping[str, Any]) -> dict[str, str]:
     values.update(
         candidate_kind=item.get("target_kind"),
         sender_digest=candidate.get("sender_digest"),
-        message_purpose=(
-            assessment.get("purpose")
-            if assessment.get("contract") == "personal-obligation-assessment-v1"
-            else None
-        ),
+        message_purpose=(assessment.purpose if assessment is not None else None),
     )
     return {key: str(value) for key, value in values.items() if value not in (None, "")}
 
@@ -483,11 +573,12 @@ def attention_protection(item: Mapping[str, Any]) -> str | None:
     interpretation = _mapping(item.get("interpretation"))
     if not interpretation and item.get("interpretation_json"):
         interpretation = _mapping(json.loads(str(item["interpretation_json"])))
-    assessment = _mapping(interpretation.get("obligation_assessment"))
-    if (
-        assessment.get("contract") == "personal-obligation-assessment-v1"
-        and assessment.get("independent_obligation") is True
-    ):
+    assessment = (
+        assessment_from_interpretation(interpretation)
+        if interpretation.get("assessment_state") == "verified"
+        else None
+    )
+    if assessment is not None and assessment.independent_obligation:
         return "independent_obligation"
     return None
 

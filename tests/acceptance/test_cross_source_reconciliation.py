@@ -401,7 +401,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
         )
         assert mortgage_primary["payload"]["decision"] == "admit"
         # A different issuer's notification does not establish invoice identity.
-        assert mortgage_attachment["payload"]["decision"] == "admit"
+        assert mortgage_attachment["payload"]["decision"] == "context_only"
         assert (
             mortgage_attachment["payload"]["matter_id"]
             != mortgage_primary["payload"]["matter_id"]

@@ -74,6 +74,7 @@ def test_qualifiers_prevent_independent_obligation_override(role):
     )
     assert result is not None
     assert result["independent_obligation"] is False
+    assert result["actionability"] == "none"
 
 
 def test_unknown_condition_is_a_possibility_and_reporting_is_not_recurrence():

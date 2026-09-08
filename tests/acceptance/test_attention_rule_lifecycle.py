@@ -31,7 +31,7 @@ OTHER_HEADERS = {"Tailscale-User-Login": "attention-b.ts.net"}
 API = "/api/member/v1/triage-learning/v2"
 
 
-def _settings(path: Path) -> RuntimeSettings:
+def _settings(path: Path, *, active: bool = True) -> RuntimeSettings:
     return RuntimeSettings.credential_free(
         path,
         encryption_key=b"a" * 32,
@@ -51,8 +51,8 @@ def _settings(path: Path) -> RuntimeSettings:
         },
         adapter_config={"adapter_supervisor_port": 0, "adapters": []},
         fixture_member_id=MEMBER,
-        reconciliation_admission_enabled=True,
-        human_triage_management_enabled=True,
+        reconciliation_admission_enabled=active,
+        human_triage_management_enabled=active,
     )
 
 
@@ -88,6 +88,9 @@ def _emit(
     account: str = "fixture-messages-account",
     source_id: str | None = None,
     source_coordinate: SourceCoordinate | None = None,
+    decision: str = "admit",
+    actionability: str | None = None,
+    action_owner: str = "member",
 ) -> str:
     runtime = client.app.state.runtime
     tenant = runtime.settings.instance.tenant_id
@@ -120,6 +123,7 @@ def _emit(
             "source_event_id": source_id,
             "route": {"member_id": MEMBER},
             "eligibility_rule_ids": ["fixture-attention"],
+            "confidence": 0.01,
             "interpretation": {
                 "contract": "triage-context-interpretation-v3",
                 "context_fingerprint": digest,
@@ -127,7 +131,7 @@ def _emit(
                 "anchor_event_id": source_id,
                 "compact_summary": f"Fixture {purpose}",
                 "thread_state": "new",
-                "action_owner": "member",
+                "action_owner": action_owner,
                 "lifecycle_state": "open",
                 "evidence_refs": [
                     {"source_event_id": source_id, "quote": "Fixture source clause"}
@@ -144,7 +148,8 @@ def _emit(
                 "assessment_state": "verified",
                 "obligation_assessment": {
                     "purpose": purpose,
-                    "actionability": "required" if independent else "informational",
+                    "actionability": actionability
+                    or ("required" if independent else "informational"),
                     "condition_state": "not_applicable",
                     "independent_obligation": independent,
                     "evidence": [
@@ -174,7 +179,7 @@ def _emit(
             "evidence_source_event_ids": [source_id],
             "member_authored_text_digest": None,
             "relationships": [],
-            "decision": "admit",
+            "decision": decision,
             "decision_revision": 1,
             "supersedes_reconciliation_event_id": None,
             "policy": {
@@ -184,7 +189,7 @@ def _emit(
                 "triage_route": "review",
                 "alert_route": "none",
                 "context_route": "metadata_only",
-                "reason_codes": [],
+                "reason_codes": ["fixture_review_policy"],
             },
             "source_coordinate": coordinate.model_dump(mode="json"),
             "freshness": "current",
@@ -473,6 +478,81 @@ def test_expired_specific_trial_restores_remaining_permanent_rule(
         public = queries._public(_row(client, future))
         assert public["learned_policy"]["state"] == "context_only"
         assert public["disposition"]["ordinary_queue"] is False
+
+
+def test_needs_you_includes_undated_obligations_and_clarifications_with_matching_counts(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "needs-you"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        required = _emit(client, 50, purpose="personal_request", independent=True)
+        clarify = _emit(
+            client,
+            51,
+            purpose="personal_request",
+            decision="unresolved",
+            actionability="unknown",
+            action_owner="unknown",
+        )
+        optional = _emit(
+            client,
+            52,
+            purpose="optional_opportunity",
+            decision="unresolved",
+            actionability="conditional",
+        )
+        explicit_optional = _emit(
+            client,
+            53,
+            purpose="optional_opportunity",
+            basis=["explicit_member_instruction"],
+            actionability="conditional",
+        )
+        assert _row(client, required)["queue_lane"] == "standard"
+        assert _row(client, required)["human_lane"] == "ordinary_obligation"
+        assert _row(client, optional)["human_lane"] == "possible_opportunity"
+        assert _row(client, required)["confidence"] == 0.01
+        for lens, expected in (
+            ("ready", {required, clarify, explicit_optional}),
+            ("low_signal", {optional}),
+        ):
+            response = client.get(
+                f"/api/member/v1/surfaces/triage?triage_lens={lens}&triage_limit=100",
+                headers=HEADERS,
+            )
+            assert response.status_code == 200, response.text
+            page = response.json()["triage"]
+            items = [
+                candidate
+                for matter in page["matters"]
+                for candidate in matter["candidates"]
+            ]
+            assert {item["proposal_id"] for item in items} == expected
+            assert page["inventory"]["views"][lens]["candidates"] == len(expected)
+            assert {item["attention_view"] for item in items} == {
+                "needs_you" if lens == "ready" else "possibilities"
+            }
+
+
+def test_flag_off_keeps_legacy_ready_counts_for_retained_qualified_obligation(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "legacy-ready"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance, active=False))) as client:
+        required = _emit(client, 54, purpose="personal_request", independent=True)
+        response = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=ready&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert page["human_triage_management"]["active"] is False
+        assert page["triage"]["inventory"]["views"]["ready"]["candidates"] == 0
+        assert page["triage"]["inventory"]["views"]["low_signal"]["candidates"] == 1
+        assert page["triage"]["matters"] == []
+        assert _row(client, required)["queue_lane"] == "standard"
 
 
 def _settle_reconciliation(client: TestClient, trigger_event_id: str) -> None:

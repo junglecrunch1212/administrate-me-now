@@ -461,11 +461,12 @@ def test_g10_connector_to_production_triage_comms_policy_and_replay(
             "focused",
             "balanced",
             "review_everything",
+            "manual",
         }
         messages_source = next(
             item
             for item in source_policy["sources"]
-            if item["coordinate"].get("connector_id") == PACK
+            if (item["coordinate"] or {}).get("connector_id") == PACK
         )
         assert messages_source["coordinate_state"] == "exact"
         preview = client.post(

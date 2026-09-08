@@ -640,6 +640,7 @@ def test_retained_imessage_future_adapter_inventory_and_independent_attention(
                 "context_mode": "none",
                 "alert_mode": "security_only",
                 "attention_mode": "possibilities",
+                "candidate_kinds": ["commitment"],
                 "purpose_routes": [
                     {
                         "purpose": "survey",
@@ -648,6 +649,22 @@ def test_retained_imessage_future_adapter_inventory_and_independent_attention(
                     }
                 ],
             }
+            kind_preview = client.post(
+                "/api/member/v1/settings/source-policies-v2/preview",
+                headers=A_HEADERS,
+                json={
+                    "coordinate": retained["coordinate"],
+                    "preset": "custom",
+                    "policy": custom,
+                },
+            )
+            assert kind_preview.status_code == 200, kind_preview.text
+            [kind_example] = kind_preview.json()["examples"]
+            assert kind_example["proposal_id"] == proposal_id
+            assert kind_example["previous_route"]["triage"] == "review"
+            assert kind_example["proposed_route"]["triage"] == "none"
+            assert "candidate_kind_not_enabled" in kind_example["reason_codes"]
+            assert kind_preview.json()["mutation_performed"] is False
             save = client.post(
                 f"/api/member/v1/settings/source-policies-v2/{retained['policy_key']}",
                 headers=A_HEADERS,
@@ -661,6 +678,25 @@ def test_retained_imessage_future_adapter_inventory_and_independent_attention(
             )
             assert save.status_code == 202, save.text
             assert save.json()["live_admission_changed"] is True
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "triage-reconciliation:admission",
+                save.json()["event_id"],
+            )
+            revised = client.portal.call(
+                runtime.event_log.get_by_causation, save.json()["event_id"]
+            )
+            kind_decision = next(
+                row
+                for row in revised
+                if row["type"] == "triage.reconciliation.decided"
+                and row["payload"]["proposal_id"] == proposal_id
+            )
+            assert kind_decision["payload"]["admission_active"] is True
+            assert kind_decision["payload"]["decision"] == "source_policy_suppression"
+            assert (
+                "candidate_kind_not_enabled" in kind_decision["payload"]["reason_codes"]
+            )
             focused = client.post(
                 f"/api/member/v1/settings/source-policies-v2/{retained['policy_key']}",
                 headers=A_HEADERS,
@@ -674,6 +710,7 @@ def test_retained_imessage_future_adapter_inventory_and_independent_attention(
             assert focused.status_code == 202, focused.text
             assert focused.json()["policy"]["context_mode"] == "none"
             assert focused.json()["policy"]["alert_mode"] == "security_only"
+            assert focused.json()["policy"]["candidate_kinds"] == ["commitment"]
             assert (
                 focused.json()["policy"]["purpose_routes"] == custom["purpose_routes"]
             )
@@ -705,4 +742,5 @@ def test_retained_imessage_future_adapter_inventory_and_independent_attention(
             assert retained["connection_state"] == "disconnected"
             assert retained["policy"]["attention_mode"] == "obligations"
             assert retained["policy"]["context_mode"] == "none"
+            assert retained["policy"]["candidate_kinds"] == ["commitment"]
             assert retained["retained_candidate_count"] == 1

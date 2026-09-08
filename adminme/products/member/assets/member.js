@@ -160,6 +160,8 @@ function moneyMinor(value, { compact = false } = {}) {
 }
 
 function triageReviewView(item) {
+  const attentionView = { needs_you: "ready", possibilities: "low_signal", alerts: "alerts", history: "recent" }[item?.attention_view];
+  if (state.surface?.human_triage_management?.active && attentionView) return attentionView;
   if (item?.decision_disposition && item.decision_disposition !== "decision") return "all_candidates";
   if (item?.review_state?.state === "needs_interpretation") return "needs_interpretation";
   if (item?.review_state?.state === "needs_details") return "needs_details";
@@ -171,12 +173,13 @@ function triageLanePresentation(lane) {
   return {
     direct_instruction: ["Your direct instruction", "You explicitly asked AdministrateMe to remember or act on this matter."],
     member_promise: ["Your promise", "This is grounded in an exact commitment you made."],
-    known_human_request: ["Known person request", "A known person made an actionable request."],
     scheduled_deadline: ["Scheduled or deadline", "This matter has a verified date or deadline."],
+    ordinary_obligation: ["Personal obligation", "The source supports a responsibility that needs your review."],
     waiting_follow_up: ["Waiting or follow-up", "This matter is waiting on someone or has a follow-up point."],
     clarification_conflict: ["Needs clarification", "Evidence conflicts or is not strong enough for an ordinary obligation."],
     alerts_safety: ["Alert or safety", "This is separated from the ordinary work queue."],
-    low_confidence_review: ["Low-confidence review", "This remains reviewable without being presented as a confident obligation."],
+    low_confidence_review: ["Needs closer review", "Meaning or ownership needs your review before this can be treated as an obligation."],
+    possible_opportunity: ["Possible opportunity", "This is optional or conditional; it does not establish a commitment."],
     security: ["Account or security", "A reviewed security phrase appears in this already-eligible item."],
     time_bound: ["Date or deadline", "This proposal contains an actual date or deadline."],
     financial: ["Money", "This proposal contains a reviewed bill or payment signal."],
@@ -1101,8 +1104,10 @@ function triageDetail(item, data, readOnly = false) {
 }
 
 function triageCandidateMatches(item, view) {
-  if (view === "recent") return false;
   if (view === "all_candidates") return true;
+  const attentionView = { ready: "needs_you", low_signal: "possibilities", alerts: "alerts", recent: "history" }[view];
+  if (state.surface?.human_triage_management?.active && attentionView && item.attention_view) return item.attention_view === attentionView;
+  if (view === "recent") return false;
   if (view === "alerts") return item.disposition?.disposition === "alerts" || item.management?.state === "alert";
   if (view === "needs_interpretation") return item.review_state?.state === "needs_interpretation";
   if (view === "needs_details") return item.review_state?.state === "needs_details" && item.decision_disposition === "decision";
@@ -1371,15 +1376,18 @@ function triageSurface(data, { preserveView = false } = {}) {
     const previewButton = text("button", "Preview first batch", "button button-quiet"); previewButton.type = "button";
     const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
     previewButton.addEventListener("click", async () => {
+      if (sourcePreferenceInteractionLocked()) return;
+      const generation = state.triageOperationGeneration;
       previewButton.disabled = true;
       try {
         const result = await api("/api/member/v1/triage/backlog-reassessment-preview?limit=25");
+        if (!preview.isConnected || sourcePreferenceInteractionLocked() || generation !== state.triageOperationGeneration) return;
         output.replaceChildren(text("p", `${result.batch.count} of ${result.batch.total} candidates previewed · ${result.changes.filter((change) => change.changed).length} proposed changes · 0 provider effects.`, "state-note"));
         const list = document.createElement("ul");
         for (const change of result.changes.slice(0, 10)) list.append(text("li", `${titleCase(change.old.disposition)} → ${titleCase(change.proposed.disposition)} · ${titleCase(change.proposed.lane)} · ${(change.proposed.reason_codes || []).join(", ") || "deterministic admission rule"}`));
         output.append(list);
       } catch (error) { output.replaceChildren(text("p", error.message, "review-state")); }
-      finally { previewButton.disabled = false; }
+      finally { sourcePreferenceControlState(previewButton, false); }
     });
     preview.append(previewButton, output); fragment.append(preview);
   }
@@ -3973,8 +3981,27 @@ function sourceRuleRoute(value) {
   return titleCase(value || "unchanged");
 }
 
+function sourcePreferenceInteractionLocked() {
+  return state.sourceSettingsPending || state.sourceSettingsRefreshRequired || triageInteractionLocked();
+}
+
+function sourcePreferenceControlState(control, disabled) {
+  // Async reads must preserve the semantic state restored by the shared lock.
+  if (control.hasAttribute("data-source-lock-disabled")) control.dataset.sourceLockDisabled = String(disabled);
+  if (control.hasAttribute("data-triage-prior-disabled")) control.dataset.triagePriorDisabled = String(disabled);
+  control.disabled = disabled || sourcePreferenceInteractionLocked();
+}
+
 function setSourceSettingsLock() {
   if (state.surface?.surface !== "settings") return;
+  const surface = $("#surface");
+  if (surface && !surface.dataset.sourceSettingsGuard) {
+    surface.dataset.sourceSettingsGuard = "true";
+    for (const type of ["click", "change", "input", "submit"]) surface.addEventListener(type, (event) => {
+      if (!state.sourceSettingsPending && !state.sourceSettingsRefreshRequired) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+    }, true);
+  }
   for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) {
     if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired) {
       if (!control.hasAttribute("data-source-lock-disabled")) control.dataset.sourceLockDisabled = String(control.disabled);
@@ -4036,7 +4063,7 @@ function sourceRulePreview(result) {
     const row = document.createElement("li"); row.dataset.ruleMatch = example.match;
     row.append(text("strong", example.title || "Authorized source example"), text("span", `${titleCase(example.match)} · ${sourceRuleRoute(example.before)} → ${sourceRuleRoute(example.after)}`));
     row.append(text("small", (example.reasons || []).map(titleCase).join(" · ") || "No handling change"));
-    if (example.source_event_id) { const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => { if (!state.sourceSettingsPending && !triageInteractionLocked()) showEvidence(example.source_event_id); }); row.append(evidence); }
+    if (example.source_event_id) { const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => { if (!sourcePreferenceInteractionLocked()) showEvidence(example.source_event_id); }); row.append(evidence); }
     examples.append(row);
   }
   if (!examples.children.length) examples.append(text("li", "No authorized recent examples are available. A shadow trial can observe future matches before changing attention.", "empty"));
@@ -4063,7 +4090,7 @@ function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) 
   let preview = null; let generation = 0; let reading = false;
   const enabled = canMutate && Boolean(initial.provider_account_id || initial.adapter_instance_id);
   function values() { return { conditions: { ...initial, message_purpose: purpose.value }, exceptions: exception.value ? [{ candidate_kind: exception.value }] : [], action: action.value, origin: "explicit", feedback_event_ids: [] }; }
-  function invalidate() { generation += 1; preview = null; reading = false; output.replaceChildren(); previewButton.disabled = !enabled; for (const button of [activate, trial, shadow, remember]) button.hidden = true; }
+  function invalidate() { if (sourcePreferenceInteractionLocked()) return; generation += 1; preview = null; reading = false; output.replaceChildren(); sourcePreferenceControlState(previewButton, !enabled); for (const button of [activate, trial, shadow, remember]) button.hidden = true; }
   for (const control of [purpose, action, exception]) { control.disabled = !enabled; control.addEventListener("change", invalidate); }
   previewButton.disabled = !enabled;
   for (const button of [activate, trial, shadow, remember]) button.hidden = true;
@@ -4073,14 +4100,14 @@ function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) 
     const current = ++generation; reading = true; previewButton.disabled = true;
     try {
       const result = await api("/api/member/v1/triage-learning/v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values()) });
-      if (generation !== current || !panel.isConnected) return;
+      if (generation !== current || !panel.isConnected || sourcePreferenceInteractionLocked()) return;
       preview = result;
       output.replaceChildren(sourceRuleSummary(result.rule || values(), scope.label), sourceRulePreview(result));
       for (const button of [activate, trial, shadow]) button.hidden = result.activation_available === false;
       remember.hidden = !candidate || result.activation_available === false;
       if (result.activation_available === false) output.append(text("p", "Preview is available. Saving or trying rules waits for learning activation.", "state-note"));
     } catch (error) { if (generation === current) output.replaceChildren(text("p", `${error.message} Nothing changed.`, "review-state")); }
-    finally { if (generation === current) { reading = false; previewButton.disabled = !enabled; } }
+    finally { if (generation === current) { reading = false; sourcePreferenceControlState(previewButton, !enabled); } }
   });
   for (const [button, mode] of [[activate, "active"], [trial, "trial"], [shadow, "shadow"]]) button.addEventListener("click", () => {
     if (!preview || !enabled) return;
@@ -4104,11 +4131,11 @@ function sourceLearningSuggestion(suggestion, canMutate) {
   const trial = text("button", "Try suggested rule for 7 days / 50 messages", "button button-primary"); trial.type = "button"; trial.hidden = true;
   let preview = null;
   previewButton.addEventListener("click", async () => {
-    if (!canMutate || state.sourceSettingsPending || triageInteractionLocked()) return;
+    if (!canMutate || sourcePreferenceInteractionLocked()) return;
     previewButton.disabled = true;
-    try { const result = await api("/api/member/v1/triage-learning/v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(rule) }); if (!section.isConnected) return; preview = result; output.replaceChildren(sourceRulePreview(result)); trial.hidden = result.activation_available === false; }
+    try { const result = await api("/api/member/v1/triage-learning/v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(rule) }); if (!section.isConnected || sourcePreferenceInteractionLocked()) return; preview = result; output.replaceChildren(sourceRulePreview(result)); trial.hidden = result.activation_available === false; }
     catch (error) { if (section.isConnected) output.replaceChildren(text("p", `${error.message} Nothing activated.`, "review-state")); }
-    finally { if (section.isConnected) previewButton.disabled = state.sourceSettingsPending; }
+    finally { if (section.isConnected) sourcePreferenceControlState(previewButton, !canMutate); }
   });
   trial.addEventListener("click", () => {
     if (!preview || !canMutate) return;
@@ -4130,7 +4157,7 @@ function sourceLearningRulesCard(canMutate) {
     load.disabled = true;
     try {
       const response = await api("/api/member/v1/triage-learning/v2/rules");
-      if (!section.isConnected) return;
+      if (!section.isConnected || sourcePreferenceInteractionLocked()) return;
       output.replaceChildren();
       for (const suggestion of response.suggestions || []) output.append(sourceLearningSuggestion(suggestion, canMutate && response.active !== false));
       for (const rule of response.rules || []) {
@@ -4156,7 +4183,7 @@ function sourceLearningRulesCard(canMutate) {
       if (!(response.rules || []).length && !(response.suggestions || []).length) output.append(text("p", "No rules have been saved. Use a source's narrower-rule controls or Do this for similar messages on a candidate to create one.", "empty"));
       load.textContent = "Refresh rules";
     } catch (error) { if (section.isConnected) output.replaceChildren(text("p", `${error.message} Your rule state could not be read.`, "review-state")); }
-    finally { if (section.isConnected) load.disabled = state.sourceSettingsPending || state.sourceSettingsRefreshRequired || triageInteractionLocked(); }
+    finally { if (section.isConnected) sourcePreferenceControlState(load, !canMutate); }
   });
   section.append(load, output); return section;
 }
@@ -4211,7 +4238,7 @@ function sourcePolicyV2Card(source, matrix) {
   advanced.append(kinds, text("p", "Provider permissions and notification timing are managed separately in Connections and CoS fine-tuning. These controls never grant calendar, message, or other provider writes.", "state-note")); form.append(advanced);
   const preview = document.createElement("section"); preview.className = "source-policy-preview"; preview.setAttribute("aria-live", "polite");
   let generation = 0;
-  function invalidatePreview() { generation += 1; preview.replaceChildren(); }
+  function invalidatePreview() { if (sourcePreferenceInteractionLocked()) return; generation += 1; preview.replaceChildren(); }
   attention.addEventListener("change", () => { advancedTriage.value = attention.value === "manual" ? "manual_only" : "review"; invalidatePreview(); });
   advancedTriage.addEventListener("change", () => { if (advancedTriage.value === "manual_only") attention.value = "manual"; else if (attention.value === "manual") attention.value = "obligations"; });
   form.addEventListener("change", invalidatePreview);
@@ -4225,7 +4252,7 @@ function sourcePolicyV2Card(source, matrix) {
     const current = ++generation; previewButton.disabled = true;
     try {
       const result = await api("/api/member/v1/settings/source-policies-v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ coordinate: source.coordinate, recent_limit: 100, preset: "custom", policy: selectedPolicy() }) });
-      if (current !== generation || !form.isConnected) return;
+      if (current !== generation || !form.isConnected || sourcePreferenceInteractionLocked()) return;
       const counts = result.estimated_recent_effect || {};
       preview.replaceChildren(text("strong", `${counts.source_facts || 0} recent source facts · ${counts.triage || 0} for review · ${counts.alerts || 0} alerts · ${counts.context || 0} retained as context`), text("p", `${counts.matching || 0} matches · ${counts.nonmatching || 0} nonmatches · ${counts.changed || 0} changes. Preview only; source history and existing decisions are unchanged.`, "state-note"));
       const examples = document.createElement("ul"); examples.className = "source-preview-examples";
@@ -4243,7 +4270,7 @@ function sourcePolicyV2Card(source, matrix) {
       if (!examples.children.length) examples.append(text("li", "No authorized recent source examples are available. No sample messages were substituted.", "empty"));
       preview.append(examples);
     } catch (error) { if (current === generation) preview.replaceChildren(text("p", `${error.message} Nothing changed.`, "review-state")); }
-    finally { if (form.isConnected) previewButton.disabled = state.sourceSettingsPending || state.sourceSettingsRefreshRequired; }
+    finally { if (form.isConnected) sourcePreferenceControlState(previewButton, false); }
   });
   const save = text("button", active ? "Save source preferences" : "Save preview preferences", "button button-primary"); save.type = "submit";
   const reset = text("button", "Reset attention choices", "button button-quiet"); reset.type = "button";

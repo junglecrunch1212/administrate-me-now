@@ -280,6 +280,7 @@ class SignalAssessment(BaseModel):
         default_factory=list, max_length=20
     )
     verified_obligation: bool = False
+    candidate_kind: str | None = Field(default=None, min_length=1, max_length=120)
     message_purpose: MessagePurpose = "unknown"
     purpose_evidence_verified: bool = False
     obligation_actionability: Literal[
@@ -309,13 +310,7 @@ PRESETS: dict[str, SourcePolicyV2] = {
         alert_mode="financial_and_security",
         context_mode="typed_facts",
         attention_mode="obligations",
-        candidate_kinds=[
-            "task",
-            "commitment",
-            "calendar_event",
-            "reminder",
-            "coordination",
-        ],
+        candidate_kinds=list(V2_CANDIDATE_KINDS),
     ),
     "balanced": SourcePolicyV2(
         preset="balanced",
@@ -833,6 +828,21 @@ def route_for_policy(
             alert=alert,
             context=policy.context_mode,
             reason_codes=[*reasons, "policy_context_only_without_triage"],
+        )
+
+    if (
+        signals.candidate_kind is not None
+        and signals.candidate_kind not in policy.candidate_kinds
+    ):
+        return RouteDecision(
+            triage="none",
+            alert=alert,
+            context=policy.context_mode,
+            reason_codes=[
+                *reasons,
+                "candidate_kind_not_enabled",
+                f"candidate_kind:{signals.candidate_kind}",
+            ],
         )
 
     independent_obligation = any(

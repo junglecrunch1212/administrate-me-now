@@ -310,7 +310,8 @@ def test_priority_uses_only_allowed_typed_evidence() -> None:
 
     assert priority_for(promise_signals) == (10, ["exact_member_commitment"])
     assert priority_for(known_signals) == (20, ["known_human_actionable_request"])
-    assert priority_for(deadline_signals) == (30, ["verified_deadline"])
+    # A model/provider field alone does not prove a source deadline.
+    assert priority_for(deadline_signals) == (60, ["standard_actionable_candidate"])
     assert known_signals.provider_or_sender_urgency_non_authoritative == "critical"
 
 

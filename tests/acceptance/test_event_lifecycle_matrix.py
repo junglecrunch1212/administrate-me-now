@@ -113,6 +113,8 @@ def test_message_and_note_sources_reach_every_triage_target(tmp_path: Path) -> N
         runtime = app.state.runtime
         for index, kind in enumerate(TRIAGE_KINDS):
             message_body = f"[fixture:triage-kind={kind}] Exact {kind} message fact"
+            if kind == "recurrence":
+                message_body = "[fixture:triage-kind=recurrence] Please review the fixture checklist every Monday."
             message_event_type = (
                 "messaging.sent" if kind == "commitment" else "messaging.received"
             )
@@ -168,8 +170,22 @@ def test_message_and_note_sources_reach_every_triage_target(tmp_path: Path) -> N
             assert {item["payload"]["target_kind"] for item in message_proposals} == {
                 kind
             }
+            if kind == "recurrence":
+                [recurrence_proposal] = message_proposals
+                assessment = recurrence_proposal["payload"]["interpretation"][
+                    "obligation_assessment"
+                ]
+                assert assessment["independent_obligation"] is True
+                assert assessment["recurrence_grounded"] is True
+                assert any(
+                    evidence["role"] == "recurrence"
+                    and evidence["quote"] == "every Monday"
+                    for evidence in assessment["evidence"]
+                )
 
             note_body = f"[fixture:triage-kind={kind}] Exact {kind} note fact"
+            if kind == "recurrence":
+                note_body = "[fixture:triage-kind=recurrence] Review the fixture checklist every Monday."
             note_id = client.portal.call(
                 runtime.events.write,
                 _private_envelope(

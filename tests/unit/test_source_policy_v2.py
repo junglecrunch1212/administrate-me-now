@@ -9,6 +9,7 @@ import pytest
 
 from adminme.settings_control import SettingsControlStore
 from adminme.source_policy import (
+    V2_CANDIDATE_KINDS,
     SignalAssessment,
     SourceCoordinate,
     SourcePolicyV2,
@@ -66,6 +67,7 @@ def test_policy_key_distinguishes_principal_account_workspace_and_instance() -> 
 
 
 def test_attention_presets_and_manual_leave_other_planes_unchanged() -> None:
+    assert policy_for_preset("focused").candidate_kinds == list(V2_CANDIDATE_KINDS)
     original = SourcePolicyV2(
         preset="custom",
         acquisition_state="paused",
@@ -88,6 +90,48 @@ def test_attention_presets_and_manual_leave_other_planes_unchanged() -> None:
         SignalAssessment(direction="inbound", security_alert=True),
     )
     assert (route.triage, route.alert, route.context) == ("none", "security", "none")
+
+
+def test_candidate_kind_preferences_apply_before_verified_obligation_and_purpose() -> (
+    None
+):
+    policy = SourcePolicyV2(
+        candidate_kinds=["task"],
+        purpose_routes=[{"purpose": "recurrence", "route": "review"}],
+    )
+    signals = SignalAssessment(
+        direction="inbound",
+        candidate_kind="recurrence",
+        verified_obligation=True,
+        message_purpose="recurrence",
+        purpose_evidence_verified=True,
+        obligation_actionability="required",
+        security_alert=True,
+    )
+    excluded = route_for_policy(_coordinate(), policy, signals)
+    assert (excluded.triage, excluded.alert, excluded.context) == (
+        "none",
+        "security",
+        "typed_facts",
+    )
+    assert "candidate_kind_not_enabled" in excluded.reason_codes
+    assert excluded.candidate_kinds == []
+    enabled = route_for_policy(
+        _coordinate(), policy, signals.model_copy(update={"candidate_kind": "task"})
+    )
+    assert enabled.triage == "review"
+    unassessed_source = route_for_policy(
+        _coordinate(), policy, signals.model_copy(update={"candidate_kind": None})
+    )
+    assert unassessed_source.triage == "review"
+    direct = route_for_policy(
+        _coordinate().model_copy(
+            update={"source_class": "direct_authenticated_intent"}
+        ),
+        policy,
+        signals.model_copy(update={"authenticated_member_instruction": True}),
+    )
+    assert direct.triage == "direct_work_order_proposal"
 
 
 def test_mixed_source_actions_use_their_own_verified_purpose() -> None:

@@ -41,7 +41,7 @@ from adminme.source_policy import (
 _REFERENCE_PATTERN = re.compile(
     r"\b(payment|account|appointment|mortgage|claim|invoice|confirmation|reference|ref)"
     r"(?:\s+(?:number|no|id|account))?\s*(?:#|:)?\s*"
-    r"([A-Z0-9][A-Z0-9-]{2,39})\b",
+    r"((?=[A-Z0-9-]{0,39}[0-9])[A-Z0-9][A-Z0-9-]{2,39})\b",
     re.IGNORECASE,
 )
 _REQUEST_PATTERN = re.compile(
@@ -820,6 +820,8 @@ def assessed_signals(
             "verified_obligation": bool(
                 assessment and assessment.independent_obligation
             ),
+            "candidate_kind": str(_payload(proposal or {}).get("target_kind") or "")
+            or None,
             "obligation_actionability": assessment.actionability
             if assessment
             else "unknown",
@@ -1011,6 +1013,8 @@ class ReconciliationAdmissionEvaluator:
         self._history: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
         self._history_cursors: dict[tuple[str, str | None], str] = {}
         self._source_cache: dict[str, dict[str, Any]] = {}
+        self._decision_index: dict[tuple[str | None, str], dict[str, Any]] = {}
+        self._profile_cache: dict[tuple[str, str], EvidenceProfile] = {}
 
     async def _events_of_type(
         self, event_type: str, *, owner_scope: str | None = None
@@ -1022,7 +1026,19 @@ class ReconciliationAdmissionEvaluator:
         ):
             values.append(event)
             self._history_cursors[key] = str(event["event_id"])
+            if event_type == "triage.reconciliation.decided":
+                self._decision_index[
+                    (owner_scope, str(_payload(event).get("proposal_id") or ""))
+                ] = event
         return list(values)
+
+    def _profile(
+        self, source: Mapping[str, Any], proposal: Mapping[str, Any]
+    ) -> EvidenceProfile:
+        key = (str(source["event_id"]), str(proposal["event_id"]))
+        if key not in self._profile_cache:
+            self._profile_cache[key] = evidence_profile(source, proposal)
+        return self._profile_cache[key]
 
     async def _source(self, event_id: str) -> dict[str, Any] | None:
         if event_id not in self._source_cache:
@@ -1073,15 +1089,11 @@ class ReconciliationAdmissionEvaluator:
     async def _latest_decision(
         self, proposal_id: str, owner_scope: str
     ) -> dict[str, Any] | None:
-        values = self._history.get(("triage.reconciliation.decided", owner_scope))
-        if values is None:
-            values = await self._events_of_type(
+        if ("triage.reconciliation.decided", owner_scope) not in self._history:
+            await self._events_of_type(
                 "triage.reconciliation.decided", owner_scope=owner_scope
             )
-        for event in reversed(values):
-            if _payload(event).get("proposal_id") == proposal_id:
-                return event
-        return None
+        return self._decision_index.get((owner_scope, proposal_id))
 
     async def _policy_snapshot(
         self, source: Mapping[str, Any], signals: SignalAssessment
@@ -1247,7 +1259,7 @@ class ReconciliationAdmissionEvaluator:
             # A proposal cannot substitute for its immutable source fact. Keep
             # the pre-G03 queue behavior until source lineage is available.
             return
-        profile = evidence_profile(source, proposal)
+        profile = self._profile(source, proposal)
         prior_correspondence_event_id = await self._prior_correspondence(source)
         signals = assessed_signals(
             source,
@@ -1262,11 +1274,28 @@ class ReconciliationAdmissionEvaluator:
         prior_proposals = await self._events_of_type(
             "triage.item.proposed", owner_scope=owner_scope
         )
+        retired_proposal_ids = {
+            str(_payload(event).get("proposal_id") or "")
+            for event in await self._events_of_type(
+                "triage.item.superseded", owner_scope=owner_scope
+            )
+            if event.get("tenant_id") == proposal.get("tenant_id")
+        }
         for prior_proposal in prior_proposals:
             prior_payload = _payload(prior_proposal)
             if prior_payload.get("proposal_id") == proposal_payload.get("proposal_id"):
                 continue
+            if prior_payload.get("proposal_id") in retired_proposal_ids:
+                # A retired interpretation cannot consume its replacement as
+                # duplicate evidence. A racing member edit is preserved by
+                # projection compare-and-apply; uncertainty here never closes
+                # a different candidate through the old interpretation.
+                continue
             if prior_proposal.get("tenant_id") != proposal.get("tenant_id"):
+                continue
+            if str(prior_proposal["event_id"]) >= str(proposal["event_id"]):
+                # Append-order roots remain stable during retained-event replay;
+                # a later proposal cannot become the first proposal's parent.
                 continue
             latest = await self._latest_decision(
                 str(prior_payload.get("proposal_id") or ""), owner_scope
@@ -1282,7 +1311,7 @@ class ReconciliationAdmissionEvaluator:
             )
             if prior_source is None:
                 continue
-            candidate_profile = evidence_profile(prior_source, prior_proposal)
+            candidate_profile = self._profile(prior_source, prior_proposal)
             candidate_relationships = evidence_relationships(profile, candidate_profile)
             if not candidate_relationships:
                 continue

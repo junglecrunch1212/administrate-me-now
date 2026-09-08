@@ -175,6 +175,15 @@ only untouched prior interpretations using revision guards. Existing member
 enrichment, dismissal, confirmation, management, canonical objects, and provider
 terminal outcomes remain authoritative and are not silently reopened.
 
+Source context fingerprints alone do not establish that an older interpretation
+uses the current assessment contract. Replay compares the interpretation and
+action identity, and can retire an untouched obsolete suggestion when the new
+source assessment supports no action. `triage.item.superseded` v4 compares the
+proposal's content revision, which advances with member enrichment or management
+but not background routing receipts. Historical v3 events retain their original
+last-event comparison. A rejected retirement cannot create a duplicate replacement
+beside the member's retained interpretation.
+
 Triage advances to **v12** and Context Fabric to **v5**, keeping the existing
 projection inventory. New columns/tables and indexes must support rebuild from
 the encrypted append-only log, restart, isolation, and encrypted restore.
