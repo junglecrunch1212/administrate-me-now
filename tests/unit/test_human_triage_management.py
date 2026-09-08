@@ -168,6 +168,53 @@ def test_required_human_lanes_are_deterministic() -> None:
     assert human_triage_lane(base) == "low_confidence_review"
 
 
+@pytest.mark.parametrize(
+    ("basis", "expected"),
+    [
+        ("explicit_member_instruction", "member_priority"),
+        ("exact_member_commitment", "member_promise"),
+        ("verified_deadline", "time_bound"),
+        ("known_human_actionable_request", "known_human_request"),
+        ("standard_actionable_candidate", "standard"),
+    ],
+)
+def test_presentation_migration_preserves_active_event_owned_queue_lane(
+    basis: str, expected: str
+) -> None:
+    projection, conn = _triage()
+    try:
+        projection.apply(_proposal(), conn)
+        projection.apply(
+            _reconciliation("event-0002", "proposal-1", "admit", basis=[basis]),
+            conn,
+        )
+        before = dict(conn.execute("SELECT * FROM triage_items").fetchone())
+        assert before["queue_lane"] == expected
+        projection.migrate_schema(conn)
+        assert dict(conn.execute("SELECT * FROM triage_items").fetchone()) == before
+        # Terminal member decisions retain their prior presentation lane too;
+        # migration must not infer a new lane from their unchanged title.
+        projection.apply(
+            _event(
+                "event-0003",
+                "triage.item.dismissed",
+                {
+                    "proposal_id": "proposal-1",
+                    "dismissed_by_member_id": MEMBER,
+                    "dismissed_at": "2030-01-01T00:03:00Z",
+                    "reason": "Member dismissed fixture obligation",
+                },
+            ),
+            conn,
+        )
+        dismissed = dict(conn.execute("SELECT * FROM triage_items").fetchone())
+        assert dismissed["queue_lane"] == expected
+        projection.migrate_schema(conn)
+        assert dict(conn.execute("SELECT * FROM triage_items").fetchone()) == dismissed
+    finally:
+        conn.close()
+
+
 def test_backlog_preview_is_bounded_stable_and_non_mutating() -> None:
     items = [
         {

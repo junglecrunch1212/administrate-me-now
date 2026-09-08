@@ -356,7 +356,9 @@ class TriageProjection(Projection):
                 """UPDATE triage_items SET
                        context_id=?, context_kind=?, group_label=?,
                        title_fingerprint=?, object_match_fingerprint=?,
-                       queue_lane=?, evidence_state=?,
+                       queue_lane=CASE WHEN reconciliation_active=1
+                                       THEN queue_lane ELSE ? END,
+                       evidence_state=?,
                        ownership_state=?, lifecycle_state=?
                      WHERE tenant_id=? AND proposal_id=?""",
                 (
@@ -421,6 +423,9 @@ class TriageProjection(Projection):
         # Recompute every presentation-only classifier during a version
         # migration. Retained proposals therefore receive the corrected
         # nullable-date lane and the same source/readiness facets as new rows.
+        # An active reconciliation owns its event-ordered queue lane. This hook
+        # also runs when a replayed database is reopened, so the legacy text
+        # classifier must not overwrite a lane established by those events.
         presentation_rows = conn.execute(
             """SELECT proposal_id, source_kind, target_kind, title,
                       candidate_json, route_json, eligibility_rule_ids_json,
@@ -445,7 +450,9 @@ class TriageProjection(Projection):
             )
             conn.execute(
                 """UPDATE triage_items
-                      SET queue_lane=?, source_id=?, review_state=?
+                      SET queue_lane=CASE WHEN reconciliation_active=1
+                                          THEN queue_lane ELSE ? END,
+                          source_id=?, review_state=?
                     WHERE tenant_id=? AND proposal_id=?""",
                 (
                     queue_lane(payload),

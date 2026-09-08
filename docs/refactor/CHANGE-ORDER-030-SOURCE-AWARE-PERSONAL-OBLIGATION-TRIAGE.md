@@ -219,6 +219,14 @@ under active admission. Existing member dismissals and edits remain protected.
 This is **MODERNIZE** under CO-021 and this change order: it completes the
 documented production default without changing provider-write authority.
 
+Presentation migration preserves the queue lane already established by active
+reconciliation and subsequent member events. Reopening a rebuilt projection
+must not replace an explicit member priority with a legacy text classification.
+The production-launcher acceptance compares complete live, rebuilt, and reopened
+rows, including queue lanes and member content revisions. This is **PRESERVE**
+under the deterministic projection/replay contract; the migration hook runs on
+every connection open and does not require a new projection version or replay.
+
 Historical unreliable-source replay uses the existing owner-scoped immutable
 proposal cache, refreshing only its event-log suffix. Fresh descendant and
 content-revision checks remain authoritative for retirement. This is

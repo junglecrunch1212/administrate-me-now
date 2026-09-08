@@ -369,6 +369,8 @@ def test_launch_upgrade_replaces_retained_shadow_receipts_without_reopening_memb
             assert successor["supersedes_reconciliation_event_id"] == shadow["event_id"]
         assert after[open_id]["reconciliation_active"] == 1
         assert after[open_id]["admission_decision"] == "admit"
+        assert after[open_id]["queue_lane"] == "member_priority"
+        assert after[edited_id]["queue_lane"] == "member_priority"
         assert after[dismissed_id]["state"] == "dismissed"
         assert (
             after[dismissed_id]["dismissal_event_id"]
