@@ -227,6 +227,17 @@ rows, including queue lanes and member content revisions. This is **PRESERVE**
 under the deterministic projection/replay contract; the migration hook runs on
 every connection open and does not require a new projection version or replay.
 
+At an actual complete fixed-watermark Triage replay, the projection first clears
+only its own disposable derived tables in one committed transaction. Its events
+then reconstruct proposal identity, content revision, applied member edits, and
+refused compare-and-apply attempts in order. This also initializes revision guards
+when the retained v11 projection upgrades to v12; replaying over its final rows
+would skip both original proposals and already-applied edits. Ordinary opens do
+not clear rows. A failed replay retains the prior version marker so retry starts
+from the same empty derived state. This is **PRESERVE** under the append-only truth,
+member correction, and deterministic replay invariants; no event, provider state,
+or operational checkpoint is edited by this projection hook.
+
 Historical unreliable-source replay uses the existing owner-scoped immutable
 proposal cache, refreshing only its event-log suffix. Fresh descendant and
 content-revision checks remain authoritative for retirement. This is

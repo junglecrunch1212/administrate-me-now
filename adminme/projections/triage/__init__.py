@@ -62,6 +62,41 @@ class TriageProjection(Projection):
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
+    # Child tables precede their parents. Every entry is disposable state owned
+    # by this projection; version/checkpoint metadata and the event log are not
+    # part of the reset.
+    replay_tables = (
+        "triage_attention_observations",
+        "triage_attention_rule_history",
+        "triage_attention_feedback",
+        "triage_attention_rules",
+        "triage_management_actions",
+        "triage_learned_policy_rules",
+        "triage_context_session_sources",
+        "triage_context_sessions",
+        "canonical_object_fingerprints",
+        "triage_items",
+    )
+
+    def before_replay(self, conn: Any) -> None:
+        """Reconstruct applied revisions from event order, never final rows.
+
+        The runner invokes this only at a complete, fixed-watermark replay,
+        including an actual projection-version upgrade. Ordinary connection
+        opens do not reset data. Replaying into an existing v11 row would skip
+        its proposal and applied member edits, leaving the new revision guards
+        uninitialized. Starting from the derived empty state also preserves the
+        distinction between an applied edit and a historically refused CAS.
+        """
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for table in self.replay_tables:
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608 - fixed projection-owned table allowlist
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
         handlers.apply_event(envelope, conn)
 
