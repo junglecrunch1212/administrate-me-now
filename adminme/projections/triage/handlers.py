@@ -33,6 +33,27 @@ def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _proposal_action_fingerprint(
+    target_kind: str | None,
+    title: str,
+    source_event_id: str,
+    interpretation: dict[str, Any] | None,
+) -> str:
+    """Keep original action identity independent of editable display fields.
+
+    Candidate keys can change between extraction generations. The original
+    exact source clause remains stable across that change and member edits;
+    normalized punctuation alone must not manufacture a second obligation.
+    """
+    evidence = (interpretation or {}).get("evidence_refs") or []
+    primary = evidence[0] if evidence else {}
+    return exact_text_fingerprint(
+        target_kind,
+        primary.get("source_event_id") or source_event_id,
+        primary.get("quote") or title,
+    )
+
+
 def _learned_scope_digest(row: dict[str, Any], scope_kind: str) -> str | None:
     candidate = json.loads(row.get("candidate_json") or "{}")
     reconciliation_scope = json.loads(row.get("reconciliation_scope_json") or "{}")
@@ -855,12 +876,16 @@ def _insert(
         ),
     )
     conn.execute(
-        """UPDATE triage_items SET human_lane=?, proposal_event_id=?, content_revision_event_id=?
+        """UPDATE triage_items SET human_lane=?, proposal_event_id=?, content_revision_event_id=?,
+                   proposal_action_fingerprint=?
              WHERE tenant_id=? AND proposal_id=?""",
         (
             human_triage_lane(proposal_payload),
             envelope["event_id"],
             envelope["event_id"],
+            _proposal_action_fingerprint(
+                target_kind, title, source_event_id, interpretation
+            ),
             envelope["tenant_id"],
             proposal_id,
         ),
@@ -889,7 +914,8 @@ def _apply_triage_proposed(
             """SELECT 1 FROM triage_items
                 WHERE tenant_id=? AND owner_member_id=?
                   AND source_kind='triage_item' AND source_event_id=?
-                  AND target_kind=? AND candidate_key=? AND proposal_id!=?
+                  AND ((target_kind=? AND candidate_key=?) OR proposal_action_fingerprint=?)
+                  AND proposal_id!=?
                   AND NOT (
                       state='dismissed'
                       AND resolved_by='system:source_changed'
@@ -902,6 +928,12 @@ def _apply_triage_proposed(
                 payload["source_event_id"],
                 payload["target_kind"],
                 candidate_key,
+                _proposal_action_fingerprint(
+                    payload["target_kind"],
+                    payload["title"],
+                    payload["source_event_id"],
+                    payload.get("interpretation"),
+                ),
                 payload["proposal_id"],
             ),
         ).fetchone()

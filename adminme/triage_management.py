@@ -157,7 +157,13 @@ def human_triage_lane(
         return "clarification_conflict"
     if (
         assessment is not None
-        and assessment.purpose == "optional_opportunity"
+        and (
+            assessment.purpose == "optional_opportunity"
+            or (
+                assessment.actionability == "conditional"
+                and assessment.condition_state == "unmet"
+            )
+        )
         and not assessment.independent_obligation
     ):
         return "possible_opportunity"
@@ -201,6 +207,11 @@ def human_attention_view(item: Mapping[str, Any]) -> str:
     flag-off views continue using their existing queue-lane filters.
     """
 
+    active = item.get("reconciliation_active") or _mapping(
+        item.get("reconciliation")
+    ).get("active")
+    if not active:
+        return "history"
     decision = str(_reconciliation_value(item, None, "decision", "admit"))
     management = str(
         item.get("management_state")
@@ -254,8 +265,12 @@ def human_attention_view(item: Mapping[str, Any]) -> str:
     )
     if assessment is not None and assessment.independent_obligation:
         return "needs_you"
-    opportunity = (
-        assessment is not None and assessment.purpose == "optional_opportunity"
+    opportunity = assessment is not None and (
+        assessment.purpose == "optional_opportunity"
+        or (
+            assessment.actionability == "conditional"
+            and assessment.condition_state == "unmet"
+        )
     )
     if decision == "unresolved" and not opportunity:
         return "needs_you"

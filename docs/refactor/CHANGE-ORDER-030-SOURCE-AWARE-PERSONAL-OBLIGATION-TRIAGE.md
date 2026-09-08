@@ -157,6 +157,13 @@ Updates and source history link to the actual Comms inventory; they are not
 relabelled as obligations. History retains immutable decision receipts and All
 candidates retains the complete recovery inventory and filters.
 
+A verified action whose condition is known to be unmet belongs in Other
+possibilities. Unknown conditions retain a clarification path in Needs you.
+Reference rules change attention without removing the candidate from All
+candidates or History. Open reference candidates remain reviewable; completed
+decisions and retired alerts retain their audit trail without reappearing as
+live alerts.
+
 Rules are inspectable from Settings and Triage with actual examples and
 protected/nonmatching cases. Older scope-only suggestions remain visible and
 rejectable; new activation uses the exact conjunction contract. Native semantic
@@ -183,6 +190,9 @@ proposal's content revision, which advances with member enrichment or management
 but not background routing receipts. Historical v3 events retain their original
 last-event comparison. A rejected retirement cannot create a duplicate replacement
 beside the member's retained interpretation.
+An immutable original action fingerprint preserves that guard when extraction
+keys or display punctuation change. It uses the original typed action and
+source clause; it does not block a different obligation from the same message.
 
 Triage advances to **v12** and Context Fabric to **v5**, keeping the existing
 projection inventory. New columns/tables and indexes must support rebuild from

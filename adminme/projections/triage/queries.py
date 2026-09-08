@@ -348,7 +348,9 @@ def _needs_you_sql() -> str:
         OR COALESCE(({verified} AND json_extract(interpretation_json,
              '$.obligation_assessment.independent_obligation')=1),0)
         OR (admission_decision='unresolved' AND NOT COALESCE(({verified}
-             AND json_extract(interpretation_json,'$.obligation_assessment.purpose')='optional_opportunity'),0)))"""  # noqa: S608 - fixed typed lens predicates
+             AND (json_extract(interpretation_json,'$.obligation_assessment.purpose')='optional_opportunity'
+               OR (json_extract(interpretation_json,'$.obligation_assessment.actionability')='conditional'
+                 AND json_extract(interpretation_json,'$.obligation_assessment.condition_state')='unmet'))),0)))"""  # noqa: S608 - fixed typed lens predicates
 
 
 def _live_alert_sql() -> str:
@@ -361,12 +363,12 @@ def _live_alert_sql() -> str:
 
 
 def _history_sql() -> str:
-    return f"""(NOT {_live_alert_sql()} AND NOT (
+    return f"""(reconciliation_active!=1 OR (NOT {_live_alert_sql()} AND NOT (
         state IN ('pending_interpretation','pending_review')
         AND management_state IN ('open','clarification','suppression_proposed')
         AND admission_decision IN ('admit','conflict_review','unresolved')
         AND decision_disposition='decision'
-        AND {_effective_learned_policy_sql()}!='context_only'))"""
+        AND {_effective_learned_policy_sql()}!='context_only')))"""
 
 
 def _queue_state_sql(human_centered: bool) -> str:
@@ -684,6 +686,10 @@ def triage_page_for_member(
         + " ELSE 99 END"
     )
     lane_case = f"(priority_rank * 100 + {legacy_lane_case})"
+    if human_centered and lens == "all_candidates" and sort == "attention":
+        # Retained high-priority history must not displace current work from
+        # the first page used by the member's attention views.
+        lane_case = f"(CASE WHEN {_history_sql()} THEN 100000 ELSE 0 END + {lane_case})"
     disposition_sql = (
         ""
         if lens in {"all_candidates", "alerts"}

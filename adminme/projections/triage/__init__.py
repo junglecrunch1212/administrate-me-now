@@ -196,6 +196,7 @@ class TriageProjection(Projection):
             "learned_rule_id": "TEXT",
             "proposal_event_id": "TEXT",
             "content_revision_event_id": "TEXT",
+            "proposal_action_fingerprint": "TEXT",
             "attention_expires_at": "TEXT",
             "attention_base_state": "TEXT NOT NULL DEFAULT 'none'",
             "attention_base_rule_id": "TEXT",

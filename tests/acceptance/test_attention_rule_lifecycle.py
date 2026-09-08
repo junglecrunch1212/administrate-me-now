@@ -91,6 +91,7 @@ def _emit(
     decision: str = "admit",
     actionability: str | None = None,
     action_owner: str = "member",
+    condition_state: str = "not_applicable",
 ) -> str:
     runtime = client.app.state.runtime
     tenant = runtime.settings.instance.tenant_id
@@ -150,7 +151,7 @@ def _emit(
                     "purpose": purpose,
                     "actionability": actionability
                     or ("required" if independent else "informational"),
-                    "condition_state": "not_applicable",
+                    "condition_state": condition_state,
                     "independent_obligation": independent,
                     "evidence": [
                         {
@@ -187,7 +188,7 @@ def _emit(
                 "policy_revision": 0,
                 "policy_origin": "recommended_default",
                 "triage_route": "review",
-                "alert_route": "none",
+                "alert_route": "security" if decision == "alert_only" else "none",
                 "context_route": "metadata_only",
                 "reason_codes": ["fixture_review_policy"],
             },
@@ -535,13 +536,36 @@ def test_needs_you_includes_undated_obligations_and_clarifications_with_matching
             basis=["explicit_member_instruction"],
             actionability="conditional",
         )
+        unchosen_preparation = _emit(
+            client,
+            55,
+            purpose="preparation",
+            decision="unresolved",
+            actionability="conditional",
+            condition_state="unmet",
+        )
+        uncertain_preparation = _emit(
+            client,
+            56,
+            purpose="preparation",
+            decision="unresolved",
+            actionability="conditional",
+            condition_state="unknown",
+        )
         assert _row(client, required)["queue_lane"] == "standard"
         assert _row(client, required)["human_lane"] == "ordinary_obligation"
         assert _row(client, optional)["human_lane"] == "possible_opportunity"
+        assert (
+            _row(client, unchosen_preparation)["human_lane"] == "possible_opportunity"
+        )
+        assert (
+            _row(client, uncertain_preparation)["human_lane"]
+            == "clarification_conflict"
+        )
         assert _row(client, required)["confidence"] == 0.01
         for lens, expected in (
-            ("ready", {required, clarify, explicit_optional}),
-            ("low_signal", {optional}),
+            ("ready", {required, clarify, explicit_optional, uncertain_preparation}),
+            ("low_signal", {optional, unchosen_preparation}),
         ):
             response = client.get(
                 f"/api/member/v1/surfaces/triage?triage_lens={lens}&triage_limit=100",

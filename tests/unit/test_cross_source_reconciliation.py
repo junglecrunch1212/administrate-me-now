@@ -361,11 +361,14 @@ def test_low_signal_and_security_evidence_do_not_become_ordinary_work(
     )
     profile = evidence_profile(source, proposal)
     signals = assessed_signals(source, proposal)
+    # A source policy alert route is an already evaluated alert, not merely
+    # permission to alert. Plain promotions do not receive a security route.
+    policy = _policy(alert="security" if signals.security_alert else "none")
     assert (
         choose_decision(
             coordinate_exact=True,
             signals=signals,
-            policy=_policy(),
+            policy=policy,
             profile=profile,
             relationships=[],
             target_kind=target_kind,

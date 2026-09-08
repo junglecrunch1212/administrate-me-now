@@ -1406,11 +1406,14 @@ function triageSurface(data, { preserveView = false } = {}) {
   if (missingRequestedCandidate) state.triageMatter = null;
   else if (!state.triageMatter || !visibleMatters.some((matter) => matter.context_id === state.triageMatter)) state.triageMatter = visibleMatters[0]?.context_id || null;
   const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
+  const visibleCandidateCount = visibleMatters.reduce((count, matter) => count + matter.candidates.length, 0);
+  const completeViewCount = state.triageView === "all_candidates" ? data.triage?.selection?.candidates ?? candidateCount : state.triageView === "recent" && humanViews ? viewCounts.history?.candidates ?? visibleCandidateCount : viewCounts[state.triageView]?.candidates ?? visibleCandidateCount;
+  const matchesBeyondPage = humanViews && !visibleMatters.length && data.triage?.has_more && completeViewCount > 0;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
   const workspaceLabels = { ready: "Decisions that need you", needs_details: "Decisions missing details", needs_interpretation: "Items to classify", low_signal: "Other suggestions", recurring_exceptions: "Recurring issues", learned_rules: "Items matching shadow rules", alerts: "Alerts and safety", all_candidates: "Complete candidate inventory", recent: "Recent decisions" };
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", workspaceLabels[state.triageView] || "Decisions to review"));
   if (state.triageView === "recent") master.append(text("p", humanViews ? "Retained decisions and reference candidates. Open candidates remain reviewable; completed decisions keep their audit trail." : "Read-only audit history. System-retired candidates are historical lifecycle receipts, not new sender rules.", "state-note"));
-  if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing needs your attention right now." : state.triageView === "needs_details" ? "No decisions are waiting for missing details." : state.triageView === "needs_interpretation" ? "No items are waiting for a type." : state.triageView === "low_signal" ? "No lower-signal suggestions are waiting." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing matches this view.", "empty"));
+  if (!visibleMatters.length) master.append(text("p", matchesBeyondPage ? `${completeViewCount} candidate${completeViewCount === 1 ? " matches" : "s match"} this view beyond the loaded page. Choose Show more to review ${completeViewCount === 1 ? "it" : "them"}.` : state.triageView === "ready" ? "Nothing needs your attention right now." : state.triageView === "needs_details" ? "No decisions are waiting for missing details." : state.triageView === "needs_interpretation" ? "No items are waiting for a type." : state.triageView === "low_signal" ? "No lower-signal suggestions are waiting." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing matches this view.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
   let priorLane = null;
   const groupByAttention = state.triageView === "ready" || (state.triageView === "all_candidates" && state.triageSort === "attention");
@@ -1428,8 +1431,6 @@ function triageSurface(data, { preserveView = false } = {}) {
     button.addEventListener("click", () => { if (triageInteractionLocked()) return; state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; state.triageFocusPending = true; replaceQuery({ view: state.triageView, item: state.triageSelected, matter: matter.context_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list);
-  const visibleCandidateCount = visibleMatters.reduce((count, matter) => count + matter.candidates.length, 0);
-  const completeViewCount = state.triageView === "all_candidates" ? data.triage?.selection?.candidates ?? candidateCount : state.triageView === "recent" && humanViews ? viewCounts.history?.candidates ?? visibleCandidateCount : viewCounts[state.triageView]?.candidates ?? visibleCandidateCount;
   const viewCountIsComplete = state.triageView !== "learned_rules";
   if (data.triage?.has_more && (state.triageView !== "recent" || humanViews) && (!viewCountIsComplete || visibleCandidateCount < completeViewCount)) { const more = text("button", "Show more", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
   const detail = document.createElement("div"); detail.className = "triage-matter-detail";

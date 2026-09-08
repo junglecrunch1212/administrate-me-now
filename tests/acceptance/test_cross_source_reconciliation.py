@@ -585,7 +585,9 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             "known_human_actionable_request"
         ]
         assert prior_human in known_decision["payload"]["evidence_source_event_ids"]
-        assert deadline_decision["payload"]["priority_basis"] == ["verified_deadline"]
+        assert deadline_decision["payload"]["priority_basis"] == [
+            "standard_actionable_candidate"
+        ]
         assert promise_decision["payload"]["member_authored_text_digest"]
         assert len(promise_decision["payload"]["member_authored_text_digest"]) == 64
         assert (

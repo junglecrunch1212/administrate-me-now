@@ -141,7 +141,56 @@ def _response(request: httpx.Request) -> httpx.Response:
                 ),
             }
 
-        if inputs.get("candidate_scope") == "primary_thread" and any(
+        attention_case = re.search(
+            r"\[fixture:attention-controls:(preparation|optional_opportunity|receipt):"
+            r"(required|conditional|informational):([1-9][0-9]?)\]\n([^\n]+)",
+            body_text,
+        )
+        if inputs.get("candidate_scope") == "primary_thread" and attention_case:
+            # Controlled language output only. The production extractor verifies
+            # citations and derives proposal identity, obligation protection,
+            # reconciliation, and lifecycle from the real source event.
+            purpose, actionability, index, quote = attention_case.groups()
+            condition = (
+                f"If you want to join activity {index}"
+                if purpose == "optional_opportunity"
+                else f"If you decide to attend activity {index}"
+                if actionability == "conditional"
+                else None
+            )
+            candidates = [
+                {
+                    "target_kind": "task",
+                    "title": quote,
+                    "evidence_source_id": current_alias,
+                    "evidence_quote": quote,
+                    "candidate": {},
+                    "confidence": 0.98,
+                    "reasons": ["fixture exact attention-control evidence"],
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                    "compact_summary": quote,
+                    "obligation_assessment": {
+                        "purpose": purpose,
+                        "actionability": actionability,
+                        "condition": condition,
+                        "condition_state": "unmet" if condition else "not_applicable",
+                        "date_role": "none",
+                        "qualifying_evidence": (
+                            [
+                                {
+                                    "source_id": current_alias,
+                                    "role": "condition",
+                                    "quote": condition,
+                                }
+                            ]
+                            if condition
+                            else []
+                        ),
+                    },
+                }
+            ]
+        elif inputs.get("candidate_scope") == "primary_thread" and any(
             "[fixture:contextual-legal]" in str(message.get("body_text") or "")
             for message in context_messages
             if message.get("relation") == "thread"

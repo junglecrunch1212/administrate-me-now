@@ -236,7 +236,15 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
             "provider_effects": 0,
         }
         matters = page["triage"]["matters"]
-        assert {value["root_proposal_id"] for value in matters} == {
+        assert len(matters) == 100
+        assert page["triage"]["inventory"]["total_candidates"] == 105
+        assert page["triage"]["inventory"]["views"]["history"]["candidates"] == 102
+        assert {
+            candidate["proposal_id"]
+            for matter in matters
+            for candidate in matter["candidates"]
+            if candidate["attention_view"] != "history"
+        } == {
             "g04-proposal-000",
             "g04-proposal-001",
             "g04-proposal-002",
@@ -250,6 +258,20 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
             candidate["disposition"]["disposition"] in {"ordinary_queue", "alerts"}
             for matter in matters
             for candidate in matter["candidates"]
+            if candidate["attention_view"] != "history"
+        )
+        ready_response = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=ready&triage_limit=100",
+            headers=A_HEADERS,
+        )
+        assert ready_response.status_code == 200, ready_response.text
+        assert {item["proposal_id"] for item in ready_response.json()["items"]} == {
+            "g04-proposal-000",
+            "g04-proposal-001",
+        }
+        assert (
+            ready_response.json()["triage"]["inventory"]["views"]["ready"]["candidates"]
+            == 2
         )
         browser_code = client.get("/member-assets/member.js", headers=A_HEADERS).text
         assert "/api/member/v1/triage/backlog-reassessment-preview" in browser_code
@@ -394,9 +416,22 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
         )
         assert trial_page.status_code == 200, trial_page.text
         assert {
-            value["root_proposal_id"]
+            candidate["proposal_id"]
             for value in trial_page.json()["triage"]["matters"]
+            for candidate in value["candidates"]
+            if candidate["attention_view"] != "history"
         } == {"g04-proposal-000", "g04-proposal-002"}
+        assert (
+            trial_page.json()["triage"]["inventory"]["views"]["history"]["candidates"]
+            == 103
+        )
+        assert (
+            trial_page.json()["triage"]["inventory"]["views"]["ready"]["candidates"]
+            == 1
+        )
+        assert "g04-proposal-001" in {
+            item["proposal_id"] for item in trial_page.json()["items"]
+        }
         suspended = client.post(
             f"/api/member/v1/triage-learning/rules/{rule_id}/review",
             headers=A_HEADERS,
@@ -419,13 +454,25 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
         )
         assert restored_page.status_code == 200, restored_page.text
         assert {
-            value["root_proposal_id"]
+            candidate["proposal_id"]
             for value in restored_page.json()["triage"]["matters"]
+            for candidate in value["candidates"]
+            if candidate["attention_view"] != "history"
         } == {
             "g04-proposal-000",
             "g04-proposal-001",
             "g04-proposal-002",
         }
+        assert (
+            restored_page.json()["triage"]["inventory"]["views"]["ready"]["candidates"]
+            == 2
+        )
+        assert (
+            restored_page.json()["triage"]["inventory"]["views"]["history"][
+                "candidates"
+            ]
+            == 102
+        )
 
         event_types = client.portal.call(_event_types, runtime)
         assert not {

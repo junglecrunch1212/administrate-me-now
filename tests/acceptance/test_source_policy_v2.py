@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 from fastapi.testclient import TestClient
 
@@ -101,6 +101,7 @@ async def _append_message(
     channel: str = "gmail",
     body_text: str | None = None,
     provider_labels: list[str] | None = None,
+    sensitivity: Literal["normal", "privileged"] = "privileged",
 ) -> str:
     payload = MessagingReceivedV5(
         source_channel=channel,
@@ -136,7 +137,7 @@ async def _append_message(
             source_account_id=account_id,
             owner_scope=f"private:{member_id}",
             visibility_scope=f"private:{member_id}",
-            sensitivity="privileged",
+            sensitivity=sensitivity,
             idempotency_key=f"policy-source:{native_id}",
             payload=payload.model_dump(mode="json"),
         )
@@ -231,11 +232,13 @@ def test_explicit_bulk_purpose_alert_matches_preview_and_active_admission(
     body = "Join the optional fixture workshop if interested."
     with TestClient(app) as client:
         runtime = app.state.runtime
+        assessed_source_ids: list[str] = []
 
         async def language_seam(
             skill_id: str, inputs: dict[str, Any], context: Any
         ) -> SimpleNamespace:
             assert skill_id == "skill:classify_message_nature"
+            assessed_source_ids.append(context.triggering_event_id)
             alias = inputs["context_pack"]["current_source_id"]
             return SimpleNamespace(
                 output={
@@ -302,12 +305,14 @@ def test_explicit_bulk_purpose_alert_matches_preview_and_active_admission(
             "gmail",
             body,
             ["CATEGORY_UPDATES"],
+            "normal",
         )
         client.portal.call(
             runtime.wait_for_subscriber,
             "pipeline:pipeline:noise_filtering",
             source_id,
         )
+        assert assessed_source_ids == [source_id]
 
         async def source_proposals() -> list[dict[str, Any]]:
             return [

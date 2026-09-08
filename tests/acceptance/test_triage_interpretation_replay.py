@@ -65,7 +65,10 @@ async def _preload(
                     "to_identifier": "fixture-member@example.invalid",
                     "thread_id": "fixture-interpretation-thread",
                     "subject": "Fixture authorization",
-                    "body_text": quote,
+                    "body_text": quote
+                    + (
+                        "\nPlease archive the fixture receipt." if member_action else ""
+                    ),
                     "received_at": AT,
                     "attachments": [],
                     "native_message_id": "fixture-interpretation-native",
@@ -110,7 +113,7 @@ async def _preload(
                     "candidate": {"description": quote},
                     "route": {"member_id": MEMBER},
                     "source_event_id": source_id,
-                    "candidate_key": f"context-{identity}",
+                    "candidate_key": f"legacy-context-{identity}",
                     "eligibility_rule_ids": ["exact_source_quote_grounded_v1"],
                     "source_occurred_at": AT,
                     "interpretation": {
@@ -269,7 +272,7 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
         )
         proposals = client.portal.call(_events, runtime, "triage.item.proposed")
         replacements = [p for p in proposals if p["payload"]["proposal_id"] != PROPOSAL]
-        assert len(replacements) == int(actionable)
+        assert len(replacements) == int(actionable) + int(member_action is not None)
         supersessions = client.portal.call(_events, runtime, "triage.item.superseded")
         assert len(supersessions) == 1
         retirement = supersessions[0]
@@ -282,7 +285,14 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
                 "triage-reconciliation:admission",
                 proposal["event_id"],
             )
-        latest = client.portal.call(runtime.event_log.latest_event_id)
+        decisions = client.portal.call(
+            _events, runtime, "triage.reconciliation.decided"
+        )
+        # Other pipelines may append events the triage projection does not
+        # subscribe to. Await the actual triage inputs after admission settles.
+        latest = max(
+            event["event_id"] for event in [*proposals, *supersessions, *decisions]
+        )
         client.portal.call(runtime.wait_for_projection, "triage", latest)
         triage = runtime.projections.connection("triage")
         prior = dict(
@@ -300,7 +310,13 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
             assert prior["resolution_reason"] == "eligibility_rule_replaced"
             assert prior["content_revision_event_id"] == prior_id
         if replacements:
-            replacement = replacements[0]
+            replacement = next(
+                proposal
+                for proposal in replacements
+                if "complete the fixture authorization"
+                in proposal["payload"]["title"].lower()
+            )
+            assert replacement["payload"]["candidate_key"] != prior["candidate_key"]
             assert replacement["schema_version"] == 5
             interpretation = replacement["payload"]["interpretation"]
             assert interpretation["contract"] == "triage-context-interpretation-v3"
@@ -315,6 +331,18 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
             ).fetchone()
             if member_action:
                 assert fresh is None
+                # The edited action is protected, not its entire source. A
+                # distinct exact sibling from the same message remains usable.
+                sibling = next(
+                    proposal for proposal in replacements if proposal != replacement
+                )
+                sibling_row = triage.execute(
+                    "SELECT * FROM triage_items WHERE proposal_id=?",
+                    (sibling["payload"]["proposal_id"],),
+                ).fetchone()
+                assert sibling_row["state"] == "pending_review"
+                assert sibling_row["admission_decision"] == "admit"
+                assert sibling_row["duplicate_of_proposal_id"] is None
             else:
                 assert fresh["state"] == "pending_review"
                 assert fresh["admission_decision"] == "admit"
@@ -334,6 +362,7 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
             "state",
             "title",
             "content_revision_event_id",
+            "proposal_action_fingerprint",
             "resolved_by",
             "resolution_reason",
         ):
