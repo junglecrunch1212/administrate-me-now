@@ -46,6 +46,7 @@ jobs:
           poetry run pytest -p no:cacheprovider -q
           tests/acceptance/test_runtime_triage_activation.py
           tests/acceptance/test_triage_rollback_compatibility.py
+          tests/acceptance/test_runtime_spine.py
 
       - name: Validate Python behavior
         run: |
