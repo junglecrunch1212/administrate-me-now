@@ -258,6 +258,7 @@ def test_real_launchd_composition_defaults_and_independent_explicit_opt_out(
             "conditions": {
                 "provider_account_id": MEMBER,
                 "adapter_instance_id": "triage",
+                "message_purpose": "personal_request",
             },
             "exceptions": [],
             "action": "review",
@@ -290,7 +291,7 @@ def test_real_launchd_composition_defaults_and_independent_explicit_opt_out(
                 },
             )
             assert undone.status_code == 200, undone.text
-        assert _triage(client, other=True)["triage"]["items"] == []
+        assert _triage(client, other=True)["items"] == []
         client.portal.call(_settle, runtime)
         assert client.portal.call(_external_writes, runtime) == 0
 
@@ -380,7 +381,7 @@ def test_launch_upgrade_replaces_retained_shadow_receipts_without_reopening_memb
             == before[edited_id]["content_revision_event_id"]
         )
         assert _triage(client)["human_triage_management"]["active"] is True
-        assert _triage(client, other=True)["triage"]["items"] == []
+        assert _triage(client, other=True)["items"] == []
         client.portal.call(runtime.projections.rebuild, "triage")
         client.portal.call(runtime.projections.rebuild, "context_fabric")
         client.portal.call(_settle, runtime)
