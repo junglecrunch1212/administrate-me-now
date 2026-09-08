@@ -62,6 +62,41 @@ class TriageProjection(Projection):
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
+    # Child tables precede their parents. Every entry is disposable state owned
+    # by this projection; version/checkpoint metadata and the event log are not
+    # part of the reset.
+    replay_tables = (
+        "triage_attention_observations",
+        "triage_attention_rule_history",
+        "triage_attention_feedback",
+        "triage_attention_rules",
+        "triage_management_actions",
+        "triage_learned_policy_rules",
+        "triage_context_session_sources",
+        "triage_context_sessions",
+        "canonical_object_fingerprints",
+        "triage_items",
+    )
+
+    def before_replay(self, conn: Any) -> None:
+        """Reconstruct applied revisions from event order, never final rows.
+
+        The runner invokes this only at a complete, fixed-watermark replay,
+        including an actual projection-version upgrade. Ordinary connection
+        opens do not reset data. Replaying into an existing v11 row would skip
+        its proposal and applied member edits, leaving the new revision guards
+        uninitialized. Starting from the derived empty state also preserves the
+        distinction between an applied edit and a historically refused CAS.
+        """
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for table in self.replay_tables:
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608 - fixed projection-owned table allowlist
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
         handlers.apply_event(envelope, conn)
 
@@ -356,7 +391,9 @@ class TriageProjection(Projection):
                 """UPDATE triage_items SET
                        context_id=?, context_kind=?, group_label=?,
                        title_fingerprint=?, object_match_fingerprint=?,
-                       queue_lane=?, evidence_state=?,
+                       queue_lane=CASE WHEN reconciliation_active=1
+                                       THEN queue_lane ELSE ? END,
+                       evidence_state=?,
                        ownership_state=?, lifecycle_state=?
                      WHERE tenant_id=? AND proposal_id=?""",
                 (
@@ -421,6 +458,9 @@ class TriageProjection(Projection):
         # Recompute every presentation-only classifier during a version
         # migration. Retained proposals therefore receive the corrected
         # nullable-date lane and the same source/readiness facets as new rows.
+        # An active reconciliation owns its event-ordered queue lane. This hook
+        # also runs when a replayed database is reopened, so the legacy text
+        # classifier must not overwrite a lane established by those events.
         presentation_rows = conn.execute(
             """SELECT proposal_id, source_kind, target_kind, title,
                       candidate_json, route_json, eligibility_rule_ids_json,
@@ -445,7 +485,9 @@ class TriageProjection(Projection):
             )
             conn.execute(
                 """UPDATE triage_items
-                      SET queue_lane=?, source_id=?, review_state=?
+                      SET queue_lane=CASE WHEN reconciliation_active=1
+                                          THEN queue_lane ELSE ? END,
+                          source_id=?, review_state=?
                     WHERE tenant_id=? AND proposal_id=?""",
                 (
                     queue_lane(payload),

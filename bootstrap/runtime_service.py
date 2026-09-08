@@ -114,6 +114,17 @@ def main() -> None:
         host_topology=host_topology,
         deployment_evidence=deployment_evidence,
         deployment_evidence_required=True,
+        # The launchd service constructs settings directly after resolving its
+        # reviewed secret references. Keep the production defaults aligned with
+        # from_environment; the credential-free test constructor stays opt-in.
+        reconciliation_admission_enabled=os.environ.get(
+            "ADMINME_RECONCILIATION_ADMISSION_ENABLED", "1"
+        )
+        == "1",
+        human_triage_management_enabled=os.environ.get(
+            "ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED", "1"
+        )
+        == "1",
     )
     uvicorn.run(
         create_application(settings),

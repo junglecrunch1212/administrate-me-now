@@ -230,7 +230,7 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
         page = page_response.json()
         assert page["human_triage_management"] == {
             "active": True,
-            "default_off": True,
+            "default_off": False,
             "backlog_preview_available": True,
             "backlog_application_available": False,
             "provider_effects": 0,
@@ -523,7 +523,7 @@ def test_g04_admission_preview_actions_learning_isolation_and_replay(
         assert replay_snapshot == first_snapshot
 
 
-def test_g04_management_is_default_off(tmp_path: Path) -> None:
+def test_g04_management_can_be_explicitly_disabled(tmp_path: Path) -> None:
     instance = tmp_path / "g04-default-off"
     instance.mkdir()
     with TestClient(create_application(_settings(instance, active=False))) as client:

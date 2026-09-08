@@ -201,13 +201,59 @@ Settings remains a replayable cache of typed private policy events. Historical
 source-family preferences and legacy rule receipts remain readable; migration
 does not copy them indiscriminately across accounts.
 
-The production environment loader defaults
+Both the production environment loader and the actual launchd composition root
+(`bootstrap.runtime_service`) default
 `ADMINME_RECONCILIATION_ADMISSION_ENABLED` and
 `ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED` to `1`; explicit `0` remains a behavior
 rollback control. Programmatic/credential-free runtime construction keeps its
 explicit opt-in defaults for compatibility tests. Settings reports effective
 activation truthfully. These are domain attention flags, not provider-write,
 enrollment, credential, permission, dependency, or model-routing controls.
+
+The production-launcher regression must exercise `runtime_service.main` through
+the real runtime and member API, replacing only host, secret, and server-listener
+boundaries with synthetic fixtures. An environment-loader test alone does not
+prove launchd activation. The reconciliation consumer advances to **2.0.1** so
+retained shadow decisions receive a new immutable decision identity and replay
+under active admission. Existing member dismissals and edits remain protected.
+This is **MODERNIZE** under CO-021 and this change order: it completes the
+documented production default without changing provider-write authority.
+
+Presentation migration preserves the queue lane already established by active
+reconciliation and subsequent member events. Reopening a rebuilt projection
+must not replace an explicit member priority with a legacy text classification.
+The production-launcher acceptance compares complete live, rebuilt, and reopened
+rows, including queue lanes and member content revisions. This is **PRESERVE**
+under the deterministic projection/replay contract; the migration hook runs on
+every connection open and does not require a new projection version or replay.
+
+At an actual complete fixed-watermark Triage replay, the projection first clears
+only its own disposable derived tables in one committed transaction. Its events
+then reconstruct proposal identity, content revision, applied member edits, and
+refused compare-and-apply attempts in order. This also initializes revision guards
+when the retained v11 projection upgrades to v12; replaying over its final rows
+would skip both original proposals and already-applied edits. Ordinary opens do
+not clear rows. A failed replay retains the prior version marker so retry starts
+from the same empty derived state. This is **PRESERVE** under the append-only truth,
+member correction, and deterministic replay invariants; no event, provider state,
+or operational checkpoint is edited by this projection hook.
+
+Historical unreliable-source replay uses the existing owner-scoped immutable
+proposal cache, refreshing only its event-log suffix. Fresh descendant and
+content-revision checks remain authoritative for retirement. This is
+**PRESERVE**: it changes lookup cost without changing candidate eligibility or
+member correction semantics.
+
+New supersession V4 writers also retain `expected_last_event_id` for retained
+predecessors that read this field for every schema version at or above V3. The
+original proposal event is a conservative legacy comparison: a predecessor may
+skip retirement after intervening routing or member changes. Current readers
+continue to use the independent content-revision guard. The compatibility field
+is optional in the V4 schema so already-recorded immutable facts remain valid;
+all new writers must include it. Rollback acceptance must open the synthetic
+post-candidate encrypted state through the actual retained predecessor runtime
+and authenticate its member API. This is **PRESERVE** under the deployment and
+correction invariants; a healthy candidate rebuild alone is insufficient.
 
 Phase A runs only in Codex/cloud or a disposable lab with synthetic inputs.
 Deployment uses the immutable merge commit from protected `main`, only after

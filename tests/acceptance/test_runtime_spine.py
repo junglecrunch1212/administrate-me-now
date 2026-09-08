@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 import sqlcipher3
 
+from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap.contracts import PROJECTION_NAMES
 
@@ -17,8 +21,47 @@ TEST_KEY = b"a" * 32
 EXPECTED_PROJECTIONS = set(PROJECTION_NAMES)
 
 
-def _seed_v2_triage_projection(settings: RuntimeSettings) -> None:
-    """Create the exact deployed pre-PR #287 Triage table shape."""
+async def _seed_legacy_triage_history(settings: RuntimeSettings) -> str:
+    """Retain the authoritative event behind the old disposable projection."""
+
+    log = EventLog(settings.instance, settings.encryption_key)
+    bus = EventBus(log, settings.instance.bus_checkpoint_path)
+    writer = EventWriter(log, bus)
+    try:
+        return str(
+            await writer.write(
+                EventEnvelope(
+                    event_at_ms=1_786_190_400_000,
+                    tenant_id=settings.instance.tenant_id,
+                    type="triage.item.proposed",
+                    schema_version=1,
+                    occurred_at="2026-08-08T12:00:00Z",
+                    source_adapter="acceptance-fixture",
+                    source_account_id="legacy-account",
+                    owner_scope="private:acceptance-member",
+                    visibility_scope="private:acceptance-member",
+                    idempotency_key="legacy-proposal",
+                    payload={
+                        "proposal_id": "legacy-proposal",
+                        "target_kind": "task",
+                        "owner_member_id": "acceptance-member",
+                        "title": "Preserved candidate",
+                        "candidate": {},
+                        "route": {"member_id": "acceptance-member"},
+                        "source_event_id": "legacy-source-event",
+                    },
+                )
+            )
+        )
+    finally:
+        await bus.stop()
+        await log.close()
+
+
+def _seed_v2_triage_projection(settings: RuntimeSettings) -> str:
+    """Create the deployed pre-PR #287 shape backed by retained event truth."""
+
+    proposal_event_id = asyncio.run(_seed_legacy_triage_history(settings))
 
     path = settings.instance.projection_db_path("triage")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +113,7 @@ def _seed_v2_triage_projection(settings: RuntimeSettings) -> None:
             (
                 "legacy-proposal",
                 settings.instance.tenant_id,
-                "message",
+                "triage_item",
                 "task",
                 "acceptance-member",
                 "Preserved candidate",
@@ -79,12 +122,13 @@ def _seed_v2_triage_projection(settings: RuntimeSettings) -> None:
                 "2026-08-08T12:00:00Z",
                 "private:acceptance-member",
                 "private:acceptance-member",
-                "legacy-source-event",
+                proposal_event_id,
             ),
         )
         conn.commit()
     finally:
         conn.close()
+    return proposal_event_id
 
 
 def test_real_process_boot_ingest_diagnostics_and_shutdown(tmp_path: Path) -> None:
@@ -156,7 +200,7 @@ def test_real_process_upgrades_existing_triage_projection_before_indexing(
         member_identities={"acceptance-member.ts.net": "acceptance-member"},
         member_roles={"acceptance-member": "principal"},
     )
-    _seed_v2_triage_projection(settings)
+    proposal_event_id = _seed_v2_triage_projection(settings)
 
     with TestClient(create_application(settings)) as client:
         assert client.get("/api/system/live").json()["runtime_started"] is True
@@ -174,3 +218,6 @@ def test_real_process_upgrades_existing_triage_projection_before_indexing(
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(triage_items)")}
         assert {"parent_intent_id", "domain_approval_event_id"} <= columns
         assert "idx_triage_tenant_parent_intent" in indexes
+        [row] = conn.execute("SELECT * FROM triage_items").fetchall()
+        assert row["proposal_event_id"] == proposal_event_id
+        assert row["content_revision_event_id"] == proposal_event_id
