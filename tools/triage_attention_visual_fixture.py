@@ -6,6 +6,7 @@ import hashlib
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
+from adminme.obligation_assessment import ground_obligation_assessment
 from adminme.source_policy import SourceCoordinate, source_coordinate_for_event
 
 
@@ -14,17 +15,17 @@ async def seed_attention_sources(
 ) -> dict[str, Any]:
     """Exercise real log, projection, Settings, and learning routes; no provider."""
     cases = (
-        [(6, "survey", False, False)]
+        [(6, "preparation", False)]
         if future
         else [
-            (1, "survey", False, False),
-            (2, "preparation", True, False),
-            (3, "survey", False, True),
-            (4, "receipt", False, False),
+            (1, "preparation", False),
+            (2, "preparation", True),
+            (3, "survey", False),
+            (4, "receipt", False),
         ]
     )
     proposal_ids = []
-    for index, purpose, independent, protected in cases:
+    for index, purpose, required in cases:
         coordinate = SourceCoordinate(
             tenant_id=runtime.settings.instance.tenant_id,
             owner_principal_id=member_id,
@@ -42,7 +43,18 @@ async def seed_attention_sources(
             native_container_kind="conversation",
             native_container_id="visual-attention-conversation",
         )
-        clause = f"Fixture {purpose} source {index}."
+        title = f"Fixture {purpose} source {index}."
+        conditional = purpose == "preparation" and not required
+        condition = f"If you decide to attend activity {index}" if conditional else None
+        clause = (
+            f"{condition}, complete the preparation form."
+            if conditional
+            else f"Please complete the required preparation form for activity {index}."
+            if required
+            else f"You may optionally share feedback about activity {index}."
+            if purpose == "survey"
+            else f"Your payment for activity {index} was received. No action is required."
+        )
         common = {
             "event_at_ms": int(now.timestamp() * 1000),
             "tenant_id": runtime.settings.instance.tenant_id,
@@ -69,7 +81,7 @@ async def seed_attention_sources(
                 "thread_id": coordinate.native_container_id,
                 "from_identifier": "fixture-sender@example.invalid",
                 "to_identifier": "fixture-member@example.invalid",
-                "subject": clause,
+                "subject": title,
                 "body_text": clause,
                 "received_at": now.isoformat(),
                 "attachments": [],
@@ -77,6 +89,32 @@ async def seed_attention_sources(
         )
         source_id = await runtime.events.write(source)
         coordinate = source_coordinate_for_event(source.model_dump(mode="json"))
+        assessment = ground_obligation_assessment(
+            {
+                "purpose": purpose,
+                "actionability": "required"
+                if required
+                else "conditional"
+                if conditional
+                else "informational",
+                "condition": condition,
+                "condition_state": "unmet" if conditional else "not_applicable",
+                "qualifying_evidence": (
+                    [{"source_id": "m01", "quote": condition, "role": "condition"}]
+                    if conditional
+                    else []
+                ),
+            },
+            source_texts={"m01": (source_id, clause)},
+            primary_alias="m01",
+            primary_quote=clause,
+            action_owner="member",
+            fields={},
+        )
+        if assessment is None or assessment["independent_obligation"] != required:
+            raise ValueError(
+                "Synthetic browser evidence did not produce its expected grounded assessment"
+            )
         proposal_id = f"visual-attention-proposal-{index}"
         digest = hashlib.sha256(proposal_id.encode()).hexdigest()
         proposal = EventEnvelope(
@@ -89,7 +127,7 @@ async def seed_attention_sources(
                 "proposal_id": proposal_id,
                 "target_kind": "task",
                 "owner_member_id": member_id,
-                "title": clause,
+                "title": title,
                 "candidate": {"sender_digest": "a" * 64},
                 "source_event_id": source_id,
                 "route": {"member_id": member_id},
@@ -99,7 +137,7 @@ async def seed_attention_sources(
                     "context_fingerprint": digest,
                     "thread_key": digest,
                     "anchor_event_id": source_id,
-                    "compact_summary": clause,
+                    "compact_summary": title,
                     "thread_state": "new",
                     "action_owner": "member",
                     "lifecycle_state": "open",
@@ -114,19 +152,7 @@ async def seed_attention_sources(
                         }
                     ],
                     "assessment_state": "verified",
-                    "obligation_assessment": {
-                        "purpose": purpose,
-                        "actionability": "required" if independent else "informational",
-                        "condition_state": "not_applicable",
-                        "independent_obligation": independent,
-                        "evidence": [
-                            {
-                                "source_event_id": source_id,
-                                "quote": clause,
-                                "role": "action",
-                            }
-                        ],
-                    },
+                    "obligation_assessment": assessment,
                 },
             },
         )
@@ -161,9 +187,7 @@ async def seed_attention_sources(
                 "source_coordinate": coordinate.model_dump(mode="json"),
                 "freshness": "current",
                 "priority_rank": 60,
-                "priority_basis": ["explicit_member_instruction"]
-                if protected
-                else ["standard_actionable_candidate"],
+                "priority_basis": ["standard_actionable_candidate"],
                 "reason_codes": ["fixture_admission"],
                 "decided_at": now.isoformat(),
                 "admission_active": True,

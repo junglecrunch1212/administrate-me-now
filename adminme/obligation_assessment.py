@@ -137,8 +137,12 @@ def ground_obligation_assessment(
             ):
                 return None
             evidence.append(
-                ObligationEvidenceV1(
-                    source_event_id=source[0], quote=quote, role=item.get("role")
+                ObligationEvidenceV1.model_validate(
+                    {
+                        "source_event_id": source[0],
+                        "quote": quote,
+                        "role": item.get("role"),
+                    }
                 )
             )
         assessment = PersonalObligationAssessmentV1.model_validate(

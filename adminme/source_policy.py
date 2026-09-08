@@ -725,7 +725,7 @@ def assess_source_signals(event: Mapping[str, Any]) -> SignalAssessment:
             "incidental_entity_extraction",
         )
     }
-    return SignalAssessment(
+    assessed = SignalAssessment(
         authenticated_member_instruction=direction == "member_authored",
         known_human_incoming_request=trusted_known_human
         and bool(payload.get("request_kind")),
@@ -748,7 +748,9 @@ def assess_source_signals(event: Mapping[str, Any]) -> SignalAssessment:
             str(provider_urgency)[:120] if provider_urgency is not None else None
         ),
         freshness=freshness,
-        **typed_flags,
+    )
+    return SignalAssessment.model_validate(
+        {**assessed.model_dump(mode="json"), **typed_flags}
     )
 
 

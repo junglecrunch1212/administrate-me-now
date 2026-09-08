@@ -1362,7 +1362,16 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             ]
             == original_stable_proposal["event_id"]
         )
-        assert replacement_stable_proposal["payload"]["interpretation"] is None
+        assert replacement_stable_proposal["schema_version"] == 5
+        assert replacement_stable_proposal["payload"]["interpretation"]["contract"] == (
+            "triage-context-interpretation-v3"
+        )
+        assert (
+            replacement_stable_proposal["payload"]["interpretation"][
+                "obligation_assessment"
+            ]["independent_obligation"]
+            is True
+        )
         stable_fallback_assessments = [
             event
             for event in client.portal.call(

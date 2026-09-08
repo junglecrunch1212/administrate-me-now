@@ -971,6 +971,8 @@ def choose_decision(
             and policy.triage_route == "review"
         )
     ):
+        if policy.alert_route != "none":
+            return "alert_only"
         return (
             "context_only"
             if policy.context_route != "none"

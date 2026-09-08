@@ -207,7 +207,21 @@ def human_attention_view(item: Mapping[str, Any]) -> str:
         or _mapping(item.get("management")).get("state")
         or "open"
     )
-    if decision == "alert_only" or management == "alert":
+    live_state = item.get("state") in {"pending_interpretation", "pending_review"} or (
+        item.get("state") == "dismissed"
+        and item.get("resolved_by") == "system:cross-source-reconciliation"
+        and item.get("resolution_reason")
+        in {
+            "reconciliation:context_only",
+            "reconciliation:source_policy_suppression",
+            "reconciliation:alert_only",
+        }
+    )
+    if (
+        live_state
+        and management in {"open", "clarification", "suppression_proposed", "alert"}
+        and (decision == "alert_only" or management == "alert")
+    ):
         return "alerts"
     learned = str(
         item.get("learned_policy_state")

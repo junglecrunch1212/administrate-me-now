@@ -426,7 +426,7 @@ def extract_grounded_context_candidates(
             for raw_value in (raw.get("unresolved_questions") or [])[:8]
             if (value := _bounded_text(raw_value, 240)) is not None
         ]
-        interpretation = {
+        interpretation: dict[str, Any] = {
             "contract": "triage-context-interpretation-v2",
             "context_fingerprint": context_pack.fingerprint,
             "thread_key": context_pack.thread_key,

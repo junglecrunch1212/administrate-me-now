@@ -575,7 +575,12 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             promise_decision["payload"]["priority_rank"],
             known_decision["payload"]["priority_rank"],
             deadline_decision["payload"]["priority_rank"],
-        ] == [0, 10, 20, 30]
+        ] == [
+            0,
+            10,
+            20,
+            60,
+        ]  # An unsupported candidate date is not a verified deadline.
         assert known_decision["payload"]["priority_basis"] == [
             "known_human_actionable_request"
         ]

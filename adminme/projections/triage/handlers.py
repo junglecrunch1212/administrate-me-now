@@ -494,7 +494,7 @@ def _recompute_attention(envelope: dict[str, Any], conn: sqlcipher3.Connection) 
                 if selected
                 else base["human_lane"]
             )
-            reason = (
+            selection_reasons = (
                 ["conflicting_attention_rules"]
                 if selection["conflict"]
                 else ["exact_conjunction"]
@@ -553,7 +553,7 @@ def _recompute_attention(envelope: dict[str, Any], conn: sqlcipher3.Connection) 
                     base["learned_policy_state"],
                     base["learned_rule_id"],
                     base["human_lane"],
-                    _json(reason),
+                    _json(selection_reasons),
                     _json(selection["rule_ids"]),
                     _json(shadows),
                     _json(schedule),

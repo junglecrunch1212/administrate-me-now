@@ -3783,7 +3783,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 132,
-    "technical_event_schemas": 321,
+    "technical_event_schemas": 322,
     "technical_event_types": 259,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -36322,6 +36322,54 @@
         "expected_last_event_id"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.item.superseded",
+      "family": "triage",
+      "properties": {
+        "expected_content_revision_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Expected Content Revision Event Id",
+          "type": "string"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "source_changed",
+            "source_deleted",
+            "source_privileged",
+            "eligibility_rule_replaced"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "replacement_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Replacement Source Event Id",
+          "type": "string"
+        },
+        "superseded_at": {
+          "minLength": 1,
+          "title": "Superseded At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "superseded_at",
+        "replacement_source_event_id",
+        "reason",
+        "expected_content_revision_event_id"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,

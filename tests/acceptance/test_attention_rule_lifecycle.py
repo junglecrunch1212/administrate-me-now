@@ -302,6 +302,32 @@ def test_exact_rule_preview_exceptions_conflicts_undo_isolation_and_replay(
         assert _row(client, survey)["learned_policy_state"] == "context_only"
         assert _row(client, protected)["learned_policy_state"] == "none"
         assert _row(client, promise)["learned_policy_state"] == "none"
+        # A quiet rule changes attention, never discoverability. The pending
+        # candidate remains visible in the complete inventory and History.
+        page = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert page.status_code == 200, page.text
+        retained = next(
+            item for item in page.json()["items"] if item["proposal_id"] == survey
+        )
+        assert retained["state"] == "pending_review"
+        assert retained["attention_view"] == "history"
+        assert survey in {item["proposal_id"] for item in page.json()["recent_items"]}
+        assert page.json()["triage"]["inventory"]["views"]["history"]["candidates"] == 1
+        assert (
+            page.json()["triage"]["inventory"]["views"]["all_candidates"]["candidates"]
+            == 5
+        )
+        quiet_page = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=low_signal&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert quiet_page.status_code == 200, quiet_page.text
+        assert survey not in {
+            item["proposal_id"] for item in quiet_page.json()["items"]
+        }
         assert client.get(f"{API}/rules", headers=OTHER_HEADERS).json()["rules"] == []
         assert (
             client.post(
@@ -680,6 +706,7 @@ def test_source_policy_quiet_then_review_restores_only_engine_hidden_work(
         for revision, mode in enumerate(("context_only", "review")):
             policy = SourcePolicyV2(
                 preset="custom",
+                candidate_kinds=["task"],
                 triage_mode=mode,
                 attention_mode="possibilities",
                 context_mode="typed_facts",
@@ -722,8 +749,15 @@ def test_source_policy_quiet_then_review_restores_only_engine_hidden_work(
             for matter in page.json()["triage"]["matters"]
             for candidate in matter["candidates"]
         }
-        assert engine_only in visible
-        assert not {member_dismissed, member_handled, confirmed} & visible
+        assert visible == set(proposals)
+        views = {
+            item["proposal_id"]: item["attention_view"] for item in page.json()["items"]
+        }
+        assert views[engine_only] == "needs_you"
+        assert {
+            views[proposal]
+            for proposal in (member_dismissed, member_handled, confirmed)
+        } == {"history"}
         before = [
             (
                 _row(client, proposal)["state"],
@@ -742,3 +776,94 @@ def test_source_policy_quiet_then_review_restores_only_engine_hidden_work(
             for proposal in proposals
         ]
         assert after == before
+
+
+def test_active_alerts_leave_attention_after_member_handling_or_semantic_retirement(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "alert-lifecycle"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        alert_ids = [
+            _emit(
+                client,
+                index,
+                purpose="account_alert",
+                decision="alert_only",
+                basis=["verified_deadline"],
+            )
+            for index in (81, 82, 83)
+        ]
+        live_alert, handled_alert, retired_alert = alert_ids
+        response = client.post(
+            f"/api/member/v1/triage/{handled_alert}/manage",
+            headers=HEADERS,
+            json={
+                "request_id": "attention-handle-alert",
+                "expected_last_event_id": _row(client, handled_alert)["last_event_id"],
+                "action": "mark_handled",
+                "reason_codes": ["already_handled"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        retirement_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.superseded",
+                schema_version=4,
+                occurred_at=EventEnvelope.now_utc_iso(),
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="attention-retire-alert",
+                payload={
+                    "proposal_id": retired_alert,
+                    "superseded_at": EventEnvelope.now_utc_iso(),
+                    "replacement_source_event_id": "attention-source-83",
+                    "reason": "eligibility_rule_replaced",
+                    "expected_content_revision_event_id": _row(client, retired_alert)[
+                        "proposal_event_id"
+                    ],
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", retirement_id)
+        assert _row(client, retired_alert)["resolved_by"] == "system:source_changed"
+        for lens in ("alerts", "ready", "low_signal", "all_candidates"):
+            page = client.get(
+                f"/api/member/v1/surfaces/triage?triage_lens={lens}&triage_limit=100",
+                headers=HEADERS,
+            )
+            assert page.status_code == 200, page.text
+            triage = page.json()["triage"]
+            visible = {
+                item["proposal_id"]
+                for matter in triage["matters"]
+                for item in matter["candidates"]
+            }
+            expected = (
+                set(alert_ids)
+                if lens == "all_candidates"
+                else {live_alert}
+                if lens == "alerts"
+                else set()
+            )
+            assert visible == expected
+            assert triage["inventory"]["views"][lens]["candidates"] == len(expected)
+            assert triage["inventory"]["views"]["history"]["candidates"] == 2
+        client.portal.call(runtime.projections.rebuild, "triage")
+        page = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=alerts&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert page.status_code == 200, page.text
+        assert {
+            item["proposal_id"]
+            for matter in page.json()["triage"]["matters"]
+            for item in matter["candidates"]
+        } == {live_alert}

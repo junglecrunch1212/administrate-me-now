@@ -2000,7 +2000,7 @@ def _merge_retained_source_inventory(
             by_key[key]["retained_candidate_count"] = count
             by_key[key]["retained_source_count"] = observed_counts.get(key, 0)
             continue
-        parent = by_key.get(parent_source_coordinate(coordinate).key)
+        parent_row = by_key.get(parent_source_coordinate(coordinate).key)
         meta = PROVIDER_CATALOG.get(coordinate.adapter_kind, {})
         catalog_source = next(
             (row for row in SOURCE_CATALOG if row["id"] == coordinate.source_kind), {}
@@ -2013,8 +2013,8 @@ def _merge_retained_source_inventory(
             "coordinate": coordinate.model_dump(mode="json"),
             "coordinate_state": "exact" if coordinate.exact else "ambiguous",
             "configurable": coordinate.exact,
-            "connection_state": parent["connection_state"]
-            if parent
+            "connection_state": parent_row["connection_state"]
+            if parent_row
             else "disconnected"
             if coordinate.exact
             else "missing_attribution",
@@ -2034,11 +2034,13 @@ def _merge_retained_source_inventory(
             "retained_source_count": observed_counts.get(key, 0),
             "acquisition": {
                 "state": "paused"
-                if parent is None
-                else parent.get("acquisition", {}).get("state", "active"),
+                if parent_row is None
+                else parent_row.get("acquisition", {}).get("state", "active"),
                 "coverage": "partial",
                 "freshness": "unknown",
-                "provider_capability": "unavailable" if parent is None else "unknown",
+                "provider_capability": "unavailable"
+                if parent_row is None
+                else "unknown",
                 "scope_widening": False,
                 "credential_creation": False,
             },

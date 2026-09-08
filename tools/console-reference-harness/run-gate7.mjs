@@ -430,7 +430,7 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
     const isKnownLocalRead = request.method() === "GET"
       && errorText === "net::ERR_ABORTED"
       && requestUrl.hostname === "127.0.0.1"
-      && [basePort, basePort + 1].includes(Number.parseInt(requestUrl.port, 10))
+      && [basePort, basePort + 1, basePort + 2].includes(Number.parseInt(requestUrl.port, 10))
       && (
         requestUrl.pathname === "/api/member/v1/bootstrap"
         || requestUrl.pathname === "/api/member/v1/chat/history"

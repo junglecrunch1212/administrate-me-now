@@ -38,7 +38,7 @@ async def _preload(
     bus = EventBus(event_log, settings.instance.bus_checkpoint_path)
     writer = EventWriter(event_log, bus)
     common = {
-        "event_at_ms": 2_022_400_800_000,
+        "event_at_ms": 1_700_000_000_000,
         "tenant_id": settings.instance.tenant_id,
         "occurred_at": AT,
         "owner_scope": f"private:{MEMBER}",

@@ -1107,6 +1107,7 @@ function triageCandidateMatches(item, view) {
   if (view === "all_candidates") return true;
   const attentionView = { ready: "needs_you", low_signal: "possibilities", alerts: "alerts", recent: "history" }[view];
   if (state.surface?.human_triage_management?.active && attentionView && item.attention_view) return item.attention_view === attentionView;
+  if (state.surface?.human_triage_management?.active && item.attention_view === "history") return false;
   if (view === "recent") return false;
   if (view === "alerts") return item.disposition?.disposition === "alerts" || item.management?.state === "alert";
   if (view === "needs_interpretation") return item.review_state?.state === "needs_interpretation";
@@ -1118,10 +1119,17 @@ function triageCandidateMatches(item, view) {
   return true;
 }
 
+function triageHistoryItems(data) {
+  if (!data.human_triage_management?.active) return data.recent_items || [];
+  const items = new Map((data.recent_items || []).map((item) => [item.proposal_id, item]));
+  for (const item of data.items || []) if (item.attention_view === "history") items.set(item.proposal_id, item);
+  return [...items.values()];
+}
+
 function triageVisibleMatters(data, view) {
   const pending = data.items || [];
   if (view === "recent") {
-    return (data.recent_items || []).map((item) => ({
+    return triageHistoryItems(data).map((item) => ({
       context_id: `recent:${item.proposal_id}`,
       label: item.title,
       queue_lane: item.state,
@@ -1276,7 +1284,7 @@ async function reviewTriageLearningRule(rule, decision, button) {
 function triageSurface(data, { preserveView = false } = {}) {
   const fragment = document.createDocumentFragment();
   const pending = data.items || [];
-  const recent = data.recent_items || [];
+  const recent = triageHistoryItems(data);
   const inventory = data.triage?.inventory || {};
   const candidateCount = inventory.total_candidates || 0; const matterCount = inventory.total_matters || 0;
   const suggestions = data.triage?.feedback_suggestions || [];
@@ -1304,7 +1312,7 @@ function triageSurface(data, { preserveView = false } = {}) {
     sourceWarning.setAttribute("data-source-assurance", assurance.state || "unknown"); overview.append(sourceWarning);
   }
   const accounting = document.createElement("details"); accounting.className = "triage-system-accounting";
-  accounting.append(text("summary", `System accounting · ${candidateCount} unresolved candidate${candidateCount === 1 ? "" : "s"} in ${matterCount} decision group${matterCount === 1 ? "" : "s"}`));
+  accounting.append(text("summary", `System accounting · ${candidateCount} ${data.human_triage_management?.active ? "retained" : "unresolved"} candidate${candidateCount === 1 ? "" : "s"} in ${matterCount} decision group${matterCount === 1 ? "" : "s"}`));
   accounting.append(text("p", `${inventory.decision_candidates || 0} are independent decisions · ${inventory.duplicate_evidence || 0} are exact duplicate evidence · ${inventory.existing_object_evidence || 0} link to existing work.`, "state-note"));
   if (assurance?.counts) {
     const counts = assurance.counts;
@@ -1324,7 +1332,7 @@ function triageSurface(data, { preserveView = false } = {}) {
     ? [["ready", "Needs you"], ["alerts", "Alerts"], ["recent", "History"], ["all_candidates", "All candidates"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Other possibilities"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Earlier shadow rules"]]
     : [["ready", "Needs attention"], ["alerts", "Alerts"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]];
   for (const [key, label] of lenses) {
-    const count = key === "recent" ? recent.length : key === "learned_rules" ? activePolicyRules.length : viewCounts[key]?.candidates ?? pending.filter((item) => triageCandidateMatches(item, key)).length;
+    const count = key === "recent" ? (humanViews ? viewCounts.history?.candidates ?? recent.length : recent.length) : key === "learned_rules" ? activePolicyRules.length : viewCounts[key]?.candidates ?? pending.filter((item) => triageCandidateMatches(item, key)).length;
     const button = document.createElement("button"); button.className = "comms-filter"; button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key)); button.setAttribute("aria-label", `${label}, ${count}`);
     button.append(text("span", label), text("span", count, "triage-tab-count"));
     button.addEventListener("click", async () => {
@@ -1401,7 +1409,7 @@ function triageSurface(data, { preserveView = false } = {}) {
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
   const workspaceLabels = { ready: "Decisions that need you", needs_details: "Decisions missing details", needs_interpretation: "Items to classify", low_signal: "Other suggestions", recurring_exceptions: "Recurring issues", learned_rules: "Items matching shadow rules", alerts: "Alerts and safety", all_candidates: "Complete candidate inventory", recent: "Recent decisions" };
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", workspaceLabels[state.triageView] || "Decisions to review"));
-  if (state.triageView === "recent") master.append(text("p", "Read-only audit history. System-retired candidates are historical lifecycle receipts, not new sender rules.", "state-note"));
+  if (state.triageView === "recent") master.append(text("p", humanViews ? "Retained decisions and reference candidates. Open candidates remain reviewable; completed decisions keep their audit trail." : "Read-only audit history. System-retired candidates are historical lifecycle receipts, not new sender rules.", "state-note"));
   if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing needs your attention right now." : state.triageView === "needs_details" ? "No decisions are waiting for missing details." : state.triageView === "needs_interpretation" ? "No items are waiting for a type." : state.triageView === "low_signal" ? "No lower-signal suggestions are waiting." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing matches this view.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
   let priorLane = null;
@@ -1421,15 +1429,21 @@ function triageSurface(data, { preserveView = false } = {}) {
   }
   master.append(list);
   const visibleCandidateCount = visibleMatters.reduce((count, matter) => count + matter.candidates.length, 0);
-  const completeViewCount = state.triageView === "all_candidates" ? data.triage?.selection?.candidates ?? candidateCount : viewCounts[state.triageView]?.candidates ?? visibleCandidateCount;
+  const completeViewCount = state.triageView === "all_candidates" ? data.triage?.selection?.candidates ?? candidateCount : state.triageView === "recent" && humanViews ? viewCounts.history?.candidates ?? visibleCandidateCount : viewCounts[state.triageView]?.candidates ?? visibleCandidateCount;
   const viewCountIsComplete = state.triageView !== "learned_rules";
-  if (data.triage?.has_more && state.triageView !== "recent" && (!viewCountIsComplete || visibleCandidateCount < completeViewCount)) { const more = text("button", "Show more", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
+  if (data.triage?.has_more && (state.triageView !== "recent" || humanViews) && (!viewCountIsComplete || visibleCandidateCount < completeViewCount)) { const more = text("button", "Show more", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
   const detail = document.createElement("div"); detail.className = "triage-matter-detail";
   if (missingRequestedCandidate) {
     const unavailable = document.createElement("section"); unavailable.className = "card triage-detail"; unavailable.setAttribute("role", "status");
     unavailable.append(text("p", "EXACT REVIEW LINK", "eyebrow"), text("h2", "This candidate is not available in your member scope."), text("p", "It may have been removed by source correction, or the link may belong to a different private member. AdministrateMe did not substitute another decision.", "state-note"));
     detail.append(unavailable);
-  } else if (selectedMatter) { if (selectedMatter.candidates.length > 1) detail.append(text("p", `${selectedMatter.candidates.length} related decisions are shown together. Confirming one never confirms the others.`, "state-note")); for (const item of selectedMatter.candidates) detail.append(triageDetail(item, data, state.triageView === "recent")); }
+  } else if (selectedMatter) {
+    if (selectedMatter.candidates.length > 1) detail.append(text("p", `${selectedMatter.candidates.length} related decisions are shown together. Confirming one never confirms the others.`, "state-note"));
+    for (const item of selectedMatter.candidates) {
+      const closed = !["pending_interpretation", "pending_review"].includes(item.state) || !["open", "clarification", "suppression_proposed", "alert"].includes(item.management?.state || "open");
+      detail.append(triageDetail(item, data, humanViews ? closed : state.triageView === "recent"));
+    }
+  }
   workspace.append(master, detail); fragment.append(workspace);
   if (suggestions.length || activePolicyRules.length || sourcePolicyProposals.length || sourcePolicyRules.length) {
     const learning = document.createElement("section"); learning.className = "card triage-learning"; learning.append(text("p", "REVERSIBLE LEARNING", "eyebrow"), text("h2", `${suggestions.length} suggested pattern${suggestions.length === 1 ? "" : "s"} · ${activePolicyRules.length} shadow rule${activePolicyRules.length === 1 ? "" : "s"}`), text("p", "Rules begin in shadow mode. They stay visible and reversible, and cannot silently confirm or suppress household truth.", "state-note"));
@@ -3976,7 +3990,7 @@ function sourcePurposeLabel(value) {
 function sourceRuleRoute(value) {
   if (value === "reference" || value === "context_only" || value === "context") return "Reference";
   if (value === "ask" || value === "clarification_required" || value === "clarification") return "Ask me";
-  if (value === "review" || value === "proposal" || value === "admit" || value === "ordinary_queue") return "Needs you";
+  if (value === "review" || value === "proposal" || value === "admit" || value === "ordinary_queue") return "Keep for review";
   if (value === "alert" || value === "alert_only") return "Alerts";
   return titleCase(value || "unchanged");
 }
@@ -4076,7 +4090,7 @@ function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) 
   panel.append(text("h3", "A rule for similar messages"), text("p", scope.label || "Your exact private source", "state-note"));
   const fields = document.createElement("div"); fields.className = "preference-grid";
   const purpose = selectControl([{ value: "", label: "Choose a message purpose…" }, ...SOURCE_PURPOSE_OPTIONS], initial.message_purpose || scope.message_purpose || "", "");
-  const action = selectControl([{ value: "reference", label: "Keep as reference" }, { value: "ask", label: "Ask me" }, { value: "review", label: "Review in Needs you" }], "reference", "");
+  const action = selectControl([{ value: "reference", label: "Keep as reference" }, { value: "ask", label: "Ask me" }, { value: "review", label: "Keep for review" }], "reference", "");
   const exception = selectControl([{ value: "", label: "No additional exception" }, { value: "calendar_event", label: "Calendar events" }, { value: "task", label: "Tasks" }, { value: "commitment", label: "Commitments" }, { value: "reminder", label: "Reminders" }, { value: "recurrence", label: "Recurring obligations" }], "", "");
   fields.append(field("When the message purpose is", purpose), field("Then", action), field("Except this type of candidate", exception)); panel.append(fields);
   panel.append(text("p", "Only this account, connection, and any specified conversation or sender. Other people's sources are never included. Independent obligations remain visible.", "state-note"));
@@ -4222,7 +4236,7 @@ function sourcePolicyV2Card(source, matrix) {
   const routes = new Map((policy.purpose_routes || []).map((item) => [item.purpose, item.route]));
   const purposeControls = new Map();
   for (const item of matrix.purpose_options || SOURCE_PURPOSE_OPTIONS) {
-    const route = selectControl([{ value: "", label: "Use attention default" }, { value: "review", label: "Review in Needs you" }, { value: "reference", label: "Keep as reference" }, { value: "alert", label: "Alerts" }], routes.get(item.value) || "", "");
+    const route = selectControl([{ value: "", label: "Use attention default" }, { value: "review", label: "Keep for review" }, { value: "reference", label: "Keep as reference" }, { value: "alert", label: "Alerts" }], routes.get(item.value) || "", "");
     route.dataset.messagePurpose = item.value; purposeControls.set(item.value, route);
     const row = field(item.label, route); row.classList.add("source-purpose-row"); if (item.description) row.append(text("small", item.description)); purposes.append(row);
   }

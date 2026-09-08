@@ -36,11 +36,12 @@ jobs:
           path: /tmp/event-lifecycle-catalog.json
       - name: Focused production and evidence regression tests
         run: poetry run pytest -q tests/unit/test_obligation_assessment.py tests/unit/test_source_policy_v2.py tests/unit/test_cross_source_reconciliation.py tests/unit/test_message_context.py tests/unit/test_pipeline_noise_filtering.py tests/acceptance/test_personal_obligation_assessment.py tests/acceptance/test_triage_interpretation_replay.py tests/acceptance/test_source_policy_v2.py tests/acceptance/test_attention_rule_lifecycle.py tests/acceptance/test_cross_source_reconciliation.py tests/acceptance/test_triage_vertical_slice.py tests/acceptance/test_event_lifecycle_matrix.py tests/acceptance/test_gate7_household_experience.py tests/acceptance/test_context_correctness_vertical_slice.py
-      - name: Python type checks
+      - name: Mypy
         if: always()
-        run: |
-          poetry run mypy adminme bridge/adminme_bridge bootstrap
-          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
+        run: poetry run mypy adminme bridge/adminme_bridge bootstrap
+      - name: Pyright
+        if: always()
+        run: poetry run pyright adminme bridge/adminme_bridge bootstrap packs
   browser-regressions:
     if: github.head_ref == 'codex/source-aware-obligation-triage'
     runs-on: ubuntu-latest

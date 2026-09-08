@@ -32,19 +32,20 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   const savedResponse = page.waitForResponse((response) => response.url().includes(`/source-policies-v2/${source.policy_key}`) && response.request().method() === "POST");
   await card.getByRole("button", { name: "Save source preferences", exact: true }).click();
   record("Source attention preference saves through its real route", (await savedResponse).ok(), await (await savedResponse).json());
-  await page.getByRole("combobox", { name: "What should reach me?", exact: true }).first().waitFor();
+  await card.locator('button[type="submit"]:not(:disabled)').waitFor();
   const after = await call("/api/member/v1/surfaces/settings");
   const saved = after.control.source_policy_v2.sources.find((value) => value.policy_key === source.policy_key).policy;
   record("Attention changes preserve context, acquisition, alerts, and candidate types", saved.attention_mode === "possibilities" && ["context_mode", "acquisition_state", "alert_mode"].every((key) => saved[key] === source.policy[key]) && JSON.stringify(saved.candidate_kinds) === JSON.stringify(source.policy.candidate_kinds), { before: source.policy, after: saved });
 
   await card.locator(".source-similar-rule > summary").click();
   const builder = card.locator(".source-rule-builder");
-  await builder.getByRole("combobox", { name: "When the message purpose is", exact: true }).selectOption("survey");
+  await builder.getByRole("combobox", { name: "When the message purpose is", exact: true }).selectOption("preparation");
   await builder.getByRole("combobox", { name: "Except this type of candidate", exact: true }).selectOption("calendar_event");
   const rulePreviewResponse = page.waitForResponse((response) => response.url().endsWith("/triage-learning/v2/preview") && response.request().method() === "POST");
   await builder.getByRole("button", { name: "Preview matches and exceptions", exact: true }).click();
   const rulePreview = await (await rulePreviewResponse).json();
   record("Rule preview shows matches, protected examples, and nonmatches", rulePreview.recent_impact.matched > 0 && rulePreview.recent_impact.protected > 0 && rulePreview.recent_impact.nonmatches > 0, rulePreview.recent_impact);
+  record("The required preparation request is protected by grounded obligation evidence", rulePreview.examples.some((value) => value.proposal_id === "visual-attention-proposal-2" && value.match === "protected" && value.reasons.includes("independent_obligation")), rulePreview.examples);
   await builder.locator('[data-rule-match="protected"]').first().waitFor();
   record("Rule terms are reviewable before activation", (await builder.textContent()).includes("Applies to") && (await builder.textContent()).includes("Duration") && (await builder.textContent()).includes("Independent obligations"), await builder.textContent());
   await screenshot(page, "source-attention-preview-desktop.png");
@@ -52,13 +53,26 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   await builder.getByRole("button", { name: "Try for 7 days / 50 messages", exact: true }).click();
   const trialResult = await (await trialResponse).json();
   record("Member starts bounded future trial with reviewed digest", Boolean(trialResult.rule_id), trialResult);
-  await page.locator(".settings-nav").waitFor();
+  await card.locator('button[type="submit"]:not(:disabled)').waitFor();
   await call("/__gate7/seed-attention-sources?future=true", "POST");
   const learned = await call("/api/member/v1/triage-learning/v2/rules");
   const trial = learned.rules.find((value) => value.rule_id === trialResult.rule_id);
   record("Future-source trial observes new evidence only", trial?.status === "trial" && trial.max_observations === 50 && trial.observed_count === 1, trial);
 
-  await page.getByRole("button", { name: "Learning & trust", exact: true }).click();
+  await page.goto(`${baseUrl}/member/triage?view=all_candidates`, { waitUntil: "networkidle" });
+  const retained = await call("/api/member/v1/surfaces/triage?triage_lens=all_candidates");
+  const reference = retained.items.find((value) => value.proposal_id === "visual-attention-proposal-6");
+  record("A live reference trial retains the exact candidate in complete inventory", reference?.attention_view === "history" && reference.learned_policy?.state === "context_only", reference);
+  await page.locator(".triage-master-list").getByRole("button").filter({ hasText: "Fixture preparation source 6." }).click();
+  await page.locator('[data-triage-item="visual-attention-proposal-6"]').waitFor();
+  await page.getByRole("button", { name: /^Needs you,/ }).click();
+  record("Reference handling changes attention without removing the evidence", !(await page.locator(".triage-master-list").textContent()).includes("Fixture preparation source 6."), await page.locator(".triage-master-list").textContent());
+  await page.getByRole("button", { name: /^History,/ }).click();
+  await page.locator(".triage-master-list").getByRole("button").filter({ hasText: "Fixture preparation source 6." }).click();
+  const historicalReference = page.locator('[data-triage-item="visual-attention-proposal-6"]');
+  await historicalReference.waitFor();
+  record("History keeps the open reference candidate inspectable before Undo", await historicalReference.getByRole("button", { name: "View source evidence", exact: true }).count() > 0 && await historicalReference.locator(".triage-management").count() === 1, await historicalReference.textContent());
+  await page.goto(`${baseUrl}/member/settings?section=learning-trust`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Load my rules", exact: true }).click();
   await page.getByRole("button", { name: "Undo this rule", exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -78,9 +92,9 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   record("Triage shows grounded obligation evidence", (await detail.textContent()).includes("What the source supports"), await detail.textContent());
   await page.getByRole("button", { name: /^Needs you,/ }).click();
   const needed = await page.locator(".triage-master-list").textContent();
-  record("Needs you includes undated obligations and excludes possibilities", needed.includes("Fixture preparation source 2.") && !needed.includes("Fixture survey source 6."), needed);
+  record("Needs you includes undated obligations and excludes possibilities", needed.includes("Fixture preparation source 2.") && !needed.includes("Fixture preparation source 6."), needed);
   await page.locator(".triage-more-views > summary").click();
   await page.getByRole("button", { name: /^Other possibilities,/ }).click();
   const possibilities = await page.locator(".triage-master-list").textContent();
-  record("Possibilities use the server attention view independently of date or confidence", possibilities.includes("Fixture survey source 6.") && !possibilities.includes("Fixture preparation source 2."), possibilities);
+  record("Possibilities use the server attention view independently of date or confidence", possibilities.includes("Fixture preparation source 6.") && !possibilities.includes("Fixture preparation source 2."), possibilities);
 }

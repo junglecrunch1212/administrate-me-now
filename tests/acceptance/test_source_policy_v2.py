@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -98,6 +99,8 @@ async def _append_message(
     native_id: str,
     provider: str = "gmail",
     channel: str = "gmail",
+    body_text: str | None = None,
+    provider_labels: list[str] | None = None,
 ) -> str:
     payload = MessagingReceivedV5(
         source_channel=channel,
@@ -105,7 +108,7 @@ async def _append_message(
         to_identifier="owner-fixture",
         thread_id=f"thread-{native_id}",
         subject=None,
-        body_text=None,
+        body_text=body_text,
         body_html=None,
         received_at="2026-08-31T12:00:00Z",
         attachments=[],
@@ -117,7 +120,9 @@ async def _append_message(
         workspace="personal" if member_id == A else "work",
         routing_scope="member_private",
         routing_target_id=member_id,
-        provider_labels=["IMPORTANT"],
+        provider_labels=provider_labels
+        if provider_labels is not None
+        else ["IMPORTANT"],
         important=True,
     )
     return await runtime.events.write(
@@ -209,6 +214,186 @@ def _custom_policy(triage_mode: str, context_mode: str) -> dict[str, Any]:
         "provider_write_authority": False,
         "admission_active": False,
     }
+
+
+def test_explicit_bulk_purpose_alert_matches_preview_and_active_admission(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "purpose-alert-instance"
+    instance.mkdir()
+    app = create_application(
+        replace(
+            _settings(instance),
+            reconciliation_admission_enabled=True,
+            human_triage_management_enabled=True,
+        )
+    )
+    body = "Join the optional fixture workshop if interested."
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+
+        async def language_seam(
+            skill_id: str, inputs: dict[str, Any], context: Any
+        ) -> SimpleNamespace:
+            assert skill_id == "skill:classify_message_nature"
+            alias = inputs["context_pack"]["current_source_id"]
+            return SimpleNamespace(
+                output={
+                    "assessment_contract": "personal-obligation-assessment-v1",
+                    "classification": "promotional",
+                    "confidence": 0.9,
+                    "reasons": ["fixture_optional_workshop"],
+                    "reply_signal": "not_required",
+                    "automated": True,
+                    "transactional_due": False,
+                    "security_code": False,
+                    "person_to_person": False,
+                    "deadline": None,
+                    "candidates": [
+                        {
+                            "target_kind": "task",
+                            "title": body,
+                            "evidence_source_id": alias,
+                            "evidence_quote": body,
+                            "candidate": {},
+                            "confidence": 0.9,
+                            "reasons": ["fixture_conditional_opportunity"],
+                            "action_owner": "member",
+                            "lifecycle_state": "open",
+                            "compact_summary": body,
+                            "case_summary": None,
+                            "why_member": None,
+                            "next_step": None,
+                            "thread_state": "unclear",
+                            "unresolved_questions": [],
+                            "related_source_ids": [],
+                            "obligation_assessment": {
+                                "purpose": "optional_opportunity",
+                                "actionability": "conditional",
+                                "condition": "if interested",
+                                "condition_state": "unknown",
+                                "beneficiary": None,
+                                "date_role": "none",
+                                "qualifying_evidence": [
+                                    {
+                                        "source_id": alias,
+                                        "role": "condition",
+                                        "quote": "if interested",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+                model_used="fixture-purpose-alert",
+                usage={},
+            )
+
+        runtime.run_skill_fn = language_seam
+        runtime.pipelines._run_skill_fn = language_seam
+        source_id = client.portal.call(
+            _append_message,
+            runtime,
+            A,
+            "gmail-policy-a",
+            "provider-account-a",
+            "optional-purpose-alert",
+            "gmail",
+            "gmail",
+            body,
+            ["CATEGORY_UPDATES"],
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:noise_filtering",
+            source_id,
+        )
+
+        async def source_proposals() -> list[dict[str, Any]]:
+            return [
+                event
+                async for event in runtime.event_log.read_since(
+                    types=["triage.item.proposed"]
+                )
+                if event["payload"]["source_event_id"] == source_id
+            ]
+
+        [proposal] = client.portal.call(source_proposals)
+        assert proposal["schema_version"] == 5
+        assessment = proposal["payload"]["interpretation"]["obligation_assessment"]
+        assert assessment["purpose"] == "optional_opportunity"
+        assert assessment["independent_obligation"] is False
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "triage-reconciliation:admission",
+            proposal["event_id"],
+        )
+        source = next(
+            item
+            for item in _v2_control(client, A_HEADERS)["sources"]
+            if (item.get("coordinate") or {}).get("adapter_instance_id")
+            == "gmail-policy-a"
+        )
+        policy = {
+            **source["policy"],
+            "preset": "custom",
+            "purpose_routes": [{"purpose": "optional_opportunity", "route": "alert"}],
+        }
+        preview = client.post(
+            "/api/member/v1/settings/source-policies-v2/preview",
+            headers=A_HEADERS,
+            json={
+                "coordinate": source["coordinate"],
+                "preset": "custom",
+                "policy": policy,
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        [example] = preview.json()["examples"]
+        assert example["proposed_route"]["triage"] == "none"
+        assert example["proposed_route"]["alert"] == "actionable"
+        save = client.post(
+            f"/api/member/v1/settings/source-policies-v2/{source['policy_key']}",
+            headers=A_HEADERS,
+            json={
+                "coordinate": source["coordinate"],
+                "expected_revision": 0,
+                "request_id": "fixture-save-purpose-alert",
+                "preset": "custom",
+                "policy": policy,
+            },
+        )
+        assert save.status_code == 202, save.text
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "triage-reconciliation:admission",
+            save.json()["event_id"],
+        )
+        revisions = client.portal.call(
+            runtime.event_log.get_by_causation, save.json()["event_id"]
+        )
+        [decision] = [
+            event
+            for event in revisions
+            if event["type"] == "triage.reconciliation.decided"
+        ]
+        assert decision["payload"]["decision"] == "alert_only"
+        assert decision["payload"]["policy"]["alert_route"] == "actionable"
+        assert "purpose_route:alert" in decision["payload"]["reason_codes"]
+        client.portal.call(runtime.wait_for_projection, "triage", decision["event_id"])
+        row = (
+            runtime.projections.connection("triage")
+            .execute(
+                "SELECT admission_decision FROM triage_items WHERE tenant_id=? AND proposal_id=?",
+                (
+                    runtime.settings.instance.tenant_id,
+                    proposal["payload"]["proposal_id"],
+                ),
+            )
+            .fetchone()
+        )
+        assert row["admission_decision"] == "alert_only"
+        assert client.portal.call(_provider_effect_count, runtime) == 0
 
 
 def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
