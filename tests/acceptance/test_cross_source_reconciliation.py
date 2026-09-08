@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from itertools import count
 from pathlib import Path
@@ -58,6 +59,31 @@ async def _events(runtime: Any, event_type: str) -> list[dict[str, Any]]:
     async for event in runtime.event_log.read_since(types=[event_type]):
         values.append(event)
     return values
+
+
+async def _settle_runtime(runtime: Any) -> str | None:
+    """Compare replay with a drained live log, including derived proposals."""
+    deadline = asyncio.get_running_loop().time() + 60.0
+    stable_event_id: str | None = None
+    stable_cycles = 0
+    statuses: dict[str, dict[str, Any]] = {}
+    while asyncio.get_running_loop().time() < deadline:
+        statuses = {
+            name: await runtime.bus.subscriber_status(name)
+            for name in sorted(runtime.bus._subscribers)  # noqa: SLF001
+        }
+        assert not any(row["degraded"] for row in statuses.values()), statuses
+        latest = await runtime.event_log.latest_event_id()
+        drained = all(row["lag_count"] == 0 for row in statuses.values())
+        if drained and latest == stable_event_id:
+            stable_cycles += 1
+        else:
+            stable_event_id = latest
+            stable_cycles = 0
+        if stable_cycles >= 2:
+            return latest
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"runtime did not settle before replay snapshot: {statuses}")
 
 
 def _write_message(
@@ -800,6 +826,10 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
         assert correction_latest["payload"]["decision_revision"] == 3
         assert correction_latest["payload"]["supersedes_reconciliation_event_id"]
 
+        # Admission of the manually controlled proposals does not mean that
+        # source interpretation and its derived writes have finished. Keep all
+        # producers active, but compare rebuilds at one fully drained watermark.
+        settled_watermark = client.portal.call(_settle_runtime, runtime)
         triage_before = [
             tuple(row)
             for row in runtime.projections.connection("triage").execute(
@@ -848,6 +878,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
 
         client.portal.call(runtime.projections.rebuild, "triage")
         client.portal.call(runtime.projections.rebuild, "context_fabric")
+        assert client.portal.call(_settle_runtime, runtime) == settled_watermark
         triage_after = [
             tuple(row)
             for row in runtime.projections.connection("triage").execute(
