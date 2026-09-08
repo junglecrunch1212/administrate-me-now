@@ -1037,7 +1037,7 @@ def build_surface(
         base["triage"]["source_policy_rules"] = source_policy_rules
         base["human_triage_management"] = {
             "active": runtime.settings.human_triage_management_enabled,
-            "default_off": True,
+            "default_off": False,
             "backlog_preview_available": True,
             "backlog_application_available": False,
             "provider_effects": 0,

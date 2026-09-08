@@ -461,6 +461,12 @@ class TriageItemSupersededV4(TriageItemSupersededV2):
 
     model_config = {"extra": "forbid"}
     expected_content_revision_event_id: str = Field(min_length=1, max_length=240)
+    # Retained predecessors read this key for every version >= 3. Writers
+    # include a conservative legacy guard; current readers use only the content
+    # revision above. Optional solely for V4 events already in immutable logs.
+    expected_last_event_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
 
 
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)

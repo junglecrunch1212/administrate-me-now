@@ -183,6 +183,43 @@ class _ContextEventLog(_FakeEventLog):
             yield value
 
 
+class _CursorContextEventLog(_ContextEventLog):
+    """Identity-scoped log with production cursor semantics and read accounting."""
+
+    __hash__ = object.__hash__
+    __eq__ = object.__eq__
+
+    def __init__(self, *, source_events: list[dict[str, Any]]) -> None:
+        super().__init__(source_events=source_events)
+        self.proposal_reads: list[dict[str, Any]] = []
+
+    async def read_since(
+        self,
+        *,
+        cursor: str | None = None,
+        owner_scope: str | None = None,
+        types: list[str] | None = None,
+        **kwargs: Any,
+    ):  # type: ignore[no-untyped-def]
+        read: dict[str, Any] = {
+            "cursor": cursor,
+            "owner_scope": owner_scope,
+            "event_ids": [],
+        }
+        if types == ["triage.item.proposed"]:
+            self.proposal_reads.append(read)
+        after_cursor = cursor is None
+        async for value in super().read_since(
+            owner_scope=owner_scope, types=types, **kwargs
+        ):
+            if not after_cursor:
+                after_cursor = value["event_id"] == cursor
+                continue
+            if types == ["triage.item.proposed"]:
+                read["event_ids"].append(value["event_id"])
+            yield value
+
+
 @dataclass
 class _RacingSupersessionEventLog(_ContextEventLog):
     gated_proposal_event_id: str = ""
@@ -409,7 +446,8 @@ async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
             "workspace": "personal",
         }
     )
-    log = _ContextEventLog(source_events=[source])
+    log = _CursorContextEventLog(source_events=[source])
+    pipeline = NoiseFilteringPipeline()
     proposal_id = "legacy-sent-prior-proposal"
     proposal_event_id = await log.write(
         EventEnvelope(
@@ -440,6 +478,14 @@ async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
         ),
         causation_id="legacy-sent-v20-assessment",
     )
+    # Cache only the immutable proposal. Member decisions appended afterward
+    # must still be read freshly before any retirement is attempted.
+    cached = await pipeline._proposals_for_sources(
+        event_log=log,
+        owner_scope=source["owner_scope"],
+        source_event_ids={source["event_id"]},
+    )
+    assert [item["event_id"] for item in cached] == [proposal_event_id]
     if member_action == "enriched":
         await log.write(
             EventEnvelope(
@@ -493,7 +539,7 @@ async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
         calls.append((args, kwargs))
         return _make_skill_result()
 
-    await NoiseFilteringPipeline().handle(source, _make_ctx(log, stub_run_skill))
+    await pipeline.handle(source, _make_ctx(log, stub_run_skill))
 
     assessment = next(
         call.envelope
@@ -517,8 +563,110 @@ async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
             "replacement_source_event_id": source["event_id"],
             "reason": "eligibility_rule_replaced",
             "expected_content_revision_event_id": proposal_event_id,
+            "expected_last_event_id": proposal_event_id,
         }
     assert calls == []
+    assert [read["event_ids"] for read in log.proposal_reads] == [
+        [proposal_event_id],
+        [],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unreliable_sources_reuse_proposal_suffix_without_crossing_owners() -> (
+    None
+):
+    pipeline = NoiseFilteringPipeline()
+    log = _CursorContextEventLog(source_events=[])
+    owner = "private:member-fixture"
+
+    async def append_proposal(
+        source_id: str, *, scope: str = owner, destination: Any = log
+    ) -> str:
+        member_id = scope.removeprefix("private:")
+        return await destination.write(
+            EventEnvelope(
+                event_at_ms=1700000000001,
+                tenant_id="tenant-test",
+                type="triage.item.proposed",
+                schema_version=1,
+                occurred_at="2026-08-08T12:00:01Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=scope,
+                visibility_scope=scope,
+                sensitivity="normal",
+                idempotency_key=f"cached-proposal:{scope}:{source_id}",
+                payload={
+                    "proposal_id": f"proposal:{scope}:{source_id}",
+                    "target_kind": "task",
+                    "owner_member_id": member_id,
+                    "title": "Review fixture action",
+                    "candidate": {},
+                    "route": {"member_id": member_id},
+                    "source_event_id": source_id,
+                    "confidence": 0.9,
+                    "reasons": ["legacy_fixture_interpretation"],
+                },
+            )
+        )
+
+    async def retire(source_id: str) -> None:
+        source = _messaging_sent_event(body_text="Unreliable fixture text")
+        source["event_id"] = source_id
+        await pipeline._supersede_unreliable_source_proposals(
+            event=source,
+            ctx=_make_ctx(log, None),
+            source_event_id=source_id,
+        )
+
+    historical_ids = [
+        await append_proposal(f"unrelated-{index}") for index in range(32)
+    ]
+    source_ids = [f"unreliable-{index}" for index in range(8)]
+    historical_ids.extend(
+        [await append_proposal(source_id) for source_id in source_ids]
+    )
+    other_scope = "private:member-other-fixture"
+    other_id = await append_proposal(source_ids[0], scope=other_scope)
+    for source_id in source_ids:
+        await retire(source_id)
+    assert [
+        event_id for read in log.proposal_reads for event_id in read["event_ids"]
+    ] == historical_ids
+    assert [read["cursor"] for read in log.proposal_reads] == [
+        None,
+        *([historical_ids[-1]] * 7),
+    ]
+    assert all(read["owner_scope"] == owner for read in log.proposal_reads)
+    supersessions = [
+        call for call in log.calls if call.envelope.type == "triage.item.superseded"
+    ]
+    assert len(supersessions) == len(source_ids)
+    assert all(call.envelope.owner_scope == owner for call in supersessions)
+
+    appended_id = await append_proposal("appended-source")
+    await retire("appended-source")
+    assert log.proposal_reads[-1]["cursor"] == historical_ids[-1]
+    assert log.proposal_reads[-1]["event_ids"] == [appended_id]
+    await retire("appended-source")
+    assert log.proposal_reads[-1]["event_ids"] == []
+    assert (
+        sum(call.envelope.type == "triage.item.superseded" for call in log.calls) == 9
+    )
+
+    other = await pipeline._proposals_for_sources(
+        event_log=log, owner_scope=other_scope, source_event_ids={source_ids[0]}
+    )
+    assert [item["event_id"] for item in other] == [other_id]
+    assert all(item["owner_scope"] == other_scope for item in other)
+    other_log = _CursorContextEventLog(source_events=[])
+    isolated_id = await append_proposal(source_ids[0], destination=other_log)
+    isolated = await pipeline._proposals_for_sources(
+        event_log=other_log, owner_scope=owner, source_event_ids={source_ids[0]}
+    )
+    assert [item["event_id"] for item in isolated] == [isolated_id]
+    assert len(other_log.proposal_reads) == 1
 
 
 @pytest.mark.asyncio
@@ -612,6 +760,9 @@ async def test_legacy_sent_supersession_carries_stale_revision_through_race() ->
     ) < log.calls.index(supersession_call)
     assert supersession_call.envelope.schema_version == 4
     assert supersession_call.envelope.payload["expected_content_revision_event_id"] == (
+        proposal_event_id
+    )
+    assert supersession_call.envelope.payload["expected_last_event_id"] == (
         proposal_event_id
     )
 
@@ -1314,6 +1465,64 @@ def test_repeated_candidate_alias_keeps_first_recorded_identity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_supersession_compatibility_field_keeps_recorded_v4_equivalent() -> None:
+    log = _RacingProposalEventLog()
+    original = EventEnvelope(
+        event_at_ms=1700000000000,
+        tenant_id="tenant-test",
+        type="triage.item.superseded",
+        schema_version=4,
+        occurred_at="2026-08-08T12:00:00Z",
+        source_adapter="deterministic_candidate_eligibility",
+        source_account_id="pipeline",
+        owner_scope="private:member-fixture",
+        visibility_scope="private:member-fixture",
+        idempotency_key="supersession-compatibility-fixture",
+        payload={
+            "proposal_id": "legacy-proposal",
+            "superseded_at": "2026-08-08T12:00:00Z",
+            "replacement_source_event_id": "fixture-source",
+            "reason": "eligibility_rule_replaced",
+            "expected_content_revision_event_id": "fixture-proposal-event",
+        },
+    )
+    original_id = await log.write(original)
+    compatible = original.model_copy(
+        update={
+            "payload": {
+                **original.payload,
+                "expected_last_event_id": "fixture-proposal-event",
+            }
+        }
+    )
+    write_args = {
+        "ctx": _make_ctx(log, None),
+        "correlation_id": None,
+        "causation_id": "fixture-proposal-event",
+        "ignored_payload_fields": frozenset(
+            {"superseded_at", "replacement_source_event_id", "expected_last_event_id"}
+        ),
+    }
+    assert (
+        await _handler._write_first_equivalent_event(envelope=compatible, **write_args)
+        == original_id
+    )
+    assert len(log.calls) == 1
+    changed_revision = compatible.model_copy(
+        update={
+            "payload": {
+                **compatible.payload,
+                "expected_content_revision_event_id": "different-member-revision",
+            }
+        }
+    )
+    with pytest.raises(IdempotencyConflict):
+        await _handler._write_first_equivalent_event(
+            envelope=changed_revision, **write_args
+        )
+
+
+@pytest.mark.asyncio
 async def test_first_equivalent_writer_does_not_mask_semantic_key_conflict() -> None:
     log = _RacingProposalEventLog()
     key = "triage:message-candidate:v19:collision:task-key:task"
@@ -1463,6 +1672,7 @@ async def test_v9_retires_only_untouched_generic_action_verb_proposals(
             "replacement_source_event_id": source_event_id,
             "reason": "eligibility_rule_replaced",
             "expected_content_revision_event_id": proposal_event_id,
+            "expected_last_event_id": proposal_event_id,
         }
 
 
@@ -1576,6 +1786,10 @@ async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> 
     ]
     assert len(superseded) == 1
     assert superseded[0].payload["proposal_id"] == "prior-thread-proposal"
+    assert (
+        superseded[0].payload["expected_last_event_id"]
+        == (superseded[0].payload["expected_content_revision_event_id"])
+    )
     new_proposals = [
         call.envelope
         for call in log.calls

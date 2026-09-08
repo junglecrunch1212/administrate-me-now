@@ -516,7 +516,10 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
     )
 
 
-def test_v3_supersession_cannot_overwrite_a_newer_member_enrichment() -> None:
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_supersession_cannot_overwrite_a_newer_member_enrichment(
+    schema_version: int,
+) -> None:
     projection, conn = _projection()
     proposal = _event(1, title="Legacy fixture interpretation")
     projection.apply(proposal, conn)
@@ -538,7 +541,7 @@ def test_v3_supersession_cannot_overwrite_a_newer_member_enrichment() -> None:
         **_event(3),
         "event_id": "event-9001",
         "type": "triage.item.superseded",
-        "schema_version": 3,
+        "schema_version": schema_version,
         "payload": {
             "proposal_id": "proposal-0001",
             "superseded_at": "2030-01-02T00:00:01Z",
@@ -547,6 +550,13 @@ def test_v3_supersession_cannot_overwrite_a_newer_member_enrichment() -> None:
             "expected_last_event_id": "event-0001",
         },
     }
+    if schema_version == 4:
+        stale_supersession["payload"].update(
+            expected_content_revision_event_id="event-0001",
+            # Even a matching legacy row guard cannot authorize replacing
+            # member content: V4 enforces the independent content revision.
+            expected_last_event_id="event-9000",
+        )
     projection.apply(stale_supersession, conn)
 
     row = conn.execute(
@@ -562,14 +572,17 @@ def test_v3_supersession_cannot_overwrite_a_newer_member_enrichment() -> None:
     )
 
 
-def test_v3_supersession_applies_to_the_exact_unchanged_revision() -> None:
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_supersession_applies_to_the_exact_unchanged_revision(
+    schema_version: int,
+) -> None:
     projection, conn = _projection()
     projection.apply(_event(1, title="Untouched legacy interpretation"), conn)
     supersession = {
         **_event(2),
         "event_id": "event-9000",
         "type": "triage.item.superseded",
-        "schema_version": 3,
+        "schema_version": schema_version,
         "payload": {
             "proposal_id": "proposal-0001",
             "superseded_at": "2030-01-02T00:00:00Z",
@@ -578,6 +591,8 @@ def test_v3_supersession_applies_to_the_exact_unchanged_revision() -> None:
             "expected_last_event_id": "event-0001",
         },
     }
+    if schema_version == 4:
+        supersession["payload"]["expected_content_revision_event_id"] = "event-0001"
     projection.apply(supersession, conn)
 
     row = conn.execute(

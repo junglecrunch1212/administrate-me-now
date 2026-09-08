@@ -54,6 +54,22 @@ async def log(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("include_legacy_guard", [False, True])
+async def test_superseded_v4_accepts_retained_and_rollback_compatible_shapes(
+    log: EventLog, include_legacy_guard: bool
+) -> None:
+    payload = {
+        "proposal_id": "fixture-proposal",
+        "superseded_at": "2030-01-02T00:00:00Z",
+        "replacement_source_event_id": "fixture-source",
+        "reason": "eligibility_rule_replaced",
+        "expected_content_revision_event_id": "fixture-proposal-event",
+    }
+    if include_legacy_guard:
+        payload["expected_last_event_id"] = "fixture-proposal-event"
+    assert await log.append(_envelope("triage.item.superseded", 4, payload))
+
+
 async def test_valid_messaging_received(log: EventLog) -> None:
     env = _envelope(
         "messaging.received",

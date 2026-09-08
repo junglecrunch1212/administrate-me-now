@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1239,6 +1240,77 @@ def test_stale_system_supersession_cannot_override_member_action(
         )
 
 
+def _assert_predecessor_can_read_supersession(
+    envelope: dict[str, Any], proposal_event_id: str
+) -> None:
+    """Exercise the frozen 890a0b5 supersession dispatch and SQL guard.
+
+    Only that predecessor boundary is retained here; it must consume an actual
+    production event without importing today's more permissive V4 handler.
+    """
+
+    payload = envelope["payload"]
+    # This exact >=3 indexing in the predecessor caused rollback to crash when
+    # the first V4 writer omitted the legacy field.
+    expected_last_event_id = (
+        str(payload["expected_last_event_id"])
+        if int(envelope.get("schema_version") or 1) >= 3
+        else None
+    )
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute(
+            """CREATE TABLE triage_items (
+                tenant_id TEXT, proposal_id TEXT, state TEXT, resolved_at TEXT,
+                resolved_by TEXT, materialized_event_ids_json TEXT,
+                resolution_reason TEXT, last_event_id TEXT)"""
+        )
+        for current_revision in (
+            proposal_event_id,
+            f"{proposal_event_id}-subsequent-routing",
+            f"{proposal_event_id}-subsequent-member-enrichment",
+        ):
+            assert current_revision < envelope["event_id"]
+            conn.execute("DELETE FROM triage_items")
+            conn.execute(
+                """INSERT INTO triage_items
+                    (tenant_id, proposal_id, state, last_event_id)
+                    VALUES (?, ?, 'pending_review', ?)""",
+                (envelope["tenant_id"], payload["proposal_id"], current_revision),
+            )
+            # Frozen _resolve from predecessor 890a0b5; do not substitute the
+            # current content-revision implementation for this rollback proof.
+            conn.execute(
+                """UPDATE triage_items
+                      SET state=?, resolved_at=?, resolved_by=?,
+                          materialized_event_ids_json=?, resolution_reason=?, last_event_id=?
+                    WHERE tenant_id=? AND proposal_id=?
+                      AND (state='pending_review' OR (?=1 AND state='pending_interpretation'))
+                      AND (? IS NULL OR last_event_id=?)
+                      AND last_event_id < ?""",
+                (
+                    "dismissed",
+                    payload["superseded_at"],
+                    "system:source_changed",
+                    "[]",
+                    payload["reason"],
+                    envelope["event_id"],
+                    envelope["tenant_id"],
+                    payload["proposal_id"],
+                    1,
+                    expected_last_event_id,
+                    expected_last_event_id,
+                    envelope["event_id"],
+                ),
+            )
+            state, last_event_id = conn.execute(
+                "SELECT state, last_event_id FROM triage_items"
+            ).fetchone()
+            if current_revision == proposal_event_id:
+                assert (state, last_event_id) == ("dismissed", envelope["event_id"])
+            else:
+                assert (state, last_event_id) == ("pending_review", current_revision)
+
+
 def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
     tmp_path: Path,
 ) -> None:
@@ -1394,6 +1466,9 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
                 "expected_content_revision_event_id"
             ]
             == original_stable_proposal["event_id"]
+        )
+        _assert_predecessor_can_read_supersession(
+            stable_fallback_supersessions[0], original_stable_proposal["event_id"]
         )
         assert replacement_stable_proposal["schema_version"] == 5
         assert replacement_stable_proposal["payload"]["interpretation"]["contract"] == (

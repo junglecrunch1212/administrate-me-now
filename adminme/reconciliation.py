@@ -996,7 +996,10 @@ def choose_decision(
 class ReconciliationAdmissionEvaluator:
     """Durable bus consumer that emits decision revisions from authorized state."""
 
-    CONSUMER_VERSION = "2.0.0"
+    # The production launcher previously omitted the activation settings and
+    # wrote shadow receipts. Revisit retained inputs under a new immutable
+    # decision namespace so those receipts cannot suppress active revisions.
+    CONSUMER_VERSION = "2.0.1"
 
     def __init__(
         self,

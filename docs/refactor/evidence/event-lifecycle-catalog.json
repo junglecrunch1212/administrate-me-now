@@ -36334,6 +36334,20 @@
           "title": "Expected Content Revision Event Id",
           "type": "string"
         },
+        "expected_last_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Last Event Id"
+        },
         "proposal_id": {
           "maxLength": 240,
           "minLength": 1,

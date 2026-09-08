@@ -1406,12 +1406,17 @@ class NoiseFilteringPipeline:
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
                         "expected_content_revision_event_id": prior["event_id"],
+                        "expected_last_event_id": prior["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,
                 causation_id=prior["event_id"],
                 ignored_payload_fields=frozenset(
-                    {"superseded_at", "replacement_source_event_id"}
+                    {
+                        "superseded_at",
+                        "replacement_source_event_id",
+                        "expected_last_event_id",
+                    }
                 ),
             )
             replaced_proposal_event_ids.add(str(prior["event_id"]))
@@ -1443,9 +1448,10 @@ class NoiseFilteringPipeline:
         if not hasattr(ctx.event_log, "read_since"):
             return
         proposals: list[dict[str, Any]] = []
-        async for prior in ctx.event_log.read_since(
+        for prior in await self._proposals_for_sources(
+            event_log=ctx.event_log,
             owner_scope=str(event.get("owner_scope") or ""),
-            types=["triage.item.proposed"],
+            source_event_ids={source_event_id},
         ):
             payload = prior.get("payload") or {}
             if prior.get("tenant_id") != event.get("tenant_id"):
@@ -1506,12 +1512,17 @@ class NoiseFilteringPipeline:
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
                         "expected_content_revision_event_id": proposal["event_id"],
+                        "expected_last_event_id": proposal["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,
                 causation_id=proposal["event_id"],
                 ignored_payload_fields=frozenset(
-                    {"superseded_at", "replacement_source_event_id"}
+                    {
+                        "superseded_at",
+                        "replacement_source_event_id",
+                        "expected_last_event_id",
+                    }
                 ),
             )
 
@@ -1581,12 +1592,17 @@ class NoiseFilteringPipeline:
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
                         "expected_content_revision_event_id": proposal["event_id"],
+                        "expected_last_event_id": proposal["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,
                 causation_id=proposal["event_id"],
                 ignored_payload_fields=frozenset(
-                    {"superseded_at", "replacement_source_event_id"}
+                    {
+                        "superseded_at",
+                        "replacement_source_event_id",
+                        "expected_last_event_id",
+                    }
                 ),
             )
 

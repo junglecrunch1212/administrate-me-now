@@ -948,6 +948,8 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_runtime(monkeypatch)
+    monkeypatch.delenv("ADMINME_RECONCILIATION_ADMISSION_ENABLED", raising=False)
+    monkeypatch.delenv("ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED", raising=False)
     state = _wizard(test_paths).run()
     store = secret_store(test_paths, test_mode=True)
     shared = store.get(state["secret_references"]["openclaw_shared"]).decode("ascii")
@@ -986,6 +988,8 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     runtime_service.main()
 
     assert runtime_capture["openclaw_gateway_token"] == shared
+    assert runtime_capture["reconciliation_admission_enabled"] is True
+    assert runtime_capture["human_triage_management_enabled"] is True
     assert runtime_capture["openclaw_shared_secret"] == shared
     assert runtime_capture["openclaw_model_configured"] is False
     assert runtime_capture["member_chat_enabled_members"] == frozenset(
