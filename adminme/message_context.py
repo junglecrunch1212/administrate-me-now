@@ -35,8 +35,8 @@ MESSAGE_EVENT_TYPES = (
 )
 MAX_THREAD_MESSAGES = 12
 MAX_RELATED_MESSAGES = 6
-MAX_MESSAGE_CHARS = 2400
-MAX_CONTEXT_CHARS = 24_000
+MAX_MESSAGE_CHARS = 12_000
+MAX_CONTEXT_CHARS = 48_000
 MAX_EPISODE_DAYS = 30
 MAX_EPISODE_SOURCES = 100
 
@@ -140,6 +140,7 @@ class ContextMessage:
     authored_text_reliable: bool
     authored_text_reason_codes: tuple[str, ...]
     attachment_names: tuple[str, ...]
+    text_truncated: bool = False
 
     def skill_payload(self) -> dict[str, Any]:
         return {
@@ -154,6 +155,7 @@ class ContextMessage:
             "subject": self.subject,
             "body_text": self.body_text,
             "attachment_names": list(self.attachment_names),
+            "text_truncated": self.text_truncated,
         }
 
     def source_text(self) -> str:
@@ -1121,6 +1123,8 @@ async def build_message_context_pack(
                     else (() if authored.reliable else ("authored_text_uncertain",))
                 ),
                 attachment_names=_attachment_names(payload),
+                text_truncated=len(body) < len(authored.text)
+                or len(authored.text) == MAX_MESSAGE_CHARS,
             )
         )
     stable = [

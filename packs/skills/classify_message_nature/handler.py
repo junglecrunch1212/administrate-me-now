@@ -54,6 +54,7 @@ def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
             + [f"rejected_classification:{classification!r}"]
         )
     result = dict(raw)
+    result["assessment_contract"] = "personal-obligation-assessment-v1"
     result["reply_signal"] = (
         raw.get("reply_signal")
         if raw.get("reply_signal") in {"required", "not_required", "unknown"}
@@ -139,6 +140,20 @@ def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
             for item in value.get("related_source_ids") or []
             if isinstance(item, str) and (not messages or item in messages)
         ][:10]
+        assessment = value.get("obligation_assessment")
+        value["obligation_assessment"] = (
+            dict(assessment)
+            if isinstance(assessment, dict)
+            else {
+                "purpose": "unknown",
+                "actionability": "unknown",
+                "condition": None,
+                "condition_state": "unknown",
+                "beneficiary": None,
+                "date_role": "unknown",
+                "qualifying_evidence": [],
+            }
+        )
         normalized_candidates.append(value)
     result["candidates"] = normalized_candidates[:20]
     return result

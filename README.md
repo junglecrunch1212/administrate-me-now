@@ -56,6 +56,11 @@ OpenClaw; AdministrateMe encryption and backup keys live in macOS Keychain.
 - An adult member portal with isolated OpenClaw chat, child/shared-screen
   restrictions, and private temporary quest views that cannot execute code or
   change household truth merely by changing a view.
+- Source-aware Triage with evidence for personal obligations, independent
+  account/conversation/purpose preferences, retained source history, and
+  inspectable private rules with bounded future trials and Undo. Email,
+  iMessage, and future reviewed sources use the same scoped machinery;
+  settings never substitute for provider enrollment or permission.
 - Rerunnable macOS bootstrap, Doctor, start/stop/status, encrypted backup,
   authenticated restore, guarded upgrade, rollback, exact-source OpenClaw
   provenance, owned cron reconciliation, and revocable per-member bridge
@@ -88,6 +93,13 @@ and
 [`docs/refactor/FINAL-VALIDATION-REPORT.md`](docs/refactor/FINAL-VALIDATION-REPORT.md).
 The governing architecture remains in `AGENTS.md`, `docs/SYSTEM_INVARIANTS.md`,
 `docs/DECISIONS.md`, and `docs/refactor/ADR/`.
+
+The current Triage change is governed by
+[CO-030: Source-aware personal obligation Triage](docs/refactor/CHANGE-ORDER-030-SOURCE-AWARE-PERSONAL-OBLIGATION-TRIAGE.md)
+and AC-60. Its contract covers v23 retained-message reassessment, preserved
+member decisions, effective attention flags, member learning controls, and
+production/browser release requirements. These documents define required
+behavior; passing checks and live activation require separate recorded evidence.
 
 Live Gmail, Apple, Plaid, Home Assistant, Tailscale, model-provider, and macOS
 privacy grants are intentionally excluded from credential-free test evidence.

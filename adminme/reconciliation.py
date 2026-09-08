@@ -27,6 +27,7 @@ from adminme.events.schemas.reconciliation import (
     TriageReconciliationDecidedV1,
 )
 from adminme.events.writer import EventSink
+from adminme.obligation_assessment import assessment_for_proposal
 from adminme.settings_control import SettingsControlStore
 from adminme.source_policy import (
     SignalAssessment,
@@ -101,7 +102,6 @@ _IDENTITY_RELATIONSHIPS = {
     "exact_external_identifier",
     "exact_canonical_object_link",
     "exact_payment_reference",
-    "exact_account_reference",
     "exact_appointment_reference",
     "strong_deterministic_correlation",
 }
@@ -150,6 +150,10 @@ class EvidenceProfile:
     current_state: str
     source_freshness: Literal["current", "stale", "unknown"]
     explicitly_shared: bool = False
+    actionability: str | None = None
+    ownership_unclear: bool = False
+    occurrence_at: str | None = None
+    obligation_purpose: str | None = None
 
 
 def _payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -230,6 +234,10 @@ def _current_state(event: Mapping[str, Any], text: str) -> str:
         state = normalized_exact_text(payload.get(field))
         if state in _TERMINAL_SATISFIED | _TERMINAL_SUPERSEDED | {"current", "open"}:
             return state
+    # Communication prose describes multiple objects and may quote historical
+    # payments or cancellations. It cannot terminalize the whole message.
+    if event_type in {"messaging.received", "messaging.sent", "telephony.sms_received"}:
+        return "current"
     if _CANCELED_PATTERN.search(text):
         return "canceled"
     if _SATISFIED_PATTERN.search(text):
@@ -241,6 +249,30 @@ def _candidate_payload(proposal: Mapping[str, Any] | None) -> Mapping[str, Any]:
     proposal_payload = _payload(proposal or {})
     value = proposal_payload.get("candidate")
     return value if isinstance(value, Mapping) else {}
+
+
+def issuer_reference(event: Mapping[str, Any], value: object) -> list[object]:
+    """An issuer's printed reference is not a globally unique object ID.
+
+    Exact native counterparty identity is deliberately conservative: different
+    addresses need an explicit canonical link before automatic reconciliation.
+    The source account is the fallback when no counterparty is known.
+    """
+
+    payload = _payload(event)
+    counterparty = payload.get("from_identifier")
+    if event.get("type") == "messaging.sent":
+        counterparty = payload.get("to_identifier")
+    issuer: object = (
+        ["counterparty", normalized_exact_text(counterparty)]
+        if counterparty
+        else [
+            "provider_account",
+            payload.get("provider") or event.get("source_adapter"),
+            payload.get("provider_account_id") or event.get("source_account_id"),
+        ]
+    )
+    return [issuer, value]
 
 
 def evidence_profile(
@@ -329,16 +361,29 @@ def evidence_profile(
                 "payment_id",
                 "transaction_reference",
             }:
-                _add_reference(references, tenant_id, "exact_payment_reference", value)
+                _add_reference(
+                    references,
+                    tenant_id,
+                    "exact_payment_reference",
+                    issuer_reference(event, value),
+                )
             elif lowered in {"account_reference", "account_number", "account_last4"}:
-                _add_reference(references, tenant_id, "exact_account_reference", value)
+                _add_reference(
+                    references,
+                    tenant_id,
+                    "exact_account_reference",
+                    issuer_reference(event, value),
+                )
             elif lowered in {
                 "appointment_reference",
                 "appointment_id",
                 "visit_id",
             }:
                 _add_reference(
-                    references, tenant_id, "exact_appointment_reference", value
+                    references,
+                    tenant_id,
+                    "exact_appointment_reference",
+                    issuer_reference(event, value),
                 )
             elif lowered in {
                 "task_id",
@@ -363,7 +408,10 @@ def evidence_profile(
                 "reference_id",
             }:
                 _add_reference(
-                    references, tenant_id, "exact_external_identifier", value
+                    references,
+                    tenant_id,
+                    "exact_external_identifier",
+                    issuer_reference(event, [lowered, value]),
                 )
         if candidate.get("linked_kind") and candidate.get("linked_id"):
             _add_reference(
@@ -387,8 +435,16 @@ def evidence_profile(
                 if prefix in {"account", "mortgage"}
                 else "exact_external_identifier"
             )
-            _add_reference(references, tenant_id, special, value)
-            _add_reference(references, tenant_id, "exact_external_identifier", value)
+            _add_reference(
+                references, tenant_id, special, issuer_reference(event, value)
+            )
+            if special != "exact_account_reference":
+                _add_reference(
+                    references,
+                    tenant_id,
+                    "exact_external_identifier",
+                    issuer_reference(event, [prefix, value]),
+                )
 
         comparable = {
             key: combined[key]
@@ -418,18 +474,19 @@ def evidence_profile(
                 references,
                 tenant_id,
                 "exact_duplicate",
-                [target_kind, normalized_title, exact_candidate],
+                [
+                    provider,
+                    account,
+                    workspace,
+                    issuer_reference(event, ""),
+                    target_kind,
+                    normalized_title,
+                    exact_candidate,
+                    None
+                    if exact_candidate
+                    else payload.get("native_message_id") or source_event_id,
+                ],
             )
-            title_words = [
-                word for word in normalized_title.split() if word not in _STOPWORDS
-            ]
-            if len(normalized_title) >= 12 and len(title_words) >= 3:
-                _add_reference(
-                    references,
-                    tenant_id,
-                    "strong_deterministic_correlation",
-                    [target_kind, normalized_title],
-                )
 
     comparable_fields = {
         key: normalized_exact_text(value)
@@ -463,6 +520,12 @@ def evidence_profile(
         if raw_freshness in {"current", "stale", "unknown"}
         else "unknown",
     )
+    assessment = assessment_for_proposal(proposal)
+    interpretation = proposal_payload.get("interpretation") or {}
+    assessed_contract = (
+        isinstance(interpretation, Mapping)
+        and interpretation.get("contract") == "triage-context-interpretation-v3"
+    )
     return EvidenceProfile(
         source_event_id=source_event_id,
         member_id=_member_id(proposal or event),
@@ -477,6 +540,20 @@ def evidence_profile(
         source_freshness=freshness,
         explicitly_shared=event.get("type")
         == "context.reconciliation.typed_fact_shared",
+        actionability=assessment.actionability
+        if assessment
+        else "unknown"
+        if assessed_contract
+        else None,
+        ownership_unclear=assessed_contract
+        and interpretation.get("action_owner") == "unknown",
+        occurrence_at=str(candidate.get("start"))
+        if assessment
+        and target_kind == "calendar_event"
+        and assessment.date_role == "occurrence"
+        and "start" in assessment.verified_date_fields
+        else None,
+        obligation_purpose=assessment.purpose if assessment else None,
     )
 
 
@@ -527,7 +604,46 @@ def evidence_relationships(
             kind, frozenset()
         )
         for digest in sorted(common):
-            automatic = relationship_type != "same_conversation"
+            automatic = relationship_type not in {
+                "same_conversation",
+                "exact_account_reference",
+            }
+            if (
+                relationship_type == "same_provider_object"
+                and current.target_kind
+                and related.target_kind
+            ):
+                # A source message may contain several independent actions.
+                automatic = (
+                    current.target_kind == related.target_kind
+                    and normalized_exact_text(current.title)
+                    == normalized_exact_text(related.title)
+                )
+            if (
+                current.target_kind
+                and related.target_kind
+                and current.target_kind != related.target_kind
+            ):
+                automatic = False
+            if (
+                current.target_kind
+                and related.target_kind
+                and relationship_type != "exact_canonical_object_link"
+            ):
+                if (
+                    current.obligation_purpose
+                    and related.obligation_purpose
+                    and current.obligation_purpose != related.obligation_purpose
+                ):
+                    automatic = False
+                if (
+                    current.obligation_purpose or related.obligation_purpose
+                ) and normalized_exact_text(current.title) != normalized_exact_text(
+                    related.title
+                ):
+                    # Two actions can concern one invoice or appointment.
+                    # An explicit canonical link can still establish identity.
+                    automatic = False
             authority = cast(
                 RelationshipAuthority,
                 "explicitly_shared_typed_fact"
@@ -636,7 +752,9 @@ def evidence_relationships(
 
 def _message_direction(event: Mapping[str, Any]) -> str:
     event_type = str(event.get("type") or "")
-    if event_type in {"messaging.sent"}:
+    if event_type in {"messaging.sent"} or "SENT" in {
+        str(value).upper() for value in _payload(event).get("provider_labels") or []
+    }:
         return "outbound"
     if event_type in {"messaging.received", "telephony.sms_received"}:
         return "inbound"
@@ -652,8 +770,8 @@ def assessed_signals(
     """Add deterministic message evidence without promoting vocabulary to authority."""
 
     base = assess_source_signals(event)
+    assessment = assessment_for_proposal(proposal)
     payload = _payload(event)
-    candidate = _candidate_payload(proposal)
     text = _source_text(event, proposal)
     direction = _message_direction(event)
     sender = str(payload.get("from_identifier") or payload.get("from_number") or "")
@@ -676,17 +794,42 @@ def assessed_signals(
         )
     if promise:
         actionability.append("exact_outbound_member_promise")
-    if any(
-        payload.get(key) or candidate.get(key)
-        for key in ("due", "due_at", "due_date", "deadline", "deadline_at")
+    if (
+        assessment
+        and assessment.date_role == "deadline"
+        and "due" in assessment.verified_date_fields
     ):
         actionability.append("verified_typed_deadline")
+    if assessment:
+        promise = (
+            assessment.independent_obligation
+            and assessment.purpose == "member_promise"
+            and direction == "outbound"
+        )
+        known_request = (
+            assessment.independent_obligation
+            and assessment.purpose == "personal_request"
+            and direction == "inbound"
+            and prior_member_correspondence
+            and not automated
+        )
+        actionability.append("source_grounded_obligation_assessment")
     return SignalAssessment.model_validate(
         {
             **base.model_dump(mode="json"),
+            "verified_obligation": bool(
+                assessment and assessment.independent_obligation
+            ),
+            "obligation_actionability": assessment.actionability
+            if assessment
+            else "unknown",
+            "message_purpose": assessment.purpose if assessment else "unknown",
+            "purpose_evidence_verified": assessment is not None,
             "known_human_incoming_request": known_request,
             "member_promise": base.member_promise or promise,
-            "security_alert": base.security_alert or security,
+            "security_alert": (assessment.purpose == "account_alert")
+            if assessment
+            else base.security_alert or security,
             "provider_update": base.provider_update
             or (bulk and not promotion and not spam),
             "receipt": base.receipt or receipt,
@@ -748,6 +891,7 @@ def choose_decision(
     profile: EvidenceProfile,
     relationships: Sequence[ReconciliationEvidenceRelationshipV1],
     target_kind: str | None,
+    as_of: datetime | None = None,
 ) -> AdmissionDecision:
     """Apply current state, exact evidence, relevance, and source policy in order."""
 
@@ -755,7 +899,17 @@ def choose_decision(
         return "already_satisfied"
     if profile.current_state in _TERMINAL_SUPERSEDED:
         return "superseded"
-    relationship_types = {item.relationship_type for item in relationships}
+    if profile.occurrence_at and as_of and not signals.authenticated_member_instruction:
+        occurrence = datetime.fromisoformat(
+            profile.occurrence_at.replace("Z", "+00:00")
+        )
+        if occurrence.date() < as_of.date():
+            # Historical attendance differs from an overdue unpaid bill.
+            # Date-only evidence never marks an event earlier today as done.
+            return "superseded"
+    relationship_types = {
+        item.relationship_type for item in relationships if item.automatic_effect
+    }
     automatic_identity = bool(relationship_types & _IDENTITY_RELATIONSHIPS)
     if automatic_identity and "contradiction" in relationship_types:
         return "conflict_review"
@@ -784,16 +938,12 @@ def choose_decision(
         return (
             "update_existing_matter" if profile.comparable_fields else "attach_evidence"
         )
-    if (
-        target_kind
-        in {
-            "party_candidate",
-            "party_identifier",
-            "party_relationship",
-            "relationship_fact",
-        }
-        and not signals.relationship_valued_communication
-    ):
+    if target_kind in {
+        "party_candidate",
+        "party_identifier",
+        "party_relationship",
+        "relationship_fact",
+    }:
         return (
             "context_only"
             if policy.context_route != "none"
@@ -810,6 +960,14 @@ def choose_decision(
             )
         )
         and not signals.relationship_valued_communication
+        and not signals.verified_obligation
+        and not signals.authenticated_member_instruction
+        and "purpose_route:review" not in policy.reason_codes
+        and not (
+            signals.purpose_evidence_verified
+            and signals.obligation_actionability == "conditional"
+            and policy.triage_route == "review"
+        )
     ):
         return (
             "context_only"
@@ -824,13 +982,17 @@ def choose_decision(
         return "source_policy_suppression"
     if not coordinate_exact:
         return "unresolved"
+    if profile.actionability in {"conditional", "unknown"} or profile.ownership_unclear:
+        return "unresolved"
+    if profile.actionability in {"none", "informational"}:
+        return "context_only"
     return "admit"
 
 
 class ReconciliationAdmissionEvaluator:
     """Durable bus consumer that emits decision revisions from authorized state."""
 
-    CONSUMER_VERSION = "1.1.0"
+    CONSUMER_VERSION = "2.0.0"
 
     def __init__(
         self,
@@ -846,16 +1008,28 @@ class ReconciliationAdmissionEvaluator:
         self._settings = settings
         self._provider_bindings = provider_bindings
         self._admission_active = admission_active
+        self._history: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+        self._history_cursors: dict[tuple[str, str | None], str] = {}
+        self._source_cache: dict[str, dict[str, Any]] = {}
 
     async def _events_of_type(
         self, event_type: str, *, owner_scope: str | None = None
     ) -> list[dict[str, Any]]:
-        values: list[dict[str, Any]] = []
+        key = (event_type, owner_scope)
+        values = self._history.setdefault(key, [])
         async for event in self._log.read_since(
-            types=[event_type], owner_scope=owner_scope
+            self._history_cursors.get(key), types=[event_type], owner_scope=owner_scope
         ):
             values.append(event)
-        return values
+            self._history_cursors[key] = str(event["event_id"])
+        return list(values)
+
+    async def _source(self, event_id: str) -> dict[str, Any] | None:
+        if event_id not in self._source_cache:
+            value = await self._log.get(event_id)
+            if value is not None:
+                self._source_cache[event_id] = value
+        return self._source_cache.get(event_id)
 
     async def _prior_correspondence(self, source: Mapping[str, Any]) -> str | None:
         if source.get("type") != "messaging.received":
@@ -865,9 +1039,8 @@ class ReconciliationAdmissionEvaluator:
         if not sender:
             return None
         matched_event_id: str | None = None
-        async for event in self._log.read_since(
-            owner_scope=str(source.get("owner_scope") or ""),
-            types=["messaging.sent"],
+        for event in await self._events_of_type(
+            "messaging.sent", owner_scope=str(source.get("owner_scope") or "")
         ):
             if event.get("tenant_id") != source.get("tenant_id"):
                 continue
@@ -900,13 +1073,15 @@ class ReconciliationAdmissionEvaluator:
     async def _latest_decision(
         self, proposal_id: str, owner_scope: str
     ) -> dict[str, Any] | None:
-        latest: dict[str, Any] | None = None
-        async for event in self._log.read_since(
-            owner_scope=owner_scope, types=["triage.reconciliation.decided"]
-        ):
+        values = self._history.get(("triage.reconciliation.decided", owner_scope))
+        if values is None:
+            values = await self._events_of_type(
+                "triage.reconciliation.decided", owner_scope=owner_scope
+            )
+        for event in reversed(values):
             if _payload(event).get("proposal_id") == proposal_id:
-                latest = event
-        return latest
+                return event
+        return None
 
     async def _policy_snapshot(
         self, source: Mapping[str, Any], signals: SignalAssessment
@@ -960,6 +1135,9 @@ class ReconciliationAdmissionEvaluator:
         )
         if existing is not None:
             return str(existing["event_id"])
+        await self._events_of_type(
+            "triage.reconciliation.decided", owner_scope=owner_scope
+        )
         prior = await self._latest_decision(proposal_id, owner_scope)
         revision = int(_payload(prior or {}).get("decision_revision") or 0) + 1
         root_proposal_id = primary_proposal_id or proposal_id
@@ -1056,9 +1234,15 @@ class ReconciliationAdmissionEvaluator:
             causation_id=trigger_id,
         )
 
-    async def _handle_proposal(self, proposal: Mapping[str, Any]) -> None:
+    async def _handle_proposal(
+        self, proposal: Mapping[str, Any], *, trigger: Mapping[str, Any] | None = None
+    ) -> None:
         proposal_payload = _payload(proposal)
-        source = await self._log.get(str(proposal_payload.get("source_event_id") or ""))
+        await self._events_of_type(
+            "triage.reconciliation.decided",
+            owner_scope=str(proposal.get("owner_scope") or ""),
+        )
+        source = await self._source(str(proposal_payload.get("source_event_id") or ""))
         if source is None:
             # A proposal cannot substitute for its immutable source fact. Keep
             # the pre-G03 queue behavior until source lineage is available.
@@ -1093,7 +1277,7 @@ class ReconciliationAdmissionEvaluator:
                 "unresolved",
             }:
                 continue
-            prior_source = await self._log.get(
+            prior_source = await self._source(
                 str(prior_payload.get("source_event_id") or "")
             )
             if prior_source is None:
@@ -1125,11 +1309,18 @@ class ReconciliationAdmissionEvaluator:
             profile=profile,
             relationships=relationships,
             target_kind=str(proposal_payload.get("target_kind") or "") or None,
+            as_of=datetime.fromisoformat(
+                str(
+                    (trigger or proposal).get("recorded_at")
+                    or (trigger or proposal).get("occurred_at")
+                    or "1970-01-01T00:00:00Z"
+                ).replace("Z", "+00:00")
+            ),
         )
         await self._emit_decision(
             proposal=proposal,
             source=source,
-            trigger=proposal,
+            trigger=trigger or proposal,
             profile=profile,
             relationships=relationships,
             decision=decision,
@@ -1225,7 +1416,7 @@ class ReconciliationAdmissionEvaluator:
                 if proposal.get("tenant_id") != trigger.get("tenant_id"):
                     continue
                 proposal_payload = _payload(proposal)
-                source = await self._log.get(
+                source = await self._source(
                     str(proposal_payload.get("source_event_id") or "")
                 )
                 if source is None:
@@ -1284,6 +1475,18 @@ class ReconciliationAdmissionEvaluator:
             await self._handle_member_intent(event)
         elif event_type == "context.reconciliation.typed_fact_shared":
             await self._handle_state_evidence(event)
+        elif event_type == "settings.source_policy_v2_changed":
+            owner_scope = str(event.get("owner_scope") or "")
+            if (
+                not owner_scope.startswith("private:")
+                or event.get("visibility_scope") != owner_scope
+            ):
+                return
+            for proposal in await self._events_of_type(
+                "triage.item.proposed", owner_scope=owner_scope
+            ):
+                if proposal.get("tenant_id") == event.get("tenant_id"):
+                    await self._handle_proposal(proposal, trigger=event)
         elif event_type != "triage.reconciliation.decided":
             await self._handle_state_evidence(event)
 

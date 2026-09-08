@@ -1,0 +1,79 @@
+// Browser proof against the real credential-free composition root. No API mocks.
+export async function auditTriageSourceControls({ page, baseUrl, record, screenshot, auditAccessibility }) {
+  const call = async (path, method = "GET", body = null) => {
+    const response = await page.request.fetch(`${baseUrl}${path}`, { method, ...(body ? { data: body } : {}) });
+    const value = await response.json();
+    record(`Attention API ${method} ${path}`, response.ok(), value);
+    return value;
+  };
+  await call("/__gate7/seed-attention-sources", "POST");
+  await page.goto(`${baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Choose what needs you." }).waitFor();
+  const settings = await call("/api/member/v1/surfaces/settings");
+  const source = settings.control.source_policy_v2.sources.find((value) => value.configurable && value.retained_candidate_count > 0 && value.coordinate?.provider_account_id === "visual-attention-account" && value.coordinate.native_container_id === "visual-attention-conversation");
+  record("Retained future-adapter source has an exact configurable account", Boolean(source?.policy_key), source);
+  const card = page.locator(`[data-source-policy-key="${source.policy_key}"]`);
+  record("Disconnected source history is honestly labelled", (await card.textContent()).includes("Disconnected") && (await card.textContent()).includes("retained candidate"), await card.textContent());
+  const futureGroup = page.locator(".candidate-policy-group").filter({ has: page.locator("summary", { hasText: /^Sources not yet connected/ }) });
+  record("Future sources are visible without invented connections", await futureGroup.count() === 1, await page.locator("#surface").textContent());
+  await futureGroup.locator(":scope > summary").click();
+  record("Unconnected sources do not present save or activation controls", await futureGroup.locator("button[type='submit']").count() === 0, await futureGroup.textContent());
+
+  const attention = card.getByRole("combobox", { name: "What should reach me?", exact: true });
+  await attention.selectOption("possibilities");
+  await card.locator(".source-purpose-settings > summary").click();
+  await card.locator('[data-message-purpose="survey"]').selectOption("reference");
+  const previewResponse = page.waitForResponse((response) => response.url().endsWith("/source-policies-v2/preview") && response.request().method() === "POST");
+  await card.getByRole("button", { name: "Preview recent effect", exact: true }).click();
+  const preview = await (await previewResponse).json();
+  record("Source preview contains real source evidence and no substitute examples", preview.examples.length > 0 && preview.examples.every((value) => value.source_event_id && !value.synthetic), preview.examples);
+  await card.getByRole("button", { name: "Reset attention choices", exact: true }).click();
+  await attention.selectOption("possibilities");
+  const savedResponse = page.waitForResponse((response) => response.url().includes(`/source-policies-v2/${source.policy_key}`) && response.request().method() === "POST");
+  await card.getByRole("button", { name: "Save source preferences", exact: true }).click();
+  record("Source attention preference saves through its real route", (await savedResponse).ok(), await (await savedResponse).json());
+  await page.getByRole("combobox", { name: "What should reach me?", exact: true }).first().waitFor();
+  const after = await call("/api/member/v1/surfaces/settings");
+  const saved = after.control.source_policy_v2.sources.find((value) => value.policy_key === source.policy_key).policy;
+  record("Attention changes preserve context, acquisition, alerts, and candidate types", saved.attention_mode === "possibilities" && ["context_mode", "acquisition_state", "alert_mode"].every((key) => saved[key] === source.policy[key]) && JSON.stringify(saved.candidate_kinds) === JSON.stringify(source.policy.candidate_kinds), { before: source.policy, after: saved });
+
+  await card.locator(".source-similar-rule > summary").click();
+  const builder = card.locator(".source-rule-builder");
+  await builder.getByRole("combobox", { name: "When the message purpose is", exact: true }).selectOption("survey");
+  await builder.getByRole("combobox", { name: "Except this type of candidate", exact: true }).selectOption("calendar_event");
+  const rulePreviewResponse = page.waitForResponse((response) => response.url().endsWith("/triage-learning/v2/preview") && response.request().method() === "POST");
+  await builder.getByRole("button", { name: "Preview matches and exceptions", exact: true }).click();
+  const rulePreview = await (await rulePreviewResponse).json();
+  record("Rule preview shows matches, protected examples, and nonmatches", rulePreview.recent_impact.matched > 0 && rulePreview.recent_impact.protected > 0 && rulePreview.recent_impact.nonmatches > 0, rulePreview.recent_impact);
+  await builder.locator('[data-rule-match="protected"]').first().waitFor();
+  record("Rule terms are reviewable before activation", (await builder.textContent()).includes("Applies to") && (await builder.textContent()).includes("Duration") && (await builder.textContent()).includes("Independent obligations"), await builder.textContent());
+  await screenshot(page, "source-attention-preview-desktop.png");
+  const trialResponse = page.waitForResponse((response) => response.url().endsWith("/triage-learning/v2/rules") && response.request().method() === "POST");
+  await builder.getByRole("button", { name: "Try for 7 days / 50 messages", exact: true }).click();
+  const trialResult = await (await trialResponse).json();
+  record("Member starts bounded future trial with reviewed digest", Boolean(trialResult.rule_id), trialResult);
+  await page.locator(".settings-nav").waitFor();
+  await call("/__gate7/seed-attention-sources?future=true", "POST");
+  const learned = await call("/api/member/v1/triage-learning/v2/rules");
+  const trial = learned.rules.find((value) => value.rule_id === trialResult.rule_id);
+  record("Future-source trial observes new evidence only", trial?.status === "trial" && trial.max_observations === 50 && trial.observed_count === 1, trial);
+
+  await page.getByRole("button", { name: "Learning & trust", exact: true }).click();
+  await page.getByRole("button", { name: "Load my rules", exact: true }).click();
+  await page.getByRole("button", { name: "Undo this rule", exact: true }).waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await auditAccessibility(page, "narrow source learning");
+  record("Rule controls fit a narrow viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), await page.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth })));
+  await screenshot(page, "source-attention-learning-narrow.png");
+  const undoResponse = page.waitForResponse((response) => response.url().endsWith(`/triage-learning/v2/rules/${trial.rule_id}/review`) && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Undo this rule", exact: true }).click();
+  record("Undo uses exact rule revision", (await undoResponse).ok(), await (await undoResponse).json());
+  const undone = await call("/api/member/v1/triage-learning/v2/rules");
+  record("Undo retains a visible terminal rule history", undone.rules.some((value) => value.rule_id === trial.rule_id && value.status === "revoked" && value.history.length > 0), undone.rules);
+  await page.goto(`${baseUrl}/member/triage?view=all_candidates&item=visual-attention-proposal-6`, { waitUntil: "networkidle" });
+  await page.locator('[data-triage-item="visual-attention-proposal-6"]').waitFor();
+  const detail = page.locator('[data-triage-item="visual-attention-proposal-6"]');
+  await detail.locator(".triage-management > summary").click();
+  record("Handling and future preference are separate member choices", await detail.getByRole("button", { name: "Already handled", exact: true }).count() === 1 && await detail.getByRole("button", { name: "Not useful", exact: true }).count() === 1 && await detail.locator("summary", { hasText: "Do this for similar messages" }).count() === 1, await detail.textContent());
+  record("Triage shows grounded obligation evidence", (await detail.textContent()).includes("What the source supports"), await detail.textContent());
+}

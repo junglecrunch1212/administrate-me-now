@@ -22,7 +22,7 @@ from adminme.source_policy import (
 class SourcePolicyShadowEvaluator:
     """Compute V1 versus V2 routes without changing admission or providers."""
 
-    CONSUMER_VERSION = "1.0.0"
+    CONSUMER_VERSION = "2.0.0"
 
     def __init__(
         self,
@@ -93,7 +93,7 @@ class SourcePolicyShadowEvaluator:
             correlation_id=event.get("correlation_id"),
             causation_id=source_event_id,
             actor_identity="source-policy-v2-shadow",
-            idempotency_key=f"source-policy-v2-shadow:v1:{source_event_id}",
+            idempotency_key=f"source-policy-v2-shadow:v2:{source_event_id}",
             payload={
                 "source_event_id": source_event_id,
                 "policy_version": "source-policy-v2",

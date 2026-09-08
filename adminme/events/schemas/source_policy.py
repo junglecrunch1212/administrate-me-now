@@ -75,8 +75,17 @@ class SourcePolicyV2ShadowEvaluatedV1(BaseModel):
         return self
 
 
+class SettingsSourcePolicyV2ChangedV2(SettingsSourcePolicyV2ChangedV1):
+    """An exact attention preference may affect local reconciliation only."""
+
+    live_admission_changed: bool = False  # type: ignore[assignment]
+
+
 registry.register(
     "settings.source_policy_v2_changed", 1, SettingsSourcePolicyV2ChangedV1
+)
+registry.register(
+    "settings.source_policy_v2_changed", 2, SettingsSourcePolicyV2ChangedV2
 )
 registry.register(
     "source.policy_v2.shadow_evaluated", 1, SourcePolicyV2ShadowEvaluatedV1

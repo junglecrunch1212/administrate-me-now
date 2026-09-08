@@ -79,9 +79,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "7.0.0"
+SKILL_VERSION = "8.0.0"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 22
+_REPLAY_GENERATION = 23
 _DEFERRED_THREAD_ASSESSOR_ID = "thread-anchor-deferred-v1"
 _CURRENT_MESSAGE_FALLBACK_RULE_IDS = frozenset(
     {
@@ -284,7 +284,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "22.0.0"
+    version: str = "23.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -713,6 +713,7 @@ class NoiseFilteringPipeline:
         inputs["candidate_kinds"] = list(policy["candidate_kinds"])
         inputs["candidate_language_enabled"] = bool(policy["language_enabled"])
         inputs["context_pack"] = context_pack.skill_payload()
+        inputs["assessment_contract"] = "personal-obligation-assessment-v1"
         inputs["candidate_scope"] = (
             "primary_thread"
             if context_pack.current_is_thread_anchor
@@ -852,6 +853,9 @@ class NoiseFilteringPipeline:
             invocation_fingerprint=invocation_fingerprint,
             source_text=source_text,
             raw_candidates=output.get("candidates"),
+            semantic_assessment_complete=output.get("assessment_contract")
+            == "personal-obligation-assessment-v1"
+            and assessment_failure_reason is None,
             message_direction=str(
                 "outbound"
                 if event.get("type") == "messaging.sent"
@@ -970,6 +974,7 @@ class NoiseFilteringPipeline:
         invocation_fingerprint: str,
         source_text: str,
         raw_candidates: Any,
+        semantic_assessment_complete: bool = False,
         message_direction: str,
         assessment_failure_reason: str | None,
         policy_source_id: str,
@@ -999,7 +1004,12 @@ class NoiseFilteringPipeline:
                 else extract_grounded_nlp_candidates(source_text, raw_candidates)
             )
         candidates = []
-        if context_pack.current_is_thread_anchor:
+        if context_pack.current_is_thread_anchor and semantic_assessment_complete:
+            # A completed semantic assessment owns both positive and negative
+            # findings. A keyword fallback must not resurrect rejected surveys,
+            # quoted instructions or already-paid bills after that assessment.
+            candidates = language_candidates
+        elif context_pack.current_is_thread_anchor:
             candidates = merge_intent_candidates(
                 extract_message_fallback_candidates(
                     source_text,
@@ -1008,7 +1018,7 @@ class NoiseFilteringPipeline:
                 ),
                 language_candidates,
             )
-        if message_direction == "inbound":
+        if message_direction == "inbound" and not semantic_assessment_complete:
             candidates = [
                 candidate
                 for candidate in candidates
@@ -1170,6 +1180,28 @@ class NoiseFilteringPipeline:
         )
         for candidate in new_candidates:
             target_kind = candidate.target_kind
+            candidate_fields = dict(candidate.fields)
+            if (candidate.interpretation or {}).get(
+                "contract"
+            ) == "triage-context-interpretation-v3":
+                primary_refs = (candidate.interpretation or {}).get(
+                    "evidence_refs"
+                ) or []
+                primary_id = (
+                    primary_refs[0].get("source_event_id") if primary_refs else None
+                )
+                evidence_message = next(
+                    (
+                        message
+                        for message in context_pack.messages
+                        if message.source_event_id == primary_id
+                    ),
+                    None,
+                )
+                if evidence_message and evidence_message.sender:
+                    candidate_fields["sender_digest"] = hashlib.sha256(
+                        evidence_message.sender.strip().casefold().encode()
+                    ).hexdigest()
             proposal_key = proposal_keys[(target_kind, candidate.candidate_key)]
             # Proposal identity follows the replay-versioned idempotency
             # identity. A stale contextual proposal and its context-free
@@ -1183,7 +1215,10 @@ class NoiseFilteringPipeline:
                 event_at_ms=event["event_at_ms"],
                 tenant_id=event["tenant_id"],
                 type="triage.item.proposed",
-                schema_version=4,
+                schema_version=5
+                if (candidate.interpretation or {}).get("contract")
+                == "triage-context-interpretation-v3"
+                else 4,
                 occurred_at=extracted_at,
                 source_adapter="deterministic_candidate_eligibility",
                 source_account_id="pipeline",
@@ -1196,7 +1231,7 @@ class NoiseFilteringPipeline:
                     "target_kind": target_kind,
                     "owner_member_id": member_id,
                     "title": candidate.title,
-                    "candidate": candidate.fields,
+                    "candidate": candidate_fields,
                     "route": {"member_id": member_id},
                     "source_event_id": source_event_id,
                     "parent_intent_id": None,

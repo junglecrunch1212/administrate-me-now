@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -236,3 +236,163 @@ __all__ = [
     "TriageSourcePolicyRuleProposedV1",
     "TriageSourcePolicyRuleReviewedV1",
 ]
+
+
+class AttentionConditionsV1(BaseModel):
+    """All supplied exact terms must match; omitted terms are unconstrained.
+
+    No pattern language, model prompt, member selector, or provider action is
+    accepted. These conditions describe attention within existing read scope.
+    """
+
+    model_config = {"extra": "forbid"}
+    provider: str | None = Field(default=None, min_length=1, max_length=120)
+    provider_account_id: str | None = Field(default=None, min_length=1, max_length=500)
+    adapter_instance_id: str | None = Field(default=None, min_length=1, max_length=500)
+    native_container_id: str | None = Field(default=None, min_length=1, max_length=1000)
+    sender_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    candidate_kind: str | None = Field(default=None, min_length=1, max_length=120)
+    message_purpose: (
+        Literal[
+            "personal_request",
+            "member_promise",
+            "appointment",
+            "preparation",
+            "payment",
+            "account_alert",
+            "optional_opportunity",
+            "status_update",
+            "receipt",
+            "survey",
+            "reference",
+            "recurrence",
+            "unknown",
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def has_a_condition(self) -> "AttentionConditionsV1":
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("at least one exact condition is required")
+        return self
+
+
+class AttentionRuleV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    conditions: AttentionConditionsV1
+    exceptions: list[AttentionConditionsV1] = Field(default_factory=list, max_length=20)
+    action: Literal["review", "reference", "ask"]
+    origin: Literal["explicit", "suggested"] = "explicit"
+    feedback_event_ids: list[str] = Field(default_factory=list, max_length=100)
+    preserve_independent_obligations: Literal[True] = True
+
+    @model_validator(mode="after")
+    def is_an_exact_source_conjunction(self) -> "AttentionRuleV1":
+        value = self.conditions
+        if not value.provider_account_id or not value.adapter_instance_id:
+            raise ValueError("rules require an exact account and adapter instance")
+        if not (
+            value.message_purpose or value.sender_digest or value.native_container_id
+        ):
+            raise ValueError("select a message purpose, sender, or conversation")
+        if len(set(self.feedback_event_ids)) != len(self.feedback_event_ids):
+            raise ValueError("feedback ids must be unique")
+        return self
+
+
+class TriageAttentionRuleSavedV1(AttentionRuleV1):
+    """An explicit, previewed private rule; trial limits are future observations."""
+
+    rule_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: Literal["active", "trial", "shadow"]
+    starts_at: datetime
+    expires_at: datetime | None = None
+    max_observations: int | None = Field(default=None, ge=1, le=100)
+    saved_by_member_id: str = Field(min_length=1, max_length=240)
+    access_widening: Literal[False] = False
+    cross_member_effect: Literal[False] = False
+    provider_effects: Literal[False] = False
+
+    @model_validator(mode="after")
+    def is_private_bounded_and_explicit(self) -> "TriageAttentionRuleSavedV1":
+        if self.saved_by_member_id != self.member_id:
+            raise ValueError("members can save only their own attention rules")
+        if self.starts_at.tzinfo is None or (
+            self.expires_at is not None and self.expires_at.tzinfo is None
+        ):
+            raise ValueError("rule times require an explicit timezone")
+        if self.mode in {"trial", "shadow"}:
+            if self.expires_at is None or self.max_observations is None:
+                raise ValueError("future trials require time and observation limits")
+            if (
+                not self.starts_at
+                < self.expires_at
+                <= self.starts_at + timedelta(days=30)
+            ):
+                raise ValueError("trial duration must be positive and at most 30 days")
+        elif self.expires_at is not None or self.max_observations is not None:
+            raise ValueError("permanent approval cannot carry trial limits")
+        return self
+
+
+class TriageAttentionRuleReviewedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    rule_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    decision: Literal["retain", "suspend", "revoke"]
+    negative_outcome: NegativePolicyOutcome | None = None
+    reason: str = Field(min_length=1, max_length=500)
+    reviewed_by_member_id: str = Field(min_length=1, max_length=240)
+    reviewed_at: datetime
+    provider_effects: Literal[False] = False
+
+    @model_validator(mode="after")
+    def adverse_feedback_restores_visibility(self) -> "TriageAttentionRuleReviewedV1":
+        if self.reviewed_by_member_id != self.member_id:
+            raise ValueError("members can review only their own attention rules")
+        if self.negative_outcome and self.decision == "retain":
+            raise ValueError("negative evidence must suspend or revoke the rule")
+        return self
+
+
+class TriageAttentionFeedbackRecordedV1(BaseModel):
+    """A correction category is explicit; completion is never a future preference."""
+
+    model_config = {"extra": "forbid"}
+    feedback_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    proposal_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    independent_observation_key: str = Field(min_length=1, max_length=240)
+    kind: Literal[
+        "future_attention_preference",
+        "interpretation_correction",
+        "completion",
+        "ownership",
+        "duplicate",
+    ]
+    rule: AttentionRuleV1 | None = None
+    recorded_by_member_id: str = Field(min_length=1, max_length=240)
+    recorded_at: datetime
+    provider_effects: Literal[False] = False
+
+    @model_validator(mode="after")
+    def future_preference_is_explicit(self) -> "TriageAttentionFeedbackRecordedV1":
+        if self.recorded_by_member_id != self.member_id:
+            raise ValueError("members can correct only their own observations")
+        if (self.kind == "future_attention_preference") != (self.rule is not None):
+            raise ValueError(
+                "only an explicit future preference carries an attention rule"
+            )
+        return self
+
+
+registry.register("triage.attention_rule.saved", 1, TriageAttentionRuleSavedV1)
+registry.register("triage.attention_rule.reviewed", 1, TriageAttentionRuleReviewedV1)
+registry.register(
+    "triage.attention_feedback.recorded", 1, TriageAttentionFeedbackRecordedV1
+)

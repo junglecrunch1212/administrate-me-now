@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from adminme.obligation_assessment import PersonalObligationAssessmentV1
+
 from adminme.events.registry import registry
 
 
@@ -206,6 +208,43 @@ class TriageItemProposedV4(TriageItemProposedV2):
 
     model_config = {"extra": "forbid"}
     interpretation: TriageContextInterpretationV2 | None = None
+    source_occurred_at: datetime | None = None
+
+
+class TriageContextInterpretationV3(BaseModel):
+    """Source-grounded action/condition assessment, still review-only."""
+
+    model_config = {"extra": "forbid"}
+    contract: Literal["triage-context-interpretation-v3"]
+    context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    thread_key: str = Field(min_length=1, max_length=64)
+    anchor_event_id: str = Field(min_length=1, max_length=240)
+    compact_summary: str = Field(min_length=1, max_length=160)
+    case_summary: str | None = Field(default=None, max_length=600)
+    why_member: str | None = Field(default=None, max_length=240)
+    next_step: str | None = Field(default=None, max_length=240)
+    thread_state: Literal[
+        "new",
+        "in_progress",
+        "waiting_on_member",
+        "waiting_on_other",
+        "blocked",
+        "unclear",
+    ]
+    action_owner: Literal["member", "group_including_member", "unknown"]
+    lifecycle_state: Literal["open", "unknown"]
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=8)
+    evidence_refs: list[TriageContextEvidenceV1] = Field(min_length=1, max_length=5)
+    context_source_event_ids: list[str] = Field(min_length=1, max_length=20)
+    context_sources: list[TriageContextSourceV2] = Field(min_length=1, max_length=20)
+    related_source_event_ids: list[str] = Field(default_factory=list, max_length=10)
+    obligation_assessment: PersonalObligationAssessmentV1 | None = None
+    assessment_state: Literal["verified", "invalid", "unavailable"]
+
+
+class TriageItemProposedV5(TriageItemProposedV2):
+    model_config = {"extra": "forbid"}
+    interpretation: TriageContextInterpretationV3 | None = None
     source_occurred_at: datetime | None = None
 
 
@@ -417,6 +456,7 @@ registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.proposed", 2, TriageItemProposedV2)
 registry.register("triage.item.proposed", 3, TriageItemProposedV3)
 registry.register("triage.item.proposed", 4, TriageItemProposedV4)
+registry.register("triage.item.proposed", 5, TriageItemProposedV5)
 registry.register("triage.intent.submitted", 1, TriageIntentSubmittedV1)
 registry.register(
     "triage.intent.features_extracted", 1, TriageIntentFeaturesExtractedV1
@@ -450,6 +490,7 @@ __all__ = [
     "TriageItemProposedV2",
     "TriageItemProposedV3",
     "TriageItemProposedV4",
+    "TriageItemProposedV5",
     "TriageItemSupersededV1",
     "TriageItemSupersededV2",
     "TriageItemSupersededV3",

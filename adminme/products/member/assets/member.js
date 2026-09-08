@@ -52,6 +52,8 @@ const state = {
   financeView: "overview",
   financeScenario: null,
   settingsSection: "overview",
+  sourceSettingsPending: false,
+  sourceSettingsRefreshRequired: false,
 };
 const $ = (selector) => document.querySelector(selector);
 const dialogReturnFocus = new WeakMap();
@@ -787,6 +789,19 @@ function triageSourceContext(item) {
     section.append(guide);
   }
   const evidence = context.evidence || {};
+  const assessment = item.interpretation?.assessment_state === "verified" ? item.interpretation?.obligation_assessment : null;
+  if (assessment) {
+    const assessed = document.createElement("section"); assessed.className = "triage-obligation-assessment";
+    assessed.append(text("strong", "What the source supports"));
+    const facts = document.createElement("dl"); facts.className = "triage-source-facts";
+    for (const [label, value] of [["Purpose", sourcePurposeLabel(assessment.purpose)], ["Action", titleCase(assessment.actionability)], ["Condition", assessment.condition], ["Condition state", assessment.condition ? titleCase(assessment.condition_state) : null], ["Date means", assessment.date_role !== "none" ? titleCase(assessment.date_role) : null]]) if (value) facts.append(text("dt", label), text("dd", value));
+    assessed.append(facts);
+    for (const citation of assessment.evidence || []) {
+      if (citation.quote === evidence.quote) continue;
+      assessed.append(text("small", `${titleCase(citation.role)} · exact source text`), text("blockquote", citation.quote, "triage-evidence-quote"));
+    }
+    section.append(assessed);
+  }
   if (evidence.quote) {
     const quote = document.createElement("blockquote"); quote.className = "triage-evidence-quote"; quote.textContent = evidence.quote;
     section.append(text("strong", "Exact source evidence"), quote);
@@ -810,8 +825,9 @@ function triageSourceContext(item) {
 }
 
 async function manageTriageMatter(item, action, button) {
-  if (triageInteractionLocked()) return;
-  button.disabled = true;
+  const token = beginTriageOperation();
+  if (token == null) return;
+  let recorded = false;
   const payload = {
     request_id: crypto.randomUUID(),
     expected_last_event_id: item.last_event_id,
@@ -826,12 +842,16 @@ async function manageTriageMatter(item, action, button) {
       headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
       body: JSON.stringify(payload),
     });
-    setBanner(`${titleCase(action)} recorded. The local decision is reversible and produced ${result.provider_effects || 0} provider effects.`);
-    await reloadActiveSurface();
+    if (!triageOperationIsCurrent(token)) return;
+    recorded = true;
+    setBanner(`${titleCase(action)} recorded for this item. Future source preferences are unchanged. ${result.provider_effects || 0} provider effects.`);
+    await reloadActiveSurface({ triageOperationToken: token });
   } catch (error) {
-    setBanner(`${error.message} Nothing was changed.`);
-    button.disabled = false;
-  }
+    if (!triageOperationIsCurrent(token)) return;
+    if (recorded) latchTriageRefreshFailure(`Your correction was recorded, but Triage could not refresh: ${error.message} Reload before continuing.`);
+    else if (!error.status || error.status >= 500) latchTriageRefreshFailure(`The correction result is uncertain: ${error.message} Reload before retrying.`);
+    else setBanner(`${error.message} The correction was rejected.`);
+  } finally { finishTriageOperation(token); }
 }
 
 function triageDetail(item, data, readOnly = false) {
@@ -887,18 +907,24 @@ function triageDetail(item, data, readOnly = false) {
   form.append(effect);
   if (data.human_triage_management?.active) {
     const management = document.createElement("details"); management.className = "triage-management";
-    management.append(text("summary", "Manage this matter without creating provider work"));
-    management.append(text("p", "Handled, context, alert, clarification, snooze, dismissal, suppression proposal, and reopen are event-sourced member decisions. Nothing here contacts a provider.", "state-note"));
+    management.append(text("summary", "Correct or set aside this item"));
+    management.append(text("p", "Already handled closes this particular obligation. Not useful corrects this suggestion. Neither teaches a future source rule. Nothing here contacts a provider.", "state-note"));
     const managementRow = document.createElement("div"); managementRow.className = "button-row";
     const actions = item.management?.state && item.management.state !== "open"
       ? [["reopen", "Reopen"]]
-      : [["mark_handled", "Handled"], ["keep_context", "Context only"], ["route_alert", "Route to alerts"], ["ask_clarification", "Ask clarification"], ["snooze", "Snooze 1 day"], ["dismiss_not_useful", "Not useful"]];
+      : [["mark_handled", "Already handled"], ["dismiss_not_useful", "Not useful"], ["keep_context", "Keep as reference"], ["route_alert", "Route to alerts"], ["ask_clarification", "Ask clarification"], ["snooze", "Snooze 1 day"]];
     for (const [action, label] of actions) {
       const button = text("button", label, "button button-quiet"); button.type = "button";
       button.addEventListener("click", () => manageTriageMatter(item, action, button));
       managementRow.append(button);
     }
     management.append(managementRow); form.append(management);
+    if (item.learning_scope?.available && item.learning_scope?.conditions) {
+      const similar = document.createElement("details"); similar.className = "triage-similar-rule";
+      similar.append(text("summary", "Do this for similar messages"), text("p", "Choose a future preference separately. Preview the exact scope and exceptions before saving.", "state-note"));
+      similar.append(sourceRuleBuilder(item.learning_scope, { canMutate: true, candidate: item }));
+      form.append(similar);
+    }
   }
   const grid = document.createElement("div"); grid.className = "field-grid";
   const schema = data.enrichment_schema || {};
@@ -1223,82 +1249,23 @@ async function revokeTriageRule(rule, button) {
   } finally { finishTriageOperation(token); }
 }
 
-function triageLearningOutcome(reason) {
-  if (reason === "duplicate") return "mark_duplicate";
-  if (["wrong_kind", "wrong_context"].includes(reason)) return "correct_extraction";
-  if (["not_mine", "wrong_owner"].includes(reason)) return "correct_ownership";
-  return "dismiss_not_useful";
-}
-
-async function proposeTriageLearningSuggestion(suggestion, button) {
-  if (triageInteractionLocked()) return;
-  const values = {
-    scope_kind: suggestion.scope_kind,
-    scope_value: suggestion.scope_value,
-    instruction: "usually",
-    outcome_kind: triageLearningOutcome(suggestion.reason),
-  };
-  button.disabled = true;
-  try {
-    if (!button.dataset.previewDigest) {
-      const preview = await api("/api/member/v1/triage-learning/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-        body: JSON.stringify(values),
-      });
-      button.dataset.previewDigest = preview.preview_digest;
-      button.textContent = "Propose this bounded rule";
-      setBanner(`${preview.explanation} ${preview.recent_impact.matching_outcomes} verified outcomes and ${preview.recent_impact.bounded_proposals} recent candidates are in this read-only preview. Nothing activated.`);
-      button.disabled = false;
-      return;
-    }
-    const proposed = await api("/api/member/v1/triage-learning/propose", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ ...values, request_id: crypto.randomUUID(), preview_digest: button.dataset.previewDigest }),
-    });
-    setBanner(`Rule proposal recorded as ${proposed.state}. It did not self-activate and produced ${proposed.provider_effects || 0} provider effects.`);
-    await reloadActiveSurface();
-  } catch (error) {
-    setBanner(`${error.message} No learned rule was activated.`);
-    button.disabled = false;
-  }
-}
-
 async function decideTriageLearningProposal(proposal, decision, button) {
-  if (triageInteractionLocked()) return;
-  button.disabled = true;
-  const trialProposalIds = decision === "trial" ? (proposal.affected_proposal_ids || []).slice(0, 25) : [];
-  try {
-    const result = await api(`/api/member/v1/triage-learning/${encodeURIComponent(proposal.policy_proposal_id)}/decide`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ request_id: crypto.randomUUID(), decision, instruction: proposal.instruction, preview_digest: proposal.preview_digest, trial_proposal_ids: trialProposalIds }),
-    });
-    setBanner(`${titleCase(decision)} recorded. ${decision === "trial" ? `${trialProposalIds.length} exact candidates are in the bounded trial.` : "The proposal remains member-scoped."} ${result.provider_effects || 0} provider effects.`);
-    await reloadActiveSurface();
-  } catch (error) {
-    setBanner(`${error.message} The proposal remains unchanged.`);
-    button.disabled = false;
-  }
+  // Legacy proposals remain inspectable and rejectable; new activation uses V2.
+  if (decision !== "reject" && decision !== "suppress") return;
+  await runSourcePreferenceMutation(() => api(`/api/member/v1/triage-learning/${encodeURIComponent(proposal.policy_proposal_id)}/decide`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+    body: JSON.stringify({ request_id: crypto.randomUUID(), decision, instruction: proposal.instruction, preview_digest: proposal.preview_digest, trial_proposal_ids: [] }),
+  }), "Earlier suggestion dismissed. No future rule was activated.");
 }
 
 async function reviewTriageLearningRule(rule, decision, button) {
-  if (triageInteractionLocked()) return;
-  button.disabled = true;
   const nextInstruction = { always: "usually", usually: "ask", ask: "never" }[rule.instruction] || null;
-  try {
-    await api(`/api/member/v1/triage-learning/rules/${encodeURIComponent(rule.rule_id)}/review`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ request_id: crypto.randomUUID(), decision, negative_outcome: decision === "suspend" ? "member_correction" : null, replacement_instruction: decision === "narrow" ? nextInstruction : null, reason: `${titleCase(decision)} from Triage learning controls` }),
-    });
-    setBanner(`${titleCase(decision)} recorded. Matching admission has been recomputed without a provider effect.`);
-    await reloadActiveSurface();
-  } catch (error) {
-    setBanner(`${error.message} The rule remains unchanged.`);
-    button.disabled = false;
-  }
+  await runSourcePreferenceMutation(() => api(`/api/member/v1/triage-learning/rules/${encodeURIComponent(rule.rule_id)}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+    body: JSON.stringify({ request_id: crypto.randomUUID(), decision, negative_outcome: decision === "suspend" ? "member_correction" : null, replacement_instruction: decision === "narrow" ? nextInstruction : null, reason: `${titleCase(decision)} from Triage learning controls` }),
+  }), `${titleCase(decision)} recorded for the earlier rule. Its audit history is retained.`);
 }
 
 function triageSurface(data, { preserveView = false } = {}) {
@@ -1343,7 +1310,15 @@ function triageSurface(data, { preserveView = false } = {}) {
 
   const controls = document.createElement("section"); controls.className = "triage-view-controls";
   const tabs = document.createElement("div"); tabs.className = "triage-lens-tabs"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
-  for (const [key, label] of [["ready", "Needs attention"], ["alerts", "Alerts"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
+  const humanViews = Boolean(data.human_triage_management?.active);
+  const moreViews = document.createElement("details"); moreViews.className = "triage-more-views";
+  moreViews.open = !["ready", "alerts", "recent", "all_candidates"].includes(state.triageView);
+  moreViews.append(text("summary", "More views"));
+  const additionalTabs = document.createElement("div"); additionalTabs.className = "triage-lens-tabs";
+  const lenses = humanViews
+    ? [["ready", "Needs you"], ["alerts", "Alerts"], ["recent", "History"], ["all_candidates", "All candidates"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Other possibilities"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Earlier shadow rules"]]
+    : [["ready", "Needs attention"], ["alerts", "Alerts"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring issues"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]];
+  for (const [key, label] of lenses) {
     const count = key === "recent" ? recent.length : key === "learned_rules" ? activePolicyRules.length : viewCounts[key]?.candidates ?? pending.filter((item) => triageCandidateMatches(item, key)).length;
     const button = document.createElement("button"); button.className = "comms-filter"; button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key)); button.setAttribute("aria-label", `${label}, ${count}`);
     button.append(text("span", label), text("span", count, "triage-tab-count"));
@@ -1359,9 +1334,16 @@ function triageSurface(data, { preserveView = false } = {}) {
       if (!mustReload) { renderSurface(data); return; }
       try { await reloadActiveSurface({ triageFocus: false }); }
       catch (error) { setBanner(`The complete queue could not be reloaded: ${error.message}`); }
-    }); tabs.append(button);
+    });
+    (humanViews && !["ready", "alerts", "recent", "all_candidates"].includes(key) ? additionalTabs : tabs).append(button);
   }
   controls.append(tabs);
+  if (humanViews) {
+    moreViews.append(additionalTabs); controls.append(moreViews);
+    const destinations = document.createElement("div"); destinations.className = "button-row";
+    for (const [label, href] of [["Updates and source history", "/member/comms?view=all"], ["Tune sources", "/member/settings?section=source-context"], ["Learning and Undo", "/member/settings?section=learning-trust"]]) { const link = text("a", label, "link-button"); link.href = href; destinations.append(link); }
+    controls.append(destinations);
+  }
   if (state.triageView === "all_candidates") {
     const facets = inventory.facets || {};
     const advanced = document.createElement("div"); advanced.className = "triage-inventory-filters";
@@ -1443,15 +1425,23 @@ function triageSurface(data, { preserveView = false } = {}) {
   workspace.append(master, detail); fragment.append(workspace);
   if (suggestions.length || activePolicyRules.length || sourcePolicyProposals.length || sourcePolicyRules.length) {
     const learning = document.createElement("section"); learning.className = "card triage-learning"; learning.append(text("p", "REVERSIBLE LEARNING", "eyebrow"), text("h2", `${suggestions.length} suggested pattern${suggestions.length === 1 ? "" : "s"} · ${activePolicyRules.length} shadow rule${activePolicyRules.length === 1 ? "" : "s"}`), text("p", "Rules begin in shadow mode. They stay visible and reversible, and cannot silently confirm or suppress household truth.", "state-note"));
-    for (const suggestion of suggestions.slice(0, 5)) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${suggestion.occurrences} × ${titleCase(suggestion.reason)} in ${titleCase(suggestion.scope_kind)}`)); const approve = text("button", data.human_triage_management?.active ? "Preview narrow rule" : "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => data.human_triage_management?.active ? proposeTriageLearningSuggestion(suggestion, approve) : approveTriageSuggestion(suggestion, approve)); row.append(approve); learning.append(row); }
+    for (const suggestion of suggestions.slice(0, 5)) {
+      const row = document.createElement("div"); row.className = "button-row";
+      row.append(text("span", `${suggestion.occurrences} earlier corrections · ${titleCase(suggestion.reason)}`));
+      if (data.human_triage_management?.active) {
+        const review = text("a", "Choose an exact future preference", "button button-quiet"); review.href = "/member/settings?section=source-context"; row.append(review);
+      } else {
+        const approve = text("button", "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => approveTriageSuggestion(suggestion, approve)); row.append(approve);
+      }
+      learning.append(row);
+    }
     for (const rule of activePolicyRules) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${titleCase(rule.disposition)} · ${titleCase(rule.scope_kind)} · shadow only`)); const revoke = text("button", "Revoke", "button button-quiet"); revoke.type = "button"; revoke.addEventListener("click", () => revokeTriageRule(rule, revoke)); row.append(revoke); learning.append(row); }
     for (const proposal of sourcePolicyProposals.filter((value) => value.status === "proposed")) {
       const row = document.createElement("div"); row.className = "button-row";
-      row.append(text("span", `${titleCase(proposal.instruction)} · ${titleCase(proposal.scope_kind)} · proposed only`));
-      for (const [decision, label] of [["approve", "Approve"], ["trial", "Start bounded trial"], ["edit", "Edit in new preview"], ["reject", "Reject"], ["suppress", "Suppress proposal"]]) {
-        const action = text("button", label, "button button-quiet"); action.type = "button";
-        action.addEventListener("click", () => decideTriageLearningProposal(proposal, decision, action)); row.append(action);
-      }
+      row.append(text("span", `Earlier ${titleCase(proposal.scope_kind)} suggestion · not activated`));
+      const review = text("a", "Review exact source and purpose", "button button-quiet"); review.href = "/member/settings?section=source-context"; row.append(review);
+      const reject = text("button", "Dismiss this suggestion", "button button-quiet"); reject.type = "button";
+      reject.addEventListener("click", () => decideTriageLearningProposal(proposal, "reject", reject)); row.append(reject);
       learning.append(row);
     }
     for (const rule of sourcePolicyRules.filter((value) => ["active", "trial"].includes(value.status))) {
@@ -1466,6 +1456,7 @@ function triageSurface(data, { preserveView = false } = {}) {
     }
     fragment.append(learning);
   }
+  if (data.human_triage_management?.active) fragment.append(sourceLearningRulesCard(true));
   if (state.triageSelected && state.triageFocusPending && !missingRequestedCandidate) {
     queueMicrotask(() => {
       const target = [...document.querySelectorAll("[data-triage-item]")].find((node) => node.dataset.triageItem === state.triageSelected);
@@ -3844,7 +3835,7 @@ function settingsNav() {
   for (const [value, label] of SETTINGS_SECTIONS) {
     const button = text("button", label, "settings-nav-button"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.settingsSection === value));
-    button.addEventListener("click", () => { state.settingsSection = value; replaceQuery({ section: value }); renderSettings(state.surface); });
+    button.addEventListener("click", () => { if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired) return; state.settingsSection = value; replaceQuery({ section: value }); renderSettings(state.surface); });
     nav.append(button);
   }
   return nav;
@@ -3961,78 +3952,363 @@ function candidatePolicyCard(source, data) {
   return form;
 }
 
-const SOURCE_POLICY_V2_PRESETS = {
-  focused: { acquisition_state: "active", triage_mode: "review", alert_mode: "financial_and_security", context_mode: "metadata_only", candidate_kinds: ["task", "commitment", "calendar_event", "reminder", "coordination"] },
-  balanced: { acquisition_state: "active", triage_mode: "review", alert_mode: "financial_and_security", context_mode: "typed_facts" },
-  review_everything: { acquisition_state: "active", triage_mode: "review", alert_mode: "actionable_and_critical", context_mode: "typed_facts_safe_snippet" },
-};
+const SOURCE_PURPOSE_OPTIONS = [
+  ["personal_request", "Personal requests"], ["member_promise", "My promises"],
+  ["appointment", "Appointments and bookings"], ["preparation", "Forms and preparation"],
+  ["payment", "Payment obligations"], ["account_alert", "Account alerts"],
+  ["optional_opportunity", "Optional opportunities"], ["status_update", "Status updates"],
+  ["receipt", "Receipts"], ["survey", "Surveys"], ["reference", "Reference material"],
+  ["recurrence", "Recurring obligations"], ["unknown", "Unclear purpose"],
+].map(([value, label]) => ({ value, label }));
+
+function sourcePurposeLabel(value) {
+  return SOURCE_PURPOSE_OPTIONS.find((item) => item.value === value)?.label || titleCase(value);
+}
+
+function sourceRuleRoute(value) {
+  if (value === "reference" || value === "context_only" || value === "context") return "Reference";
+  if (value === "ask" || value === "clarification_required" || value === "clarification") return "Ask me";
+  if (value === "review" || value === "proposal" || value === "admit" || value === "ordinary_queue") return "Needs you";
+  if (value === "alert" || value === "alert_only") return "Alerts";
+  return titleCase(value || "unchanged");
+}
+
+function setSourceSettingsLock() {
+  if (state.surface?.surface !== "settings") return;
+  for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) {
+    if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired) {
+      if (!control.hasAttribute("data-source-lock-disabled")) control.dataset.sourceLockDisabled = String(control.disabled);
+      control.disabled = true;
+    } else if (control.hasAttribute("data-source-lock-disabled")) {
+      control.disabled = control.dataset.sourceLockDisabled === "true";
+      delete control.dataset.sourceLockDisabled;
+    }
+  }
+}
+
+async function runSourcePreferenceMutation(request, success) {
+  const inTriage = state.surface?.surface === "triage";
+  if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired || (inTriage && triageInteractionLocked())) return;
+  const token = inTriage ? beginTriageOperation() : null;
+  if (inTriage && token == null) return;
+  state.sourceSettingsPending = true; setSourceSettingsLock();
+  let recorded = false;
+  try {
+    const result = await request();
+    if (inTriage && !triageOperationIsCurrent(token)) return;
+    recorded = true;
+    setBanner(typeof success === "function" ? success(result) : success);
+    await reloadActiveSurface(inTriage ? { triageOperationToken: token } : {});
+  } catch (error) {
+    if (inTriage && !triageOperationIsCurrent(token)) return;
+    if (recorded || !error.status || error.status >= 500) {
+      const message = recorded ? `Your change was recorded, but the page could not refresh: ${error.message} Reload before continuing.` : `The change result is uncertain: ${error.message} Reload before retrying.`;
+      if (inTriage) latchTriageRefreshFailure(message);
+      else { state.sourceSettingsRefreshRequired = true; setBanner(message); }
+    } else setBanner(`${error.message} The change was rejected.`);
+  } finally {
+    state.sourceSettingsPending = false;
+    if (inTriage) finishTriageOperation(token);
+    setSourceSettingsLock();
+  }
+}
+
+function sourceRuleSummary(rule, label = null) {
+  const facts = document.createElement("dl"); facts.className = "settings-facts source-rule-summary";
+  const conditions = rule.conditions || {};
+  const scope = [label, conditions.provider_account_id && `Account ${conditions.provider_account_id}`, conditions.adapter_instance_id && `Connection ${conditions.adapter_instance_id}`, conditions.native_container_id && "This exact conversation or container", conditions.sender_digest && "This exact sender"].filter(Boolean).join(" · ");
+  const when = [conditions.message_purpose && sourcePurposeLabel(conditions.message_purpose), conditions.candidate_kind && titleCase(conditions.candidate_kind)].filter(Boolean).join(" · ") || "The exact sender or conversation in scope";
+  const exceptions = (rule.exceptions || []).map((item) => Object.entries(item).map(([key, value]) => key === "message_purpose" ? sourcePurposeLabel(value) : key === "sender_digest" ? "Exact excluded sender" : `${titleCase(key)}: ${value}`).join(" and "));
+  const duration = rule.expires_at ? `Until ${new Date(rule.expires_at).toLocaleString()} or ${rule.max_observations} future matches (${rule.observed_count || 0} observed)` : rule.status === "active" ? "Until you change or undo it" : "Choose after preview";
+  for (const [name, value] of [["Applies to", scope || "Your exact private source"], ["When", when], ["Except", [...exceptions, "Independent obligations and direct requests remain protected"].join("; ")], ["Then", sourceRuleRoute(rule.action)], ["Duration", duration]]) facts.append(text("dt", name), text("dd", value));
+  return facts;
+}
+
+function sourceRulePreview(result) {
+  const output = document.createElement("section"); output.className = "source-rule-preview";
+  output.setAttribute("aria-label", "Rule preview results");
+  const counts = result.recent_impact || {};
+  output.append(text("strong", `${counts.total || 0} recent items examined · ${counts.matched || 0} matches · ${counts.exceptions || 0} exceptions · ${counts.nonmatches || 0} nonmatches · ${counts.protected || 0} protected`));
+  output.append(text("p", "This preview changes nothing. Matching content is evaluated separately from other obligations in the same message.", "state-note"));
+  if (result.limitations?.length) output.append(text("p", result.limitations.join(" "), "state-note"));
+  const examples = document.createElement("ul"); examples.className = "source-preview-examples";
+  for (const example of result.examples || []) {
+    const row = document.createElement("li"); row.dataset.ruleMatch = example.match;
+    row.append(text("strong", example.title || "Authorized source example"), text("span", `${titleCase(example.match)} · ${sourceRuleRoute(example.before)} → ${sourceRuleRoute(example.after)}`));
+    row.append(text("small", (example.reasons || []).map(titleCase).join(" · ") || "No handling change"));
+    if (example.source_event_id) { const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => { if (!state.sourceSettingsPending && !triageInteractionLocked()) showEvidence(example.source_event_id); }); row.append(evidence); }
+    examples.append(row);
+  }
+  if (!examples.children.length) examples.append(text("li", "No authorized recent examples are available. A shadow trial can observe future matches before changing attention.", "empty"));
+  output.append(examples); return output;
+}
+
+function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) {
+  const panel = document.createElement("section"); panel.className = "source-rule-builder";
+  const initial = scope.conditions || {};
+  panel.append(text("h3", "A rule for similar messages"), text("p", scope.label || "Your exact private source", "state-note"));
+  const fields = document.createElement("div"); fields.className = "preference-grid";
+  const purpose = selectControl([{ value: "", label: "Choose a message purpose…" }, ...SOURCE_PURPOSE_OPTIONS], initial.message_purpose || scope.message_purpose || "", "");
+  const action = selectControl([{ value: "reference", label: "Keep as reference" }, { value: "ask", label: "Ask me" }, { value: "review", label: "Review in Needs you" }], "reference", "");
+  const exception = selectControl([{ value: "", label: "No additional exception" }, { value: "calendar_event", label: "Calendar events" }, { value: "task", label: "Tasks" }, { value: "commitment", label: "Commitments" }, { value: "reminder", label: "Reminders" }, { value: "recurrence", label: "Recurring obligations" }], "", "");
+  fields.append(field("When the message purpose is", purpose), field("Then", action), field("Except this type of candidate", exception)); panel.append(fields);
+  panel.append(text("p", "Only this account, connection, and any specified conversation or sender. Other people's sources are never included. Independent obligations remain visible.", "state-note"));
+  const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const previewButton = text("button", "Preview matches and exceptions", "button button-quiet"); previewButton.type = "button";
+  const activate = text("button", "Save this rule", "button button-primary"); activate.type = "button";
+  const trial = text("button", "Try for 7 days / 50 messages", "button button-quiet"); trial.type = "button";
+  const shadow = text("button", "Observe only for 7 days / 50 messages", "button button-quiet"); shadow.type = "button";
+  const remember = text("button", "Remember for future suggestions", "button button-quiet"); remember.type = "button";
+  let preview = null; let generation = 0; let reading = false;
+  const enabled = canMutate && Boolean(initial.provider_account_id || initial.adapter_instance_id);
+  function values() { return { conditions: { ...initial, message_purpose: purpose.value }, exceptions: exception.value ? [{ candidate_kind: exception.value }] : [], action: action.value, origin: "explicit", feedback_event_ids: [] }; }
+  function invalidate() { generation += 1; preview = null; reading = false; output.replaceChildren(); previewButton.disabled = !enabled; for (const button of [activate, trial, shadow, remember]) button.hidden = true; }
+  for (const control of [purpose, action, exception]) { control.disabled = !enabled; control.addEventListener("change", invalidate); }
+  previewButton.disabled = !enabled;
+  for (const button of [activate, trial, shadow, remember]) button.hidden = true;
+  previewButton.addEventListener("click", async () => {
+    if (!enabled || reading || state.sourceSettingsPending || state.sourceSettingsRefreshRequired || triageInteractionLocked()) return;
+    if (!purpose.value) { output.replaceChildren(text("p", "Choose a message purpose to keep this rule specific.", "review-state")); purpose.focus(); return; }
+    const current = ++generation; reading = true; previewButton.disabled = true;
+    try {
+      const result = await api("/api/member/v1/triage-learning/v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values()) });
+      if (generation !== current || !panel.isConnected) return;
+      preview = result;
+      output.replaceChildren(sourceRuleSummary(result.rule || values(), scope.label), sourceRulePreview(result));
+      for (const button of [activate, trial, shadow]) button.hidden = result.activation_available === false;
+      remember.hidden = !candidate || result.activation_available === false;
+      if (result.activation_available === false) output.append(text("p", "Preview is available. Saving or trying rules waits for learning activation.", "state-note"));
+    } catch (error) { if (generation === current) output.replaceChildren(text("p", `${error.message} Nothing changed.`, "review-state")); }
+    finally { if (generation === current) { reading = false; previewButton.disabled = !enabled; } }
+  });
+  for (const [button, mode] of [[activate, "active"], [trial, "trial"], [shadow, "shadow"]]) button.addEventListener("click", () => {
+    if (!preview || !enabled) return;
+    const payload = { ...values(), request_id: crypto.randomUUID(), preview_digest: preview.preview_digest, mode, ...(mode === "active" ? {} : { trial_days: 7, trial_message_limit: 50 }) };
+    runSourcePreferenceMutation(() => api("/api/member/v1/triage-learning/v2/rules", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(payload) }), mode === "shadow" ? "Observation trial saved for 7 days or 50 future matches. It changes no attention preferences. Undo is available in Learning." : mode === "trial" ? "Rule trial saved for 7 days or 50 future matches. It expires automatically; Undo is available in Learning." : "Your scoped rule was saved. You can undo it in Learning.");
+  });
+  remember.addEventListener("click", () => {
+    if (!preview || !candidate || !enabled) return;
+    const payload = { request_id: crypto.randomUUID(), expected_last_event_id: candidate.last_event_id, proposal_id: candidate.proposal_id, kind: "future_attention_preference", rule: values() };
+    runSourcePreferenceMutation(() => api("/api/member/v1/triage-learning/v2/feedback", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(payload) }), "Future preference recorded. Nothing activated. Consistent preferences from independent observations may produce a rule suggestion for you to review.");
+  });
+  buttons.append(previewButton, activate, trial, shadow, remember); panel.append(buttons, output); return panel;
+}
+
+function sourceLearningSuggestion(suggestion, canMutate) {
+  const section = document.createElement("article"); section.className = "source-rule-record";
+  const rule = suggestion.rule;
+  section.append(text("h3", "Suggested from your explicit preferences"), text("p", `${suggestion.independent_observations} independent observations. This suggestion has not activated.`, "state-note"), sourceRuleSummary(rule));
+  const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
+  const previewButton = text("button", "Preview suggested rule", "button button-quiet"); previewButton.type = "button"; previewButton.disabled = !canMutate;
+  const trial = text("button", "Try suggested rule for 7 days / 50 messages", "button button-primary"); trial.type = "button"; trial.hidden = true;
+  let preview = null;
+  previewButton.addEventListener("click", async () => {
+    if (!canMutate || state.sourceSettingsPending || triageInteractionLocked()) return;
+    previewButton.disabled = true;
+    try { const result = await api("/api/member/v1/triage-learning/v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(rule) }); if (!section.isConnected) return; preview = result; output.replaceChildren(sourceRulePreview(result)); trial.hidden = result.activation_available === false; }
+    catch (error) { if (section.isConnected) output.replaceChildren(text("p", `${error.message} Nothing activated.`, "review-state")); }
+    finally { if (section.isConnected) previewButton.disabled = state.sourceSettingsPending; }
+  });
+  trial.addEventListener("click", () => {
+    if (!preview || !canMutate) return;
+    const payload = { ...rule, request_id: crypto.randomUUID(), preview_digest: preview.preview_digest, mode: "trial", trial_days: 7, trial_message_limit: 50 };
+    runSourcePreferenceMutation(() => api("/api/member/v1/triage-learning/v2/rules", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(payload) }), "Suggested rule trial saved. It expires after 7 days or 50 future matches. You can undo it in Learning.");
+  });
+  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(previewButton, trial); section.append(actions, output); return section;
+}
+
+function sourceLearningRulesCard(canMutate) {
+  const section = document.createElement("section"); section.className = "card source-learning-rules";
+  section.append(text("p", "YOUR LEARNING RULES", "eyebrow"), text("h2", "Review, pause, or undo a rule"), text("p", "Completed tasks, duplicate corrections, and ignored messages do not create preferences. Every rule below comes from an explicit preference or an approved learning proposal.", "state-note"));
+  const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
+  const load = text("button", "Load my rules", "button button-quiet"); load.type = "button";
+  load.disabled = !canMutate;
+  if (!canMutate) section.append(text("p", "Return to your own adult member context to inspect private learning rules.", "state-note"));
+  load.addEventListener("click", async () => {
+    if (!canMutate || state.sourceSettingsPending || state.sourceSettingsRefreshRequired || triageInteractionLocked()) return;
+    load.disabled = true;
+    try {
+      const response = await api("/api/member/v1/triage-learning/v2/rules");
+      if (!section.isConnected) return;
+      output.replaceChildren();
+      for (const suggestion of response.suggestions || []) output.append(sourceLearningSuggestion(suggestion, canMutate && response.active !== false));
+      for (const rule of response.rules || []) {
+        const card = document.createElement("article"); card.className = "source-rule-record";
+        card.append(text("h3", `${sourcePurposeLabel(rule.conditions?.message_purpose || "Scoped messages")} → ${sourceRuleRoute(rule.action)}`), text("span", titleCase(rule.status), "pill pill-lavender"), sourceRuleSummary(rule, rule.scope_label));
+        if (rule.status === "shadow") card.append(text("p", "Observation only. This rule does not change visibility.", "state-note"));
+        if (["expired", "revoked", "suspended"].includes(rule.status)) card.append(text("p", "This rule no longer changes attention. Its history is retained.", "state-note"));
+        if (canMutate && ["active", "trial", "shadow", "suspended"].includes(rule.status)) {
+          const actions = document.createElement("div"); actions.className = "button-row";
+          const choices = [...(rule.status === "trial" ? [["retain", "Keep this rule"]] : []), ...(rule.status === "active" || rule.status === "trial" ? [["suspend", "Pause"], ["missed", "This hid an obligation"]] : []), ["revoke", "Undo this rule"]];
+          for (const [choice, label] of choices) {
+            const button = text("button", label, "button button-quiet"); button.type = "button";
+            button.addEventListener("click", () => {
+              const decision = choice === "missed" ? "suspend" : choice;
+              const payload = { request_id: crypto.randomUUID(), expected_last_event_id: rule.last_event_id, decision, ...(choice === "missed" ? { negative_outcome: "missed_obligation" } : {}), reason: choice === "missed" ? "Member reported a missed obligation" : `${label} from member rule controls` };
+              runSourcePreferenceMutation(() => api(`/api/member/v1/triage-learning/v2/rules/${encodeURIComponent(rule.rule_id)}/review`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(payload) }), choice === "revoke" ? "Rule undone. Its history is retained and it no longer changes attention." : decision === "suspend" ? "Rule paused. Its matches return to ordinary assessment." : "Rule retained. You can pause or undo it at any time.");
+            }); actions.append(button);
+          }
+          card.append(actions);
+        }
+        output.append(card);
+      }
+      if (!(response.rules || []).length && !(response.suggestions || []).length) output.append(text("p", "No rules have been saved. Use a source's narrower-rule controls or Do this for similar messages on a candidate to create one.", "empty"));
+      load.textContent = "Refresh rules";
+    } catch (error) { if (section.isConnected) output.replaceChildren(text("p", `${error.message} Your rule state could not be read.`, "review-state")); }
+    finally { if (section.isConnected) load.disabled = state.sourceSettingsPending || state.sourceSettingsRefreshRequired || triageInteractionLocked(); }
+  });
+  section.append(load, output); return section;
+}
 
 function sourcePolicyV2Card(source, matrix) {
   const policy = source.policy || {};
-  const form = document.createElement("form"); form.className = "card candidate-policy-card";
+  const editable = Boolean(source.configurable && source.coordinate && !source.direct_authenticated_intent);
+  const active = Boolean(matrix.admission_active || matrix.active);
+  const form = document.createElement("form"); form.className = "card candidate-policy-card source-attention-card";
+  form.dataset.sourcePolicyKey = source.policy_key || source.id || "unattributed";
   const head = document.createElement("div"); head.className = "candidate-policy-heading";
-  const copy = document.createElement("div"); copy.append(text("p", `${source.provider_label} · ${titleCase(source.workspace)}`, "eyebrow"), text("h3", source.label), text("small", source.account_hint ? `${source.account_hint} · exact adapter instance` : "Exact owner-scoped source"));
-  head.append(copy, text("span", source.coordinate_state === "exact" ? "Exact source" : "Needs review", `pill state-label state-${source.coordinate_state === "exact" ? "healthy" : "degraded"}`)); form.append(head);
-  if (source.direct_authenticated_intent) form.append(text("p", "An authenticated request you make here always remains eligible. Passive-source presets cannot suppress it.", "state-note"));
-  if (source.migration_state === "migration_needed") form.append(text("p", "Your older source-family preference is still preserving live behavior. Choose a setting for this exact account to resolve the V2 shadow policy without applying one rule to every account.", "review-state"));
-  if (!source.configurable && !source.direct_authenticated_intent) { form.append(text("p", "This source lacks one exact reviewed account or workspace coordinate. No V2 rule was expanded or activated.", "state-note")); return form; }
-
-  const preset = document.createElement("select");
-  for (const item of [...(matrix.presets || []), { id: "custom", label: "Advanced selection" }]) { const option = text("option", item.label); option.value = item.id; option.selected = policy.preset === item.id; preset.append(option); }
-  preset.disabled = source.direct_authenticated_intent || !source.configurable;
-  const acquisition = document.createElement("select"); for (const [value, label] of [["active", "Active"], ["paused", "Paused"]]) { const option = text("option", label); option.value = value; option.selected = policy.acquisition_state === value; acquisition.append(option); }
-  const triage = document.createElement("select"); for (const [value, label] of [["direct_work_order_proposal", "Direct work-order proposal"], ["review", "Review in Triage"], ["alert_only", "Alert only"], ["context_only", "Context only"], ["ignore", "Ignore / suppress"], ["manual_only", "Only when I ask"]]) { const option = text("option", label); option.value = value; option.selected = policy.triage_mode === value; triage.append(option); }
-  const alert = document.createElement("select"); for (const [value, label] of [["none", "No alerts"], ["security_only", "Security alerts"], ["financial_and_security", "Financial and security"], ["actionable_and_critical", "Actionable and critical"]]) { const option = text("option", label); option.value = value; option.selected = policy.alert_mode === value; alert.append(option); }
-  const context = document.createElement("select"); for (const [value, label] of [["none", "No context"], ["metadata_only", "Metadata only"], ["typed_facts", "Typed facts"], ["typed_facts_safe_snippet", "Typed facts plus safe snippet"], ["content_on_explicit_authorized_demand", "Content only when I explicitly ask"]]) { const option = text("option", label); option.value = value; option.selected = policy.context_mode === value; context.append(option); }
-  const controls = [acquisition, triage, alert, context]; controls.forEach((node) => { node.disabled = source.direct_authenticated_intent || !source.configurable; node.addEventListener("change", () => { preset.value = "custom"; }); });
-  form.append(field("Recommended setup", preset));
-  const advanced = document.createElement("details"); advanced.className = "settings-technical"; advanced.append(text("summary", "Advanced bounded selections"));
-  const planes = document.createElement("div"); planes.className = "preference-grid"; planes.append(field("Acquisition and observation", acquisition), field("Triage", triage), field("Alerts", alert), field("Context", context)); advanced.append(planes);
-  const kinds = document.createElement("fieldset"); kinds.className = "candidate-kind-grid"; kinds.disabled = source.direct_authenticated_intent || !source.configurable; kinds.append(text("legend", "Candidate types"));
-  for (const value of matrix.candidate_kinds || []) { const label = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.value = value; input.checked = (policy.candidate_kinds || []).includes(value); input.addEventListener("change", () => { preset.value = "custom"; }); label.append(input, document.createTextNode(` ${titleCase(value)}`)); kinds.append(label); }
-  advanced.append(kinds, text("p", "These choices cannot change credentials, scopes, identity, ownership, disclosure, or provider-write authority.", "state-note")); form.append(advanced);
-  const preview = document.createElement("div"); preview.className = "state-note";
-
+  const copy = document.createElement("div");
+  copy.append(text("p", [source.provider_label, source.account_hint, source.workspace && titleCase(source.workspace)].filter(Boolean).join(" · "), "eyebrow"), text("h3", source.label), text("small", source.native_container_label || (source.coordinate?.native_container_id ? `This exact ${titleCase(source.coordinate.native_container_kind || "conversation")}` : "Private to you")));
+  const lifecycle = source.connection_state || (source.coordinate_state === "exact" ? "attributed" : "missing_attribution");
+  const status = { connected: "Connected", disconnected: "Disconnected · history retained", not_connected: "Not connected", missing_attribution: "Needs source attribution", attributed: "Exact source" }[lifecycle] || titleCase(lifecycle);
+  head.append(copy, text("span", status, `pill state-label state-${lifecycle === "connected" ? "healthy" : "unknown"}`)); form.append(head);
+  if (source.retained_candidate_count) {
+    form.append(text("p", `${source.retained_candidate_count} retained candidate${source.retained_candidate_count === 1 ? "" : "s"}. Source disconnection does not erase evidence or decisions.`, "state-note"));
+    const history = text("a", "Review retained candidates", "link-button"); history.href = "/member/triage?view=all_candidates"; form.append(history);
+  }
+  if (source.direct_authenticated_intent) { form.append(text("p", "Requests you explicitly add for review always remain eligible. Passive-source settings cannot hide them.", "state-note")); return form; }
+  if (!editable) {
+    form.append(text("p", lifecycle === "not_connected" ? "This source can use the same obligation, purpose, and learning controls after a reviewed connection supplies its exact account. A preference does not connect or authorize it." : "Retained evidence stays available. An exact authorized account and connection are required before a future rule can be saved.", "state-note"));
+    return form;
+  }
+  if (source.migration_state === "migration_needed") form.append(text("p", "An older source-family preference is retained. This selection applies only to the account and conversation shown here.", "review-state"));
+  const attention = selectControl([
+    { value: "obligations", label: "Focus on obligations" },
+    { value: "possibilities", label: "Include possible opportunities" },
+    { value: "manual", label: "Only when I ask" },
+  ], policy.attention_mode || (policy.triage_mode === "manual_only" ? "manual" : policy.preset === "review_everything" ? "possibilities" : "obligations"), "");
+  attention.name = "attention_mode";
+  form.append(field("What should reach me?", attention), text("small", "This attention choice preserves your source access, permitted context, alerts, and candidate types.", "state-note"));
+  const purposes = document.createElement("details"); purposes.className = "source-purpose-settings";
+  purposes.append(text("summary", "Fine-tune by message purpose"), text("p", "A message can contain several purposes. Keeping its receipt or survey as reference still preserves an independent booking, required form, or unpaid bill.", "state-note"));
+  const routes = new Map((policy.purpose_routes || []).map((item) => [item.purpose, item.route]));
+  const purposeControls = new Map();
+  for (const item of matrix.purpose_options || SOURCE_PURPOSE_OPTIONS) {
+    const route = selectControl([{ value: "", label: "Use attention default" }, { value: "review", label: "Review in Needs you" }, { value: "reference", label: "Keep as reference" }, { value: "alert", label: "Alerts" }], routes.get(item.value) || "", "");
+    route.dataset.messagePurpose = item.value; purposeControls.set(item.value, route);
+    const row = field(item.label, route); row.classList.add("source-purpose-row"); if (item.description) row.append(text("small", item.description)); purposes.append(row);
+  }
+  form.append(purposes);
+  const advanced = document.createElement("details"); advanced.className = "settings-technical"; advanced.append(text("summary", "Source access, context, and alerts"));
+  const acquisition = selectControl([{ value: "active", label: "Active source assessment" }, { value: "paused", label: "Pause source assessment" }], policy.acquisition_state || "active", "");
+  const alert = selectControl([{ value: "none", label: "No alerts" }, { value: "security_only", label: "Security alerts" }, { value: "financial_and_security", label: "Financial and security alerts" }, { value: "actionable_and_critical", label: "Actionable and critical alerts" }], policy.alert_mode || "financial_and_security", "");
+  const context = selectControl([{ value: "none", label: "No context" }, { value: "metadata_only", label: "Metadata only" }, { value: "typed_facts", label: "Typed facts" }, { value: "typed_facts_safe_snippet", label: "Typed facts and permitted excerpts" }, { value: "content_on_explicit_authorized_demand", label: "Content only when I explicitly ask" }], policy.context_mode || "typed_facts", "");
+  const advancedTriage = selectControl([{ value: "review", label: "Use attention and purpose settings" }, { value: "manual_only", label: "Only when I ask" }, { value: "alert_only", label: "Alerts only" }, { value: "context_only", label: "Reference only" }, { value: "ignore", label: "Provenance only" }], policy.triage_mode || "review", "");
+  const planes = document.createElement("div"); planes.className = "preference-grid"; planes.append(field("Source assessment", acquisition), field("Permitted context", context), field("Alerts", alert), field("Advanced attention override", advancedTriage)); advanced.append(planes);
+  const kinds = document.createElement("fieldset"); kinds.className = "candidate-kind-grid"; kinds.append(text("legend", "Candidate types"));
+  for (const value of matrix.candidate_kinds || []) { const label = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.value = value; input.checked = (policy.candidate_kinds || []).includes(value); label.append(input, document.createTextNode(` ${titleCase(value)}`)); kinds.append(label); }
+  advanced.append(kinds, text("p", "Provider permissions and notification timing are managed separately in Connections and CoS fine-tuning. These controls never grant calendar, message, or other provider writes.", "state-note")); form.append(advanced);
+  const preview = document.createElement("section"); preview.className = "source-policy-preview"; preview.setAttribute("aria-live", "polite");
+  let generation = 0;
+  function invalidatePreview() { generation += 1; preview.replaceChildren(); }
+  attention.addEventListener("change", () => { advancedTriage.value = attention.value === "manual" ? "manual_only" : "review"; invalidatePreview(); });
+  advancedTriage.addEventListener("change", () => { if (advancedTriage.value === "manual_only") attention.value = "manual"; else if (attention.value === "manual") attention.value = "obligations"; });
+  form.addEventListener("change", invalidatePreview);
   function selectedPolicy() {
-    return { preset: "custom", acquisition_state: acquisition.value, triage_mode: triage.value, alert_mode: alert.value, context_mode: context.value, candidate_kinds: [...kinds.querySelectorAll("input:checked")].map((input) => input.value), scope_widening: false, credential_creation: false, provider_write_authority: false, admission_active: false };
-  }
-  function requestSelection() {
-    return preset.value === "custom" ? { preset: "custom", policy: selectedPolicy() } : { preset: preset.value };
-  }
-  function applyPreset() {
-    const value = SOURCE_POLICY_V2_PRESETS[preset.value]; if (!value) return;
-    acquisition.value = value.acquisition_state; triage.value = value.triage_mode; alert.value = value.alert_mode; context.value = value.context_mode;
-    const selected = new Set(value.candidate_kinds || matrix.candidate_kinds || []); for (const input of kinds.querySelectorAll("input")) input.checked = selected.has(input.value);
-  }
-  preset.addEventListener("change", applyPreset);
-  async function savePolicy(action = "set", forcedPolicy = null) {
-    const selection = forcedPolicy || requestSelection();
-    const body = { expected_revision: matrix.revision, request_id: crypto.randomUUID(), coordinate: source.coordinate, action, preset: selection.preset || "balanced" }; if (selection.policy) body.policy = selection.policy;
-    return api(`/api/member/v1/settings/source-policies-v2/${encodeURIComponent(source.policy_key)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) });
+    return { ...policy, preset: "custom", attention_mode: attention.value, purpose_routes: [...purposeControls].filter(([, control]) => control.value).map(([purpose, control]) => ({ purpose, route: control.value, preserve_independent_obligations: true })), acquisition_state: acquisition.value, triage_mode: advancedTriage.value, alert_mode: alert.value, context_mode: context.value, candidate_kinds: [...kinds.querySelectorAll("input:checked")].map((input) => input.value), scope_widening: false, credential_creation: false, provider_write_authority: false, admission_active: false };
   }
   const actions = document.createElement("div"); actions.className = "button-row";
-  const previewButton = text("button", "Preview recent effect", "button button-quiet"); previewButton.type = "button"; previewButton.addEventListener("click", async () => { previewButton.disabled = true; setBanner(`Previewing ${source.label} without changing it…`); try { const result = await api("/api/member/v1/settings/source-policies-v2/preview", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ coordinate: source.coordinate, recent_limit: 100, ...requestSelection() }) }); const counts = result.estimated_recent_effect; preview.replaceChildren(text("strong", `${counts.source_facts} recent source fact${counts.source_facts === 1 ? "" : "s"}: ${counts.triage} to Triage · ${counts.alerts} alerts · ${counts.context} context · ${counts.provenance_only} provenance only.`)); for (const example of result.examples || []) { const line = document.createElement("div"); line.append(text("small", `${example.synthetic ? "Synthetic example" : "Authorized recent example"} · Triage ${titleCase(example.route.triage)} · Alert ${titleCase(example.route.alert)} · Context ${titleCase(example.route.context)}`)); if (example.source_event_id) { const why = text("button", "Why did this appear?", "button button-quiet"); why.type = "button"; why.addEventListener("click", async () => { try { const result = await api(`/api/member/v1/settings/source-policies-v2/why/${encodeURIComponent(example.source_event_id)}`); line.append(text("p", `${result.current.explanation} ${result.shadow.explanation}`, "state-note")); why.disabled = true; } catch (error) { setBanner(error.message); } }); line.append(why); } preview.append(line); } setBanner("Preview complete. Nothing was changed."); } catch (error) { setBanner(`${error.message} Nothing was changed.`); } finally { previewButton.disabled = false; } }); actions.append(previewButton);
-  if (source.configurable && !source.direct_authenticated_intent) {
-    const pause = text("button", policy.acquisition_state === "paused" ? "Resume" : "Pause", "button button-quiet"); pause.type = "button"; pause.addEventListener("click", async () => { pause.disabled = true; const next = selectedPolicy(); next.acquisition_state = policy.acquisition_state === "paused" ? "active" : "paused"; try { await savePolicy("set", { preset: "custom", policy: next }); setBanner(`${source.label} ${next.acquisition_state === "paused" ? "paused" : "resumed"}. Live admission is still unchanged.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The policy was not changed.`); pause.disabled = false; } });
-    const reset = text("button", "Reset to recommended", "button button-quiet"); reset.type = "button"; reset.addEventListener("click", async () => { reset.disabled = true; try { await savePolicy("reset", { preset: "balanced" }); setBanner(`${source.label} reset to the recommended shadow default.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The policy was not changed.`); reset.disabled = false; } });
-    const save = text("button", "Save shadow policy", "button button-primary"); save.type = "submit"; actions.append(pause, reset, save);
-    form.addEventListener("submit", async (event) => { event.preventDefault(); if (preset.value === "custom" && !selectedPolicy().candidate_kinds.length) { setBanner("Select at least one candidate type. Nothing was changed."); return; } save.disabled = true; try { await savePolicy(); setBanner(`${source.label} shadow policy saved. No live admission or provider action changed.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The policy was not changed.`); save.disabled = false; } });
-  }
-  form.append(actions, preview); return form;
+  const previewButton = text("button", "Preview recent effect", "button button-quiet"); previewButton.type = "button";
+  previewButton.addEventListener("click", async () => {
+    if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired) return;
+    const current = ++generation; previewButton.disabled = true;
+    try {
+      const result = await api("/api/member/v1/settings/source-policies-v2/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ coordinate: source.coordinate, recent_limit: 100, preset: "custom", policy: selectedPolicy() }) });
+      if (current !== generation || !form.isConnected) return;
+      const counts = result.estimated_recent_effect || {};
+      preview.replaceChildren(text("strong", `${counts.source_facts || 0} recent source facts · ${counts.triage || 0} for review · ${counts.alerts || 0} alerts · ${counts.context || 0} retained as context`), text("p", `${counts.matching || 0} matches · ${counts.nonmatching || 0} nonmatches · ${counts.changed || 0} changes. Preview only; source history and existing decisions are unchanged.`, "state-note"));
+      const examples = document.createElement("ul"); examples.className = "source-preview-examples";
+      for (const example of (result.examples || []).filter((value) => !value.synthetic)) {
+        const row = document.createElement("li"); const route = example.route || example.proposed || {};
+        row.append(text("strong", example.source_title || example.title || example.subject || "Authorized recent source"), text("span", `${sourceRuleRoute(example.previous_route?.triage || example.current_route?.triage || example.before?.triage || example.before)} → ${sourceRuleRoute(route.triage)} · ${sourceRuleRoute(route.alert)} alerts · ${titleCase(route.context || "none")} context`));
+        if (example.message_purpose) row.append(text("small", sourcePurposeLabel(example.message_purpose)));
+        if (example.reason_codes || example.reasons || route.reasons) row.append(text("small", (example.reason_codes || example.reasons || route.reasons).map(titleCase).join(" · ")));
+        if (example.source_event_id) {
+          const why = text("button", "Why this handling?", "link-button"); why.type = "button";
+          why.addEventListener("click", async () => { if (state.sourceSettingsPending) return; why.disabled = true; try { const result = await api(`/api/member/v1/settings/source-policies-v2/why/${encodeURIComponent(example.source_event_id)}`); if (row.isConnected) row.append(text("p", [result.current?.explanation, result.shadow?.explanation].filter(Boolean).join(" "), "state-note")); } catch (error) { if (row.isConnected) row.append(text("p", error.message, "review-state")); why.disabled = false; } }); row.append(why);
+        }
+        examples.append(row);
+      }
+      if (!examples.children.length) examples.append(text("li", "No authorized recent source examples are available. No sample messages were substituted.", "empty"));
+      preview.append(examples);
+    } catch (error) { if (current === generation) preview.replaceChildren(text("p", `${error.message} Nothing changed.`, "review-state")); }
+    finally { if (form.isConnected) previewButton.disabled = state.sourceSettingsPending || state.sourceSettingsRefreshRequired; }
+  });
+  const save = text("button", active ? "Save source preferences" : "Save preview preferences", "button button-primary"); save.type = "submit";
+  const reset = text("button", "Reset attention choices", "button button-quiet"); reset.type = "button";
+  reset.addEventListener("click", () => { if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired) return; attention.value = "obligations"; advancedTriage.value = "review"; for (const control of purposeControls.values()) control.value = ""; invalidatePreview(); setBanner("Attention choices reset in this form. Save to apply; source access, context, and alerts were preserved."); });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault(); if (state.sourceSettingsPending || state.sourceSettingsRefreshRequired) return;
+    const selected = selectedPolicy(); if (!selected.candidate_kinds.length) { setBanner("Select at least one candidate type. Nothing changed."); return; }
+    const body = { expected_revision: matrix.revision, request_id: crypto.randomUUID(), coordinate: source.coordinate, action: "set", preset: "custom", policy: selected };
+    runSourcePreferenceMutation(() => api(`/api/member/v1/settings/source-policies-v2/${encodeURIComponent(source.policy_key)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) }), active ? `${source.label} preferences saved. Source history and provider permissions are unchanged.` : `${source.label} preview preferences saved. Live admission is unchanged.`);
+  });
+  actions.append(previewButton, reset, save); form.append(actions, preview);
+  const rules = document.createElement("details"); rules.className = "source-similar-rule"; rules.append(text("summary", "Create a narrower rule with exceptions"));
+  const coordinate = source.coordinate;
+  const conditions = { provider_account_id: coordinate.provider_account_id, adapter_instance_id: coordinate.adapter_instance_id, ...(coordinate.native_container_id ? { native_container_id: coordinate.native_container_id } : {}) };
+  rules.append(sourceRuleBuilder({ conditions, label: [source.label, source.account_hint, source.native_container_label].filter(Boolean).join(" · ") }, { canMutate: editable })); form.append(rules);
+  return form;
 }
 
 function candidateIdentificationSettings(data) {
-  const fragment = document.createDocumentFragment(); const matrix = data.control.source_policy_v2 || { sources: [], presets: [], migrations: [], safety_limitations: [] }; const legacy = data.control.candidate_identification || { sources: [], non_configurable: [] };
-  const intro = document.createElement("section"); intro.className = "hero-card candidate-policy-intro"; intro.append(text("p", "EXACT-SOURCE POLICY · SHADOW ONLY", "eyebrow"), text("h2", "Choose what reaches Triage, alerts, or context."), text("p", "Each setting belongs to you, one exact account, workspace, adapter instance, source class, and trusted route. V2 records what would change while current admission remains untouched.")); fragment.append(intro);
-  if (!matrix.owner_visible) { const privateState = document.createElement("section"); privateState.className = "state-card"; privateState.append(text("strong", "These policies are owner-private."), text("p", "Adults and administrators cannot inspect or change another adult’s private source policy.")); fragment.append(privateState); return fragment; }
-  const presets = document.createElement("section"); presets.className = "settings-summary-grid"; for (const item of matrix.presets || []) { const card = document.createElement("article"); card.className = "card settings-summary-card"; card.append(text("strong", item.label), text("small", item.explanation)); presets.append(card); } fragment.append(presets);
-  if ((matrix.migrations || []).length) { const migration = document.createElement("section"); migration.className = "state-card"; migration.append(text("strong", "Older preferences need an exact account choice."), text("p", `${matrix.migrations.length} source-family preference${matrix.migrations.length === 1 ? "" : "s"} continue preserving live V1 behavior. Nothing was copied across every account, access was not expanded, and ambiguity was not discarded.`)); fragment.append(migration); }
-  const providerSources = (matrix.sources || []).filter((source) => !source.direct_authenticated_intent); const directSources = (matrix.sources || []).filter((source) => source.direct_authenticated_intent);
-  if (providerSources.length) { const section = document.createElement("details"); section.className = "candidate-policy-group"; section.open = true; section.append(text("summary", `Exact provider sources · ${providerSources.length}`)); const grid = document.createElement("div"); grid.className = "candidate-policy-grid"; for (const source of providerSources) grid.append(sourcePolicyV2Card(source, matrix)); section.append(grid); fragment.append(section); }
-  const direct = document.createElement("details"); direct.className = "candidate-policy-group"; direct.append(text("summary", `Authenticated member entry · ${directSources.length} protected paths`)); const directGrid = document.createElement("div"); directGrid.className = "candidate-policy-grid"; for (const source of directSources) directGrid.append(sourcePolicyV2Card(source, matrix)); direct.append(directGrid); fragment.append(direct);
-  const invariants = document.createElement("section"); invariants.className = "card candidate-policy-invariants"; invariants.append(text("h2", "Clear safety limitations")); const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const value of matrix.safety_limitations || []) list.append(text("li", value)); invariants.append(list); fragment.append(invariants);
-  const current = document.createElement("details"); current.className = "candidate-policy-group"; current.append(text("summary", "Current live V1 admission · retained until later activation")); const currentNote = document.createElement("section"); currentNote.className = "state-card"; currentNote.append(text("strong", "These coarse settings still control live admission."), text("p", "They are shown during migration so prior quiet or manual behavior is not lost. V2 does not copy one Gmail rule to every account.")); current.append(currentNote); const groups = new Map(); for (const source of legacy.sources || []) { if (!groups.has(source.group)) groups.set(source.group, []); groups.get(source.group).push(source); } for (const [group, sources] of groups) { const section = document.createElement("details"); section.className = "candidate-policy-group"; const reviewCount = sources.filter((source) => source.policy?.mode === "review").length; section.append(text("summary", `${group} · ${reviewCount} of ${sources.length} reviewing`)); const grid = document.createElement("div"); grid.className = "candidate-policy-grid"; for (const source of sources) grid.append(candidatePolicyCard(source, data)); section.append(grid); current.append(section); } fragment.append(current);
-  const timing = document.createElement("section"); timing.className = "state-card"; timing.append(text("strong", "Every source fact gets a current and shadow route."), text("p", "The receipt keeps the exact reasons, policy version, source provenance, typed signal assessment, and zero-provider-effect result. Ignore never deletes history; context-only never puts the fact in Triage.")); fragment.append(timing); return fragment;
+  const fragment = document.createDocumentFragment();
+  const matrix = data.control.source_policy_v2 || { sources: [], presets: [], migrations: [], safety_limitations: [] };
+  const legacy = data.control.candidate_identification || { sources: [], non_configurable: [] };
+  const active = Boolean(matrix.admission_active || matrix.active);
+  const intro = document.createElement("section"); intro.className = "hero-card candidate-policy-intro";
+  intro.append(text("p", active ? "YOUR SOURCES" : "YOUR SOURCES · PREVIEW MODE", "eyebrow"), text("h2", "Choose what needs you."), text("p", "Tune each account, conversation, and message purpose. Email, iMessage, and future reviewed sources use the same obligation and learning controls. Disconnected sources keep their existing evidence and candidates."));
+  if (!active) intro.append(text("p", "Source preferences are available for preview. Live admission remains on its current policy until this behavior is activated.", "state-note"));
+  fragment.append(intro);
+  if (!matrix.owner_visible) { const privateState = document.createElement("section"); privateState.className = "state-card"; privateState.append(text("strong", "These policies are owner-private."), text("p", "Return to your own member context to inspect or change source preferences.")); fragment.append(privateState); return fragment; }
+  const presets = document.createElement("section"); presets.className = "settings-summary-grid";
+  for (const [label, description] of [["Focus on obligations", "Requests, promises, appointments, and open work supported by source evidence."], ["Include possible opportunities", "Also review optional possibilities that may matter to you."], ["Only when I ask", "Keep passive suggestions out of your task queue. Explicit requests remain available."]]) { const card = document.createElement("article"); card.className = "card settings-summary-card"; card.append(text("strong", label), text("small", description)); presets.append(card); }
+  fragment.append(presets);
+  if ((matrix.migrations || []).length) { const migration = document.createElement("section"); migration.className = "state-card"; migration.append(text("strong", "Some older preferences need an exact account choice."), text("p", `${matrix.migrations.length} source-family preference${matrix.migrations.length === 1 ? "" : "s"} remain retained. They were not copied across every account.`)); fragment.append(migration); }
+  const sources = matrix.sources || [];
+  const groups = [
+    ["Connected and configured sources", sources.filter((source) => !source.direct_authenticated_intent && !["disconnected", "not_connected", "missing_attribution"].includes(source.connection_state)), true],
+    ["Disconnected sources and retained history", sources.filter((source) => source.connection_state === "disconnected"), true],
+    ["Sources not yet connected", sources.filter((source) => source.connection_state === "not_connected"), false],
+    ["Sources needing attribution", sources.filter((source) => source.connection_state === "missing_attribution"), false],
+    ["Explicit member requests · always available", sources.filter((source) => source.direct_authenticated_intent), false],
+  ];
+  for (const [label, items, open] of groups) {
+    if (!items.length) continue;
+    const section = document.createElement("details"); section.className = "candidate-policy-group"; section.open = open;
+    section.append(text("summary", `${label} · ${items.length}`));
+    const grid = document.createElement("div"); grid.className = "candidate-policy-grid";
+    for (const source of items) grid.append(sourcePolicyV2Card({ ...source, configurable: source.configurable && data.control.identity.can_mutate }, matrix));
+    section.append(grid); fragment.append(section);
+  }
+  if (!sources.length) fragment.append(text("p", "No exact source accounts are available yet. Connect a reviewed source to configure its purposes; retained history remains accessible from All candidates.", "empty"));
+  const current = document.createElement("details"); current.className = "candidate-policy-group";
+  current.append(text("summary", active ? "Retained source-family preferences" : "Current admission · source-family preferences"));
+  current.append(text("p", active ? "These older family preferences remain visible for compatibility. Use exact account and conversation settings above to tune attention." : "These older settings still control admission while the new exact-source controls are in preview mode.", "state-note"));
+  const legacyGroups = new Map();
+  for (const source of legacy.sources || []) { if (!legacyGroups.has(source.group)) legacyGroups.set(source.group, []); legacyGroups.get(source.group).push(source); }
+  for (const [group, items] of legacyGroups) {
+    const section = document.createElement("details"); section.className = "candidate-policy-group"; section.append(text("summary", group));
+    const grid = document.createElement("div"); grid.className = "candidate-policy-grid";
+    const legacyData = active ? { ...data, control: { ...data.control, identity: { ...data.control.identity, can_mutate: false } } } : data;
+    for (const source of items) grid.append(candidatePolicyCard(source, legacyData));
+    section.append(grid); current.append(section);
+  }
+  fragment.append(current);
+  const invariants = document.createElement("details"); invariants.className = "card candidate-policy-invariants"; invariants.append(text("summary", "Privacy and source history"));
+  const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const value of matrix.safety_limitations || []) list.append(text("li", value)); invariants.append(list); fragment.append(invariants);
+  return fragment;
 }
 
 function defaultPreferenceValue(key, data) {
@@ -4198,7 +4474,7 @@ function capabilitySettings(data) {
 }
 
 function learningTrustSettings(data) {
-  const fragment = document.createDocumentFragment(); const model = data.control.learning_and_trust || { proposals: [], operating_agreement_proposals: [], rules: [], trials: [], suspended_or_revoked: [], inactive_operating_agreements: [] }; const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Trust is capability-specific and evidence-backed."), text("p", "A proposal never self-activates, and success in one domain never silently promotes another.")); fragment.append(intro); for (const [title, rows, empty] of [["Source-policy proposals", model.proposals || [], "No source-policy proposals await review."], ["Operating-agreement proposals", model.operating_agreement_proposals || [], "No operating-agreement proposals await review."], ["Active rules and trials", model.rules || [], "No active learning rules."], ["Suspended, expired, or revoked", [...(model.suspended_or_revoked || []), ...(model.inactive_operating_agreements || [])], "No suspended, expired, or revoked policy."]]) { const section = document.createElement("section"); section.className = "card"; section.append(text("h2", title)); const list = document.createElement("ul"); list.className = "settings-contract-list"; for (const item of rows) { const row = document.createElement("li"); row.append(text("strong", item.policy_proposal_id || item.rule_id || item.agreement_id || "Scoped policy"), text("small", `${titleCase(item.scope_kind || item.authority_scope)} · ${titleCase(item.instruction || item.trust_stage)} · ${titleCase(item.state || item.effective_state || "proposed")}`)); list.append(row); } if (!rows.length) list.append(text("li", empty, "empty")); section.append(list); fragment.append(section); } return fragment;
+  const fragment = document.createDocumentFragment(); fragment.append(sourceLearningRulesCard(data.control.identity.can_mutate)); const model = data.control.learning_and_trust || { proposals: [], operating_agreement_proposals: [], rules: [], trials: [], suspended_or_revoked: [], inactive_operating_agreements: [] }; const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Trust is capability-specific and evidence-backed."), text("p", "A proposal never self-activates, and success in one domain never silently promotes another.")); fragment.append(intro); for (const [title, rows, empty] of [["Source-policy proposals", model.proposals || [], "No source-policy proposals await review."], ["Operating-agreement proposals", model.operating_agreement_proposals || [], "No operating-agreement proposals await review."], ["Active rules and trials", model.rules || [], "No active learning rules."], ["Suspended, expired, or revoked", [...(model.suspended_or_revoked || []), ...(model.inactive_operating_agreements || [])], "No suspended, expired, or revoked policy."]]) { const section = document.createElement("section"); section.className = "card"; section.append(text("h2", title)); const list = document.createElement("ul"); list.className = "settings-contract-list"; for (const item of rows) { const row = document.createElement("li"); row.append(text("strong", item.policy_proposal_id || item.rule_id || item.agreement_id || "Scoped policy"), text("small", `${titleCase(item.scope_kind || item.authority_scope)} · ${titleCase(item.instruction || item.trust_stage)} · ${titleCase(item.state || item.effective_state || "proposed")}`)); list.append(row); } if (!rows.length) list.append(text("li", empty, "empty")); section.append(list); fragment.append(section); } return fragment;
 }
 
 function adminRequestsSettings(data) {
@@ -4221,6 +4497,7 @@ function renderSettings(data) {
   else if (state.settingsSection === "admin-requests") content.append(adminRequestsSettings(data));
   else content.append(systemSettings(data));
   root.append(content);
+  setSourceSettingsLock();
 }
 
 function freshnessStrip(data) {

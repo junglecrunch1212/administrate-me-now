@@ -39,6 +39,7 @@ from adminme.events.schemas.triage import (
     TriageSourceSurface,
     TriageTargetKind,
 )
+from adminme.events.schemas.triage_management import AttentionRuleV1
 from adminme.events.schemas.knowledge import KnowledgeGrantPermission
 from adminme.events.schemas.reminder_context import (
     ContextKind,
@@ -142,16 +143,16 @@ from adminme.candidate_policy import validate_policy_override
 from adminme.capability_catalog import catalog_item, compose_member_catalog
 from adminme.settings_control import (
     compose_connections,
+    compose_source_policy_v2_sources,
     member_label,
 )
 from adminme.source_policy import (
-    SignalAssessment,
     SourceCoordinate,
     SourcePolicyV2,
-    assess_source_signals,
     policy_for_preset,
     route_for_policy,
     source_coordinate_for_event,
+    source_coordinate_contains,
     source_policy_event_types,
 )
 from adminme.projections.lists.queries import (
@@ -175,7 +176,11 @@ from adminme.triage_intent import (
 from adminme.triage_contract import candidate_update_fields, triage_destination
 from adminme.triage_context import add_triage_source_context
 from adminme.triage_management import (
+    attention_match,
+    attention_rule_expired,
+    attention_rule_preview,
     backlog_reassessment_preview,
+    independent_observation_key,
     source_policy_rule_preview,
 )
 from adminme.today import add_today_decision_context
@@ -246,14 +251,18 @@ class SettingsSourcePolicyV2Request(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     coordinate: SourceCoordinate
     action: Literal["set", "reset"] = "set"
-    preset: Literal["focused", "balanced", "review_everything", "custom"] = "balanced"
+    preset: Literal["focused", "balanced", "review_everything", "manual", "custom"] = (
+        "balanced"
+    )
     policy: SourcePolicyV2 | None = None
 
 
 class SettingsSourcePolicyV2PreviewRequest(BaseModel):
     model_config = {"extra": "forbid"}
     coordinate: SourceCoordinate
-    preset: Literal["focused", "balanced", "review_everything", "custom"] = "balanced"
+    preset: Literal["focused", "balanced", "review_everything", "manual", "custom"] = (
+        "balanced"
+    )
     policy: SourcePolicyV2 | None = None
     recent_limit: int = Field(default=100, ge=1, le=200)
 
@@ -976,7 +985,10 @@ def _require_owned_source_coordinate(
 
 
 def _resolved_source_policy(
-    preset: str, policy: SourcePolicyV2 | None
+    preset: str,
+    policy: SourcePolicyV2 | None,
+    *,
+    current_policy: SourcePolicyV2 | None = None,
 ) -> SourcePolicyV2:
     if preset == "custom":
         if policy is None or policy.preset != "custom":
@@ -985,9 +997,22 @@ def _resolved_source_policy(
     if policy is not None:
         raise HTTPException(422, "preset source policy cannot include custom controls")
     try:
-        return policy_for_preset(preset)
+        return policy_for_preset(preset, current_policy=current_policy)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+def _require_observed_source_coordinate(
+    runtime: Any, session: Session, coordinate: SourceCoordinate
+) -> None:
+    sources = compose_source_policy_v2_sources(
+        runtime, session.auth_member_id, state=runtime.settings_control.read()
+    )
+    if not any(row.get("policy_key") == coordinate.key for row in sources):
+        raise HTTPException(
+            422,
+            "source must be configured or attributed from retained evidence before setting a policy",
+        )
 
 
 async def _write_settings_receipt(
@@ -999,6 +1024,7 @@ async def _write_settings_receipt(
     request_id: str,
     request_fingerprint: str,
     owner_member_id: str,
+    schema_version: int = 1,
 ) -> str:
     if runtime.events is None:
         raise HTTPException(503, "Settings audit log is unavailable")
@@ -1008,7 +1034,7 @@ async def _write_settings_receipt(
             event_at_ms=int(time.time() * 1000),
             tenant_id=session.tenant_id,
             type=event_type,
-            schema_version=1,
+            schema_version=schema_version,
             occurred_at=now,
             source_adapter="member-settings-control-plane",
             source_account_id=session.auth_member_id,
@@ -3148,6 +3174,11 @@ def _learning_preview(
     session: Session,
     body: TriageLearningPreviewRequest,
 ) -> dict[str, Any]:
+    if body.outcome_kind not in {"dismiss_not_useful", "keep_context"}:
+        raise HTTPException(
+            422,
+            "completion, ownership, duplication, and extraction corrections are not future attention preferences",
+        )
     if runtime.projections is None:
         raise HTTPException(503, "context policy projection unavailable")
     evidence = verified_feedback_for_scope(
@@ -5854,19 +5885,31 @@ async def preview_settings_source_policy_v2(
     request: Request,
     session: SessionDep,
 ) -> dict[str, Any]:
-    """Estimate a V2 policy from authorized metadata without changing state."""
+    """Compare each assessed action and unmatched source without changing state."""
 
     _require_self_settings(session)
     _require_owned_source_coordinate(session, body.coordinate)
-    policy = _resolved_source_policy(body.preset, body.policy)
     runtime = _runtime(request)
+    _require_observed_source_coordinate(runtime, session, body.coordinate)
+    current_policy = SourcePolicyV2.model_validate(
+        runtime.settings_control.effective_source_policy_v2(
+            session.auth_member_id, body.coordinate
+        )["policy"]
+    )
+    policy = _resolved_source_policy(
+        body.preset, body.policy, current_policy=current_policy
+    )
     if runtime.event_log is None:
         raise HTTPException(503, "source policy preview is unavailable")
     matches: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since(
         types=source_policy_event_types(runtime.settings.repository_root)
     ):
-        if event.get("owner_scope") != f"private:{session.auth_member_id}":
+        if (
+            event.get("tenant_id") != session.tenant_id
+            or event.get("owner_scope") != f"private:{session.auth_member_id}"
+            or event.get("visibility_scope") != f"private:{session.auth_member_id}"
+        ):
             continue
         try:
             coordinate = source_coordinate_for_event(
@@ -5874,9 +5917,28 @@ async def preview_settings_source_policy_v2(
             )
         except (TypeError, ValueError):
             continue
-        if coordinate.key == body.coordinate.key:
+        if source_coordinate_contains(body.coordinate, coordinate):
             matches.append(event)
-    matches = matches[-body.recent_limit :]
+            if len(matches) > body.recent_limit:
+                matches.pop(0)
+    # Use code-owned persisted interpretations; provider flags cannot assign a
+    # message purpose or an independent obligation. Include sources that never
+    # generated a proposal so preview is not biased to the current queue.
+    from adminme.reconciliation import assessed_signals
+
+    source_ids = {str(event["event_id"]) for event in matches}
+    proposals: dict[str, dict[str, dict[str, Any]]] = {}
+    async for proposal in runtime.event_log.read_since(types=["triage.item.proposed"]):
+        payload = proposal.get("payload") or {}
+        source_id = str(payload.get("source_event_id") or "")
+        if (
+            source_id in source_ids
+            and proposal.get("tenant_id") == session.tenant_id
+            and proposal.get("owner_scope") == f"private:{session.auth_member_id}"
+            and proposal.get("visibility_scope") == f"private:{session.auth_member_id}"
+        ):
+            proposal_id = str(payload.get("proposal_id") or proposal["event_id"])
+            proposals.setdefault(source_id, {})[proposal_id] = proposal
     examples: list[dict[str, Any]] = []
     counts = {
         "source_facts": len(matches),
@@ -5884,58 +5946,115 @@ async def preview_settings_source_policy_v2(
         "alerts": 0,
         "context": 0,
         "provenance_only": 0,
+        "assessed_actions": 0,
+        "matching": 0,
+        "nonmatching": 0,
+        "changed": 0,
+        "previous_triage": 0,
+        "sources_without_candidates": 0,
     }
     for event in matches:
-        signals = assess_source_signals(event)
-        route = route_for_policy(body.coordinate, policy, signals)
-        counts["triage"] += route.triage != "none"
-        counts["alerts"] += route.alert != "none"
-        counts["context"] += route.context != "none"
-        counts["provenance_only"] += (
-            route.triage == "none" and route.alert == "none" and route.context == "none"
+        event_coordinate = source_coordinate_for_event(
+            event, provider_bindings=runtime.settings.provider_bindings
         )
-        if len(examples) < 5:
+        event_effective = runtime.settings_control.effective_source_policy_v2(
+            session.auth_member_id, event_coordinate
+        )
+        event_current_policy = SourcePolicyV2.model_validate(event_effective["policy"])
+        child_override = (
+            event_coordinate.key != body.coordinate.key
+            and event_effective["origin"] == "exact_override"
+            and event_effective.get("inherited_from_policy_key") != body.coordinate.key
+        )
+        event_proposed_policy = event_current_policy if child_override else policy
+        event_proposals = list(proposals.get(str(event["event_id"]), {}).values())
+        if not event_proposals:
+            counts["sources_without_candidates"] += 1
+        actions: list[dict[str, Any] | None] = (
+            list(event_proposals) if event_proposals else [None]
+        )
+        for action_proposal in actions:
+            signals = assessed_signals(event, action_proposal)
+            previous = route_for_policy(event_coordinate, event_current_policy, signals)
+            route = route_for_policy(event_coordinate, event_proposed_policy, signals)
+            matched = (
+                not child_override
+                and signals.purpose_evidence_verified
+                and any(
+                    rule.purpose == signals.message_purpose
+                    for rule in policy.purpose_routes
+                )
+            )
+            changed = (
+                previous.triage,
+                previous.alert,
+                previous.context,
+                previous.candidate_kinds,
+            ) != (route.triage, route.alert, route.context, route.candidate_kinds)
+            counts["assessed_actions"] += action_proposal is not None
+            counts["matching"] += matched
+            counts["nonmatching"] += not matched
+            counts["changed"] += changed
+            counts["previous_triage"] += previous.triage != "none"
+            counts["triage"] += route.triage != "none"
+            counts["alerts"] += route.alert != "none"
+            counts["context"] += route.context != "none"
+            counts["provenance_only"] += (
+                route.triage == "none"
+                and route.alert == "none"
+                and route.context == "none"
+            )
+            source_payload = event.get("payload") or {}
             examples.append(
                 {
                     "synthetic": False,
                     "source_event_id": event["event_id"],
+                    "source_title": str(
+                        source_payload.get("subject")
+                        or source_payload.get("title")
+                        or "Source without a title"
+                    )[:160],
+                    "proposal_id": (action_proposal.get("payload") or {}).get(
+                        "proposal_id"
+                    )
+                    if action_proposal
+                    else None,
+                    "message_purpose": signals.message_purpose,
+                    "purpose_evidence_verified": signals.purpose_evidence_verified,
+                    "matched": matched,
+                    "changed": changed,
+                    "existing_container_override_preserved": child_override,
+                    "previous_route": previous.model_dump(mode="json"),
+                    "current_route": previous.model_dump(mode="json"),
+                    "proposed_route": route.model_dump(mode="json"),
                     "route": route.model_dump(mode="json"),
+                    "reason_codes": route.reason_codes,
                     "content_returned": False,
                 }
             )
-    if not examples:
-        direct = body.coordinate.source_class == "direct_authenticated_intent"
-        signals = SignalAssessment(
-            authenticated_member_instruction=direct,
-            direction="member_authored" if direct else "state",
-            deterministic_actionability_evidence=(
-                ["authenticated_member_intent"] if direct else []
-            ),
-        )
-        examples.append(
-            {
-                "synthetic": True,
-                "source_event_id": None,
-                "route": route_for_policy(body.coordinate, policy, signals).model_dump(
-                    mode="json"
-                ),
-                "content_returned": False,
-            }
-        )
+    # Keep both positive and negative examples visible when both exist.
+    selected = [row for row in examples if row["matched"]][:5]
+    selected.extend(
+        row for row in examples if not row["matched"] and len(selected) < 10
+    )
     return {
         "contract": "source-policy-v2-preview",
         "policy_key": body.coordinate.key,
         "policy": policy.model_dump(mode="json"),
         "estimated_recent_effect": counts,
-        "examples": examples,
+        "examples": selected,
+        "matching_count": counts["matching"],
+        "nonmatching_count": counts["nonmatching"],
+        "retained_candidate_count": counts["assessed_actions"],
+        "coverage": "bounded_recent_authorized_sources",
         "mutation_performed": False,
         "reversible": True,
         "live_admission_changed": False,
         "provider_effects": False,
         "limitations": [
-            "This is an estimate over already authorized source metadata.",
-            "No source content, prompt, model setting, credential, or raw configuration is returned.",
-            "V2 remains shadow-only; current Triage admission is unchanged.",
+            "This compares recent authorized sources and persisted action assessments, including sources without candidates.",
+            "No message body, prompt, model setting, credential, or raw configuration is returned; titles remain private to their source owner.",
+            "Preview changes no settings or candidates. Missing assessments remain explicitly unverified.",
         ],
     }
 
@@ -5948,13 +6067,16 @@ async def explain_settings_source_policy_v2(
 ) -> dict[str, Any]:
     """Explain one owner-visible current and shadow source route."""
 
+    _require_self_settings(session)
     runtime = _runtime(request)
     if runtime.event_log is None:
         raise HTTPException(503, "source policy explanation is unavailable")
     source = await runtime.event_log.get(source_event_id)
     if (
         source is None
+        or source.get("tenant_id") != session.tenant_id
         or source.get("owner_scope") != f"private:{session.auth_member_id}"
+        or source.get("visibility_scope") != f"private:{session.auth_member_id}"
     ):
         raise HTTPException(404, "source policy explanation was not found")
     evaluations = [
@@ -5968,12 +6090,43 @@ async def explain_settings_source_policy_v2(
     payload = evaluations[-1]["payload"]
     current_route = payload["current_route"]
     shadow_route = payload["shadow_route"]
+    active = runtime.settings.reconciliation_admission_enabled
+    current_items = (
+        runtime.projections.connection("triage")
+        .execute(
+            """SELECT proposal_id, admission_decision, management_state, learned_policy_state,
+                  reconciliation_reasons_json FROM triage_items
+           WHERE tenant_id=? AND source_event_id=? AND owner_member_id=?
+             AND owner_scope=? AND visibility_scope=? ORDER BY proposal_id""",
+            (
+                session.tenant_id,
+                source_event_id,
+                session.auth_member_id,
+                f"private:{session.auth_member_id}",
+                f"private:{session.auth_member_id}",
+            ),
+        )
+        .fetchall()
+    )
     return {
         "contract": "source-policy-v2-why",
         "source_event_id": source_event_id,
+        "admission_active": active,
+        "current_local_items": [
+            {
+                "proposal_id": row["proposal_id"],
+                "admission_decision": row["admission_decision"],
+                "management_state": row["management_state"],
+                "learned_policy_state": row["learned_policy_state"],
+                "reason_codes": json.loads(row["reconciliation_reasons_json"] or "[]"),
+            }
+            for row in current_items
+        ],
         "current": {
             "explanation": (
-                "The live V1 policy sent this source to Triage review."
+                "This is the legacy route recorded at intake; current local item decisions are listed separately."
+                if active
+                else "The live V1 policy sent this source to Triage review."
                 if current_route["triage"] != "none"
                 else "The live V1 policy did not send this source to Triage."
             ),
@@ -5981,7 +6134,9 @@ async def explain_settings_source_policy_v2(
         },
         "shadow": {
             "explanation": (
-                "The proposed V2 policy would send this source to Triage."
+                "This intake comparison is historical. Current source preferences and corrections may have changed local admission."
+                if active
+                else "The proposed V2 policy would send this source to Triage."
                 if shadow_route["triage"] != "none"
                 else "The proposed V2 policy would keep this source out of Triage."
             ),
@@ -6002,26 +6157,38 @@ async def change_settings_source_policy_v2(
     request: Request,
     session: SessionDep,
 ) -> dict[str, Any]:
-    """Append one owner-scoped exact policy while live admission stays V1."""
+    """Append one owner-scoped attention policy without access/provider authority."""
 
     _require_self_settings(session)
     _require_owned_source_coordinate(session, body.coordinate)
     if body.coordinate.key != policy_key:
         raise HTTPException(422, "policy key does not match exact source coordinate")
+    runtime = _runtime(request)
+    admission_active = runtime.settings.reconciliation_admission_enabled
+    _require_observed_source_coordinate(runtime, session, body.coordinate)
+    current_policy = SourcePolicyV2.model_validate(
+        runtime.settings_control.effective_source_policy_v2(
+            session.auth_member_id, body.coordinate
+        )["policy"]
+    )
     policy = (
         None
         if body.action == "reset"
-        else _resolved_source_policy(body.preset, body.policy)
+        else _resolved_source_policy(
+            body.preset, body.policy, current_policy=current_policy
+        )
     )
     if body.action == "reset" and body.policy is not None:
         raise HTTPException(422, "reset cannot include a source policy")
-    runtime = _runtime(request)
     values = {
         "policy_key": policy_key,
         "expected_revision": body.expected_revision,
         "coordinate": body.coordinate.model_dump(mode="json"),
         "action": body.action,
-        "policy": policy.model_dump(mode="json") if policy is not None else None,
+        "preset": body.preset,
+        "policy": body.policy.model_dump(mode="json")
+        if body.policy is not None
+        else None,
     }
     fingerprint = _settings_request_fingerprint(
         "settings.source_policy_v2_changed", values
@@ -6052,7 +6219,8 @@ async def change_settings_source_policy_v2(
                 "idempotent": True,
                 "event_id": prior["event_id"],
                 **effective,
-                "live_admission_changed": False,
+                "live_admission_changed": admission_active,
+                "admission_active": admission_active,
                 "provider_effects": False,
             }
         try:
@@ -6073,7 +6241,7 @@ async def change_settings_source_policy_v2(
                 "scope_widening": False,
                 "credential_creation": False,
                 "provider_write_authority": False,
-                "live_admission_changed": False,
+                "live_admission_changed": admission_active,
             },
         )
         changed_at = EventEnvelope.now_utc_iso()
@@ -6090,7 +6258,7 @@ async def change_settings_source_policy_v2(
             "scope_widening": False,
             "credential_creation": False,
             "provider_write_authority": False,
-            "live_admission_changed": False,
+            "live_admission_changed": admission_active,
         }
         event_id = await _write_settings_receipt(
             runtime,
@@ -6100,6 +6268,7 @@ async def change_settings_source_policy_v2(
             request_fingerprint=fingerprint,
             owner_member_id=session.auth_member_id,
             payload=payload,
+            schema_version=2 if admission_active else 1,
         )
         try:
             runtime.settings_control.apply_source_policy_v2_event(payload)
@@ -6115,7 +6284,8 @@ async def change_settings_source_policy_v2(
             "accepted": True,
             "event_id": event_id,
             **effective,
-            "live_admission_changed": False,
+            "live_admission_changed": admission_active,
+            "admission_active": admission_active,
             "provider_effects": False,
         }
 
@@ -8711,6 +8881,470 @@ async def temporary_surface_action(
         session,
     )
     return {**result, "next_action": result.get("what_now")}
+
+
+class AttentionRulePreviewRequest(AttentionRuleV1):
+    pass
+
+
+class AttentionRuleSaveRequest(AttentionRuleV1):
+    request_id: str = Field(min_length=8, max_length=120)
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: Literal["active", "trial", "shadow"] = "trial"
+    trial_days: int = Field(default=7, ge=1, le=30)
+    trial_message_limit: int = Field(default=50, ge=1, le=100)
+
+
+class AttentionRuleReviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    decision: Literal["retain", "suspend", "revoke"]
+    negative_outcome: (
+        Literal[
+            "false_suppression",
+            "missed_obligation",
+            "member_correction",
+            "scope_mismatch",
+        ]
+        | None
+    ) = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class AttentionFeedbackRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    proposal_id: str = Field(min_length=1, max_length=240)
+    kind: Literal[
+        "future_attention_preference",
+        "interpretation_correction",
+        "completion",
+        "ownership",
+        "duplicate",
+    ]
+    rule: AttentionRuleV1 | None = None
+
+
+def _attention_rule_body(body: AttentionRuleV1) -> dict[str, Any]:
+    return AttentionRuleV1.model_validate(
+        body.model_dump(include=set(AttentionRuleV1.model_fields))
+    ).model_dump(mode="json", exclude_none=True)
+
+
+def _attention_connection(runtime: Any) -> Any:
+    if runtime.projections is None:
+        raise HTTPException(503, "attention rule projection unavailable")
+    return runtime.projections.connection("triage")
+
+
+def _attention_rules(runtime: Any, session: Session) -> list[dict[str, Any]]:
+    conn = _attention_connection(runtime)
+    rows = conn.execute(
+        "SELECT * FROM triage_attention_rules WHERE tenant_id=? AND member_id=? ORDER BY starts_at DESC,rule_id",
+        (session.tenant_id, session.auth_member_id),
+    ).fetchall()
+    rules = []
+    for row in rows:
+        rule = dict(row)
+        for key in ("conditions", "exceptions", "feedback_event_ids"):
+            rule[key] = json.loads(rule.pop(f"{key}_json"))
+        rule["conditions"] = {
+            key: value for key, value in rule["conditions"].items() if value is not None
+        }
+        rule["exceptions"] = [
+            {key: value for key, value in terms.items() if value is not None}
+            for terms in rule["exceptions"]
+        ]
+        if rule["status"] in {"trial", "shadow"} and attention_rule_expired(
+            rule, EventEnvelope.now_utc_iso()
+        ):
+            rule["status"] = "expired"
+        rule["history"] = [
+            dict(value)
+            for value in conn.execute(
+                """SELECT event_id,decision,reason,occurred_at FROM triage_attention_rule_history
+               WHERE tenant_id=? AND rule_id=? ORDER BY event_id""",
+                (session.tenant_id, rule["rule_id"]),
+            ).fetchall()
+        ]
+        rule["provider_effects"] = 0
+        rule["reversible"] = True
+        rules.append(rule)
+    return rules
+
+
+async def _attention_preview(
+    runtime: Any,
+    session: Session,
+    body: AttentionRuleV1,
+) -> dict[str, Any]:
+    conn = _attention_connection(runtime)
+    rule = _attention_rule_body(body)
+    rows = conn.execute(
+        """SELECT * FROM triage_items WHERE tenant_id=? AND owner_member_id=?
+           AND owner_scope=? AND visibility_scope=? ORDER BY proposed_at DESC,proposal_id LIMIT 500""",
+        (
+            session.tenant_id,
+            session.auth_member_id,
+            f"private:{session.auth_member_id}",
+            f"private:{session.auth_member_id}",
+        ),
+    ).fetchall()
+    items = [
+        dict(value) for value in rows if filter_one(session, dict(value)) is not None
+    ]
+    evidence_ids = set(body.feedback_event_ids)
+    if body.origin == "suggested":
+        evidence = conn.execute(
+            """SELECT * FROM triage_attention_feedback WHERE tenant_id=? AND member_id=?
+               AND kind='future_attention_preference' ORDER BY recorded_at DESC""",
+            (session.tenant_id, session.auth_member_id),
+        ).fetchall()
+        verified = []
+        for value in evidence:
+            if value["last_event_id"] not in evidence_ids:
+                continue
+            prior_rule = AttentionRuleV1.model_validate(
+                json.loads(value["rule_json"] or "{}")
+            ).model_dump(mode="json", exclude_none=True)
+            if all(
+                prior_rule.get(key) == rule[key]
+                for key in ("conditions", "exceptions", "action")
+            ):
+                verified.append(value)
+        if (
+            set(str(value["last_event_id"]) for value in verified) != evidence_ids
+            or len({value["observation_key"] for value in verified}) < 3
+        ):
+            raise HTTPException(
+                422,
+                "a suggested rule requires three independent matching future-preference corrections",
+            )
+    elif evidence_ids:
+        raise HTTPException(
+            422, "explicit rules do not borrow inferred feedback evidence"
+        )
+    source_only: list[dict[str, Any]] = []
+    seen_sources = {str(item["source_event_id"]) for item in items}
+    if runtime.event_log is not None:
+        async for event in runtime.event_log.read_since(
+            owner_scope=f"private:{session.auth_member_id}",
+            types=source_policy_event_types(runtime.settings.repository_root),
+        ):
+            if (
+                event.get("tenant_id") != session.tenant_id
+                or filter_one(session, event) is None
+            ):
+                continue
+            if str(event["event_id"]) in seen_sources:
+                continue
+            try:
+                coordinate = source_coordinate_for_event(
+                    event, provider_bindings=runtime.settings.provider_bindings
+                )
+            except (TypeError, ValueError):
+                continue
+            if (
+                coordinate.provider_account_id != body.conditions.provider_account_id
+                or coordinate.adapter_instance_id != body.conditions.adapter_instance_id
+            ):
+                continue
+            source_only.append(
+                {
+                    "source_event_id": event["event_id"],
+                    "last_event_id": event["event_id"],
+                    "title": "Source without an assessed candidate",
+                    "state": "reference",
+                    "reconciliation": {"scope": coordinate.model_dump(mode="json")},
+                    "assessment_unavailable": True,
+                }
+            )
+            source_only = source_only[-250:]
+    return {
+        **attention_rule_preview(
+            rule,
+            items,
+            source_only=source_only,
+            as_of=EventEnvelope.now_utc_iso(),
+            existing_rules=_attention_rules(runtime, session),
+        ),
+        "activation_available": runtime.settings.human_triage_management_enabled,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/v2/preview")
+async def preview_attention_rule(
+    body: AttentionRulePreviewRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    return await _attention_preview(_runtime(request), session, body)
+
+
+@router.get("/api/member/v1/triage-learning/v2/rules")
+async def list_attention_rules(request: Request, session: SessionDep) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    groups: dict[str, dict[str, Any]] = {}
+    for row in (
+        _attention_connection(runtime)
+        .execute(
+            """SELECT * FROM triage_attention_feedback WHERE tenant_id=? AND member_id=?
+           AND kind='future_attention_preference' ORDER BY recorded_at DESC LIMIT 500""",
+            (session.tenant_id, session.auth_member_id),
+        )
+        .fetchall()
+    ):
+        rule = AttentionRuleV1.model_validate(
+            json.loads(row["rule_json"] or "{}")
+        ).model_dump(mode="json", exclude_none=True)
+        terms = {key: rule.get(key) for key in ("conditions", "exceptions", "action")}
+        key = json.dumps(terms, sort_keys=True, separators=(",", ":"))
+        group = groups.setdefault(key, {"rule": rule, "observations": {}})
+        group["observations"].setdefault(row["observation_key"], row["last_event_id"])
+    suggestions = []
+    for group in groups.values():
+        if len(group["observations"]) < 3:
+            continue
+        suggestions.append(
+            {
+                "rule": {
+                    **group["rule"],
+                    "origin": "suggested",
+                    "feedback_event_ids": sorted(group["observations"].values())[:100],
+                },
+                "independent_observations": len(group["observations"]),
+                "self_activates": False,
+            }
+        )
+    return {
+        "rules": _attention_rules(runtime, session),
+        "suggestions": suggestions,
+        "active": runtime.settings.human_triage_management_enabled,
+        "provider_effects": 0,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/v2/rules")
+async def save_attention_rule(
+    body: AttentionRuleSaveRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    _require_human_triage_management(runtime)
+    fingerprint = _triage_request_fingerprint("attention-rule", body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.attention_rule.saved",
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("triage", prior["event_id"])
+        return {
+            "event_id": prior["event_id"],
+            "rule_id": prior["payload"]["rule_id"],
+            "duplicate": True,
+            "provider_effects": 0,
+        }
+    preview = await _attention_preview(runtime, session, body)
+    if preview["preview_digest"] != body.preview_digest:
+        raise HTTPException(409, "observations changed; preview the rule again")
+    now = datetime.now(timezone.utc)
+    rule_id = (
+        "attention_rule_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:28]
+    )
+    payload = {
+        **_attention_rule_body(body),
+        "rule_id": rule_id,
+        "member_id": session.auth_member_id,
+        "preview_digest": body.preview_digest,
+        "mode": body.mode,
+        "starts_at": now.isoformat(),
+        "expires_at": (now + timedelta(days=body.trial_days)).isoformat()
+        if body.mode != "active"
+        else None,
+        "max_observations": body.trial_message_limit if body.mode != "active" else None,
+        "saved_by_member_id": session.auth_member_id,
+        "access_widening": False,
+        "cross_member_effect": False,
+        "provider_effects": False,
+    }
+    await _guard_triage_write(runtime, session, "triage.attention_rule.saved", payload)
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.attention_rule.saved",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=None,
+        )
+    )
+    await runtime.wait_for_projection("triage", event_id)
+    return {
+        "event_id": event_id,
+        "rule_id": rule_id,
+        "state": body.mode,
+        "duplicate": False,
+        "provider_effects": 0,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/v2/rules/{rule_id}/review")
+async def review_attention_rule(
+    rule_id: str,
+    body: AttentionRuleReviewRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    _require_human_triage_management(runtime)
+    fingerprint = _triage_request_fingerprint(rule_id, body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.attention_rule.reviewed",
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "event_id": prior["event_id"],
+            "rule_id": rule_id,
+            "duplicate": True,
+            "provider_effects": 0,
+        }
+    rule = next(
+        (
+            value
+            for value in _attention_rules(runtime, session)
+            if value["rule_id"] == rule_id
+        ),
+        None,
+    )
+    if rule is None:
+        raise HTTPException(404, "attention rule not found")
+    if rule["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "rule changed; refresh before reviewing")
+    if body.decision == "retain" and (
+        body.negative_outcome or rule["status"] in {"suspended", "revoked"}
+    ):
+        raise HTTPException(
+            422, "a suspended rule or adverse evidence requires a new preview"
+        )
+    payload = {
+        **body.model_dump(mode="json", exclude={"request_id"}),
+        "rule_id": rule_id,
+        "member_id": session.auth_member_id,
+        "reviewed_by_member_id": session.auth_member_id,
+        "reviewed_at": EventEnvelope.now_utc_iso(),
+        "provider_effects": False,
+    }
+    await _guard_triage_write(
+        runtime, session, "triage.attention_rule.reviewed", payload
+    )
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.attention_rule.reviewed",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=body.expected_last_event_id,
+        )
+    )
+    await runtime.wait_for_projection("triage", event_id)
+    return {
+        "event_id": event_id,
+        "rule_id": rule_id,
+        "state": body.decision,
+        "provider_effects": 0,
+    }
+
+
+@router.post("/api/member/v1/triage-learning/v2/feedback")
+async def record_attention_feedback(
+    body: AttentionFeedbackRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    _require_human_triage_management(runtime)
+    fingerprint = _triage_request_fingerprint(body.proposal_id, body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.attention_feedback.recorded",
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {"event_id": prior["event_id"], "duplicate": True, "provider_effects": 0}
+    item = _owned_triage_item(runtime, session, body.proposal_id)
+    if item["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "candidate changed; refresh before correcting")
+    if (body.kind == "future_attention_preference") != (body.rule is not None):
+        raise HTTPException(422, "only an explicit future preference supplies a rule")
+    if (
+        body.rule is not None
+        and attention_match(_attention_rule_body(body.rule), item) != "match"
+    ):
+        raise HTTPException(
+            422, "the example must match the rule and its protected exceptions"
+        )
+    observation = item
+    if item.get("duplicate_of_proposal_id"):
+        original = get_triage_item(
+            _attention_connection(runtime),
+            session,
+            proposal_id=item["duplicate_of_proposal_id"],
+        )
+        if (
+            original is not None
+            and original["owner_member_id"] == session.auth_member_id
+        ):
+            observation = original
+    payload = {
+        "feedback_id": "attention_feedback_"
+        + hashlib.sha256(
+            f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}".encode()
+        ).hexdigest()[:28],
+        "member_id": session.auth_member_id,
+        "proposal_id": body.proposal_id,
+        "source_event_id": item["source_event_id"],
+        "independent_observation_key": independent_observation_key(observation),
+        "kind": body.kind,
+        "rule": _attention_rule_body(body.rule) if body.rule else None,
+        "recorded_by_member_id": session.auth_member_id,
+        "recorded_at": EventEnvelope.now_utc_iso(),
+        "provider_effects": False,
+    }
+    await _guard_triage_write(
+        runtime, session, "triage.attention_feedback.recorded", payload
+    )
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.attention_feedback.recorded",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            causation_id=item["last_event_id"],
+        )
+    )
+    await runtime.wait_for_projection("triage", event_id)
+    return {
+        "event_id": event_id,
+        "kind": body.kind,
+        "future_rule_activated": False,
+        "provider_effects": 0,
+    }
 
 
 __all__ = ["router"]

@@ -10,7 +10,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from adminme.events.envelope import EventEnvelope
-from adminme.reconciliation import reference_digest
+from adminme.reconciliation import issuer_reference, reference_digest
 from adminme.runtime.application import RuntimeSettings, create_application
 
 
@@ -371,8 +371,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=A,
             key="mortgage-due",
-            subject="Mortgage account MTG-2048 payment due",
-            body="Mortgage account MTG-2048 is due this week.",
+            subject="Mortgage invoice MTG-2048 payment due",
+            body="Mortgage invoice MTG-2048 is due this week.",
             sender="billing@example.invalid",
         )
         mortgage_primary = _write_proposal(
@@ -380,7 +380,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             proposal_id="proposal-mortgage-primary",
             source_event_id=mortgage_due,
-            title="Pay mortgage account MTG-2048",
+            title="Pay mortgage invoice MTG-2048",
             candidate={"due_at": "2026-09-08T21:00:00Z"},
         )
         mortgage_budget = _write_message(
@@ -388,8 +388,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=A,
             key="mortgage-budget",
-            subject="Budget view for mortgage account MTG-2048",
-            body="Budget notification for mortgage account MTG-2048.",
+            subject="Budget view for mortgage invoice MTG-2048",
+            body="Budget notification for mortgage invoice MTG-2048.",
             sender="updates@example.invalid",
         )
         mortgage_attachment = _write_proposal(
@@ -397,16 +397,14 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             proposal_id="proposal-mortgage-budget",
             source_event_id=mortgage_budget,
-            title="Review mortgage budget account MTG-2048",
+            title="Review mortgage budget invoice MTG-2048",
         )
         assert mortgage_primary["payload"]["decision"] == "admit"
-        assert mortgage_attachment["payload"]["decision"] == "attach_evidence"
-        assert mortgage_attachment["payload"]["primary_proposal_id"] == (
-            "proposal-mortgage-primary"
-        )
+        # A different issuer's notification does not establish invoice identity.
+        assert mortgage_attachment["payload"]["decision"] == "admit"
         assert (
             mortgage_attachment["payload"]["matter_id"]
-            == mortgage_primary["payload"]["matter_id"]
+            != mortgage_primary["payload"]["matter_id"]
         )
 
         _write_message(
@@ -414,8 +412,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=B,
             key="mortgage-private-payment",
-            subject="Mortgage account MTG-2048 payment received",
-            body="Payment received for mortgage account MTG-2048.",
+            subject="Mortgage invoice MTG-2048 payment received",
+            body="Payment received for mortgage invoice MTG-2048.",
             sender="billing@example.invalid",
             provider_account_id="fixture-account-b",
         )
@@ -424,13 +422,17 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
         )
 
         mortgage_digest = reference_digest(
-            tenant_id, "exact_account_reference", "MTG-2048"
+            tenant_id,
+            "exact_payment_reference",
+            issuer_reference(
+                client.portal.call(runtime.event_log.get, mortgage_due), "MTG-2048"
+            ),
         )
         shared_satisfaction = _write_shared_state(
             client,
             runtime,
             key="mortgage-satisfied",
-            reference_kind="account_reference",
+            reference_kind="payment_reference",
             reference_digest_value=mortgage_digest,
             current_state="satisfied",
         )
@@ -484,8 +486,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             )
         assert [item["payload"]["decision"] for item in healthcare_decisions] == [
             "admit",
-            "duplicate",
-            "duplicate",
+            "attach_evidence",
+            "attach_evidence",
         ]
         assert len({item["payload"]["matter_id"] for item in healthcare_decisions}) == 1
         assert [
@@ -732,7 +734,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
                     runtime,
                     proposal_id=f"proposal-{key}",
                     source_event_id=source_id,
-                    title="Complete account CNF-3300 action",
+                    title="Complete invoice CNF-3300 action",
                     candidate={"due_at": due},
                 )
             )
@@ -750,24 +752,28 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=A,
             key="correction-source",
-            subject="Account COR-9900 action due",
-            body="Account COR-9900 action due.",
+            subject="Invoice COR-9900 action due",
+            body="Invoice COR-9900 action due.",
         )
         correction_initial = _write_proposal(
             client,
             runtime,
             proposal_id="proposal-correction",
             source_event_id=correction_source,
-            title="Complete account COR-9900 action",
+            title="Complete invoice COR-9900 action",
         )
         correction_digest = reference_digest(
-            tenant_id, "exact_account_reference", "COR-9900"
+            tenant_id,
+            "exact_payment_reference",
+            issuer_reference(
+                client.portal.call(runtime.event_log.get, correction_source), "COR-9900"
+            ),
         )
         _write_shared_state(
             client,
             runtime,
             key="correction-satisfied",
-            reference_kind="account_reference",
+            reference_kind="payment_reference",
             reference_digest_value=correction_digest,
             current_state="satisfied",
         )
@@ -775,7 +781,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             client,
             runtime,
             key="correction-superseded",
-            reference_kind="account_reference",
+            reference_kind="payment_reference",
             reference_digest_value=correction_digest,
             current_state="superseded",
         )

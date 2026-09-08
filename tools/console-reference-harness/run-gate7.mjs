@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
+import { auditTriageSourceControls } from "./triage-source-controls.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -155,7 +156,7 @@ async function waitForServer(baseUrl) {
   throw new Error(`Gate 7 fixture server did not become ready at ${baseUrl}`);
 }
 
-async function startServer(port, modelConfigured) {
+async function startServer(port, modelConfigured, attentionEnabled = false) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
@@ -170,6 +171,7 @@ async function startServer(port, modelConfigured) {
         ADMINME_GATE7_VISUAL_PORT: String(port),
         ADMINME_GATE7_VISUAL_MODEL: modelConfigured ? "1" : "0",
         ADMINME_GATE7_VISUAL_NOW: fixedNow,
+        ADMINME_GATE7_ATTENTION_ENABLED: attentionEnabled ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -807,6 +809,7 @@ async function run() {
   await mkdir(evidenceDir, { recursive: true });
   const server = await startServer(basePort, true);
   let degraded;
+  let attentionServer;
   const browser = await launchEdge();
   browserDescription = `${browserDescription}; engine ${browser.version()}`;
   console.log(`[Gate 7] Browser ready: ${browserDescription}`);
@@ -1845,6 +1848,11 @@ async function run() {
     await screenshot(degradedAdult.page, "adult-chat-degraded-domain-healthy.png");
     await closePageContext(degradedAdult);
 
+    attentionServer = await startServer(basePort + 2, true, true);
+    const attentionBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    await auditTriageSourceControls({ page: attentionBrowser.page, baseUrl: attentionServer.baseUrl, record, screenshot, auditAccessibility });
+    await closePageContext(attentionBrowser);
+
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
@@ -1876,6 +1884,7 @@ async function run() {
     }
     await stopServer(server);
     if (degraded) await stopServer(degraded);
+    if (attentionServer) await stopServer(attentionServer);
   }
 
   const report = {

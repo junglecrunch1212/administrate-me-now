@@ -598,6 +598,28 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .candidate-policy-heading { display: flex; justify-content: space-between; align-items: start; gap: .6rem; }
 .candidate-policy-heading > div { min-width: 0; }
 .candidate-policy-heading h3 { overflow-wrap: anywhere; }
+.source-attention-card { align-content: start; min-width: 0; }
+.source-purpose-settings, .source-similar-rule, .triage-similar-rule { border-top: 1px solid var(--line); padding-top: .75rem; min-width: 0; }
+.source-purpose-settings > summary, .source-similar-rule > summary, .triage-similar-rule > summary { cursor: pointer; padding: .45rem 0; font-weight: 700; min-height: 2.75rem; }
+.source-purpose-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(10rem, 1fr); gap: .45rem .75rem; align-items: center; margin-block: .65rem; }
+.source-purpose-row > small { grid-column: 1 / -1; color: var(--muted); }
+.source-rule-builder { display: grid; gap: .8rem; min-width: 0; padding-block: .75rem; }
+.source-rule-builder .preference-grid { margin: 0; grid-template-columns: 1fr; }
+.source-attention-card .preference-grid { grid-template-columns: 1fr; }
+.source-rule-builder [hidden] { display: none !important; }
+.source-rule-preview, .source-policy-preview { display: grid; gap: .6rem; min-width: 0; }
+.source-preview-examples { list-style: none; padding: 0; margin: 0; display: grid; gap: .65rem; }
+.source-preview-examples > li { display: grid; gap: .35rem; border-left: 3px solid var(--line); padding: .65rem .8rem; overflow-wrap: anywhere; }
+.source-preview-examples > li[data-rule-match="match"] { border-left-color: var(--teal); }
+.source-preview-examples > li[data-rule-match="protected"] { border-left-color: var(--danger); }
+.source-preview-examples small { color: var(--muted); }
+.source-preview-examples .link-button { justify-self: start; }
+.source-rule-record { border-top: 1px solid var(--line); padding-block: 1rem; min-width: 0; }
+.source-rule-record h3 { margin-bottom: .5rem; overflow-wrap: anywhere; }
+.source-rule-record .button-row { margin-top: .8rem; }
+.source-rule-summary { margin-bottom: .75rem; }
+.triage-more-views > summary { cursor: pointer; padding: .55rem 0; min-height: 2.75rem; color: var(--muted); }
+.triage-obligation-assessment { border-top: 1px solid var(--line); margin-top: .75rem; padding-top: .75rem; }
 .candidate-mode-copy { display: block; margin-top: -.35rem; color: var(--muted); }
 .candidate-language-toggle { display: flex; gap: .55rem; align-items: start; padding: .7rem; border: 1px solid var(--line); border-radius: var(--radius); background: #f4efe6; }
 .candidate-language-toggle input { flex: none; width: 1rem; height: 1rem; margin-top: .15rem; }
@@ -716,6 +738,7 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 }
 
 @media (max-width: 900px) {
+  .candidate-policy-grid { grid-template-columns: 1fr; }
   .triage-workspace,
   .comms-workspace,
   .reminder-workspace,
@@ -797,6 +820,7 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   .bridge-device-choice { grid-template-columns: 1fr; }
   .capability-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .candidate-policy-grid { grid-template-columns: 1fr; }
+  .source-purpose-row { grid-template-columns: 1fr; }
   .connection-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .permission-grid, .preference-grid { grid-template-columns: 1fr; }
   .settings-facts { grid-template-columns: 1fr; }

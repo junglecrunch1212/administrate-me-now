@@ -1,14 +1,14 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 7.0.0
+version: 8.0.0
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
 provider_preferences:
   - anthropic/claude-haiku-4-5
   - anthropic/claude-opus-4-7
-max_tokens: 4000
+max_tokens: 6000
 temperature: 0.1
 sensitivity_required: normal
 context_scopes_required: []

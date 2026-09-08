@@ -1214,6 +1214,53 @@ def _record_reconciliation(
         )
 
 
+def _record_source_inventory(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Index authorized source coordinates even when no candidate was produced."""
+    from adminme.source_policy import SourceCoordinate
+
+    payload = envelope.get("payload") or {}
+    try:
+        coordinate = SourceCoordinate.model_validate(payload.get("coordinate"))
+    except (TypeError, ValueError):
+        return
+    member_id = coordinate.owner_principal_id
+    private_scope = f"private:{member_id}"
+    if (
+        coordinate.owner_kind != "member"
+        or coordinate.tenant_id != envelope["tenant_id"]
+        or envelope.get("owner_scope") != private_scope
+        or envelope.get("visibility_scope") != private_scope
+        or envelope.get("source_adapter") != "source-policy-v2-shadow"
+        or payload.get("policy_key") != coordinate.key
+    ):
+        return
+    conn.execute(
+        """INSERT INTO source_policy_inventory (
+               tenant_id, source_event_id, policy_key, source_coordinate_json,
+               owner_member_id, owner_scope, visibility_scope, sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, source_event_id) DO UPDATE SET
+               policy_key=excluded.policy_key,
+               source_coordinate_json=excluded.source_coordinate_json,
+               last_event_id=excluded.last_event_id
+           WHERE source_policy_inventory.last_event_id < excluded.last_event_id
+             AND source_policy_inventory.owner_member_id=excluded.owner_member_id""",
+        (
+            envelope["tenant_id"],
+            payload["source_event_id"],
+            coordinate.key,
+            _json(coordinate.model_dump(mode="json")),
+            member_id,
+            private_scope,
+            private_scope,
+            envelope.get("sensitivity", "normal"),
+            envelope["event_id"],
+        ),
+    )
+
+
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     """Index one envelope without reading another projection or the network."""
 
@@ -1275,6 +1322,8 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _record_shared_reconciliation_fact(envelope, conn)
     elif event_type == "triage.reconciliation.decided":
         _record_reconciliation(envelope, conn)
+    elif event_type == "source.policy_v2.shadow_evaluated":
+        _record_source_inventory(envelope, conn)
     elif event_type == "triage.feedback.recorded":
         _record_feedback(envelope, conn)
     elif event_type in {"triage.policy_rule.approved", "triage.policy_rule.revoked"}:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import sqlcipher3
@@ -12,11 +13,42 @@ import sqlcipher3
 from adminme.candidate_policy import SOURCE_BY_ID
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
-from adminme.triage_management import current_disposition, proposed_disposition
+from adminme.triage_management import (
+    attention_rule_expired,
+    attention_values,
+    current_disposition,
+    proposed_disposition,
+)
 
 
 def _public(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
+    as_of = datetime.now(timezone.utc).isoformat()
+    schedule = json.loads(result.pop("attention_expiry_schedule_json", "[]"))
+    elapsed = [
+        value
+        for value in schedule
+        if attention_rule_expired({"expires_at": value["at"]}, as_of)
+    ]
+    attention_expired = attention_rule_expired(
+        {"expires_at": result.get("attention_expires_at")},
+        as_of,
+    )
+    if elapsed:
+        current = elapsed[-1]
+        result["learned_policy_state"] = current["state"]
+        result["learned_rule_id"] = current["rule_id"]
+        result["human_lane"] = current["lane"]
+        result["attention_rule_ids_json"] = json.dumps(current["rule_ids"])
+        result["attention_reason_json"] = json.dumps(current["reasons"])
+    elif attention_expired:
+        # Projection remains deterministic. A read restores the pre-trial
+        # visibility immediately; the next event projects/audits expiration.
+        result["learned_policy_state"] = result.get("attention_base_state", "none")
+        result["learned_rule_id"] = result.get("attention_base_rule_id")
+        result["human_lane"] = result.get("attention_base_lane") or result.get(
+            "human_lane"
+        )
     result["candidate"] = json.loads(result.pop("candidate_json") or "{}")
     route = result.pop("route_json")
     result["route"] = json.loads(route) if route else None
@@ -74,7 +106,46 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         "rule_id": result.pop("learned_rule_id", None),
         "narrow_only": True,
         "provider_effects": 0,
+        "rule_ids": json.loads(result.pop("attention_rule_ids_json", "[]")),
+        "reasons": ["trial_expired"]
+        if attention_expired and not elapsed
+        else json.loads(result.pop("attention_reason_json", "[]")),
+        "expires_at": result.pop("attention_expires_at", None),
+        "shadow": json.loads(result.pop("attention_shadow_json", "[]")),
     }
+    values = attention_values(result)
+    conditions = {
+        key: values[key]
+        for key in (
+            "provider_account_id",
+            "adapter_instance_id",
+            "native_container_id",
+            "sender_digest",
+            "message_purpose",
+        )
+        if key in values
+    }
+    result["learning_scope"] = {
+        "conditions": conditions,
+        "label": "This source and message purpose",
+        "message_purpose": values.get("message_purpose"),
+        "available": bool(
+            conditions.get("provider_account_id")
+            and conditions.get("adapter_instance_id")
+            and (
+                conditions.get("message_purpose")
+                or conditions.get("native_container_id")
+                or conditions.get("sender_digest")
+            )
+        ),
+    }
+    for key in (
+        "attention_base_state",
+        "attention_base_rule_id",
+        "attention_base_lane",
+        "attention_reason_json",
+    ):
+        result.pop(key, None)
     disposition = (
         proposed_disposition(result)
         if result["reconciliation"]["active"]
@@ -278,7 +349,11 @@ def _queue_state_sql(human_centered: bool) -> str:
         (state IN ('pending_interpretation','pending_review')
          AND admission_decision IN ('admit','conflict_review','unresolved')
          AND management_state IN ('open','clarification','suppression_proposed'))
-         AND learned_policy_state!='context_only'
+         AND COALESCE((SELECT json_extract(expiry.value,'$.state')
+              FROM json_each(attention_expiry_schedule_json) AS expiry
+              WHERE julianday(json_extract(expiry.value,'$.at'))<=julianday('now')
+              ORDER BY julianday(json_extract(expiry.value,'$.at')) DESC LIMIT 1),
+              learned_policy_state)!='context_only'
         OR admission_decision='alert_only'
         OR management_state='alert'
     )"""

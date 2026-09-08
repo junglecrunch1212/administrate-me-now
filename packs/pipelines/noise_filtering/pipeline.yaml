@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 22.0.0
+  version: 23.0.0
   kind: pipeline
 runtime:
   language: python
@@ -15,7 +15,7 @@ triggers:
     - telephony.sms_received
     - source.assessment.recovery_requested
 replay:
-  # v22 deliberately reassesses retained immutable message facts after a
+  # v23 deliberately reassesses retained immutable message facts after a
   # guarded v21 attempt appended partial history. Non-anchor sources receive
   # deterministic terminal deferral; only the latest thread anchor invokes
   # the language seam and owns candidate reconciliation.
@@ -34,7 +34,7 @@ delivery:
   concurrency: 8
 depends_on:
   skills:
-    - classify_message_nature@^7.0.0
+    - classify_message_nature@^8.0.0
   projections: []
 events_emitted:
   - messaging.classified

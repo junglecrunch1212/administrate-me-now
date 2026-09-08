@@ -1420,7 +1420,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         assert valid["review_state"]["human_gate_required"] is True
 
         pipeline_status = client.portal.call(runtime.pipelines.status)
-        assert pipeline_status["pipeline:noise_filtering"]["version"] == "22.0.0"
+        assert pipeline_status["pipeline:noise_filtering"]["version"] == "23.0.0"
         assert (
             pipeline_status["pipeline:noise_filtering"]["subscriber_status"][
                 "lag_count"

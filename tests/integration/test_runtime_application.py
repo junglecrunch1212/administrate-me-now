@@ -1555,7 +1555,7 @@ async def test_runtime_startup_terminalizes_checkpointed_recovery_command(
                 "source.assessment.recovery_requested",
             ],
             noop,
-            consumer_version="22.0.0",
+            consumer_version="23.0.0",
         )
         await checkpoint_bus.set_checkpoint(
             "pipeline:pipeline:noise_filtering", current_id
