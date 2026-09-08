@@ -10,6 +10,15 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   const requiredQuote = initialSeed.sources.find((value) => value.index === 2).quote;
   const optionalQuote = initialSeed.sources.find((value) => value.index === 3).quote;
   await call("/__gate7/settle", "POST");
+  const initialInventory = await call("/api/member/v1/surfaces/triage?triage_lens=all_candidates");
+  const initialItems = initialInventory.items.filter((item) => initialSeed.sources.some((source) => source.source_event_id === item.source_event_id));
+  for (const [index, purpose, independent] of [[1, "preparation", false], [2, "preparation", true], [3, "optional_opportunity", false]]) {
+    const source = initialSeed.sources.find((value) => value.index === index);
+    const item = initialItems.find((value) => value.source_event_id === source.source_event_id && value.title === source.quote);
+    record(`Source ${index} produces its verified assessment through the real pipeline`, item?.interpretation?.assessment_state === "verified" && item.interpretation.obligation_assessment?.purpose === purpose && item.interpretation.obligation_assessment.independent_obligation === independent, { expected: { source, purpose, independent }, items: initialItems });
+  }
+  const receipt = initialSeed.sources.find((value) => value.index === 4);
+  record("The informational receipt is retained without manufacturing a candidate", !initialItems.some((value) => value.source_event_id === receipt.source_event_id), { receipt, items: initialItems });
   await page.goto(`${baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "Choose what needs you." }).waitFor();
   const settings = await call("/api/member/v1/surfaces/settings");
@@ -50,7 +59,7 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   const rulePreviewResponse = page.waitForResponse((response) => response.url().endsWith("/triage-learning/v2/preview") && response.request().method() === "POST");
   await builder.getByRole("button", { name: "Preview matches and exceptions", exact: true }).click();
   const rulePreview = await (await rulePreviewResponse).json();
-  record("Rule preview shows matches, protected examples, and nonmatches", rulePreview.recent_impact.matched > 0 && rulePreview.recent_impact.protected > 0 && rulePreview.recent_impact.nonmatches > 0, rulePreview.recent_impact);
+  record("Rule preview shows matches, protected examples, and nonmatches", rulePreview.recent_impact.matched > 0 && rulePreview.recent_impact.protected > 0 && rulePreview.recent_impact.nonmatches > 0, { source_coordinate: source.coordinate, ...rulePreview });
   record("The required preparation request is protected by grounded obligation evidence", rulePreview.examples.some((value) => value.title === requiredQuote && value.match === "protected" && value.reasons.includes("independent_obligation")), rulePreview.examples);
   record("An optional invitation is a real assessed nonmatch", rulePreview.examples.some((value) => value.title === optionalQuote && value.proposal_id && value.match === "nonmatch"), rulePreview.examples);
   await builder.locator('[data-rule-match="protected"]').first().waitFor();

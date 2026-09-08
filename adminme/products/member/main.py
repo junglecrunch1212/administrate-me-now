@@ -5362,6 +5362,7 @@ async def surface(
         "low_signal",
         "recurring_exceptions",
         "learned_rules",
+        "alerts",
         "all_candidates",
     ] = "all_candidates",
     triage_sort: Literal["attention", "oldest", "newest"] = "attention",

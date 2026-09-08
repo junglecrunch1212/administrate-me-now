@@ -1317,7 +1317,9 @@ def _apply_reconciliation(
                   priority_rank=?, priority_basis_json=?
             WHERE tenant_id=? AND proposal_id=?
               AND owner_member_id=? AND owner_scope=? AND visibility_scope=?
-              AND reconciliation_revision < ?""",
+              AND reconciliation_revision < ?
+              AND (?=0 OR content_revision_event_id IS NULL
+                   OR content_revision_event_id=proposal_event_id)""",
         (
             payload["decision"],
             int(bool(payload["admission_active"])),
@@ -1338,11 +1340,21 @@ def _apply_reconciliation(
             expected_scope,
             expected_scope,
             payload["decision_revision"],
+            int(
+                payload["decision"]
+                in {
+                    "context_only",
+                    "source_policy_suppression",
+                    "alert_only",
+                }
+            ),
         ),
     )
     if updated.rowcount != 1:
         # A duplicate/stale receipt cannot change lifecycle or presentation
-        # after a newer receipt or a member decision has already won.
+        # after a newer receipt or a member decision has already won. Automatic
+        # attention routing also cannot reinterpret a member content revision.
+        # Actual completion/supersession outcomes remain independently valid.
         return
     decision = str(payload["decision"])
     review_decisions = {"admit", "conflict_review", "unresolved"}

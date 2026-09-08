@@ -300,10 +300,27 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
                 "SELECT * FROM triage_items WHERE proposal_id=?", (PROPOSAL,)
             ).fetchone()
         )
+        prior_diagnostic = {
+            key: prior[key]
+            for key in (
+                "state",
+                "resolved_by",
+                "resolution_reason",
+                "admission_decision",
+                "proposal_event_id",
+                "content_revision_event_id",
+                "reconciliation_event_id",
+            )
+        }
         if member_action:
-            assert prior["state"] == "pending_review"
+            assert prior["state"] == "pending_review", prior_diagnostic
             assert prior["title"] == "Member retained this obligation"
             assert prior["content_revision_event_id"] == member_id
+            assert prior["admission_decision"] in {
+                "admit",
+                "unresolved",
+                "conflict_review",
+            }, prior_diagnostic
         else:
             assert prior["state"] == "dismissed"
             assert prior["resolved_by"] == "system:source_changed"
@@ -367,6 +384,53 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
             "resolution_reason",
         ):
             assert after[key] == prior[key]
+        if member_action:
+            # A verified terminal receipt still closes the protected local
+            # interpretation; protection only defeats attention rerouting.
+            preceding = max(
+                (
+                    event
+                    for event in decisions
+                    if event["payload"]["proposal_id"] == PROPOSAL
+                ),
+                key=lambda event: event["event_id"],
+            )
+            terminal_payload = {
+                **preceding["payload"],
+                "decision": "already_satisfied",
+                "decision_revision": preceding["payload"]["decision_revision"] + 1,
+                "supersedes_reconciliation_event_id": preceding["event_id"],
+                "reason_codes": ["fixture_typed_completion"],
+            }
+            terminal_id = client.portal.call(
+                runtime.events.write,
+                EventEnvelope(
+                    event_at_ms=0,
+                    tenant_id=settings.instance.tenant_id,
+                    type="triage.reconciliation.decided",
+                    schema_version=1,
+                    occurred_at=AT,
+                    source_adapter="cross-source-reconciliation",
+                    source_account_id="internal",
+                    owner_scope=f"private:{MEMBER}",
+                    visibility_scope=f"private:{MEMBER}",
+                    sensitivity="normal",
+                    idempotency_key="fixture-member-edited-completion",
+                    payload=terminal_payload,
+                ),
+            )
+            client.portal.call(runtime.wait_for_projection, "triage", terminal_id)
+            terminal = (
+                runtime.projections.connection("triage")
+                .execute(
+                    "SELECT state,resolution_reason,content_revision_event_id FROM triage_items WHERE proposal_id=?",
+                    (PROPOSAL,),
+                )
+                .fetchone()
+            )
+            assert terminal["state"] == "dismissed"
+            assert terminal["resolution_reason"] == "reconciliation:already_satisfied"
+            assert terminal["content_revision_event_id"] == member_id
         assert client.portal.call(_events, runtime, "task.created") == []
         assert (
             client.portal.call(_events, runtime, "external_sync.write_requested") == []

@@ -679,7 +679,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             title="Review known correspondent candidate",
             target_kind="party_candidate",
         )
-        assert valued_party["payload"]["decision"] == "admit"
+        # People context remains available without inventing personal work.
+        assert valued_party["payload"]["decision"] == "context_only"
 
         weak_first_source = _write_message(
             client,

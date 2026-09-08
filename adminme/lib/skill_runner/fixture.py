@@ -175,6 +175,7 @@ def _response(request: httpx.Request) -> httpx.Response:
                         "actionability": actionability,
                         "condition": condition,
                         "condition_state": "unmet" if condition else "not_applicable",
+                        "beneficiary": None,
                         "date_role": "none",
                         "qualifying_evidence": (
                             [
