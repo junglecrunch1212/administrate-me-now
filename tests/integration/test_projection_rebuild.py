@@ -1077,7 +1077,7 @@ async def test_version_change_replays_triage_before_live_delivery(
             .execute("SELECT value FROM _projection_meta WHERE key='version'")
             .fetchone()[0]
         )
-        assert version == "11"
+        assert version == "12"
     finally:
         await runner_v8.stop()
         await log_v8.close()

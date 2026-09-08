@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Literal
 
 from fastapi.testclient import TestClient
 
@@ -95,26 +97,33 @@ async def _append_message(
     adapter_id: str,
     account_id: str,
     native_id: str,
+    provider: str = "gmail",
+    channel: str = "gmail",
+    body_text: str | None = None,
+    provider_labels: list[str] | None = None,
+    sensitivity: Literal["normal", "privileged"] = "privileged",
 ) -> str:
     payload = MessagingReceivedV5(
-        source_channel="gmail",
+        source_channel=channel,
         from_identifier="sender-fixture",
         to_identifier="owner-fixture",
         thread_id=f"thread-{native_id}",
         subject=None,
-        body_text=None,
+        body_text=body_text,
         body_html=None,
         received_at="2026-08-31T12:00:00Z",
         attachments=[],
         native_message_id=native_id,
         member_id=member_id,
         service_principal_id=None,
-        provider="gmail",
+        provider=provider,
         provider_account_id=account_id,
         workspace="personal" if member_id == A else "work",
         routing_scope="member_private",
         routing_target_id=member_id,
-        provider_labels=["IMPORTANT"],
+        provider_labels=provider_labels
+        if provider_labels is not None
+        else ["IMPORTANT"],
         important=True,
     )
     return await runtime.events.write(
@@ -128,7 +137,7 @@ async def _append_message(
             source_account_id=account_id,
             owner_scope=f"private:{member_id}",
             visibility_scope=f"private:{member_id}",
-            sensitivity="privileged",
+            sensitivity=sensitivity,
             idempotency_key=f"policy-source:{native_id}",
             payload=payload.model_dump(mode="json"),
         )
@@ -208,6 +217,190 @@ def _custom_policy(triage_mode: str, context_mode: str) -> dict[str, Any]:
     }
 
 
+def test_explicit_bulk_purpose_alert_matches_preview_and_active_admission(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "purpose-alert-instance"
+    instance.mkdir()
+    app = create_application(
+        replace(
+            _settings(instance),
+            reconciliation_admission_enabled=True,
+            human_triage_management_enabled=True,
+        )
+    )
+    body = "Join the optional fixture workshop if interested."
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        assessed_source_ids: list[str] = []
+
+        async def language_seam(
+            skill_id: str, inputs: dict[str, Any], context: Any
+        ) -> SimpleNamespace:
+            assert skill_id == "skill:classify_message_nature"
+            assessed_source_ids.append(context.triggering_event_id)
+            alias = inputs["context_pack"]["current_source_id"]
+            return SimpleNamespace(
+                output={
+                    "assessment_contract": "personal-obligation-assessment-v1",
+                    "classification": "promotional",
+                    "confidence": 0.9,
+                    "reasons": ["fixture_optional_workshop"],
+                    "reply_signal": "not_required",
+                    "automated": True,
+                    "transactional_due": False,
+                    "security_code": False,
+                    "person_to_person": False,
+                    "deadline": None,
+                    "candidates": [
+                        {
+                            "target_kind": "task",
+                            "title": body,
+                            "evidence_source_id": alias,
+                            "evidence_quote": body,
+                            "candidate": {},
+                            "confidence": 0.9,
+                            "reasons": ["fixture_conditional_opportunity"],
+                            "action_owner": "member",
+                            "lifecycle_state": "open",
+                            "compact_summary": body,
+                            "case_summary": None,
+                            "why_member": None,
+                            "next_step": None,
+                            "thread_state": "unclear",
+                            "unresolved_questions": [],
+                            "related_source_ids": [],
+                            "obligation_assessment": {
+                                "purpose": "optional_opportunity",
+                                "actionability": "conditional",
+                                "condition": "if interested",
+                                "condition_state": "unknown",
+                                "beneficiary": None,
+                                "date_role": "none",
+                                "qualifying_evidence": [
+                                    {
+                                        "source_id": alias,
+                                        "role": "condition",
+                                        "quote": "if interested",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+                model_used="fixture-purpose-alert",
+                usage={},
+            )
+
+        runtime.run_skill_fn = language_seam
+        runtime.pipelines._run_skill_fn = language_seam
+        source_id = client.portal.call(
+            _append_message,
+            runtime,
+            A,
+            "gmail-policy-a",
+            "provider-account-a",
+            "optional-purpose-alert",
+            "gmail",
+            "gmail",
+            body,
+            ["CATEGORY_UPDATES"],
+            "normal",
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:noise_filtering",
+            source_id,
+        )
+        assert assessed_source_ids == [source_id]
+
+        async def source_proposals() -> list[dict[str, Any]]:
+            return [
+                event
+                async for event in runtime.event_log.read_since(
+                    types=["triage.item.proposed"]
+                )
+                if event["payload"]["source_event_id"] == source_id
+            ]
+
+        [proposal] = client.portal.call(source_proposals)
+        assert proposal["schema_version"] == 5
+        assessment = proposal["payload"]["interpretation"]["obligation_assessment"]
+        assert assessment["purpose"] == "optional_opportunity"
+        assert assessment["independent_obligation"] is False
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "triage-reconciliation:admission",
+            proposal["event_id"],
+        )
+        source = next(
+            item
+            for item in _v2_control(client, A_HEADERS)["sources"]
+            if (item.get("coordinate") or {}).get("adapter_instance_id")
+            == "gmail-policy-a"
+        )
+        policy = {
+            **source["policy"],
+            "preset": "custom",
+            "purpose_routes": [{"purpose": "optional_opportunity", "route": "alert"}],
+        }
+        preview = client.post(
+            "/api/member/v1/settings/source-policies-v2/preview",
+            headers=A_HEADERS,
+            json={
+                "coordinate": source["coordinate"],
+                "preset": "custom",
+                "policy": policy,
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        [example] = preview.json()["examples"]
+        assert example["proposed_route"]["triage"] == "none"
+        assert example["proposed_route"]["alert"] == "actionable"
+        save = client.post(
+            f"/api/member/v1/settings/source-policies-v2/{source['policy_key']}",
+            headers=A_HEADERS,
+            json={
+                "coordinate": source["coordinate"],
+                "expected_revision": 0,
+                "request_id": "fixture-save-purpose-alert",
+                "preset": "custom",
+                "policy": policy,
+            },
+        )
+        assert save.status_code == 202, save.text
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "triage-reconciliation:admission",
+            save.json()["event_id"],
+        )
+        revisions = client.portal.call(
+            runtime.event_log.get_by_causation, save.json()["event_id"]
+        )
+        [decision] = [
+            event
+            for event in revisions
+            if event["type"] == "triage.reconciliation.decided"
+        ]
+        assert decision["payload"]["decision"] == "alert_only"
+        assert decision["payload"]["policy"]["alert_route"] == "actionable"
+        assert "purpose_route:alert" in decision["payload"]["reason_codes"]
+        client.portal.call(runtime.wait_for_projection, "triage", decision["event_id"])
+        row = (
+            runtime.projections.connection("triage")
+            .execute(
+                "SELECT admission_decision FROM triage_items WHERE tenant_id=? AND proposal_id=?",
+                (
+                    runtime.settings.instance.tenant_id,
+                    proposal["payload"]["proposal_id"],
+                ),
+            )
+            .fetchone()
+        )
+        assert row["admission_decision"] == "alert_only"
+        assert client.portal.call(_provider_effect_count, runtime) == 0
+
+
 def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
     tmp_path: Path,
 ) -> None:
@@ -245,11 +438,13 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
         assert a_provider["policy_key"] != a_work_provider["policy_key"]
         assert a_provider["policy_key"] != b_provider["policy_key"]
         assert all(
-            source["coordinate"]["owner_principal_id"] == A
+            source["coordinate"] is None
+            or source["coordinate"]["owner_principal_id"] == A
             for source in a_control["sources"]
         )
         assert all(
-            source["coordinate"]["owner_principal_id"] == B
+            source["coordinate"] is None
+            or source["coordinate"]["owner_principal_id"] == B
             for source in b_control["sources"]
         )
 
@@ -355,7 +550,7 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
         shadow = client.portal.call(_wait_for_shadow, runtime, source_id)
         assert shadow["payload"]["policy_origin"] == "exact_override"
         assert shadow["payload"]["shadow_route"]["triage"] == "none"
-        assert shadow["payload"]["shadow_route"]["context"] == "metadata_only"
+        assert shadow["payload"]["shadow_route"]["context"] == "typed_facts"
         assert shadow["payload"]["signals"]["provider_labels_non_authoritative"] == [
             "IMPORTANT"
         ]
@@ -514,3 +709,228 @@ def test_exact_source_policy_shadow_privacy_preview_replay_and_zero_effects(
         assert (
             client.portal.call(_provider_effect_count, restored_app.state.runtime) == 0
         )
+
+
+def test_retained_imessage_future_adapter_inventory_and_independent_attention(
+    tmp_path: Path,
+) -> None:
+    """Actual source→proposal→reconciliation→Settings, with no connected provider."""
+    instance = tmp_path / "retained-source-instance"
+    instance.mkdir()
+    settings = replace(
+        _settings(instance),
+        reconciliation_admission_enabled=True,
+        human_triage_management_enabled=True,
+    )
+    saved_keys: list[str] = []
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        initial = _v2_control(client, A_HEADERS)
+        assert initial["admission_active"] is True
+        future = next(
+            row
+            for row in initial["sources"]
+            if row["source_kind"] == "adapter:microsoft_graph_mail"
+        )
+        assert future["coordinate"] is None
+        assert future["connection_state"] == "not_connected"
+        assert future["configurable"] is False
+
+        for index, (provider, channel) in enumerate(
+            (("bluebubbles", "imessage"), ("fixture", "future_reviewed_channel"))
+        ):
+            adapter = f"retained-source-adapter-{index}"
+            account = f"retained-source-account-{index}"
+            source_event_id = client.portal.call(
+                _append_message,
+                runtime,
+                A,
+                adapter,
+                account,
+                f"retained-source-message-{index}",
+                provider,
+                channel,
+            )
+            shadow = client.portal.call(_wait_for_shadow, runtime, source_event_id)
+            client.portal.call(
+                runtime.wait_for_projection, "context_fabric", shadow["event_id"]
+            )
+            observed = next(
+                row
+                for row in _v2_control(client, A_HEADERS)["sources"]
+                if (row.get("coordinate") or {}).get("provider_account_id") == account
+                and row.get("retained_source_count") == 1
+            )
+            assert observed["retained_candidate_count"] == 0
+            assert observed["connection_state"] == "disconnected"
+            proposal_id = f"retained-source-proposal-{index}"
+            proposal_event_id = client.portal.call(
+                runtime.events.write,
+                EventEnvelope(
+                    event_at_ms=1_788_200_100_000 + index,
+                    tenant_id=runtime.settings.instance.tenant_id,
+                    type="triage.item.proposed",
+                    schema_version=1,
+                    occurred_at="2026-08-31T12:01:00Z",
+                    source_adapter="deterministic-candidate-fixture",
+                    source_account_id="pipeline",
+                    owner_scope=f"private:{A}",
+                    visibility_scope=f"private:{A}",
+                    sensitivity="normal",
+                    idempotency_key=proposal_id,
+                    payload={
+                        "proposal_id": proposal_id,
+                        "target_kind": "task",
+                        "owner_member_id": A,
+                        "title": "Review fixture action",
+                        "candidate": {},
+                        "route": {"member_id": A},
+                        "source_event_id": source_event_id,
+                        "confidence": 0.5,
+                        "reasons": ["fixture_action"],
+                    },
+                ),
+            )
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "triage-reconciliation:admission",
+                proposal_event_id,
+            )
+            children = client.portal.call(
+                runtime.event_log.get_by_causation, proposal_event_id
+            )
+            decision = next(
+                row
+                for row in children
+                if row["type"] == "triage.reconciliation.decided"
+            )
+            client.portal.call(
+                runtime.wait_for_projection, "context_fabric", decision["event_id"]
+            )
+            client.portal.call(
+                runtime.wait_for_projection, "triage", decision["event_id"]
+            )
+            inventory = _v2_control(client, A_HEADERS)
+            retained = next(
+                row
+                for row in inventory["sources"]
+                if row.get("retained_candidate_count") == 1
+                and (row.get("coordinate") or {}).get("provider_account_id") == account
+            )
+            assert retained["connection_state"] == "disconnected"
+            assert retained["configurable"] is True
+            assert retained["acquisition"]["provider_capability"] == "unavailable"
+            if channel == "imessage":
+                assert retained["coordinate"]["native_container_kind"] == "conversation"
+            saved_keys.append(retained["policy_key"])
+            custom = {
+                **retained["policy"],
+                "preset": "custom",
+                "context_mode": "none",
+                "alert_mode": "security_only",
+                "attention_mode": "possibilities",
+                "candidate_kinds": ["commitment"],
+                "purpose_routes": [
+                    {
+                        "purpose": "survey",
+                        "route": "reference",
+                        "preserve_independent_obligations": True,
+                    }
+                ],
+            }
+            kind_preview = client.post(
+                "/api/member/v1/settings/source-policies-v2/preview",
+                headers=A_HEADERS,
+                json={
+                    "coordinate": retained["coordinate"],
+                    "preset": "custom",
+                    "policy": custom,
+                },
+            )
+            assert kind_preview.status_code == 200, kind_preview.text
+            [kind_example] = kind_preview.json()["examples"]
+            assert kind_example["proposal_id"] == proposal_id
+            assert kind_example["previous_route"]["triage"] == "review"
+            assert kind_example["proposed_route"]["triage"] == "none"
+            assert "candidate_kind_not_enabled" in kind_example["reason_codes"]
+            assert kind_preview.json()["mutation_performed"] is False
+            save = client.post(
+                f"/api/member/v1/settings/source-policies-v2/{retained['policy_key']}",
+                headers=A_HEADERS,
+                json={
+                    "coordinate": retained["coordinate"],
+                    "expected_revision": index * 2,
+                    "request_id": f"retained-custom-{index}",
+                    "preset": "custom",
+                    "policy": custom,
+                },
+            )
+            assert save.status_code == 202, save.text
+            assert save.json()["live_admission_changed"] is True
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "triage-reconciliation:admission",
+                save.json()["event_id"],
+            )
+            revised = client.portal.call(
+                runtime.event_log.get_by_causation, save.json()["event_id"]
+            )
+            kind_decision = next(
+                row
+                for row in revised
+                if row["type"] == "triage.reconciliation.decided"
+                and row["payload"]["proposal_id"] == proposal_id
+            )
+            assert kind_decision["payload"]["admission_active"] is True
+            assert kind_decision["payload"]["decision"] == "source_policy_suppression"
+            assert (
+                "candidate_kind_not_enabled" in kind_decision["payload"]["reason_codes"]
+            )
+            focused = client.post(
+                f"/api/member/v1/settings/source-policies-v2/{retained['policy_key']}",
+                headers=A_HEADERS,
+                json={
+                    "coordinate": retained["coordinate"],
+                    "expected_revision": index * 2 + 1,
+                    "request_id": f"retained-focused-{index}",
+                    "preset": "focused",
+                },
+            )
+            assert focused.status_code == 202, focused.text
+            assert focused.json()["policy"]["context_mode"] == "none"
+            assert focused.json()["policy"]["alert_mode"] == "security_only"
+            assert focused.json()["policy"]["candidate_kinds"] == ["commitment"]
+            assert (
+                focused.json()["policy"]["purpose_routes"] == custom["purpose_routes"]
+            )
+            preview = client.post(
+                "/api/member/v1/settings/source-policies-v2/preview",
+                headers=A_HEADERS,
+                json={"coordinate": retained["coordinate"], "preset": "balanced"},
+            )
+            assert preview.status_code == 200, preview.text
+            assert preview.json()["mutation_performed"] is False
+            assert preview.json()["estimated_recent_effect"]["source_facts"] == 1
+            assert preview.json()["examples"][0]["source_event_id"] == source_event_id
+            assert preview.json()["examples"][0]["previous_route"]
+            assert preview.json()["examples"][0]["proposed_route"]
+            assert all(
+                row.get("policy_key") != retained["policy_key"]
+                for row in _v2_control(client, B_HEADERS)["sources"]
+            )
+        assert client.portal.call(_provider_effect_count, runtime) == 0
+
+    (instance / "config" / "settings-control.json").unlink()
+    with TestClient(create_application(settings)) as client:
+        inventory = _v2_control(client, A_HEADERS)
+        assert inventory["revision"] == 4
+        for key in saved_keys:
+            retained = next(
+                row for row in inventory["sources"] if row.get("policy_key") == key
+            )
+            assert retained["connection_state"] == "disconnected"
+            assert retained["policy"]["attention_mode"] == "obligations"
+            assert retained["policy"]["context_mode"] == "none"
+            assert retained["policy"]["candidate_kinds"] == ["commitment"]
+            assert retained["retained_candidate_count"] == 1

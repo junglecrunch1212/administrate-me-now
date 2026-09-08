@@ -1,5 +1,37 @@
 # UX behavior contract
 
+CO-030 amendment (2026-09-08): source-aware Triage separates grounded
+responsibility from the member's attention preference. With human management
+active, **Needs you**, **Alerts**, **History**, and **All candidates** are the
+primary lenses; additional interpretation, details, possibility, recurrence,
+and older shadow-rule views remain reachable. Updates and source history open
+the actual Comms inventory. Exact source evidence includes the conditions,
+negations, and date roles supporting the action, while generated interpretation
+remains a review aid.
+
+Settings shows connected/configured, disconnected-with-retained-history,
+not-connected, and missing-attribution states independently. Exact retained
+accounts and native containers remain configurable after disconnection; an
+unconnected catalog row must not invent an account or imply enrollment.
+Attention presets and purpose routes preserve source-assessment, context,
+alerts, and candidate types unless the member changes those controls
+explicitly. iMessage and future reviewed sources use the same controls within
+their actual adapter/permission ceilings.
+
+Rules display **Applies to**, **When**, **Except**, **Then**, and **Duration**,
+with real matching, protected, excepted, and nonmatching examples before a
+member saves or tries them. Missing recent data is explicit and never replaced
+by a synthetic production example. Future trials are bounded by time and
+independent observations; shadow observation changes no visibility. Members
+can inspect, pause, report a missed obligation, or undo rules with retained
+history. **Already handled**, **Not useful**, and ownership/duplicate/extraction
+corrections do not silently create future preferences. **Do this for similar
+messages** is a separate explicit action. Narrow layouts, native controls,
+safe text rendering, exact-source scope, stale revisions, serialized mutations,
+and uncertain-result/reload locks remain required under CO-016. CO-030/AC-60
+supersede conflicting earlier labels, coupled presets, and trial descriptions;
+the historical compatibility paths remain readable.
+
 CO-020 amendment (2026-08-30): Triage opens as a human decision workspace,
 not a projection-accounting console. **Needs attention** contains pending
 candidates with a fixed, explainable non-standard lane; ordinary candidates

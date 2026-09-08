@@ -1,9 +1,9 @@
 """Exact per-principal, per-source policy and shadow routing.
 
-This is the V2 policy contract.  It deliberately does not replace the live
-``candidate_policy_v1`` admission path.  Source facts are mapped to an exact,
-owner-scoped coordinate, an immutable policy decision is computed, and a
-shadow receipt is emitted.  Provider execution is never a policy plane.
+Source facts map to an exact owner/account/container boundary. Interpretation,
+attention, alerts and permitted context remain distinct; the reconciler applies
+the resulting local route only under its runtime gate. The intake comparison
+receipt remains non-mutating. Provider execution is never a policy plane.
 """
 
 from __future__ import annotations
@@ -37,7 +37,41 @@ SourceClass = Literal[
     "context_observation",
     "unknown",
 ]
-PolicyPreset = Literal["focused", "balanced", "review_everything", "custom"]
+PolicyPreset = Literal["focused", "balanced", "review_everything", "manual", "custom"]
+AttentionMode = Literal["obligations", "possibilities", "manual"]
+MessagePurpose = Literal[
+    "personal_request",
+    "member_promise",
+    "appointment",
+    "preparation",
+    "payment",
+    "account_alert",
+    "optional_opportunity",
+    "status_update",
+    "receipt",
+    "survey",
+    "reference",
+    "recurrence",
+    "unknown",
+]
+NativeContainerKind = Literal[
+    "folder", "list", "label", "calendar", "source", "conversation", "project"
+]
+PURPOSE_OPTIONS = (
+    ("personal_request", "Personal requests"),
+    ("member_promise", "My promises"),
+    ("appointment", "Appointments and bookings"),
+    ("preparation", "Forms and preparation"),
+    ("payment", "Payments and bills"),
+    ("account_alert", "Account alerts"),
+    ("optional_opportunity", "Optional opportunities"),
+    ("status_update", "Status updates"),
+    ("receipt", "Receipts"),
+    ("survey", "Optional surveys"),
+    ("reference", "Reference material"),
+    ("recurrence", "Repeating obligations"),
+    ("unknown", "Unclear purpose"),
+)
 AcquisitionState = Literal["active", "paused"]
 TriageMode = Literal[
     "direct_work_order_proposal",
@@ -94,9 +128,7 @@ class SourceCoordinate(BaseModel):
     device_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     connector_id: str | None = Field(default=None, min_length=1, max_length=240)
     protected_source_id: str | None = Field(default=None, min_length=1, max_length=500)
-    native_container_kind: (
-        Literal["folder", "list", "label", "calendar", "source"] | None
-    ) = None
+    native_container_kind: NativeContainerKind | None = None
     native_container_id: str | None = Field(default=None, min_length=1, max_length=1000)
 
     @model_validator(mode="after")
@@ -159,6 +191,16 @@ class SourceCoordinate(BaseModel):
         )
 
 
+class PurposeRoute(BaseModel):
+    """A preference for one assessed action, never a sender-wide block."""
+
+    model_config = {"extra": "forbid", "frozen": True}
+
+    purpose: MessagePurpose
+    route: Literal["review", "reference", "alert"]
+    preserve_independent_obligations: Literal[True] = True
+
+
 class SourcePolicyV2(BaseModel):
     """Bounded settings that cannot manufacture access or provider authority."""
 
@@ -170,6 +212,8 @@ class SourcePolicyV2(BaseModel):
     alert_mode: AlertMode = "financial_and_security"
     context_mode: ContextMode = "typed_facts"
     candidate_kinds: list[str] = Field(min_length=1, max_length=20)
+    attention_mode: AttentionMode | None = None
+    purpose_routes: list[PurposeRoute] = Field(default_factory=list, max_length=13)
     scope_widening: Literal[False] = False
     credential_creation: Literal[False] = False
     provider_write_authority: Literal[False] = False
@@ -182,6 +226,9 @@ class SourcePolicyV2(BaseModel):
             raise ValueError("candidate kinds must be unique")
         if set(selected) - set(V2_CANDIDATE_KINDS):
             raise ValueError("candidate kind is outside the bounded V2 catalog")
+        purposes = [rule.purpose for rule in self.purpose_routes]
+        if len(set(purposes)) != len(purposes):
+            raise ValueError("each message purpose must have one unambiguous route")
         return self
 
 
@@ -232,6 +279,13 @@ class SignalAssessment(BaseModel):
     llm_extracted_claims_non_authoritative: list[str] = Field(
         default_factory=list, max_length=20
     )
+    verified_obligation: bool = False
+    candidate_kind: str | None = Field(default=None, min_length=1, max_length=120)
+    message_purpose: MessagePurpose = "unknown"
+    purpose_evidence_verified: bool = False
+    obligation_actionability: Literal[
+        "required", "conditional", "informational", "none", "unknown"
+    ] = "unknown"
     member_priority: str | None = Field(default=None, max_length=120)
     provider_or_sender_urgency_non_authoritative: str | None = Field(
         default=None, max_length=120
@@ -254,37 +308,75 @@ PRESETS: dict[str, SourcePolicyV2] = {
         preset="focused",
         triage_mode="review",
         alert_mode="financial_and_security",
-        context_mode="metadata_only",
-        candidate_kinds=[
-            "task",
-            "commitment",
-            "calendar_event",
-            "reminder",
-            "coordination",
-        ],
+        context_mode="typed_facts",
+        attention_mode="obligations",
+        candidate_kinds=list(V2_CANDIDATE_KINDS),
     ),
     "balanced": SourcePolicyV2(
         preset="balanced",
         triage_mode="review",
         alert_mode="financial_and_security",
         context_mode="typed_facts",
+        attention_mode="possibilities",
         candidate_kinds=list(V2_CANDIDATE_KINDS),
     ),
     "review_everything": SourcePolicyV2(
         preset="review_everything",
         triage_mode="review",
-        alert_mode="actionable_and_critical",
-        context_mode="typed_facts_safe_snippet",
+        alert_mode="financial_and_security",
+        context_mode="typed_facts",
+        attention_mode="possibilities",
+        candidate_kinds=list(V2_CANDIDATE_KINDS),
+    ),
+    "manual": SourcePolicyV2(
+        preset="manual",
+        attention_mode="manual",
         candidate_kinds=list(V2_CANDIDATE_KINDS),
     ),
 }
 
 
-def policy_for_preset(preset: str) -> SourcePolicyV2:
+def policy_for_preset(
+    preset: str, *, current_policy: SourcePolicyV2 | None = None
+) -> SourcePolicyV2:
     try:
-        return PRESETS[preset].model_copy(deep=True)
+        selected = PRESETS[preset].model_copy(deep=True)
     except KeyError as exc:
         raise ValueError("unknown source-policy preset") from exc
+    if current_policy is None:
+        return selected
+    # Presets govern attention only. Access, context, alerts, existing kind
+    # ceilings and explicit purpose choices require their own visible edits.
+    return current_policy.model_copy(
+        update={
+            "preset": selected.preset,
+            "attention_mode": selected.attention_mode,
+            "triage_mode": selected.triage_mode,
+        }
+    )
+
+
+def parent_source_coordinate(coordinate: SourceCoordinate) -> SourceCoordinate:
+    """The same attributed source with its optional native sub-container removed."""
+
+    if coordinate.native_container_kind in {None, "source"}:
+        return coordinate
+    return coordinate.model_copy(
+        update={
+            "native_container_kind": "source"
+            if coordinate.protected_source_id
+            else None,
+            "native_container_id": coordinate.protected_source_id,
+        }
+    )
+
+
+def source_coordinate_contains(
+    scope: SourceCoordinate, source: SourceCoordinate
+) -> bool:
+    """Exact account/owner/adapter matching, with only explicit container ancestry."""
+
+    return scope.key == source.key or scope.key == parent_source_coordinate(source).key
 
 
 def validate_custom_policy(value: Mapping[str, Any]) -> SourcePolicyV2:
@@ -409,6 +501,16 @@ def source_coordinate_for_event(
         owner_id = "unattributed"
 
     source_kind = source_id_for_event(event) or event_type
+    if event_type in {"messaging.received", "messaging.sent", "telephony.sms_received"}:
+        # Typed provider attribution takes precedence over an ambiguous channel
+        # label: SMS observed on the Messages bridge is not a Twilio account.
+        source_kind = {
+            "gmail": "adapter:gmail",
+            "microsoft_graph": "adapter:microsoft_graph_mail",
+            "bluebubbles": "adapter:bluebubbles",
+            "twilio_sms": "adapter:twilio_sms",
+            "twilio_whatsapp": "adapter:twilio_whatsapp",
+        }.get(str(payload.get("provider") or ""), source_kind)
     catalog_source = SOURCE_BY_ID.get(source_kind)
     adapter_kind = str(
         payload.get("adapter_kind")
@@ -436,11 +538,19 @@ def source_coordinate_for_event(
         adapter_instance = source_kind
         account_id = owner_id
         workspace = "private_portal"
-    container_kind: Literal["folder", "list", "label", "calendar", "source"] | None = (
-        None
-    )
+    container_kind: NativeContainerKind | None = None
     container_id: str | None = None
+    # Conversation identity is an optional preference boundary, never an
+    # obligation identity. Gmail threads remain evidence continuity by default.
+    chat_channel = str(payload.get("source_channel") or "").casefold()
+    if chat_channel in {"imessage", "sms", "whatsapp", "bluebubbles"}:
+        thread_id = payload.get("native_chat_id") or payload.get("thread_id")
+        if isinstance(thread_id, str) and thread_id.strip():
+            container_kind = "conversation"
+            container_id = thread_id.strip()
     for kind, key in (
+        ("conversation", "conversation_id"),
+        ("project", "project_id"),
         ("source", "protected_source_id"),
         ("calendar", "calendar_external_id"),
         ("calendar", "calendar_id"),
@@ -452,7 +562,7 @@ def source_coordinate_for_event(
         ("folder", "folder"),
     ):
         value = payload.get(key)
-        if isinstance(value, str) and value.strip():
+        if container_id is None and isinstance(value, str) and value.strip():
             container_kind = kind  # type: ignore[assignment]
             container_id = value.strip()
             break
@@ -615,7 +725,7 @@ def assess_source_signals(event: Mapping[str, Any]) -> SignalAssessment:
             "incidental_entity_extraction",
         )
     }
-    return SignalAssessment(
+    assessed = SignalAssessment(
         authenticated_member_instruction=direction == "member_authored",
         known_human_incoming_request=trusted_known_human
         and bool(payload.get("request_kind")),
@@ -638,7 +748,9 @@ def assess_source_signals(event: Mapping[str, Any]) -> SignalAssessment:
             str(provider_urgency)[:120] if provider_urgency is not None else None
         ),
         freshness=freshness,
-        **typed_flags,
+    )
+    return SignalAssessment.model_validate(
+        {**assessed.model_dump(mode="json"), **typed_flags}
     )
 
 
@@ -663,13 +775,6 @@ def route_for_policy(
             reason_codes=[*reasons, "authenticated_member_intent_cannot_be_suppressed"],
         )
 
-    if policy.acquisition_state == "paused":
-        return RouteDecision(
-            triage="none",
-            alert="none",
-            context="none",
-            reason_codes=[*reasons, "source_acquisition_paused"],
-        )
     if policy.triage_mode == "ignore":
         return RouteDecision(
             triage="none",
@@ -677,14 +782,6 @@ def route_for_policy(
             context="none",
             reason_codes=[*reasons, "policy_ignore_preserves_provenance_only"],
         )
-    if policy.triage_mode == "manual_only":
-        return RouteDecision(
-            triage="none",
-            alert="none",
-            context="none",
-            reason_codes=[*reasons, "policy_manual_only"],
-        )
-
     alert: Literal["security", "financial", "actionable", "none"] = "none"
     if signals.security_alert and policy.alert_mode != "none":
         alert = "security"
@@ -699,25 +796,104 @@ def route_for_policy(
     ):
         alert = "actionable"
 
+    if policy.acquisition_state == "paused":
+        # This attention policy pauses automatic work assessment. Provider
+        # acquisition is independently controlled by the connection boundary.
+        return RouteDecision(
+            triage="none",
+            alert=alert,
+            context=policy.context_mode,
+            reason_codes=[
+                *reasons,
+                "source_assessment_paused_context_and_alerts_preserved",
+            ],
+        )
+
+    if policy.triage_mode == "manual_only" or policy.attention_mode == "manual":
+        return RouteDecision(
+            triage="none",
+            alert=alert,
+            context=policy.context_mode,
+            reason_codes=[*reasons, "policy_manual_only"],
+        )
+
     if policy.triage_mode == "alert_only":
         return RouteDecision(
             triage="none",
             alert=alert,
-            context="none",
+            context=policy.context_mode,
             reason_codes=[*reasons, "policy_alert_only"],
         )
     if policy.triage_mode == "context_only":
-        context = (
-            "typed_facts" if policy.context_mode == "none" else policy.context_mode
-        )
         return RouteDecision(
             triage="none",
             alert=alert,
-            context=context,
+            context=policy.context_mode,
             reason_codes=[*reasons, "policy_context_only_without_triage"],
         )
 
-    if policy.preset == "focused" and not any(
+    if (
+        signals.candidate_kind is not None
+        and signals.candidate_kind not in policy.candidate_kinds
+    ):
+        return RouteDecision(
+            triage="none",
+            alert=alert,
+            context=policy.context_mode,
+            reason_codes=[
+                *reasons,
+                "candidate_kind_not_enabled",
+                f"candidate_kind:{signals.candidate_kind}",
+            ],
+        )
+
+    independent_obligation = any(
+        (
+            signals.verified_obligation,
+            signals.known_human_incoming_request,
+            signals.member_promise,
+            signals.human_reply_requiring_follow_up,
+            signals.transactional_deadline,
+        )
+    )
+    purpose_rule = next(
+        (
+            rule
+            for rule in policy.purpose_routes
+            if signals.purpose_evidence_verified
+            and rule.purpose == signals.message_purpose
+        ),
+        None,
+    )
+    if purpose_rule is not None:
+        reasons.append(f"message_purpose:{purpose_rule.purpose}")
+        if purpose_rule.route != "review":
+            if (
+                purpose_rule.route == "alert"
+                and alert == "none"
+                and policy.alert_mode != "none"
+            ):
+                alert = "actionable"
+            return RouteDecision(
+                triage="none",
+                alert=alert,
+                context=policy.context_mode,
+                reason_codes=[*reasons, f"purpose_route:{purpose_rule.route}"],
+            )
+        # A reviewed purpose applies only to this assessed action. Other
+        # independent actions in the same message are assessed separately.
+        return RouteDecision(
+            triage="review",
+            alert=alert,
+            context=policy.context_mode,
+            candidate_kinds=list(policy.candidate_kinds),
+            reason_codes=[*reasons, "purpose_route:review"],
+        )
+
+    if (
+        policy.attention_mode == "obligations"
+        or (policy.attention_mode is None and policy.preset == "focused")
+    ) and not any(
         (
             signals.known_human_incoming_request,
             signals.member_promise,
@@ -725,12 +901,19 @@ def route_for_policy(
             signals.transactional_deadline,
             signals.security_alert,
             signals.financial_notice,
+            signals.verified_obligation,
         )
     ):
         triage: Literal["direct_work_order_proposal", "review", "none"] = "none"
         reasons.append("focused_requires_typed_actionability")
     elif (
-        policy.preset == "balanced"
+        (
+            policy.preset == "balanced"
+            or (
+                policy.attention_mode == "possibilities"
+                and policy.preset != "review_everything"
+            )
+        )
         and any(
             (
                 signals.spam,
@@ -740,6 +923,12 @@ def route_for_policy(
             )
         )
         and not signals.relationship_valued_communication
+        and not independent_obligation
+        and not (
+            policy.attention_mode == "possibilities"
+            and signals.purpose_evidence_verified
+            and signals.obligation_actionability == "conditional"
+        )
     ):
         triage = "none"
         reasons.append("balanced_suppresses_low_actionability_signal")
@@ -797,6 +986,8 @@ def source_policy_event_types(repository_root: Any) -> list[str]:
 __all__ = [
     "AcquisitionEvidence",
     "PRESETS",
+    "PURPOSE_OPTIONS",
+    "PurposeRoute",
     "V2_CANDIDATE_KINDS",
     "RouteDecision",
     "SignalAssessment",
@@ -805,8 +996,10 @@ __all__ = [
     "assess_source_signals",
     "current_v1_route",
     "policy_for_preset",
+    "parent_source_coordinate",
     "route_for_policy",
     "source_coordinate_for_event",
+    "source_coordinate_contains",
     "source_policy_event_types",
     "validate_custom_policy",
 ]

@@ -37,6 +37,7 @@ Recipients: {{ message.recipients | join(", ") }}
 {% if message.attachment_names %}Attachments: {{ message.attachment_names | join(", ") }}{% endif %}
 Body:
 {{ message.body_text }}
+{% if message.text_truncated %}[Source text truncated; omitted content was not assessed.]{% endif %}
 {% endfor %}
 {% endif %}
 
@@ -75,12 +76,15 @@ Also extract possible household candidates for human review:
 - task — an action the member must take, including a bill to pay, a document
   to review, a reply or decision explicitly requested, a form to submit, or a
   booking/purchase/follow-up to complete;
-- calendar_event — an appointment, reservation, meeting, deadline block, or
-  other occurrence with date/time evidence;
-- reminder — a due notice, warning, renewal, or cue worth remembering even
-  when the message does not yet contain a fully specified task;
-- recurrence — an explicitly repeating bill, subscription, renewal, payment,
-  appointment, or household rhythm;
+- calendar_event — a confirmed appointment, purchased/registered event,
+  reservation, or agreed meeting with supported date/time. A deadline alone
+  belongs on a task and does not reserve calendar time. An unaccepted offer or
+  tentative plan is not a confirmed event;
+- reminder — a distinct personal action or member-requested cue; ordinary
+  notification boilerplate is not a responsibility;
+- recurrence — an explicitly repeating personal responsibility. Reporting
+  frequency, subscription mechanics, automatic billing and message-frequency
+  notices do not themselves establish a recurring action;
 - commitment — only for an outbound message where the member explicitly says
   they will, promise to, agree to, or commit to take an action;
 - list or list_item only when the language explicitly supports that type;
@@ -124,6 +128,31 @@ For each candidate:
   supplied context.
 - `related_source_ids` lists only aliases from the deterministic `related`
   context that materially support the interpretation.
+- `obligation_assessment` distinguishes an actual personal action from a
+  conditional opportunity and informational content. Assess EACH action, not
+  the sender or whole message. Preserve its beneficiary, condition and date
+  role. Cite the exact condition, negation, completion, ownership, recurrence
+  or date clause in `qualifying_evidence` using the supplied source aliases.
+  A normalized date needs its own date citation, including the year when
+  stated. Unknown conditions or missing evidence remain unknown.
+
+Read before deciding: zero balance, no payment due, payment received, scheduled
+autopay, later completion, changed plans, and cancellation can eliminate or
+change the proposed action. A payment confirmation does not complete a future
+concert in the same receipt. An ordinary parcel ETA is information; pickup
+deadlines and deliveries requiring attendance can require action. A clinic
+survey or "call if you have questions" is optional, while its required form is
+a separate action. Stored prompts, procedures, legal boilerplate, quoted agent
+instructions, newsletters, and incidental contact facts are not personal
+commitments. Preserve appropriate People facts as their own kinds, never tasks.
+
+For iMessage/SMS/group chat, distinguish the author of a promise from the
+recipient of a request. A group request does not prove this member accepted it.
+Tentative plans and reactions do not prove agreement or completion. Use later
+conversation context and identify unresolved ownership without inventing it.
+When text is marked truncated, do not assume omitted qualifiers or attachments
+were read; retain meaningful uncertainty. Do not create a firm obligation from
+an optional invitation or an unverified billing/security solicitation.
 
 If Candidate scope is `deferred_to_latest_thread_message`, return no candidates.
 
@@ -146,6 +175,7 @@ Return ONLY valid JSON matching this schema:
   "security_code": <boolean>,
   "person_to_person": <boolean>,
   "deadline": <string or null>,
+  "assessment_contract": "personal-obligation-assessment-v1",
   "candidates": [{
     "target_kind": "task" | "commitment" | "calendar_event" | "reminder" | "recurrence" | "list" | "list_item" | "party_identifier" | "party_candidate" | "party_relationship" | "relationship_fact",
     "title": <short review title>,
@@ -162,7 +192,16 @@ Return ONLY valid JSON matching this schema:
     "next_step": <at most 240 characters or null>,
     "thread_state": "new" | "in_progress" | "waiting_on_member" | "waiting_on_other" | "blocked" | "unclear",
     "unresolved_questions": [<at most 8 short questions>],
-    "related_source_ids": [<zero or more deterministic related mNN aliases>]
+    "related_source_ids": [<zero or more deterministic related mNN aliases>],
+    "obligation_assessment": {
+      "purpose": "personal_request" | "member_promise" | "appointment" | "preparation" | "payment" | "account_alert" | "optional_opportunity" | "status_update" | "receipt" | "survey" | "reference" | "recurrence" | "unknown",
+      "actionability": "required" | "conditional" | "informational" | "none" | "unknown",
+      "condition": <condition as a short phrase or null>,
+      "condition_state": "met" | "unmet" | "unknown" | "not_applicable",
+      "beneficiary": <person/group described in source, or null>,
+      "date_role": "deadline" | "occurrence" | "expiry" | "reporting" | "none" | "unknown",
+      "qualifying_evidence": [{"source_id": <mNN alias>, "quote": <exact contiguous quote>, "role": "condition" | "negation" | "completion" | "date" | "ownership" | "recurrence"}]
+    }
   }]
 }
 

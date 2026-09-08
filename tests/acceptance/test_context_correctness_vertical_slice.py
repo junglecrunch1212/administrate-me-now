@@ -34,6 +34,31 @@ async def _events(runtime: Any, event_type: str) -> list[dict[str, Any]]:
     return values
 
 
+async def _settle_context_fixture(runtime: Any) -> str | None:
+    """Drain source-derived work before testing interactive corrections/replay."""
+    deadline = asyncio.get_running_loop().time() + 60.0
+    stable_event_id: str | None = None
+    stable_cycles = 0
+    statuses: dict[str, dict[str, Any]] = {}
+    while asyncio.get_running_loop().time() < deadline:
+        statuses = {
+            name: await runtime.bus.subscriber_status(name)
+            for name in sorted(runtime.bus._subscribers)  # noqa: SLF001
+        }
+        assert not any(row["degraded"] for row in statuses.values()), statuses
+        latest = await runtime.event_log.latest_event_id()
+        drained = all(row["lag_count"] == 0 for row in statuses.values())
+        if drained and latest == stable_event_id:
+            stable_cycles += 1
+        else:
+            stable_event_id = latest
+            stable_cycles = 0
+        if stable_cycles >= 2:
+            return latest
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"context fixture did not settle: {statuses}")
+
+
 def _message(
     runtime: Any,
     *,
@@ -696,6 +721,8 @@ def test_exact_context_correction_round_trip_through_production_composition(
         member_identities={"context-correctness.ts.net": MEMBER},
         member_roles={MEMBER: "principal"},
         openclaw_enabled=False,
+        deterministic_openclaw_fixture=True,
+        fixture_member_id=MEMBER,
     )
     app = create_application(settings)
     with TestClient(app) as client:
@@ -826,6 +853,10 @@ def test_exact_context_correction_round_trip_through_production_composition(
         client.portal.call(
             runtime.wait_for_projection, "context_fabric", proposal_event_id
         )
+        # Source consumers can still append assessments after both projections
+        # pass this proposal. Drain that preparation work before exercising
+        # the correction endpoints and their unchanged response deadlines.
+        client.portal.call(_settle_context_fixture, runtime)
 
         source = client.portal.call(runtime.event_log.get, source_id)
         assert source["occurred_at"] == "2024-01-31T15:00:00Z"
@@ -933,6 +964,7 @@ def test_exact_context_correction_round_trip_through_production_composition(
             "Please review the fixture transfer. Also archive the fixture receipt."
         )
 
+        settled_watermark = client.portal.call(_settle_context_fixture, runtime)
         context = runtime.projections.connection("context_fabric")
         assert tuple(
             context.execute(
@@ -946,6 +978,7 @@ def test_exact_context_correction_round_trip_through_production_composition(
             == "reinstated"
         )
         client.portal.call(runtime.projections.rebuild, "context_fabric")
+        assert client.portal.call(_settle_context_fixture, runtime) == settled_watermark
         rebuilt = runtime.projections.connection("context_fabric")
         assert tuple(
             rebuilt.execute(
@@ -1209,7 +1242,7 @@ def test_stale_system_supersession_cannot_override_member_action(
 def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
     tmp_path: Path,
 ) -> None:
-    """Actual Gmail mapping reaches the v22 full-replay production runner."""
+    """Actual Gmail mapping reaches the v23 full-replay production runner."""
 
     instance = tmp_path / "replay-instance"
     instance.mkdir()
@@ -1314,7 +1347,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             for event in replay_assessments
             if event.get("causation_id") == first_id
             and event.get("idempotency_key")
-            == f"triage:message-features:v22:{first_id}"
+            == f"triage:message-features:v23:{first_id}"
         )
         assert deferred_first["payload"]["assessment_outcome"] == "no_candidate"
         assert deferred_first["payload"]["extractor_id"] == (
@@ -1357,10 +1390,21 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             "triage-context-interpretation-v1"
         )
         assert (
-            stable_fallback_supersessions[0]["payload"]["expected_last_event_id"]
+            stable_fallback_supersessions[0]["payload"][
+                "expected_content_revision_event_id"
+            ]
             == original_stable_proposal["event_id"]
         )
-        assert replacement_stable_proposal["payload"]["interpretation"] is None
+        assert replacement_stable_proposal["schema_version"] == 5
+        assert replacement_stable_proposal["payload"]["interpretation"]["contract"] == (
+            "triage-context-interpretation-v3"
+        )
+        assert (
+            replacement_stable_proposal["payload"]["interpretation"][
+                "obligation_assessment"
+            ]["independent_obligation"]
+            is True
+        )
         stable_fallback_assessments = [
             event
             for event in client.portal.call(
@@ -1377,7 +1421,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             stable_fallback_assessments, key=lambda event: event["event_id"]
         )
         assert current_stable_assessment["idempotency_key"] == (
-            f"triage:message-features:v22:{stable_fallback_source_id}"
+            f"triage:message-features:v23:{stable_fallback_source_id}"
         )
         client.portal.call(
             runtime.wait_for_projection,
@@ -1420,7 +1464,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         assert valid["review_state"]["human_gate_required"] is True
 
         pipeline_status = client.portal.call(runtime.pipelines.status)
-        assert pipeline_status["pipeline:noise_filtering"]["version"] == "22.0.0"
+        assert pipeline_status["pipeline:noise_filtering"]["version"] == "23.0.0"
         assert (
             pipeline_status["pipeline:noise_filtering"]["subscriber_status"][
                 "lag_count"

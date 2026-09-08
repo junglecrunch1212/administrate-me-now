@@ -144,7 +144,7 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
         runtime = app.state.runtime
         body = (
             "[fixture:recurring-bill] Your household utility payment is due "
-            "August 15 and repeats monthly."
+            "August 15, 2026 at 17:00 UTC and repeats monthly."
         )
         source_event_id = client.portal.call(
             runtime.events.write,
@@ -199,6 +199,12 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
         recurrence_proposal = proposals_by_kind.get("recurrence")
         assert task_proposal is not None
         assert recurrence_proposal is not None
+        recurrence_assessment = recurrence_proposal["payload"]["interpretation"][
+            "obligation_assessment"
+        ]
+        assert recurrence_assessment["independent_obligation"] is True
+        assert recurrence_assessment["recurrence_grounded"] is True
+        assert "next_occurrence" in recurrence_assessment["verified_date_fields"]
         client.portal.call(
             runtime.wait_for_projection, "triage", recurrence_proposal["event_id"]
         )
@@ -425,8 +431,15 @@ def test_multi_message_legal_context_yields_distinct_explainable_candidates(
             "commitment",
             "task",
         ]
-        assert all(value["schema_version"] == 4 for value in proposals)
-        assert all(value["payload"]["interpretation"] for value in proposals)
+        assert all(value["schema_version"] == 5 for value in proposals)
+        assert all(
+            value["payload"]["interpretation"]["contract"]
+            == "triage-context-interpretation-v3"
+            and value["payload"]["interpretation"]["obligation_assessment"][
+                "evidence_verified"
+            ]
+            for value in proposals
+        )
         client.portal.call(
             runtime.wait_for_projection,
             "triage",

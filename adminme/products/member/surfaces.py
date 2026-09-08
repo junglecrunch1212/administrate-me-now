@@ -884,7 +884,12 @@ def build_surface(
         items = [
             item for matter in triage_page["matters"] for item in matter["candidates"]
         ]
-        recent_items = recent_triage(triage_conn, session, member_id=member)
+        recent_items = recent_triage(
+            triage_conn,
+            session,
+            member_id=member,
+            human_centered=runtime.settings.human_triage_management_enabled,
+        )
         if (
             focused_item is not None
             and focused_item.get("state")

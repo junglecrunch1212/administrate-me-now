@@ -35,8 +35,8 @@ MESSAGE_EVENT_TYPES = (
 )
 MAX_THREAD_MESSAGES = 12
 MAX_RELATED_MESSAGES = 6
-MAX_MESSAGE_CHARS = 2400
-MAX_CONTEXT_CHARS = 24_000
+MAX_MESSAGE_CHARS = 12_000
+MAX_CONTEXT_CHARS = 48_000
 MAX_EPISODE_DAYS = 30
 MAX_EPISODE_SOURCES = 100
 
@@ -121,6 +121,7 @@ class AuthoredMessageText:
     canonical_source_text: str = ""
     authored_span: tuple[int, int] | None = None
     contract: str = "authored-message-text-v2"
+    text_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,7 @@ class ContextMessage:
     authored_text_reliable: bool
     authored_text_reason_codes: tuple[str, ...]
     attachment_names: tuple[str, ...]
+    text_truncated: bool = False
 
     def skill_payload(self) -> dict[str, Any]:
         return {
@@ -154,6 +156,7 @@ class ContextMessage:
             "subject": self.subject,
             "body_text": self.body_text,
             "attachment_names": list(self.attachment_names),
+            "text_truncated": self.text_truncated,
         }
 
     def source_text(self) -> str:
@@ -236,6 +239,7 @@ def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
                         quoted_history_removed=True,
                         canonical_source_text=text,
                         authored_span=(0, len(bounded_html_text)),
+                        text_truncated=len(html_text) > MAX_MESSAGE_CHARS,
                     )
                 return AuthoredMessageText("", False, False, canonical_source_text=text)
             if _HTML_QUOTE_HINT.search(raw_html):
@@ -267,6 +271,7 @@ def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
         quoted_history_removed=quoted_history_removed,
         canonical_source_text=canonical_source_text,
         authored_span=(0, min(len(text), MAX_MESSAGE_CHARS)) if text else None,
+        text_truncated=len(text) > MAX_MESSAGE_CHARS,
     )
 
 
@@ -1121,6 +1126,8 @@ async def build_message_context_pack(
                     else (() if authored.reliable else ("authored_text_uncertain",))
                 ),
                 attachment_names=_attachment_names(payload),
+                text_truncated=len(body) < len(authored.text)
+                or authored.text_truncated,
             )
         )
     stable = [

@@ -16,6 +16,7 @@ from typing import Any
 
 from adminme.events.schemas.triage import TriageTargetKind
 from adminme.message_context import MessageContextPack
+from adminme.obligation_assessment import ground_obligation_assessment
 
 
 EXTRACTOR_ID = "deterministic-intent-features-v1"
@@ -364,6 +365,51 @@ def extract_grounded_context_candidates(
             continue
         base = bases[0]
         quote = base.title
+        assessment = ground_obligation_assessment(
+            raw.get("obligation_assessment"),
+            source_texts={
+                key: (message.source_event_id, message.source_text())
+                for key, message in aliases.items()
+                if message.authored_text_reliable
+            },
+            primary_alias=alias,
+            primary_quote=quote,
+            action_owner=owner,
+            fields=base.fields,
+        )
+        if (
+            assessment
+            and assessment["actionability"] in {"informational", "none"}
+            and base.target_kind
+            not in {
+                "party_candidate",
+                "party_identifier",
+                "party_relationship",
+                "relationship_fact",
+            }
+        ):
+            continue
+        if (
+            "obligation_assessment" in raw
+            and base.target_kind == "recurrence"
+            and not (assessment and assessment["recurrence_grounded"])
+        ):
+            # Periodic reports and subscription mechanics do not establish a
+            # repeating personal responsibility. Preserve genuine uncertainty
+            # as a one-time review rather than manufacturing an RRULE.
+            base = replace(
+                base,
+                target_kind="task",
+                fields={"description": quote},
+                reasons=[*base.reasons[:18], "recurrence_requires_clarification_v1"],
+            )
+            if assessment:
+                assessment = {
+                    **assessment,
+                    "actionability": "unknown",
+                    "independent_obligation": False,
+                    "verified_date_fields": [],
+                }
         identity = hashlib.sha256(
             f"{context_pack.thread_key}|{base.target_kind}|{quote}".encode("utf-8")
         ).hexdigest()[:16]
@@ -380,7 +426,7 @@ def extract_grounded_context_candidates(
             for raw_value in (raw.get("unresolved_questions") or [])[:8]
             if (value := _bounded_text(raw_value, 240)) is not None
         ]
-        interpretation = {
+        interpretation: dict[str, Any] = {
             "contract": "triage-context-interpretation-v2",
             "context_fingerprint": context_pack.fingerprint,
             "thread_key": context_pack.thread_key,
@@ -428,6 +474,27 @@ def extract_grounded_context_candidates(
             ],
             "related_source_event_ids": list(dict.fromkeys(related_source_event_ids)),
         }
+        if "obligation_assessment" in raw:
+            interpretation.update(
+                {
+                    "contract": "triage-context-interpretation-v3",
+                    "obligation_assessment": assessment,
+                    "assessment_state": "verified" if assessment else "invalid",
+                }
+            )
+            if assessment is None:
+                interpretation["unresolved_questions"] = [
+                    *unresolved[:7],
+                    "The source qualifiers could not be verified.",
+                ]
+            elif any(
+                base.fields.get(key) and key not in assessment["verified_date_fields"]
+                for key in ("due", "start", "end", "next_occurrence")
+            ):
+                interpretation["unresolved_questions"] = [
+                    *unresolved[:7],
+                    "Confirm the proposed dates against the source; an explicit calendar day was not verified.",
+                ]
         rules = [
             *base.eligibility_rule_ids,
             "conversation_context_pack_v2",

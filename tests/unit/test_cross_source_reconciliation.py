@@ -15,6 +15,7 @@ from adminme.reconciliation import (
     choose_decision,
     evidence_profile,
     evidence_relationships,
+    issuer_reference,
     priority_for,
     reference_digest,
 )
@@ -147,7 +148,6 @@ def test_exact_relationships_are_typed_and_contradictions_require_review() -> No
         "same_conversation",
         "exact_external_identifier",
         "exact_appointment_reference",
-        "strong_deterministic_correlation",
         "contradiction",
     } <= types
     conversation = next(
@@ -208,15 +208,17 @@ def test_explicit_shared_typed_state_satisfies_without_raw_cross_member_content(
 ):
     source = _source(
         "source-mortgage-due",
-        subject="Mortgage account MTG-2048 payment due",
+        subject="Mortgage invoice MTG-2048 payment due",
     )
     proposal = _proposal(
         "proposal-mortgage",
         "source-mortgage-due",
-        "Pay mortgage account MTG-2048",
+        "Pay mortgage invoice MTG-2048",
         candidate={"due_at": "2026-09-08T21:00:00Z"},
     )
-    digest = reference_digest(TENANT, "exact_account_reference", "MTG-2048")
+    digest = reference_digest(
+        TENANT, "exact_payment_reference", issuer_reference(source, "MTG-2048")
+    )
     shared = {
         "event_id": "source-shared-payment-state",
         "tenant_id": TENANT,
@@ -225,7 +227,7 @@ def test_explicit_shared_typed_state_satisfies_without_raw_cross_member_content(
         "visibility_scope": "shared:household",
         "payload": {
             "member_id": "member-source",
-            "references": [{"kind": "account_reference", "digest": digest}],
+            "references": [{"kind": "payment_reference", "digest": digest}],
             "current_state": "satisfied",
         },
     }
@@ -235,7 +237,7 @@ def test_explicit_shared_typed_state_satisfies_without_raw_cross_member_content(
     )
     types = {item.relationship_type for item in relationships}
 
-    assert "exact_account_reference" in types
+    assert "exact_payment_reference" in types
     assert "satisfaction_or_completion" in types
     assert all(
         item.authority == "explicitly_shared_typed_fact" for item in relationships
@@ -260,7 +262,7 @@ def test_explicit_shared_typed_state_satisfies_without_raw_cross_member_content(
         "share_grant_id": "grant-payment-state",
         "source_reference_digest": "b" * 64,
         "fact_kind": "payment_state",
-        "references": [{"kind": "account_reference", "digest": digest}],
+        "references": [{"kind": "payment_reference", "digest": digest}],
         "current_state": "satisfied",
         "occurred_at": "2026-09-01T12:00:00Z",
         "raw_body_included": False,
@@ -308,7 +310,8 @@ def test_priority_uses_only_allowed_typed_evidence() -> None:
 
     assert priority_for(promise_signals) == (10, ["exact_member_commitment"])
     assert priority_for(known_signals) == (20, ["known_human_actionable_request"])
-    assert priority_for(deadline_signals) == (30, ["verified_deadline"])
+    # A model/provider field alone does not prove a source deadline.
+    assert priority_for(deadline_signals) == (60, ["standard_actionable_candidate"])
     assert known_signals.provider_or_sender_urgency_non_authoritative == "critical"
 
 
@@ -358,11 +361,14 @@ def test_low_signal_and_security_evidence_do_not_become_ordinary_work(
     )
     profile = evidence_profile(source, proposal)
     signals = assessed_signals(source, proposal)
+    # A source policy alert route is an already evaluated alert, not merely
+    # permission to alert. Plain promotions do not receive a security route.
+    policy = _policy(alert="security" if signals.security_alert else "none")
     assert (
         choose_decision(
             coordinate_exact=True,
             signals=signals,
-            policy=_policy(),
+            policy=policy,
             profile=profile,
             relationships=[],
             target_kind=target_kind,

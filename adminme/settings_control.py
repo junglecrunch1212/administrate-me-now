@@ -55,10 +55,12 @@ from adminme.candidate_policy import (
     validate_policy_override,
 )
 from adminme.source_policy import (
+    PURPOSE_OPTIONS,
     V2_CANDIDATE_KINDS,
     SourceCoordinate,
     SourcePolicyV2,
     policy_for_preset,
+    parent_source_coordinate,
 )
 
 
@@ -432,6 +434,17 @@ class SettingsControlStore:
                     raise RuntimeError("Settings source policy V2 is invalid")
                 try:
                     SourcePolicyV2.model_validate(record["policy"])
+                    if record.get("coordinate") is not None:
+                        coordinate = SourceCoordinate.model_validate(
+                            record["coordinate"]
+                        )
+                        if (
+                            coordinate.key != policy_key
+                            or coordinate.owner_principal_id != owner_id
+                        ):
+                            raise ValueError(
+                                "cached source coordinate contradicts its owner or key"
+                            )
                 except (TypeError, ValueError) as exc:
                     raise RuntimeError("Settings source policy V2 is invalid") from exc
         if set(value["source_policy_v2_revisions"]) - set(value["source_policies_v2"]):
@@ -997,6 +1010,7 @@ class SettingsControlStore:
         elif action == "set":
             policy = SourcePolicyV2.model_validate(payload.get("policy"))
             current = {
+                "coordinate": coordinate.model_dump(mode="json"),
                 "policy": policy.model_dump(mode="json"),
                 "revision": revision,
                 "changed_at": str(payload.get("changed_at") or ""),
@@ -1276,6 +1290,13 @@ class SettingsControlStore:
         record = (
             owner_rows.get(coordinate.key) if isinstance(owner_rows, dict) else None
         )
+        inherited_from = None
+        if not isinstance(record, dict) and isinstance(owner_rows, dict):
+            parent = parent_source_coordinate(coordinate)
+            if parent.key != coordinate.key:
+                record = owner_rows.get(parent.key)
+                if isinstance(record, dict):
+                    inherited_from = parent.key
         migrations = current["source_policy_v2_migrations"].get(owner_principal_id)
         migration = (
             migrations.get(coordinate.source_kind)
@@ -1304,6 +1325,7 @@ class SettingsControlStore:
             "migration_state": migration_state,
             "migration": copy.deepcopy(migration) if migration is not None else None,
             "exact_coordinate": coordinate.exact,
+            "inherited_from_policy_key": inherited_from,
             "live_admission": "candidate_policy_v1",
             "admission_active": False,
         }
@@ -1607,7 +1629,7 @@ def _source_policy_adapter_shape(kind: str) -> tuple[str, str]:
 def compose_source_policy_v2_sources(
     runtime: Any, member_id: str, *, state: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """Compose only exact owner-visible coordinates; never adapter-wide rows."""
+    """Union configured, retained and catalog sources without inventing access."""
 
     connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
     sources: list[dict[str, Any]] = []
@@ -1618,9 +1640,10 @@ def compose_source_policy_v2_sources(
         if not isinstance(config, dict) or config.get("member_id") != member_id:
             continue
         kind = str(entry.get("kind") or "").removeprefix("adapter:")
-        meta = PROVIDER_CATALOG.get(kind)
-        if meta is None:
-            continue
+        meta = PROVIDER_CATALOG.get(kind) or {
+            "provider": str(config.get("provider") or "unknown"),
+            "label": str(entry.get("label") or kind),
+        }
         connection_id = str(entry.get("id") or f"adapter-{index}")
         binding = next(
             (
@@ -1701,6 +1724,11 @@ def compose_source_policy_v2_sources(
                 "coordinate": coordinate.model_dump(mode="json"),
                 "coordinate_state": "exact" if coordinate.exact else "ambiguous",
                 "configurable": coordinate.exact,
+                "connection_state": "connected"
+                if connection.get("setup") == "connected"
+                else "configured",
+                "retained_candidate_count": 0,
+                "source_scope": "container" if native_id else "account",
                 "acquisition": {
                     "state": effective["policy"]["acquisition_state"],
                     "coverage": "unknown",
@@ -1769,6 +1797,11 @@ def compose_source_policy_v2_sources(
                 "coordinate": coordinate.model_dump(mode="json"),
                 "coordinate_state": "exact" if coordinate.exact else "ambiguous",
                 "configurable": coordinate.exact,
+                "connection_state": "connected"
+                if connection.get("setup") == "connected"
+                else "configured",
+                "retained_candidate_count": 0,
+                "source_scope": "account",
                 "acquisition": {
                     "state": effective["policy"]["acquisition_state"],
                     "coverage": "partial",
@@ -1825,6 +1858,9 @@ def compose_source_policy_v2_sources(
                 "coordinate": coordinate.model_dump(mode="json"),
                 "coordinate_state": "exact",
                 "configurable": False,
+                "connection_state": "connected",
+                "retained_candidate_count": 0,
+                "source_scope": "direct_intent",
                 "direct_authenticated_intent": True,
                 "acquisition": {
                     "state": "active",
@@ -1837,6 +1873,32 @@ def compose_source_policy_v2_sources(
                 **effective,
             }
         )
+    sources = _merge_retained_source_inventory(runtime, member_id, state, sources)
+    represented = {str(row["source_kind"]) for row in sources}
+    for catalog_source in SOURCE_CATALOG:
+        source_id = str(catalog_source["id"])
+        if source_id in represented:
+            continue
+        sources.append(
+            {
+                "policy_key": None,
+                "coordinate": None,
+                "coordinate_state": "not_observed",
+                "configurable": False,
+                "connection_state": "not_connected",
+                "implementation": catalog_source["implementation"],
+                "policy_execution": catalog_source["policy_execution"],
+                "source_kind": source_id,
+                "source_scope": "catalog",
+                "label": str(catalog_source["label"]),
+                "provider_label": str(catalog_source["label"]),
+                "account_hint": None,
+                "workspace": None,
+                "adapter_instance_id": None,
+                "retained_candidate_count": 0,
+                "reason_codes": ["catalog_is_not_connection_or_permission_evidence"],
+            }
+        )
     return sorted(
         sources,
         key=lambda row: (
@@ -1845,6 +1907,193 @@ def compose_source_policy_v2_sources(
             str(row["label"]),
         ),
     )
+
+
+def _merge_retained_source_inventory(
+    runtime: Any, member_id: str, state: dict[str, Any], sources: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Read content-free projected coordinates, including disconnected providers.
+
+    Only exact private tenant/member rows are considered. Coordinates are
+    provenance, not credentials or a claim that a connector remains available.
+    """
+
+    tenant_id = runtime.settings.instance.tenant_id
+    private_scope = f"private:{member_id}"
+    by_key = {row["policy_key"]: row for row in sources}
+    retained: dict[str, tuple[SourceCoordinate, int]] = {}
+    observed_counts: dict[str, int] = {}
+    represented_proposals: set[str] = set()
+    projections = getattr(runtime, "projections", None)
+    if projections is not None:
+        observed = (
+            projections.connection("context_fabric")
+            .execute(
+                """SELECT source_coordinate_json, COUNT(*) AS source_count FROM source_policy_inventory
+               WHERE tenant_id=? AND owner_member_id=? AND owner_scope=? AND visibility_scope=?
+               GROUP BY policy_key, source_coordinate_json""",
+                (tenant_id, member_id, private_scope, private_scope),
+            )
+            .fetchall()
+        )
+        for row in observed:
+            try:
+                coordinate = SourceCoordinate.model_validate_json(
+                    row["source_coordinate_json"]
+                )
+            except (TypeError, ValueError):
+                continue
+            if (
+                coordinate.tenant_id != tenant_id
+                or coordinate.owner_principal_id != member_id
+                or coordinate.owner_kind != "member"
+            ):
+                continue
+            retained[coordinate.key] = (coordinate, 0)
+            observed_counts[coordinate.key] = int(row["source_count"])
+        rows = (
+            projections.connection("context_fabric")
+            .execute(
+                """SELECT proposal_id, source_coordinate_json FROM reconciliation_decisions
+               WHERE tenant_id=? AND owner_member_id=? AND owner_scope=? AND visibility_scope=?
+               ORDER BY proposal_id, decision_revision DESC""",
+                (tenant_id, member_id, private_scope, private_scope),
+            )
+            .fetchall()
+        )
+        for row in rows:
+            proposal_id = str(row["proposal_id"])
+            if proposal_id in represented_proposals:
+                continue
+            try:
+                coordinate = SourceCoordinate.model_validate_json(
+                    row["source_coordinate_json"]
+                )
+            except (TypeError, ValueError):
+                continue
+            if (
+                coordinate.tenant_id != tenant_id
+                or coordinate.owner_principal_id != member_id
+                or coordinate.owner_kind != "member"
+            ):
+                continue
+            represented_proposals.add(proposal_id)
+            count = retained.get(coordinate.key, (coordinate, 0))[1]
+            retained[coordinate.key] = (coordinate, count + 1)
+
+    for record in state["source_policies_v2"].get(member_id, {}).values():
+        if not isinstance(record, dict) or not record.get("coordinate"):
+            continue
+        coordinate = SourceCoordinate.model_validate(record["coordinate"])
+        if (
+            coordinate.tenant_id == tenant_id
+            and coordinate.owner_principal_id == member_id
+        ):
+            retained.setdefault(coordinate.key, (coordinate, 0))
+
+    for coordinate, count in list(retained.values()):
+        parent = parent_source_coordinate(coordinate)
+        if parent.key != coordinate.key and parent.key not in retained:
+            retained[parent.key] = (parent, 0)
+    for key, (coordinate, count) in retained.items():
+        if key in by_key:
+            by_key[key]["retained_candidate_count"] = count
+            by_key[key]["retained_source_count"] = observed_counts.get(key, 0)
+            continue
+        parent_row = by_key.get(parent_source_coordinate(coordinate).key)
+        meta = PROVIDER_CATALOG.get(coordinate.adapter_kind, {})
+        catalog_source = next(
+            (row for row in SOURCE_CATALOG if row["id"] == coordinate.source_kind), {}
+        )
+        label = str(
+            meta.get("label") or catalog_source.get("label") or coordinate.provider
+        )
+        row = {
+            "policy_key": key,
+            "coordinate": coordinate.model_dump(mode="json"),
+            "coordinate_state": "exact" if coordinate.exact else "ambiguous",
+            "configurable": coordinate.exact,
+            "connection_state": parent_row["connection_state"]
+            if parent_row
+            else "disconnected"
+            if coordinate.exact
+            else "missing_attribution",
+            "label": label,
+            "provider_label": label,
+            "account_hint": coordinate.provider_account_id
+            if coordinate.exact
+            else None,
+            "workspace": coordinate.workspace,
+            "adapter_instance_id": coordinate.adapter_instance_id,
+            "source_kind": coordinate.source_kind,
+            "source_scope": "container"
+            if coordinate.native_container_kind not in {None, "source"}
+            else "account",
+            "native_container_label": coordinate.native_container_id,
+            "retained_candidate_count": count,
+            "retained_source_count": observed_counts.get(key, 0),
+            "acquisition": {
+                "state": "paused"
+                if parent_row is None
+                else parent_row.get("acquisition", {}).get("state", "active"),
+                "coverage": "partial",
+                "freshness": "unknown",
+                "provider_capability": "unavailable"
+                if parent_row is None
+                else "unknown",
+                "scope_widening": False,
+                "credential_creation": False,
+            },
+            **runtime.settings_control.effective_source_policy_v2(
+                member_id, coordinate, state=state
+            ),
+        }
+        by_key[key] = row
+        sources.append(row)
+
+    if projections is not None:
+        missing: dict[str, int] = {}
+        rows = (
+            projections.connection("triage")
+            .execute(
+                """SELECT proposal_id, source_id FROM triage_items
+               WHERE tenant_id=? AND owner_member_id=? AND owner_scope=? AND visibility_scope=?""",
+                (tenant_id, member_id, private_scope, private_scope),
+            )
+            .fetchall()
+        )
+        for row in rows:
+            if str(row["proposal_id"]) not in represented_proposals:
+                source_id = str(row["source_id"])
+                missing[source_id] = missing.get(source_id, 0) + 1
+        for source_id, count in sorted(missing.items()):
+            catalog_source = next(
+                (row for row in SOURCE_CATALOG if row["id"] == source_id), {}
+            )
+            label = str(
+                catalog_source.get("label") or "Retained source awaiting attribution"
+            )
+            sources.append(
+                {
+                    "policy_key": None,
+                    "coordinate": None,
+                    "coordinate_state": "ambiguous",
+                    "configurable": False,
+                    "connection_state": "missing_attribution",
+                    "source_kind": source_id,
+                    "source_scope": "unattributed",
+                    "label": label,
+                    "provider_label": label,
+                    "account_hint": None,
+                    "workspace": None,
+                    "adapter_instance_id": None,
+                    "retained_candidate_count": count,
+                    "reason_codes": [
+                        "retained_candidates_require_exact_source_attribution"
+                    ],
+                }
+            )
+    return sources
 
 
 def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
@@ -2186,7 +2435,7 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             ],
         },
         "source_policy_v2": {
-            "contract": "per-principal-per-source-policy-v2-shadow",
+            "contract": "per-principal-per-source-policy-v2",
             "owner_only": True,
             "owner_visible": source_policy_owner_visible,
             "owner_principal_id": auth_id if source_policy_owner_visible else None,
@@ -2195,19 +2444,49 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             )
             if source_policy_owner_visible
             else None,
-            "live_admission": "candidate_policy_v1",
-            "shadow_only": True,
+            "live_admission": "reconciled_source_policy_v2"
+            if getattr(runtime.settings, "reconciliation_admission_enabled", False)
+            else "candidate_policy_v1",
+            "shadow_only": not bool(
+                getattr(runtime.settings, "reconciliation_admission_enabled", False)
+            ),
+            "admission_active": bool(
+                getattr(runtime.settings, "reconciliation_admission_enabled", False)
+            ),
+            "attention_modes": [
+                {"value": "obligations", "label": "Focus on obligations"},
+                {"value": "possibilities", "label": "Include possible opportunities"},
+                {"value": "manual", "label": "Only when I ask"},
+            ],
+            "purpose_options": [
+                {
+                    "value": value,
+                    "label": label,
+                    "description": "Applies to this assessed action; other actions in the same source keep their own routes.",
+                }
+                for value, label in PURPOSE_OPTIONS
+            ],
+            "route_options": [
+                {"value": "review", "label": "Needs you"},
+                {"value": "reference", "label": "Reference"},
+                {"value": "alert", "label": "Alerts when permitted"},
+            ],
             "provider_execution_is_a_policy_plane": False,
             "presets": [
                 {
                     "id": "focused",
-                    "label": "Focused",
-                    "explanation": "Reviews only typed actionable signals; keeps critical financial and security alerts.",
+                    "label": "Focus on obligations",
+                    "explanation": "Prioritizes grounded obligations. Existing context, access and alert choices stay unchanged.",
                 },
                 {
                     "id": "balanced",
-                    "label": "Balanced",
-                    "explanation": "Reviews useful source facts while filtering typed low-actionability signals.",
+                    "label": "Include possible opportunities",
+                    "explanation": "Includes possible work while preserving context, access and alert choices.",
+                },
+                {
+                    "id": "manual",
+                    "label": "Only when I ask",
+                    "explanation": "Stops automatic work suggestions while preserving context and alert choices.",
                 },
                 {
                     "id": "review_everything",
@@ -2223,11 +2502,11 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 "Policies cannot establish identity, ownership, priority, disclosure, or write authority.",
                 "Provider labels, sender urgency, and language claims are non-authoritative evidence.",
                 "Direct authenticated member intent cannot be suppressed by passive-source presets.",
-                "V2 admission remains shadow-only until a later, separately approved activation.",
+                "Attention preferences affect local review only; source access and provider actions remain separately governed.",
             ],
             "preview": {
                 "mutates": False,
-                "uses": "synthetic or already authorized source metadata",
+                "uses": "recent authorized sources and verified action assessments, including sources with no candidate",
                 "content_returned": False,
             },
         },

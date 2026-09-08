@@ -584,11 +584,11 @@ class RuntimeSettings:
             member_chat_enabled_members=frozenset(chat_members),
             child_chat_enabled_members=frozenset(child_chat_members),
             reconciliation_admission_enabled=os.environ.get(
-                "ADMINME_RECONCILIATION_ADMISSION_ENABLED", "0"
+                "ADMINME_RECONCILIATION_ADMISSION_ENABLED", "1"
             )
             == "1",
             human_triage_management_enabled=os.environ.get(
-                "ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED", "0"
+                "ADMINME_HUMAN_TRIAGE_MANAGEMENT_ENABLED", "1"
             )
             == "1",
         )
@@ -967,6 +967,7 @@ class AdministrateMeRuntime:
                             *source_policy_event_types(self.settings.repository_root),
                             "triage.item.proposed",
                             "context.reconciliation.typed_fact_shared",
+                            "settings.source_policy_v2_changed",
                         ]
                     )
                 ),

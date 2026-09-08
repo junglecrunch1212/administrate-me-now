@@ -30,7 +30,7 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "7.0.0"
+    assert loaded.version == "8.0.0"
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (
         "anthropic/claude-haiku-4-5" in loaded.skill_frontmatter["provider_preferences"]
@@ -92,6 +92,7 @@ def test_handler_passes_through_well_formed_output() -> None:
     loaded = load_pack(PACK_ROOT)
     assert loaded.handler_post_process is not None
     raw = {
+        "assessment_contract": "personal-obligation-assessment-v1",
         "classification": "transactional",
         "confidence": 0.93,
         "reasons": ["unsubscribe footer + receipt language"],
@@ -104,6 +105,7 @@ def test_handler_passes_through_well_formed_output() -> None:
         "candidates": [],
     }
     out = loaded.handler_post_process(raw, {}, None)
+    Draft202012Validator(loaded.output_schema).validate(out)
     assert out == raw
 
 

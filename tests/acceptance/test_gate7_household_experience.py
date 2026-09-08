@@ -2452,6 +2452,11 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
             ),
         )
         client.portal.call(runtime.wait_for_projection, "interactions", message_event)
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:noise_filtering",
+            message_event,
+        )
         semantic_event = client.portal.call(
             runtime.events.write,
             EventEnvelope(

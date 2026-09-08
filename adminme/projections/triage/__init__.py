@@ -23,7 +23,7 @@ from adminme.triage_review import proposal_source_id, triage_review_state
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 11
+    version = 12
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "triage.item.proposed",
@@ -35,6 +35,9 @@ class TriageProjection(Projection):
         "triage.item.managed",
         "triage.source_policy_rule.decided",
         "triage.source_policy_rule.reviewed",
+        "triage.attention_rule.saved",
+        "triage.attention_rule.reviewed",
+        "triage.attention_feedback.recorded",
         "triage.reconciliation.decided",
         "triage.intent.submitted",
         "triage.intent.features_extracted",
@@ -176,6 +179,7 @@ class TriageProjection(Projection):
             "reconciliation_policy_json": "TEXT",
             "reconciliation_scope_json": "TEXT",
             "reconciliation_freshness": "TEXT NOT NULL DEFAULT 'unknown'",
+            "reconciliation_prior_state": "TEXT",
             "priority_rank": "INTEGER NOT NULL DEFAULT 60",
             "priority_basis_json": (
                 "TEXT NOT NULL DEFAULT '[\"standard_actionable_candidate\"]'"
@@ -190,6 +194,17 @@ class TriageProjection(Projection):
             "snoozed_until": "TEXT",
             "learned_policy_state": "TEXT NOT NULL DEFAULT 'none'",
             "learned_rule_id": "TEXT",
+            "proposal_event_id": "TEXT",
+            "content_revision_event_id": "TEXT",
+            "proposal_action_fingerprint": "TEXT",
+            "attention_expires_at": "TEXT",
+            "attention_base_state": "TEXT NOT NULL DEFAULT 'none'",
+            "attention_base_rule_id": "TEXT",
+            "attention_base_lane": "TEXT",
+            "attention_reason_json": "TEXT NOT NULL DEFAULT '[]'",
+            "attention_rule_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "attention_shadow_json": "TEXT NOT NULL DEFAULT '[]'",
+            "attention_expiry_schedule_json": "TEXT NOT NULL DEFAULT '[]'",
             "confirmation_event_id": "TEXT",
             "confirmation_request_id": "TEXT",
             "dismissal_event_id": "TEXT",

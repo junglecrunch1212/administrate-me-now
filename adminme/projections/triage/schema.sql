@@ -165,6 +165,38 @@ CREATE TABLE IF NOT EXISTS triage_context_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_triage_context_session_latest
     ON triage_context_sessions(tenant_id, owner_member_id, thread_key, sequence);
+
+CREATE TABLE IF NOT EXISTS triage_attention_rules (
+    tenant_id TEXT NOT NULL, rule_id TEXT NOT NULL, member_id TEXT NOT NULL,
+    conditions_json TEXT NOT NULL, exceptions_json TEXT NOT NULL,
+    action TEXT NOT NULL, origin TEXT NOT NULL, feedback_event_ids_json TEXT NOT NULL,
+    preview_digest TEXT NOT NULL, mode TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active','trial','shadow','expired','suspended','revoked')),
+    starts_at TEXT NOT NULL, expires_at TEXT, max_observations INTEGER,
+    observed_count INTEGER NOT NULL DEFAULT 0, created_event_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, rule_id)
+);
+CREATE INDEX IF NOT EXISTS idx_attention_rules_member
+    ON triage_attention_rules(tenant_id, member_id, status);
+CREATE TABLE IF NOT EXISTS triage_attention_observations (
+    tenant_id TEXT NOT NULL, rule_id TEXT NOT NULL, observation_key TEXT NOT NULL,
+    source_event_id TEXT NOT NULL, proposal_id TEXT NOT NULL, observed_at TEXT NOT NULL,
+    match_kind TEXT NOT NULL, event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, rule_id, observation_key)
+);
+CREATE TABLE IF NOT EXISTS triage_attention_feedback (
+    tenant_id TEXT NOT NULL, feedback_id TEXT NOT NULL, member_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+    observation_key TEXT NOT NULL, kind TEXT NOT NULL, rule_json TEXT,
+    recorded_at TEXT NOT NULL, last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, feedback_id)
+);
+CREATE TABLE IF NOT EXISTS triage_attention_rule_history (
+    tenant_id TEXT NOT NULL, rule_id TEXT NOT NULL, event_id TEXT NOT NULL,
+    decision TEXT NOT NULL, reason TEXT NOT NULL, occurred_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, rule_id, event_id)
+);
 CREATE TABLE IF NOT EXISTS triage_context_session_sources (
     tenant_id          TEXT NOT NULL,
     owner_member_id    TEXT NOT NULL,

@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTANCE = Path(os.environ["ADMINME_GATE7_VISUAL_INSTANCE"]).resolve()
 PORT = int(os.environ.get("ADMINME_GATE7_VISUAL_PORT", "3347"))
 MODEL_CONFIGURED = os.environ.get("ADMINME_GATE7_VISUAL_MODEL", "1") == "1"
+ATTENTION_ENABLED = os.environ.get("ADMINME_GATE7_ATTENTION_ENABLED", "0") == "1"
 FIXED_NOW = datetime.fromisoformat(
     os.environ.get("ADMINME_GATE7_VISUAL_NOW", "2026-08-13T14:00:00Z").replace(
         "Z", "+00:00"
@@ -145,8 +146,20 @@ def build_app():
         member_chat_enabled_members=frozenset({PRINCIPAL, ADULT, CHILD}),
         child_chat_enabled_members=frozenset({CHILD}),
         deterministic_member_chat_fixture=True,
+        reconciliation_admission_enabled=ATTENTION_ENABLED,
+        human_triage_management_enabled=ATTENTION_ENABLED,
     )
     app = create_application(settings)
+
+    @app.post("/__gate7/seed-attention-sources")
+    async def seed_attention_sources_endpoint(future: bool = False):
+        if not ATTENTION_ENABLED:
+            raise HTTPException(404, "Attention fixture is not enabled")
+        from tools.triage_attention_visual_fixture import seed_attention_sources
+
+        return await seed_attention_sources(
+            app.state.runtime, PRINCIPAL, fixture_now(), future=future
+        )
 
     def install_triage_failure_hooks() -> None:
         """Install opt-in, one-shot failures inside the production handlers."""

@@ -60,6 +60,21 @@ CREATE TABLE IF NOT EXISTS contexts (
 
 -- Reconciliation is an evidence/decision index, not a universal Matter store.
 -- It retains only typed coordinates, digests, reasons, and lineage.
+CREATE TABLE IF NOT EXISTS source_policy_inventory (
+    tenant_id             TEXT NOT NULL,
+    source_event_id       TEXT NOT NULL,
+    policy_key            TEXT NOT NULL,
+    source_coordinate_json TEXT NOT NULL,
+    owner_member_id       TEXT NOT NULL,
+    owner_scope           TEXT NOT NULL,
+    visibility_scope      TEXT NOT NULL,
+    sensitivity           TEXT NOT NULL,
+    last_event_id         TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, source_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_source_policy_inventory_member
+    ON source_policy_inventory(tenant_id, owner_member_id, policy_key);
+
 CREATE TABLE IF NOT EXISTS reconciliation_decisions (
     tenant_id          TEXT NOT NULL,
     reconciliation_id TEXT NOT NULL,

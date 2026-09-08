@@ -11,6 +11,8 @@ from pydantic import ValidationError
 
 from adminme.events.schemas.triage import TriageContextSourceV2
 from adminme.message_context import (
+    MAX_CONTEXT_CHARS,
+    MAX_MESSAGE_CHARS,
     authored_message_text,
     build_message_context_pack,
     strip_quoted_history,
@@ -778,7 +780,7 @@ async def test_context_budget_reserves_current_anchor_and_tracks_full_episode() 
     messages = [
         _message(
             f"source-{index:02d}",
-            "x" * 2400,
+            "x" * MAX_MESSAGE_CHARS,
             occurred_at=(start + timedelta(minutes=index)).isoformat(),
         )
         for index in range(12)
@@ -798,7 +800,8 @@ async def test_context_budget_reserves_current_anchor_and_tracks_full_episode() 
     )
     assert pack.messages[-1].source_event_id == "source-current"
     assert pack.messages[-1].body_text == "Please review the current fixture request."
-    assert sum(len(message.body_text) for message in pack.messages) <= 24_000
+    assert sum(len(message.body_text) for message in pack.messages) <= MAX_CONTEXT_CHARS
+    assert pack.messages[-1].text_truncated is False
 
 
 @pytest.mark.asyncio
@@ -829,7 +832,7 @@ async def test_context_budget_reserves_non_anchor_source_under_assessment() -> N
     messages = [
         _message(
             f"source-{index:02d}",
-            str(index % 10) * 2400,
+            str(index % 10) * MAX_MESSAGE_CHARS,
             occurred_at=(start + timedelta(minutes=index)).isoformat(),
         )
         for index in range(13)
@@ -838,9 +841,9 @@ async def test_context_budget_reserves_non_anchor_source_under_assessment() -> N
     pack = await build_message_context_pack(messages[10], _Log(messages))
     by_source = {message.source_event_id: message for message in pack.messages}
 
-    assert by_source["source-10"].body_text == "0" * 2400
-    assert by_source["source-12"].body_text == "2" * 2400
-    assert sum(len(message.body_text) for message in pack.messages) <= 24_000
+    assert by_source["source-10"].body_text == "0" * MAX_MESSAGE_CHARS
+    assert by_source["source-12"].body_text == "2" * MAX_MESSAGE_CHARS
+    assert sum(len(message.body_text) for message in pack.messages) <= MAX_CONTEXT_CHARS
 
 
 @pytest.mark.asyncio

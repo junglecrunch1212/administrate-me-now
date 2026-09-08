@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import sqlcipher3
@@ -12,11 +13,44 @@ import sqlcipher3
 from adminme.candidate_policy import SOURCE_BY_ID
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
-from adminme.triage_management import current_disposition, proposed_disposition
+from adminme.triage_management import (
+    HUMAN_TRIAGE_LANE_ORDER,
+    attention_rule_expired,
+    attention_values,
+    current_disposition,
+    human_attention_view,
+    proposed_disposition,
+)
 
 
 def _public(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
+    as_of = datetime.now(timezone.utc).isoformat()
+    schedule = json.loads(result.pop("attention_expiry_schedule_json", "[]"))
+    elapsed = [
+        value
+        for value in schedule
+        if attention_rule_expired({"expires_at": value["at"]}, as_of)
+    ]
+    attention_expired = attention_rule_expired(
+        {"expires_at": result.get("attention_expires_at")},
+        as_of,
+    )
+    if elapsed:
+        current = elapsed[-1]
+        result["learned_policy_state"] = current["state"]
+        result["learned_rule_id"] = current["rule_id"]
+        result["human_lane"] = current["lane"]
+        result["attention_rule_ids_json"] = json.dumps(current["rule_ids"])
+        result["attention_reason_json"] = json.dumps(current["reasons"])
+    elif attention_expired:
+        # Projection remains deterministic. A read restores the pre-trial
+        # visibility immediately; the next event projects/audits expiration.
+        result["learned_policy_state"] = result.get("attention_base_state", "none")
+        result["learned_rule_id"] = result.get("attention_base_rule_id")
+        result["human_lane"] = result.get("attention_base_lane") or result.get(
+            "human_lane"
+        )
     result["candidate"] = json.loads(result.pop("candidate_json") or "{}")
     route = result.pop("route_json")
     result["route"] = json.loads(route) if route else None
@@ -74,7 +108,46 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         "rule_id": result.pop("learned_rule_id", None),
         "narrow_only": True,
         "provider_effects": 0,
+        "rule_ids": json.loads(result.pop("attention_rule_ids_json", "[]")),
+        "reasons": ["trial_expired"]
+        if attention_expired and not elapsed
+        else json.loads(result.pop("attention_reason_json", "[]")),
+        "expires_at": result.pop("attention_expires_at", None),
+        "shadow": json.loads(result.pop("attention_shadow_json", "[]")),
     }
+    values = attention_values(result)
+    conditions = {
+        key: values[key]
+        for key in (
+            "provider_account_id",
+            "adapter_instance_id",
+            "native_container_id",
+            "sender_digest",
+            "message_purpose",
+        )
+        if key in values
+    }
+    result["learning_scope"] = {
+        "conditions": conditions,
+        "label": "This source and message purpose",
+        "message_purpose": values.get("message_purpose"),
+        "available": bool(
+            conditions.get("provider_account_id")
+            and conditions.get("adapter_instance_id")
+            and (
+                conditions.get("message_purpose")
+                or conditions.get("native_container_id")
+                or conditions.get("sender_digest")
+            )
+        ),
+    }
+    for key in (
+        "attention_base_state",
+        "attention_base_rule_id",
+        "attention_base_lane",
+        "attention_reason_json",
+    ):
+        result.pop(key, None)
     disposition = (
         proposed_disposition(result)
         if result["reconciliation"]["active"]
@@ -112,6 +185,7 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         "eligibility_rule_replaced",
     }:
         result["state"] = "superseded"
+    result["attention_view"] = human_attention_view(result)
     return result
 
 
@@ -174,17 +248,7 @@ def pending_for_sources(
     for offset in range(0, len(source_ids), 400):
         chunk = source_ids[offset : offset + 400]
         placeholders = ",".join("?" for _ in chunk)
-        state_sql = (
-            """AND reconciliation_active=1 AND (
-                   (state IN ('pending_interpretation','pending_review')
-                    AND admission_decision IN ('admit','conflict_review','unresolved')
-                    AND management_state IN ('open','clarification','suppression_proposed'))
-                   OR admission_decision='alert_only'
-                   OR management_state='alert'
-               )"""
-            if human_centered
-            else "AND state IN ('pending_interpretation','pending_review')"
-        )
+        state_sql = _queue_state_sql(human_centered)
         rows = conn.execute(
             f"""SELECT * FROM triage_items
                  WHERE tenant_id=? AND owner_member_id=?
@@ -259,28 +323,63 @@ _LANE_ORDER = {
     "standard": 7,
 }
 
-_HUMAN_LANE_ORDER = {
-    "direct_instruction": 0,
-    "member_promise": 1,
-    "known_human_request": 2,
-    "scheduled_deadline": 3,
-    "waiting_follow_up": 4,
-    "clarification_conflict": 5,
-    "alerts_safety": 6,
-    "low_confidence_review": 7,
-}
+_HUMAN_LANE_ORDER = HUMAN_TRIAGE_LANE_ORDER
+
+
+def _effective_learned_policy_sql() -> str:
+    return """COALESCE((SELECT json_extract(expiry.value,'$.state')
+         FROM json_each(attention_expiry_schedule_json) AS expiry
+         WHERE julianday(json_extract(expiry.value,'$.at'))<=julianday('now')
+         ORDER BY julianday(json_extract(expiry.value,'$.at')) DESC LIMIT 1),
+         learned_policy_state)"""
+
+
+def _needs_you_sql() -> str:
+    verified = """(json_extract(interpretation_json,'$.contract')='triage-context-interpretation-v3'
+        AND json_extract(interpretation_json,'$.assessment_state')='verified'
+        AND COALESCE(json_extract(interpretation_json,'$.obligation_assessment.contract'),'personal-obligation-assessment-v1')='personal-obligation-assessment-v1'
+        AND COALESCE(json_extract(interpretation_json,'$.obligation_assessment.evidence_verified'),1)=1)"""
+    return f"""(EXISTS (SELECT 1 FROM json_each(priority_basis_json) AS basis
+          WHERE basis.value IN ('explicit_member_instruction','exact_member_commitment',
+             'known_human_actionable_request','verified_deadline','household_policy'))
+        OR source_kind='commitment_proposal'
+        OR {_effective_learned_policy_sql()}='clarification_required'
+        OR admission_decision='conflict_review'
+        OR COALESCE(({verified} AND json_extract(interpretation_json,
+             '$.obligation_assessment.independent_obligation')=1),0)
+        OR (admission_decision='unresolved' AND NOT COALESCE(({verified}
+             AND (json_extract(interpretation_json,'$.obligation_assessment.purpose')='optional_opportunity'
+               OR (json_extract(interpretation_json,'$.obligation_assessment.actionability')='conditional'
+                 AND json_extract(interpretation_json,'$.obligation_assessment.condition_state')='unmet'))),0)))"""  # noqa: S608 - fixed typed lens predicates
+
+
+def _live_alert_sql() -> str:
+    return """COALESCE(((admission_decision='alert_only' OR management_state='alert')
+        AND management_state IN ('open','clarification','suppression_proposed','alert')
+        AND (state IN ('pending_interpretation','pending_review')
+          OR (state='dismissed' AND resolved_by='system:cross-source-reconciliation'
+            AND resolution_reason IN ('reconciliation:context_only',
+                'reconciliation:source_policy_suppression','reconciliation:alert_only')))),0)"""
+
+
+def _history_sql() -> str:
+    return f"""(reconciliation_active!=1 OR (NOT {_live_alert_sql()} AND NOT (
+        state IN ('pending_interpretation','pending_review')
+        AND management_state IN ('open','clarification','suppression_proposed')
+        AND admission_decision IN ('admit','conflict_review','unresolved')
+        AND decision_disposition='decision'
+        AND {_effective_learned_policy_sql()}!='context_only')))"""
 
 
 def _queue_state_sql(human_centered: bool) -> str:
     if not human_centered:
         return "AND state IN ('pending_interpretation','pending_review')"
-    return """AND reconciliation_active=1 AND (
+    return f"""AND reconciliation_active=1 AND (
         (state IN ('pending_interpretation','pending_review')
          AND admission_decision IN ('admit','conflict_review','unresolved')
          AND management_state IN ('open','clarification','suppression_proposed'))
-         AND learned_policy_state!='context_only'
-        OR admission_decision='alert_only'
-        OR management_state='alert'
+         AND {_effective_learned_policy_sql()}!='context_only'
+        OR {_live_alert_sql()}
     )"""
 
 
@@ -367,13 +466,14 @@ def _queue_revision(
     """
 
     private_scope = f"private:{member_id}"
-    state_sql = _queue_state_sql(human_centered)
+    state_sql = "" if human_centered else _queue_state_sql(False)
     rows = conn.execute(
         f"""SELECT proposal_id, context_id, queue_lane, human_lane,
                   management_state, priority_rank,
                   admission_decision, proposed_at,
                   decision_disposition, state, last_event_id,
-                  owner_scope, visibility_scope, sensitivity
+                  owner_scope, visibility_scope, sensitivity,
+                  {_effective_learned_policy_sql()} AS effective_learned_policy_state
              FROM triage_items
             WHERE tenant_id=? AND owner_member_id=?
               AND owner_scope=? AND visibility_scope=?
@@ -398,6 +498,7 @@ def _queue_revision(
                     row["decision_disposition"],
                     row["state"],
                     row["last_event_id"],
+                    row["effective_learned_policy_state"],
                 ],
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -464,14 +565,16 @@ def _cursor_decode(
     raise ValueError("invalid triage cursor")
 
 
-def _lens_where(lens: str) -> tuple[str, list[Any]]:
+def _lens_where(lens: str, *, human_centered: bool = False) -> tuple[str, list[Any]]:
     if lens == "alerts":
-        return "AND (admission_decision='alert_only' OR management_state='alert')", []
+        return f"AND {_live_alert_sql()}", []
     if lens == "needs_interpretation":
         return "AND review_state='needs_interpretation'", []
     if lens == "needs_details":
         return "AND review_state='needs_details'", []
     if lens == "low_signal":
+        if human_centered:
+            return f"AND NOT {_live_alert_sql()} AND NOT {_needs_you_sql()}", []
         return "AND queue_lane='standard'", []
     if lens == "recurring_exceptions":
         return "AND queue_lane='recurring_exception'", []
@@ -482,7 +585,11 @@ def _lens_where(lens: str) -> tuple[str, list[Any]]:
         return "", []
     if lens == "all_candidates":
         return "", []
+    if lens == "history" and human_centered:
+        return f"AND {_history_sql()}", []
     if lens == "ready":
+        if human_centered:
+            return f"AND NOT {_live_alert_sql()} AND {_needs_you_sql()}", []
         return "AND queue_lane!='standard'", []
     return "", []
 
@@ -556,7 +663,7 @@ def triage_page_for_member(
     )
     if decoded is not None and (decoded[0] != queue_revision or decoded[1] != view_key):
         raise ValueError("stale triage cursor")
-    lens_sql, lens_params = _lens_where(lens)
+    lens_sql, lens_params = _lens_where(lens, human_centered=human_centered)
     filter_sql = ""
     filter_params: list[Any] = []
     if source_id is not None:
@@ -579,6 +686,10 @@ def triage_page_for_member(
         + " ELSE 99 END"
     )
     lane_case = f"(priority_rank * 100 + {legacy_lane_case})"
+    if human_centered and lens == "all_candidates" and sort == "attention":
+        # Retained high-priority history must not displace current work from
+        # the first page used by the member's attention views.
+        lane_case = f"(CASE WHEN {_history_sql()} THEN 100000 ELSE 0 END + {lane_case})"
     disposition_sql = (
         ""
         if lens in {"all_candidates", "alerts"}
@@ -608,7 +719,9 @@ def triage_page_for_member(
     elif sort == "newest":
         context_order = "proposed_at DESC, proposal_id DESC"
         result_order = "proposed_at DESC, proposal_id DESC"
-    state_sql = _queue_state_sql(human_centered)
+    live_state_sql = _queue_state_sql(human_centered)
+    inventory_state_sql = "" if human_centered else live_state_sql
+    state_sql = inventory_state_sql if lens == "all_candidates" else live_state_sql
     roots = conn.execute(
         f"""
         WITH ranked AS (
@@ -708,7 +821,7 @@ def triage_page_for_member(
              FROM triage_items
             WHERE tenant_id=? AND owner_member_id=?
               AND owner_scope=? AND visibility_scope=?
-              {state_sql}""",  # noqa: S608 - fixed feature fragment
+              {inventory_state_sql}""",  # noqa: S608 - fixed feature fragment
         (session.tenant_id, member_id, private_scope, private_scope),
     ).fetchone()
     lane_rows = conn.execute(
@@ -717,7 +830,7 @@ def triage_page_for_member(
              FROM triage_items
             WHERE tenant_id=? AND owner_member_id=?
               AND owner_scope=? AND visibility_scope=?
-              {state_sql}
+              {inventory_state_sql}
             GROUP BY {lane_column} ORDER BY {lane_column}""",  # noqa: S608
         (session.tenant_id, member_id, private_scope, private_scope),
     ).fetchall()
@@ -727,7 +840,7 @@ def triage_page_for_member(
              FROM triage_items
             WHERE tenant_id=? AND owner_member_id=?
               AND owner_scope=? AND visibility_scope=?
-              {state_sql}
+              {inventory_state_sql}
             GROUP BY source_id ORDER BY candidates DESC, source_id""",  # noqa: S608
         (session.tenant_id, member_id, private_scope, private_scope),
     ).fetchall()
@@ -737,7 +850,7 @@ def triage_page_for_member(
              FROM triage_items
             WHERE tenant_id=? AND owner_member_id=?
               AND owner_scope=? AND visibility_scope=?
-              {state_sql}
+              {inventory_state_sql}
               AND target_kind IS NOT NULL
             GROUP BY target_kind ORDER BY candidates DESC, target_kind""",  # noqa: S608
         (session.tenant_id, member_id, private_scope, private_scope),
@@ -751,12 +864,20 @@ def triage_page_for_member(
         "recurring_exceptions",
         "all_candidates",
         "alerts",
+        *(["history"] if human_centered else []),
     ):
-        view_lens_sql, view_lens_params = _lens_where(view)
+        view_lens_sql, view_lens_params = _lens_where(
+            view, human_centered=human_centered
+        )
         view_disposition_sql = (
             ""
-            if view in {"all_candidates", "alerts"}
+            if view in {"all_candidates", "alerts", "history"}
             else "AND decision_disposition='decision'"
+        )
+        view_state_sql = (
+            inventory_state_sql
+            if view in {"all_candidates", "history"}
+            else live_state_sql
         )
         count_row = conn.execute(
             f"""SELECT COUNT(*) AS candidates,
@@ -764,7 +885,7 @@ def triage_page_for_member(
                   FROM triage_items
                  WHERE tenant_id=? AND owner_member_id=?
                    AND owner_scope=? AND visibility_scope=?
-                   {state_sql}
+                   {view_state_sql}
                    {view_disposition_sql} {view_lens_sql}""",  # noqa: S608
             [
                 session.tenant_id,
@@ -861,14 +982,14 @@ def recent_for_member(
     *,
     member_id: str,
     limit: int = 50,
+    human_centered: bool = False,
 ) -> list[dict[str, Any]]:
     """Return recently resolved proposals for reversible review history."""
 
-    rows = conn.execute(
-        """SELECT * FROM triage_items
-             WHERE tenant_id=? AND owner_member_id=?
-               AND owner_scope=? AND visibility_scope=?
-               AND (
+    history_sql = (
+        _history_sql()
+        if human_centered
+        else """(
                     state IN ('approved','confirmed','dismissed','failed')
                     OR (
                         state IN ('pending_interpretation','pending_review')
@@ -876,10 +997,16 @@ def recent_for_member(
                             'open','clarification','suppression_proposed','alert'
                         )
                     )
-               )
+               )"""
+    )
+    rows = conn.execute(
+        f"""SELECT * FROM triage_items
+             WHERE tenant_id=? AND owner_member_id=?
+               AND owner_scope=? AND visibility_scope=?
+               AND {history_sql}
                AND COALESCE(resolution_reason, '') != 'candidates_extracted'
-             ORDER BY resolved_at DESC, proposal_id
-             LIMIT ?""",
+             ORDER BY COALESCE(resolved_at, proposed_at) DESC, proposal_id
+             LIMIT ?""",  # noqa: S608 - fixed typed history predicates
         (
             session.tenant_id,
             member_id,

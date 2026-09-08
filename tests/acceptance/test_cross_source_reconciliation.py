@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from itertools import count
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from adminme.events.envelope import EventEnvelope
-from adminme.reconciliation import reference_digest
+from adminme.reconciliation import issuer_reference, reference_digest
 from adminme.runtime.application import RuntimeSettings, create_application
 
 
@@ -58,6 +59,31 @@ async def _events(runtime: Any, event_type: str) -> list[dict[str, Any]]:
     async for event in runtime.event_log.read_since(types=[event_type]):
         values.append(event)
     return values
+
+
+async def _settle_runtime(runtime: Any) -> str | None:
+    """Compare replay with a drained live log, including derived proposals."""
+    deadline = asyncio.get_running_loop().time() + 60.0
+    stable_event_id: str | None = None
+    stable_cycles = 0
+    statuses: dict[str, dict[str, Any]] = {}
+    while asyncio.get_running_loop().time() < deadline:
+        statuses = {
+            name: await runtime.bus.subscriber_status(name)
+            for name in sorted(runtime.bus._subscribers)  # noqa: SLF001
+        }
+        assert not any(row["degraded"] for row in statuses.values()), statuses
+        latest = await runtime.event_log.latest_event_id()
+        drained = all(row["lag_count"] == 0 for row in statuses.values())
+        if drained and latest == stable_event_id:
+            stable_cycles += 1
+        else:
+            stable_event_id = latest
+            stable_cycles = 0
+        if stable_cycles >= 2:
+            return latest
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"runtime did not settle before replay snapshot: {statuses}")
 
 
 def _write_message(
@@ -371,8 +397,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=A,
             key="mortgage-due",
-            subject="Mortgage account MTG-2048 payment due",
-            body="Mortgage account MTG-2048 is due this week.",
+            subject="Mortgage invoice MTG-2048 payment due",
+            body="Mortgage invoice MTG-2048 is due this week.",
             sender="billing@example.invalid",
         )
         mortgage_primary = _write_proposal(
@@ -380,7 +406,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             proposal_id="proposal-mortgage-primary",
             source_event_id=mortgage_due,
-            title="Pay mortgage account MTG-2048",
+            title="Pay mortgage invoice MTG-2048",
             candidate={"due_at": "2026-09-08T21:00:00Z"},
         )
         mortgage_budget = _write_message(
@@ -388,8 +414,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=A,
             key="mortgage-budget",
-            subject="Budget view for mortgage account MTG-2048",
-            body="Budget notification for mortgage account MTG-2048.",
+            subject="Budget view for mortgage invoice MTG-2048",
+            body="Budget notification for mortgage invoice MTG-2048.",
             sender="updates@example.invalid",
         )
         mortgage_attachment = _write_proposal(
@@ -397,16 +423,14 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             proposal_id="proposal-mortgage-budget",
             source_event_id=mortgage_budget,
-            title="Review mortgage budget account MTG-2048",
+            title="Review mortgage budget invoice MTG-2048",
         )
         assert mortgage_primary["payload"]["decision"] == "admit"
-        assert mortgage_attachment["payload"]["decision"] == "attach_evidence"
-        assert mortgage_attachment["payload"]["primary_proposal_id"] == (
-            "proposal-mortgage-primary"
-        )
+        # A different issuer's notification does not establish invoice identity.
+        assert mortgage_attachment["payload"]["decision"] == "context_only"
         assert (
             mortgage_attachment["payload"]["matter_id"]
-            == mortgage_primary["payload"]["matter_id"]
+            != mortgage_primary["payload"]["matter_id"]
         )
 
         _write_message(
@@ -414,8 +438,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=B,
             key="mortgage-private-payment",
-            subject="Mortgage account MTG-2048 payment received",
-            body="Payment received for mortgage account MTG-2048.",
+            subject="Mortgage invoice MTG-2048 payment received",
+            body="Payment received for mortgage invoice MTG-2048.",
             sender="billing@example.invalid",
             provider_account_id="fixture-account-b",
         )
@@ -424,13 +448,17 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
         )
 
         mortgage_digest = reference_digest(
-            tenant_id, "exact_account_reference", "MTG-2048"
+            tenant_id,
+            "exact_payment_reference",
+            issuer_reference(
+                client.portal.call(runtime.event_log.get, mortgage_due), "MTG-2048"
+            ),
         )
         shared_satisfaction = _write_shared_state(
             client,
             runtime,
             key="mortgage-satisfied",
-            reference_kind="account_reference",
+            reference_kind="payment_reference",
             reference_digest_value=mortgage_digest,
             current_state="satisfied",
         )
@@ -484,8 +512,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             )
         assert [item["payload"]["decision"] for item in healthcare_decisions] == [
             "admit",
-            "duplicate",
-            "duplicate",
+            "attach_evidence",
+            "attach_evidence",
         ]
         assert len({item["payload"]["matter_id"] for item in healthcare_decisions}) == 1
         assert [
@@ -573,12 +601,19 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             promise_decision["payload"]["priority_rank"],
             known_decision["payload"]["priority_rank"],
             deadline_decision["payload"]["priority_rank"],
-        ] == [0, 10, 20, 30]
+        ] == [
+            0,
+            10,
+            20,
+            60,
+        ]  # An unsupported candidate date is not a verified deadline.
         assert known_decision["payload"]["priority_basis"] == [
             "known_human_actionable_request"
         ]
         assert prior_human in known_decision["payload"]["evidence_source_event_ids"]
-        assert deadline_decision["payload"]["priority_basis"] == ["verified_deadline"]
+        assert deadline_decision["payload"]["priority_basis"] == [
+            "standard_actionable_candidate"
+        ]
         assert promise_decision["payload"]["member_authored_text_digest"]
         assert len(promise_decision["payload"]["member_authored_text_digest"]) == 64
         assert (
@@ -670,7 +705,8 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             title="Review known correspondent candidate",
             target_kind="party_candidate",
         )
-        assert valued_party["payload"]["decision"] == "admit"
+        # People context remains available without inventing personal work.
+        assert valued_party["payload"]["decision"] == "context_only"
 
         weak_first_source = _write_message(
             client,
@@ -732,7 +768,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
                     runtime,
                     proposal_id=f"proposal-{key}",
                     source_event_id=source_id,
-                    title="Complete account CNF-3300 action",
+                    title="Complete invoice CNF-3300 action",
                     candidate={"due_at": due},
                 )
             )
@@ -750,24 +786,28 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             member=A,
             key="correction-source",
-            subject="Account COR-9900 action due",
-            body="Account COR-9900 action due.",
+            subject="Invoice COR-9900 action due",
+            body="Invoice COR-9900 action due.",
         )
         correction_initial = _write_proposal(
             client,
             runtime,
             proposal_id="proposal-correction",
             source_event_id=correction_source,
-            title="Complete account COR-9900 action",
+            title="Complete invoice COR-9900 action",
         )
         correction_digest = reference_digest(
-            tenant_id, "exact_account_reference", "COR-9900"
+            tenant_id,
+            "exact_payment_reference",
+            issuer_reference(
+                client.portal.call(runtime.event_log.get, correction_source), "COR-9900"
+            ),
         )
         _write_shared_state(
             client,
             runtime,
             key="correction-satisfied",
-            reference_kind="account_reference",
+            reference_kind="payment_reference",
             reference_digest_value=correction_digest,
             current_state="satisfied",
         )
@@ -775,7 +815,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             client,
             runtime,
             key="correction-superseded",
-            reference_kind="account_reference",
+            reference_kind="payment_reference",
             reference_digest_value=correction_digest,
             current_state="superseded",
         )
@@ -786,6 +826,10 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
         assert correction_latest["payload"]["decision_revision"] == 3
         assert correction_latest["payload"]["supersedes_reconciliation_event_id"]
 
+        # Admission of the manually controlled proposals does not mean that
+        # source interpretation and its derived writes have finished. Keep all
+        # producers active, but compare rebuilds at one fully drained watermark.
+        settled_watermark = client.portal.call(_settle_runtime, runtime)
         triage_before = [
             tuple(row)
             for row in runtime.projections.connection("triage").execute(
@@ -834,6 +878,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
 
         client.portal.call(runtime.projections.rebuild, "triage")
         client.portal.call(runtime.projections.rebuild, "context_fabric")
+        assert client.portal.call(_settle_runtime, runtime) == settled_watermark
         triage_after = [
             tuple(row)
             for row in runtime.projections.connection("triage").execute(

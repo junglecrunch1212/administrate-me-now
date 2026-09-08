@@ -312,8 +312,20 @@ def test_active_queue_contains_only_admitted_obligations_and_separate_alerts() -
     )
     assert {matter["root_proposal_id"] for matter in page["matters"]} == {
         "proposal-0",
+        "proposal-1",
+        "proposal-2",
         "proposal-3",
     }
+    assert page["inventory"]["views"]["history"]["candidates"] == 2
+    ready = triage_page_for_member(
+        conn,
+        session,
+        member_id=MEMBER,
+        lens="ready",
+        human_centered=True,
+    )
+    assert [matter["root_proposal_id"] for matter in ready["matters"]] == ["proposal-0"]
+    assert ready["inventory"]["views"]["ready"]["candidates"] == 1
     alerts = triage_page_for_member(
         conn,
         session,
@@ -324,6 +336,22 @@ def test_active_queue_contains_only_admitted_obligations_and_separate_alerts() -
     assert [matter["root_proposal_id"] for matter in alerts["matters"]] == [
         "proposal-3"
     ]
+    first_page = triage_page_for_member(
+        conn, session, member_id=MEMBER, human_centered=True, limit=2
+    )
+    assert {matter["root_proposal_id"] for matter in first_page["matters"]} == {
+        "proposal-0",
+        "proposal-3",
+    }
+    projection.apply(_proposal("event-0099", "proposal-awaiting-admission"), conn)
+    pending = get_item(conn, session, proposal_id="proposal-awaiting-admission")
+    assert pending is not None
+    assert pending["attention_view"] == "history"
+    inventory = triage_page_for_member(
+        conn, session, member_id=MEMBER, human_centered=True
+    )["inventory"]
+    assert inventory["views"]["ready"]["candidates"] == 1
+    assert inventory["views"]["history"]["candidates"] == 3
 
 
 def test_learning_never_self_activates_and_negative_feedback_deactivates() -> None:
@@ -536,13 +564,26 @@ def test_approved_rule_narrows_matching_admission_and_suspension_restores_it() -
         "rule_id": "rule-learned",
         "narrow_only": True,
         "provider_effects": 0,
+        "rule_ids": [],
+        "reasons": [],
+        "expires_at": None,
+        "shadow": [],
     }
-    assert (
-        triage_page_for_member(conn, session, member_id=MEMBER, human_centered=True)[
-            "inventory"
-        ]["total_candidates"]
-        == 0
+    retained = triage_page_for_member(
+        conn, session, member_id=MEMBER, human_centered=True
     )
+    assert retained["inventory"]["total_candidates"] == 1
+    assert retained["inventory"]["views"]["history"]["candidates"] == 1
+    assert narrowed["attention_view"] == "history"
+    active = triage_page_for_member(
+        conn,
+        session,
+        member_id=MEMBER,
+        human_centered=True,
+        lens="ready",
+    )
+    assert active["matters"] == []
+    assert active["inventory"]["views"]["ready"]["candidates"] == 0
     projection.apply(
         _event(
             "event-0004",
@@ -567,6 +608,18 @@ def test_approved_rule_narrows_matching_admission_and_suspension_restores_it() -
     )
     restored = get_item(conn, session, proposal_id="proposal-learned")
     assert restored is not None and restored["learned_policy"]["state"] == "none"
+    assert restored["attention_view"] == "needs_you"
+    active = triage_page_for_member(
+        conn,
+        session,
+        member_id=MEMBER,
+        human_centered=True,
+        lens="ready",
+    )
+    assert [matter["root_proposal_id"] for matter in active["matters"]] == [
+        "proposal-learned"
+    ]
+    assert active["inventory"]["views"]["ready"]["candidates"] == 1
     assert (
         triage_page_for_member(conn, session, member_id=MEMBER, human_centered=True)[
             "inventory"

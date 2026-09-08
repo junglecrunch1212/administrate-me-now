@@ -9,13 +9,16 @@ import pytest
 
 from adminme.settings_control import SettingsControlStore
 from adminme.source_policy import (
+    V2_CANDIDATE_KINDS,
     SignalAssessment,
     SourceCoordinate,
     SourcePolicyV2,
     assess_source_signals,
     policy_for_preset,
+    parent_source_coordinate,
     route_for_policy,
     source_coordinate_for_event,
+    source_coordinate_contains,
     source_policy_event_types,
 )
 
@@ -61,6 +64,232 @@ def test_policy_key_distinguishes_principal_account_workspace_and_instance() -> 
         )
         == 5
     )
+
+
+def test_attention_presets_and_manual_leave_other_planes_unchanged() -> None:
+    assert policy_for_preset("focused").candidate_kinds == list(V2_CANDIDATE_KINDS)
+    original = SourcePolicyV2(
+        preset="custom",
+        acquisition_state="paused",
+        context_mode="none",
+        alert_mode="security_only",
+        candidate_kinds=["task"],
+        purpose_routes=[{"purpose": "survey", "route": "reference"}],
+    )
+    for preset in ("focused", "balanced", "review_everything", "manual"):
+        selected = policy_for_preset(preset, current_policy=original)
+        assert selected.context_mode == "none"
+        assert selected.acquisition_state == "paused"
+        assert selected.alert_mode == "security_only"
+        assert selected.candidate_kinds == ["task"]
+        assert selected.purpose_routes == original.purpose_routes
+    manual = policy_for_preset("manual", current_policy=original)
+    route = route_for_policy(
+        _coordinate(),
+        manual,
+        SignalAssessment(direction="inbound", security_alert=True),
+    )
+    assert (route.triage, route.alert, route.context) == ("none", "security", "none")
+
+
+def test_candidate_kind_preferences_apply_before_verified_obligation_and_purpose() -> (
+    None
+):
+    policy = SourcePolicyV2(
+        candidate_kinds=["task"],
+        purpose_routes=[{"purpose": "recurrence", "route": "review"}],
+    )
+    signals = SignalAssessment(
+        direction="inbound",
+        candidate_kind="recurrence",
+        verified_obligation=True,
+        message_purpose="recurrence",
+        purpose_evidence_verified=True,
+        obligation_actionability="required",
+        security_alert=True,
+    )
+    excluded = route_for_policy(_coordinate(), policy, signals)
+    assert (excluded.triage, excluded.alert, excluded.context) == (
+        "none",
+        "security",
+        "typed_facts",
+    )
+    assert "candidate_kind_not_enabled" in excluded.reason_codes
+    assert excluded.candidate_kinds == []
+    enabled = route_for_policy(
+        _coordinate(), policy, signals.model_copy(update={"candidate_kind": "task"})
+    )
+    assert enabled.triage == "review"
+    unassessed_source = route_for_policy(
+        _coordinate(), policy, signals.model_copy(update={"candidate_kind": None})
+    )
+    assert unassessed_source.triage == "review"
+    direct = route_for_policy(
+        _coordinate().model_copy(
+            update={"source_class": "direct_authenticated_intent"}
+        ),
+        policy,
+        signals.model_copy(update={"authenticated_member_instruction": True}),
+    )
+    assert direct.triage == "direct_work_order_proposal"
+
+
+def test_mixed_source_actions_use_their_own_verified_purpose() -> None:
+    policy = policy_for_preset("balanced").model_copy(
+        update={
+            "purpose_routes": SourcePolicyV2(
+                candidate_kinds=["task"],
+                purpose_routes=[{"purpose": "survey", "route": "reference"}],
+            ).purpose_routes,
+        }
+    )
+    survey = SignalAssessment(
+        direction="inbound",
+        bulk_notification=True,
+        message_purpose="survey",
+        purpose_evidence_verified=True,
+    )
+    required_form = SignalAssessment(
+        direction="inbound",
+        bulk_notification=True,
+        message_purpose="preparation",
+        purpose_evidence_verified=True,
+        verified_obligation=True,
+    )
+    assert route_for_policy(_coordinate(), policy, survey).triage == "none"
+    assert route_for_policy(_coordinate(), policy, required_form).triage == "review"
+    paid_ticket = required_form.model_copy(
+        update={"message_purpose": "appointment", "receipt": True}
+    )
+    assert route_for_policy(_coordinate(), policy, paid_ticket).triage == "review"
+    # Matching the word or accepting a model flag in raw provider input never
+    # selects the saved purpose rule.
+    forged = assess_source_signals(
+        {
+            "type": "messaging.received",
+            "payload": {
+                "message_purpose": "survey",
+                "purpose_evidence_verified": True,
+                "verified_obligation": True,
+            },
+        }
+    )
+    assert forged.purpose_evidence_verified is False
+    assert forged.verified_obligation is False
+    assert route_for_policy(_coordinate(), policy, forged).triage == "review"
+
+
+def test_possibilities_and_explicit_alert_rules_have_distinct_routes() -> None:
+    possible = SignalAssessment(
+        direction="inbound",
+        bulk_notification=True,
+        message_purpose="optional_opportunity",
+        purpose_evidence_verified=True,
+        obligation_actionability="conditional",
+    )
+    assert (
+        route_for_policy(_coordinate(), policy_for_preset("balanced"), possible).triage
+        == "review"
+    )
+    assert (
+        route_for_policy(_coordinate(), policy_for_preset("focused"), possible).triage
+        == "none"
+    )
+    informational = possible.model_copy(
+        update={"obligation_actionability": "informational"}
+    )
+    assert (
+        route_for_policy(
+            _coordinate(), policy_for_preset("balanced"), informational
+        ).triage
+        == "none"
+    )
+    alert_policy = SourcePolicyV2(
+        candidate_kinds=["task"],
+        purpose_routes=[{"purpose": "optional_opportunity", "route": "alert"}],
+    )
+    alert = route_for_policy(_coordinate(), alert_policy, possible)
+    assert (alert.triage, alert.alert) == ("none", "actionable")
+    disabled = route_for_policy(
+        _coordinate(), alert_policy.model_copy(update={"alert_mode": "none"}), possible
+    )
+    assert disabled.alert == "none"
+
+
+def test_conversation_preferences_inherit_only_the_exact_account(
+    tmp_path: Path,
+) -> None:
+    store = SettingsControlStore(tmp_path / "settings.json")
+    parent = _coordinate()
+    conversation = parent.model_copy(
+        update={
+            "native_container_kind": "conversation",
+            "native_container_id": "fixture-chat-one",
+        }
+    )
+    sibling = conversation.model_copy(
+        update={"native_container_id": "fixture-chat-two"}
+    )
+    other_account = conversation.model_copy(
+        update={"provider_account_id": "fixture-other-account"}
+    )
+    assert parent_source_coordinate(conversation) == parent
+    assert source_coordinate_contains(parent, conversation)
+    assert not source_coordinate_contains(conversation, sibling)
+    assert not source_coordinate_contains(parent, other_account)
+    for revision, coordinate, preset in (
+        (1, parent, "focused"),
+        (2, conversation, "manual"),
+    ):
+        store.apply_source_policy_v2_event(
+            {
+                "owner_principal_id": "member-a",
+                "policy_key": coordinate.key,
+                "coordinate": coordinate.model_dump(mode="json"),
+                "revision": revision,
+                "action": "set",
+                "policy": policy_for_preset(preset).model_dump(mode="json"),
+                "changed_at": "2030-01-01T00:00:00Z",
+                "changed_by_principal_id": "member-a",
+            }
+        )
+    assert (
+        store.effective_source_policy_v2("member-a", conversation)["policy"][
+            "attention_mode"
+        ]
+        == "manual"
+    )
+    inherited = store.effective_source_policy_v2("member-a", sibling)
+    assert inherited["policy"]["attention_mode"] == "obligations"
+    assert inherited["inherited_from_policy_key"] == parent.key
+    assert (
+        store.effective_source_policy_v2("member-a", other_account)["origin"]
+        == "recommended_default"
+    )
+
+
+def test_bridge_sms_keeps_messages_provider_and_native_conversation_scope() -> None:
+    coordinate = source_coordinate_for_event(
+        {
+            "tenant_id": "tenant-fixture",
+            "type": "messaging.received",
+            "source_adapter": "fixture-enrollment",
+            "source_account_id": "fixture-messages-account",
+            "owner_scope": "private:member-a",
+            "payload": {
+                "member_id": "member-a",
+                "provider": "bluebubbles",
+                "workspace": "personal",
+                "source_channel": "sms",
+                "thread_id": "fixture-provider-thread",
+                "native_chat_id": "fixture-native-chat",
+            },
+        }
+    )
+    assert coordinate.source_kind == "adapter:bluebubbles"
+    assert coordinate.adapter_kind == "messaging-bluebubbles"
+    assert coordinate.native_container_kind == "conversation"
+    assert coordinate.native_container_id == "fixture-native-chat"
 
 
 def test_service_owned_source_needs_no_fake_member() -> None:
