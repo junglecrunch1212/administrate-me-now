@@ -36,6 +36,13 @@ from bootstrap.source_identity import (
     write_source_marker,
 )
 from bootstrap.contracts import DeploymentPaths
+from bootstrap.deployment_budget import (
+    CONTROLLER_SECONDS,
+    DEADLINE_ENV,
+    START_ENV,
+    DeploymentBudget,
+    DeploymentBudgetError,
+)
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 
 
@@ -253,6 +260,79 @@ def test_supervisor_accepts_safe_root_owned_system_python(
     assert environment["ADMINME_TEST_MODE"] == "1"
 
 
+def test_supervisor_discards_ambient_deadline_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_home = tmp_path / "private-home"
+    private_home.mkdir(mode=0o700)
+    monkeypatch.setenv(START_ENV, "nan")
+    monkeypatch.setenv(DEADLINE_ENV, "inf")
+    environment = update_supervisor._controller_environment(  # noqa: SLF001
+        private_home, test_mode=False
+    )
+    assert START_ENV not in environment
+    assert DEADLINE_ENV not in environment
+    assert CONTROLLER_SECONDS == update_supervisor.CONTROLLER_TIMEOUT_SECONDS
+    assert CONTROLLER_SECONDS == update_controller_guardian.CONTROLLER_TIMEOUT_SECONDS
+    assert CONTROLLER_SECONDS == 13 * 60 * 60
+
+
+@pytest.mark.parametrize(
+    ("start", "deadline"),
+    [
+        (None, None),
+        ("100", None),
+        (None, "46900"),
+        ("nan", "46900"),
+        ("100", "inf"),
+        ("-100", "46700"),
+        ("201", "47001"),
+        ("100", "46901"),
+        ("100", "200"),
+        ("invalid", "46900"),
+    ],
+)
+def test_controller_deadline_rejects_missing_or_untrusted_budget(
+    monkeypatch: pytest.MonkeyPatch, start: str | None, deadline: str | None
+) -> None:
+    environment: dict[str, str] = {}
+    monkeypatch.setenv("ADMINME_UPDATE_SUPERVISED", "1")
+    for name, value in ((START_ENV, start), (DEADLINE_ENV, deadline)):
+        monkeypatch.delenv(name, raising=False)
+        if value is not None:
+            environment[name] = value
+            monkeypatch.setenv(name, value)
+    with pytest.raises(DeploymentBudgetError):
+        DeploymentBudget.from_environment(environment, now=200, supervised=True)
+    with pytest.raises(SystemExit):
+        update_controller_guardian._controller_deadline(  # noqa: SLF001
+            CONTROLLER_SECONDS, now=200
+        )
+
+
+def test_guardian_and_controller_share_deadline_after_delayed_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = {START_ENV: "100", DEADLINE_ENV: str(100 + CONTROLLER_SECONDS)}
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("ADMINME_UPDATE_SUPERVISED", "1")
+    inherited = update_controller_guardian._controller_deadline(  # noqa: SLF001
+        CONTROLLER_SECONDS, now=1000
+    )
+    budget = DeploymentBudget.from_environment(environment, now=1200, supervised=True)
+    assert inherited == budget.deadline == 100 + CONTROLLER_SECONDS
+    assert inherited < 1000 + CONTROLLER_SECONDS
+    with pytest.raises(DeploymentBudgetError, match="untrusted"):
+        DeploymentBudget.from_environment(environment, now=1200, supervised=False)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), 46801])
+def test_guardian_timeout_cannot_exceed_reviewed_ceiling(timeout: float) -> None:
+    with pytest.raises(SystemExit):
+        update_controller_guardian._controller_deadline(timeout, now=100)  # noqa: SLF001
+
+
 def test_supervisor_rejects_writable_test_interpreter_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -291,6 +371,61 @@ def test_fixed_blob_supervisor_owns_lock_controller_and_cleanup(tmp_path: Path) 
     assert lock.is_file() and not lock.is_symlink()
     assert stat.S_IMODE(lock.stat().st_mode) == 0o600
     assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+
+
+def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, _old_commit = _supervisor_repository(tmp_path)
+    bootstrap = repository / "bootstrap"
+    shutil.copy2(REPO_ROOT / "bootstrap" / "common.sh", bootstrap)
+    shutil.copy2(REPO_ROOT / "bootstrap" / "deployment_budget.py", bootstrap)
+    # Execute the exact production final shell-to-CLI block, after the real
+    # common.sh environment setup. Preparation dependencies remain synthetic.
+    production_shell = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")
+    handoff = production_shell[
+        production_shell.rindex('(\n  cd "$fixed_controller_root"') :
+    ]
+    (bootstrap / "update.sh").write_text(
+        "#!/bin/bash -p\nset -Eeuo pipefail\n"
+        'fixed_controller_root="$ADMINME_FIXED_CONTROLLER_ROOT"\n'
+        'source "$fixed_controller_root/bootstrap/common.sh"\n'
+        "resolve_instance_root\n"
+        'supervised_commit="$ADMINME_SUPERVISED_CANDIDATE_COMMIT"\n'
+        'controller="${ADMINME_ACCEPTANCE_PYTHON%/bin/python}"\n'
+        'node_bin_dir="/usr/bin"\npoetry_venv="$controller"\n'
+        "upgrade_args=(deadline-proof)\n" + handoff,
+        encoding="utf-8",
+    )
+    (bootstrap / "cli.py").write_text(
+        "import json, os, time\nfrom pathlib import Path\n"
+        "from bootstrap.deployment_budget import DeploymentBudget, START_ENV, DEADLINE_ENV\n"
+        "now = time.monotonic()\n"
+        "budget = DeploymentBudget.from_environment(os.environ, now=now, supervised=True)\n"
+        "report = {name: os.environ[name] for name in (START_ENV, DEADLINE_ENV, "
+        "'ADMINME_UPGRADE_CONTROLLER_COMMIT', 'ADMINME_UPGRADE_CONTROLLER_ROOT')}\n"
+        "report.update(now=now, deadline=budget.deadline, started=budget.started_at)\n"
+        "Path(os.environ['ADMINME_SUPERVISOR_REPORT']).write_text(json.dumps(report))\n",
+        encoding="utf-8",
+    )
+    commit = _commit(repository, "production deadline handoff")
+    paths, _active_commit = _supervisor_instance(tmp_path)
+    report = tmp_path / "deadline-report"
+    monkeypatch.setenv(START_ENV, "nan")
+    monkeypatch.setenv(DEADLINE_ENV, "inf")
+
+    completed = _run_fixed_supervisor(
+        repository, commit, paths, report, "--test-mode", str(repository)
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    observed = json.loads(report.read_text("utf-8"))
+    assert observed["started"] <= observed["now"] < observed["deadline"]
+    assert observed["deadline"] - observed["started"] == CONTROLLER_SECONDS
+    assert observed["ADMINME_UPGRADE_CONTROLLER_COMMIT"] == commit
+    assert Path(observed["ADMINME_UPGRADE_CONTROLLER_ROOT"]).name == "source"
+    assert float(observed[DEADLINE_ENV]) == observed["deadline"]
+    assert float(observed[START_ENV]) == observed["started"]
 
 
 def test_fixed_blob_supervisor_bootstrap_creates_private_instance_and_cleans(

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +13,12 @@ import pytest
 
 from bootstrap.backup_restore import BackupError, BackupManager
 from bootstrap.contracts import DeploymentPaths
-from bootstrap.service_settlement import POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
+from bootstrap.service_settlement import (
+    POST_SWITCH_CONSUMER_PROGRESS_SECONDS,
+    POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
+    run_release_doctor,
+    wait_for_settled_doctor,
+)
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import write_source_marker
 
@@ -161,7 +166,7 @@ def test_restore_missing_live_readiness_has_only_three_retries(restore_proof):
     assert sleep.call_count == 3
 
 
-def test_restore_source_settlement_has_one_fixed_hour_budget(
+def test_restore_source_settlement_has_one_fixed_six_hour_budget(
     restore_proof, monkeypatch
 ):
     manager, services, _doctor, run, sleep = restore_proof
@@ -170,11 +175,14 @@ def test_restore_source_settlement_has_one_fixed_hour_budget(
     services.runtime_diagnostics.return_value = _readiness(pending=1)
     now = [0.0]
     monkeypatch.setattr("bootstrap.service_settlement.time.monotonic", lambda: now[0])
-    sleep.side_effect = lambda _seconds: now.__setitem__(0, 3600.0)
+    sleep.side_effect = lambda _seconds: now.__setitem__(0, 21600.0)
 
-    assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 3600
-    assert manager._post_restore_doctor(services_restarted=True) == transient
-    assert run.call_count == 2
+    assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 21600
+    result = manager._post_restore_doctor(services_restarted=True)
+    assert result["status"] == "failed"
+    assert result["checks"][-1]["evidence"]["reason"] == "deadline_exhausted"
+    # Expiration cannot launch another Doctor and later accept its success.
+    assert run.call_count == 1
     assert sleep.call_count == 1
 
 
@@ -380,3 +388,459 @@ def test_restore_rejects_pointer_change_during_readiness_poll(
         manager._post_restore_doctor(services_restarted=True)
     assert len(calls) == 1
     assert services.runtime_diagnostics.call_count == 1
+
+
+@pytest.fixture
+def settlement_clock(monkeypatch):
+    clock = SimpleNamespace(now=0.0, sleeps=[])
+
+    def sleep(seconds):
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+
+    monkeypatch.setattr(
+        "bootstrap.service_settlement.time",
+        SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
+    )
+    return clock
+
+
+_REPLAY_ID = "pipeline:pipeline:noise_filtering"
+_PROJECTION_ID = "projection:source_assurance"
+
+
+def _consumer(checkpoint, *, lag=1, version=23, kind="reactive_pipeline"):
+    return {
+        "kind": kind,
+        "state": "healthy",
+        "details": {
+            "version": version,
+            "checkpoint_event_id": checkpoint,
+            "lag_count": lag,
+            "consecutive_failures": 0,
+            "poison_event_id": None,
+        },
+    }
+
+
+def _settlement_services(diagnostics):
+    services = Mock(spec=ServiceManager)
+    services.runtime_is_live.return_value = True
+    services.runtime_diagnostics.side_effect = diagnostics
+    return services
+
+
+def _settlement_failure(result):
+    assert result["status"] == "failed"
+    check = result["checks"][-1]
+    assert check["name"] == "bounded_service_settlement"
+    assert check["ok"] is False
+    assert check["evidence"]["contract"] == "bounded-service-settlement-v1"
+    return check["evidence"]
+
+
+def test_checkpoint_advancement_can_settle_after_more_than_one_hour(settlement_clock):
+    clock = settlement_clock
+    checkpoints = []
+
+    def diagnostics():
+        pending = clock.now < 3900
+        result = _readiness(pending=int(pending))
+        checkpoint = f"ev_{int(clock.now // 300):020d}"
+        checkpoints.append(checkpoint)
+        result["capabilities"][_REPLAY_ID] = _consumer(
+            checkpoint, lag=10 if pending else 0
+        )
+        return result
+
+    def doctor(*, include_synthetic_proof):
+        if clock.now < 3900:
+            return _report("source_assurance_terminal_dispositions")
+        return _report()
+
+    run = Mock(side_effect=doctor)
+    services = _settlement_services(diagnostics)
+    result = wait_for_settled_doctor(
+        run_doctor=run, services=services, test_mode=False, poll_seconds=300
+    )
+
+    assert result == _report()
+    assert 3600 < clock.now < POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
+    assert checkpoints == sorted(set(checkpoints))
+    assert len(checkpoints) > 10
+    assert [call.kwargs for call in run.call_args_list] == [
+        {"include_synthetic_proof": False},
+        {"include_synthetic_proof": False},
+        {"include_synthetic_proof": True},
+    ]
+
+
+@pytest.mark.parametrize("decreasing_lag", [False, True])
+def test_one_stalled_consumer_cannot_borrow_other_progress_or_ingress(
+    settlement_clock, decreasing_lag
+):
+    clock = settlement_clock
+
+    def diagnostics():
+        step = int(clock.now // 100)
+        result = _readiness(pending=step + 1)
+        result["capabilities"][_REPLAY_ID] = _consumer(
+            "ev_00000000000000000001",
+            lag=1000 - step if decreasing_lag else 1000 + step,
+        )
+        result["capabilities"][_REPLAY_ID]["details"]["last_success_at"] = step
+        result["capabilities"][_PROJECTION_ID] = _consumer(
+            f"ev_{step:020d}", kind="projection"
+        )
+        return result
+
+    run = Mock(return_value=_report("source_assurance_terminal_dispositions"))
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        poll_seconds=100,
+    )
+
+    evidence = _settlement_failure(result)
+    assert evidence["reason"] == "consumer_stalled"
+    assert evidence["consumer_id"] == _REPLAY_ID
+    assert clock.now == POST_SWITCH_CONSUMER_PROGRESS_SECONDS == 600
+    run.assert_called_once_with(include_synthetic_proof=False)
+
+
+@pytest.mark.parametrize("absolute_deadline", [600, 100000])
+def test_tiny_checkpoint_progress_never_extends_either_hard_deadline(
+    settlement_clock, absolute_deadline
+):
+    clock = settlement_clock
+
+    def diagnostics():
+        result = _readiness(pending=1)
+        result["capabilities"][_REPLAY_ID] = _consumer(
+            f"ev_{int(clock.now // 100):020d}"
+        )
+        return result
+
+    run = Mock(return_value=_report("source_assurance_terminal_dispositions"))
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        poll_seconds=100,
+        timeout_seconds=100000,
+        absolute_deadline=absolute_deadline,
+    )
+
+    assert _settlement_failure(result)["reason"] == "deadline_exhausted"
+    assert clock.now == min(absolute_deadline, 21600)
+    run.assert_called_once_with(include_synthetic_proof=False)
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("version", "consumer_identity_changed"),
+        ("missing", "consumer_identity_changed"),
+        ("kind", "consumer_identity_changed"),
+        ("checkpoint_regression", "consumer_checkpoint_regressed"),
+        ("checkpoint_cleared", "consumer_checkpoint_regressed"),
+        ("checkpoint_invalid", "consumer_evidence_invalid"),
+        ("version_missing", "consumer_evidence_invalid"),
+        ("lag_missing", "consumer_evidence_invalid"),
+    ],
+)
+def test_consumer_identity_and_checkpoint_evidence_are_frozen(
+    settlement_clock, change, reason
+):
+    clock = settlement_clock
+
+    def diagnostics():
+        result = _readiness(pending=1)
+        consumer = _consumer("ev_00000000000000000010")
+        result["capabilities"][_REPLAY_ID] = consumer
+        if clock.now:
+            if change == "missing":
+                del result["capabilities"][_REPLAY_ID]
+            elif change == "kind":
+                consumer["kind"] = "projection"
+            else:
+                field, value = {
+                    "version": ("version", 24),
+                    "checkpoint_regression": (
+                        "checkpoint_event_id",
+                        "ev_00000000000000000009",
+                    ),
+                    "checkpoint_cleared": ("checkpoint_event_id", None),
+                    "checkpoint_invalid": ("checkpoint_event_id", {}),
+                    "version_missing": ("version", None),
+                    "lag_missing": ("lag_count", None),
+                }[change]
+                consumer["details"][field] = value
+        return result
+
+    run = Mock(return_value=_report("source_assurance_terminal_dispositions"))
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        poll_seconds=100,
+    )
+
+    evidence = _settlement_failure(result)
+    assert evidence["reason"] == reason
+    assert evidence["consumer_id"] == _REPLAY_ID
+    assert clock.now == 100
+    run.assert_called_once_with(include_synthetic_proof=False)
+
+
+def test_observed_empty_backlog_starts_a_new_pending_episode(settlement_clock):
+    clock = settlement_clock
+    observations = []
+
+    def diagnostics():
+        now = clock.now
+        result = _readiness(pending=int(now < 1500))
+        lag = 1 if now == 0 or 1000 <= now < 1500 else 0
+        checkpoint = (
+            "ev_00000000000000000001" if now < 1500 else "ev_00000000000000000002"
+        )
+        result["capabilities"][_REPLAY_ID] = _consumer(checkpoint, lag=lag)
+        result["capabilities"][_PROJECTION_ID] = _consumer(
+            f"ev_{int(now // 100):020d}", lag=int(now < 1500), kind="projection"
+        )
+        observations.append((now, checkpoint, lag))
+        return result
+
+    run = Mock(
+        side_effect=lambda **kwargs: (
+            _report("source_assurance_terminal_dispositions")
+            if clock.now < 1500
+            else _report()
+        )
+    )
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        poll_seconds=100,
+    )
+
+    assert result == _report()
+    assert (1000, "ev_00000000000000000001", 1) in observations
+    assert clock.now == 1600
+    assert run.call_args.kwargs == {"include_synthetic_proof": True}
+
+
+@pytest.mark.parametrize("completion", ["checkpoint", "empty_backlog"])
+def test_watchdog_reads_final_progress_before_rejecting_stale_checkpoint(
+    settlement_clock, completion
+):
+    clock = settlement_clock
+    observations = []
+
+    def diagnostics():
+        # Progress becomes observable during the final bounded readiness call,
+        # after the preceding poll had seen the unchanged checkpoint.
+        if clock.now == 600:
+            clock.now += 1
+        done = clock.now >= 600
+        result = _readiness(pending=int(not done))
+        checkpoint = (
+            "ev_00000000000000000002"
+            if done and completion == "checkpoint"
+            else "ev_00000000000000000001"
+        )
+        lag = 0 if done and completion == "empty_backlog" else 1
+        result["capabilities"][_REPLAY_ID] = _consumer(checkpoint, lag=lag)
+        observations.append(clock.now)
+        return result
+
+    run = Mock(
+        side_effect=lambda **kwargs: (
+            _report("source_assurance_terminal_dispositions")
+            if clock.now < 600
+            else _report()
+        )
+    )
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        poll_seconds=100,
+    )
+
+    assert result == _report()
+    assert observations[-1] == 601
+    assert run.call_args.kwargs == {"include_synthetic_proof": True}
+
+
+@pytest.mark.parametrize("failure", ["poison_event_id", "consecutive_failures"])
+def test_consumer_poison_and_failure_fail_even_with_a_healthy_state_label(
+    settlement_clock, failure
+):
+    diagnostics = _readiness(pending=1)
+    consumer = _consumer("ev_00000000000000000001")
+    consumer["details"][failure] = (
+        "ev_poison_fixture" if failure == "poison_event_id" else 1
+    )
+    diagnostics["capabilities"][_REPLAY_ID] = consumer
+    run = Mock(return_value=_report("source_assurance_terminal_dispositions"))
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(lambda: diagnostics),
+        test_mode=False,
+    )
+
+    assert _settlement_failure(result)["reason"] == "consumer_failed"
+    assert settlement_clock.now == 0
+    run.assert_called_once_with(include_synthetic_proof=False)
+
+
+def test_failed_source_assurance_is_not_waitable_pending_work(settlement_clock):
+    diagnostics = _readiness(pending=1)
+    diagnostics["capabilities"]["policy:source-assurance"]["details"]["counts"][
+        "failed"
+    ] = 1
+    result = wait_for_settled_doctor(
+        run_doctor=Mock(return_value=_report("source_assurance_terminal_dispositions")),
+        services=_settlement_services(lambda: diagnostics),
+        test_mode=False,
+    )
+    assert _settlement_failure(result)["reason"] == "source_assurance_failed"
+    assert settlement_clock.now == 0
+
+
+def test_readiness_blackouts_do_not_reset_consumer_progress(settlement_clock):
+    clock = settlement_clock
+
+    def diagnostics():
+        if clock.now not in {0, 300}:
+            return None
+        result = _readiness(pending=1)
+        result["capabilities"][_REPLAY_ID] = _consumer("ev_00000000000000000001")
+        return result
+
+    result = wait_for_settled_doctor(
+        run_doctor=Mock(return_value=_report("source_assurance_terminal_dispositions")),
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        poll_seconds=100,
+    )
+    assert _settlement_failure(result)["reason"] == "consumer_stalled"
+    assert clock.now == 600
+
+
+def test_structural_readiness_cannot_be_overruled_by_basic_doctor_success(
+    settlement_clock,
+):
+    diagnostics = _readiness(pending=1)
+    diagnostics["capabilities"]["adapter:fixture"] = {
+        "kind": "adapter",
+        "state": "blocked",
+    }
+    run = Mock(
+        side_effect=[_report("source_assurance_terminal_dispositions"), _report()]
+    )
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(lambda: diagnostics),
+        test_mode=False,
+    )
+    assert _settlement_failure(result)["reason"] == "structural_degradation"
+    assert all(
+        not call.kwargs["include_synthetic_proof"] for call in run.call_args_list
+    )
+    assert settlement_clock.now == 0
+
+
+def test_full_doctor_success_after_expiry_is_still_failure(settlement_clock):
+    clock = settlement_clock
+
+    def doctor(*, include_synthetic_proof):
+        if include_synthetic_proof:
+            clock.now = 300
+        return _report()
+
+    run = Mock(side_effect=doctor)
+    services = _settlement_services(lambda: _readiness())
+    result = wait_for_settled_doctor(
+        run_doctor=run, services=services, test_mode=False, absolute_deadline=300
+    )
+    evidence = _settlement_failure(result)
+    assert evidence["reason"] == "deadline_exhausted"
+    assert evidence["phase"] == "full_doctor"
+    assert run.call_count == 2
+    services.runtime_diagnostics.assert_not_called()
+
+
+def test_full_doctor_is_not_started_without_its_complete_remaining_budget(
+    settlement_clock,
+):
+    clock = settlement_clock
+
+    def doctor(*, include_synthetic_proof):
+        assert include_synthetic_proof is False
+        clock.now += 100
+        return _report()
+
+    run = Mock(side_effect=doctor)
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(lambda: _readiness()),
+        test_mode=False,
+        absolute_deadline=200,
+    )
+    evidence = _settlement_failure(result)
+    assert evidence["reason"] == "proof_budget_exhausted"
+    assert evidence["phase"] == "full_doctor"
+    run.assert_called_once_with(include_synthetic_proof=False)
+
+
+@pytest.mark.parametrize("phase", ["readiness", "liveness"])
+def test_readiness_and_liveness_calls_reserve_their_bounded_time(
+    settlement_clock, phase
+):
+    clock = settlement_clock
+
+    def doctor(**kwargs):
+        clock.now += 115 if phase == "readiness" else 120
+        return _report("source_assurance_terminal_dispositions")
+
+    def diagnostics():
+        clock.now += 26
+        return None
+
+    services = _settlement_services(diagnostics)
+    result = wait_for_settled_doctor(
+        run_doctor=doctor,
+        services=services,
+        test_mode=False,
+        absolute_deadline=140 if phase == "readiness" else 150,
+    )
+    evidence = _settlement_failure(result)
+    assert evidence["reason"] == "proof_budget_exhausted"
+    assert evidence["phase"] == phase
+    assert services.runtime_diagnostics.call_count == int(phase == "liveness")
+    services.runtime_is_live.assert_not_called()
+
+
+@pytest.mark.parametrize("timeout", [7, 1000])
+def test_selected_release_doctor_timeout_cannot_exceed_its_existing_bound(
+    selected_release, monkeypatch, timeout
+):
+    manager, release, _pointer = selected_release
+    run = Mock(return_value=SimpleNamespace(stdout=json.dumps(_report())))
+    monkeypatch.setattr("bootstrap.service_settlement.subprocess.run", run)
+
+    assert (
+        run_release_doctor(
+            manager.paths,
+            release,
+            include_synthetic_proof=True,
+            require_runtime=True,
+            timeout_seconds=timeout,
+        )
+        == _report()
+    )
+    assert run.call_args.kwargs["timeout"] == min(timeout, 120)

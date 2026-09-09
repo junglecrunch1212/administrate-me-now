@@ -67,6 +67,10 @@ jobs:
           tests/unit/test_cross_source_reconciliation.py
           tests/unit/test_message_context.py
           tests/unit/bootstrap/test_restore_settlement.py
+          tests/unit/bootstrap/test_phase5_operations.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_activation_transaction.py
+          tests/acceptance/test_upgrade_deadline_rollback.py
           tests/acceptance/test_macos_bootstrap_operations.py::test_encrypted_restore_settles_late_sources_and_quiesces_failed_state
           tests/acceptance/test_macos_bootstrap_operations.py::test_newer_restore_controller_proves_selected_predecessor_in_its_real_process
           tests/unit/test_attention_rule_scope.py

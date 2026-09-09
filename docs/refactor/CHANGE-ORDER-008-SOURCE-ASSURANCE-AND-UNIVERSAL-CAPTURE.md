@@ -448,6 +448,18 @@ metadata reader, including non-null causation and the mixed terminal-payload
 branch, and exercise migration, read-only historical inspection, predecessor
 reopening, and source-assurance readiness through the production composition.
 
+Retained replay can still require multiple hours after the metadata cost is
+removed: several thousand anchors processed in bounded batches can exceed the
+former one-hour deployment wait at observed per-call latency. The
+[bootstrap deadline contract](BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md#deployment-and-recovery-deadlines)
+**MODERNIZES** the operational wait to a six-hour hard settlement limit with
+a ten-minute watchdog for each pending consumer, while reserving six hours for
+predecessor recovery and ten minutes for final proof/cleanup within a fixed
+thirteen-hour guardian budget. This **PRESERVES** all source accounting, terminal
+correlation, freshness, complete Doctor, and automatic recovery requirements.
+An advancing replay may use the larger finite budget; a stalled or over-budget
+replay cannot be declared healthy or consume an unbounded recovery window.
+
 ### 10.7 Exact-pin plugin health reconciliation
 
 PR #307 merged as `cbc6cc9` and deployed after encrypted backup

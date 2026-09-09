@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-import time
-import os
 import json
+import math
+import os
 import subprocess
-from pathlib import Path
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.doctor import Doctor
-from bootstrap.wizard import service_environment_path
-
 from bootstrap.services import (
+    RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
     ServiceManager,
     isolated_degraded_adapter_ids,
     source_assurance_terminal_evidence,
 )
-
+from bootstrap.wizard import service_environment_path
 
 _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
     {
@@ -52,18 +53,172 @@ _TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS = frozenset(
         "openclaw",
     }
 )
-# A full reviewed language-bound replay can traverse more than one thousand
-# immutable message facts on a household instance.  Keep this bounded, but do
-# not make a healthy, advancing replay race an unrealistically short rollback
-# clock.
-POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 60 * 60
+# Fixed reviewed ceilings, not an estimate of any household's remaining work.
+# Advancing checkpoints can satisfy the watchdog, never extend the deadline.
+POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 6 * 60 * 60
+POST_SWITCH_CONSUMER_PROGRESS_SECONDS = 10 * 60
 POST_SWITCH_POLL_SECONDS = 2
+RELEASE_DOCTOR_TIMEOUT_SECONDS = 120
+_RUNTIME_LIVENESS_TIMEOUT_SECONDS = 5
+_REPLAY_CONSUMER_KINDS = frozenset({"projection", "reactive_pipeline"})
 # A live runtime can briefly make the full readiness document unavailable
 # while the source-settlement audit contends for the encrypted event log. Each
 # miss has already consumed the bounded diagnostics timeout. Retry only while
 # the cheap liveness proof succeeds and Doctor reports no non-settlement gap;
 # an unresolved blackout still fails closed after this small fixed allowance.
 POST_SWITCH_LIVE_READINESS_RETRIES = 3
+
+
+class _SettlementStopped(RuntimeError):
+    def __init__(
+        self, reason: str, *, consumer_id: str | None = None, phase: str | None = None
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.consumer_id = consumer_id
+        self.phase = phase
+
+
+@dataclass
+class _ConsumerProgress:
+    kind: str
+    version: int | str
+    checkpoint: str | None
+    last_progress: float
+    lag: int
+
+
+class _ReplayProgress:
+    """Freeze each observed lagging consumer's identity for this settlement."""
+
+    def __init__(self) -> None:
+        self.consumers: dict[str, _ConsumerProgress] = {}
+
+    def check_stalls(self, now: float) -> None:
+        for consumer_id, consumer in self.consumers.items():
+            if (
+                consumer.lag > 0
+                and now - consumer.last_progress
+                >= POST_SWITCH_CONSUMER_PROGRESS_SECONDS
+            ):
+                raise _SettlementStopped("consumer_stalled", consumer_id=consumer_id)
+
+    def next_deadline(self, deadline: float) -> float:
+        return min(
+            [deadline]
+            + [
+                consumer.last_progress + POST_SWITCH_CONSUMER_PROGRESS_SECONDS
+                for consumer in self.consumers.values()
+                if consumer.lag > 0
+            ]
+        )
+
+    def observe(self, diagnostics: dict[str, Any], now: float) -> None:
+        capabilities = diagnostics["capabilities"]
+        # A disappearance, renamed consumer or changed version cannot create a
+        # fresh progress timer. Keep the original identity even after lag is zero.
+        for consumer_id, consumer in self.consumers.items():
+            capability = capabilities.get(consumer_id)
+            if (
+                not isinstance(capability, dict)
+                or capability.get("kind") != consumer.kind
+            ):
+                raise _SettlementStopped(
+                    "consumer_identity_changed", consumer_id=consumer_id
+                )
+
+        for consumer_id, capability in capabilities.items():
+            if not isinstance(capability, dict):
+                continue
+            kind = capability.get("kind")
+            if kind not in _REPLAY_CONSUMER_KINDS:
+                continue
+            details = capability.get("details")
+            prior = self.consumers.get(consumer_id)
+            if not isinstance(details, dict):
+                if prior is not None:
+                    raise _SettlementStopped(
+                        "consumer_evidence_invalid", consumer_id=consumer_id
+                    )
+                continue
+            failures = details.get("consecutive_failures", 0)
+            if details.get("poison_event_id") or (
+                isinstance(failures, int) and failures > 0
+            ):
+                raise _SettlementStopped("consumer_failed", consumer_id=consumer_id)
+            lag = details.get("lag_count")
+            if prior is None and (type(lag) is not int or lag <= 0):
+                continue
+            version = details.get("version")
+            checkpoint = details.get("checkpoint_event_id")
+            if (
+                type(lag) is not int
+                or lag < 0
+                or not (
+                    (type(version) is int and version > 0)
+                    or (isinstance(version, str) and bool(version.strip()))
+                )
+                or not (
+                    checkpoint is None
+                    or (isinstance(checkpoint, str) and bool(checkpoint.strip()))
+                )
+            ):
+                raise _SettlementStopped(
+                    "consumer_evidence_invalid", consumer_id=consumer_id
+                )
+            if prior is None:
+                self.consumers[consumer_id] = _ConsumerProgress(
+                    kind=kind,
+                    version=version,
+                    checkpoint=checkpoint,
+                    last_progress=now,
+                    lag=lag,
+                )
+                continue
+            if type(version) is not type(prior.version) or version != prior.version:
+                raise _SettlementStopped(
+                    "consumer_identity_changed", consumer_id=consumer_id
+                )
+            if prior.checkpoint is not None and (
+                checkpoint is None or checkpoint < prior.checkpoint
+            ):
+                raise _SettlementStopped(
+                    "consumer_checkpoint_regressed", consumer_id=consumer_id
+                )
+            if checkpoint is not None and (
+                prior.checkpoint is None or checkpoint > prior.checkpoint
+            ):
+                prior.checkpoint = checkpoint
+                prior.last_progress = now
+            elif prior.lag == 0 and lag > 0:
+                # An observed empty backlog ends the pending episode. New
+                # derived work gets its own timer, retaining the same frozen
+                # identity/version and the unchanged operation deadline.
+                prior.last_progress = now
+            # Lag, last_success_at and source-assurance counts are deliberately
+            # absent from the condition that refreshes last_progress.
+            prior.lag = lag
+
+
+def _stopped_report(
+    last: dict[str, Any], stopped: _SettlementStopped
+) -> dict[str, Any]:
+    evidence = {
+        "contract": "bounded-service-settlement-v1",
+        "reason": stopped.reason,
+    }
+    if stopped.consumer_id is not None:
+        evidence["consumer_id"] = stopped.consumer_id
+    if stopped.phase is not None:
+        evidence["phase"] = stopped.phase
+    return {
+        **last,
+        "status": "failed",
+        "checks": [
+            *last.get("checks", []),
+            {"name": "bounded_service_settlement", "ok": False, "evidence": evidence},
+        ],
+    }
 
 
 def failed_check_names(result: dict[str, Any]) -> set[str]:
@@ -184,6 +339,7 @@ def wait_for_settled_doctor(
     live_readiness_retry_limit: int = POST_SWITCH_LIVE_READINESS_RETRIES,
     allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
     validate_selection: Callable[[], None] | None = None,
+    absolute_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Share the upgrade/restore proof without invoking either controller.
 
@@ -192,94 +348,160 @@ def wait_for_settled_doctor(
     The complete proof runs after readiness, within one fixed settlement budget.
     """
 
-    # Historical source replay may walk tens of thousands of encrypted
-    # facts before its candidate-bearing source prefix. Repeating full
-    # Doctor during that work competes for the same log and proves nothing
-    # new. Poll only the content-free readiness document until source
-    # settlement, then rerun the complete proof. Structural failures still
-    # return on their first observation.
-    deadline = time.monotonic() + (
-        0
-        if test_mode
-        else min(max(timeout_seconds, 0), POST_SWITCH_REPLAY_SETTLEMENT_SECONDS)
+    if not math.isfinite(timeout_seconds) or (
+        absolute_deadline is not None and not math.isfinite(absolute_deadline)
+    ):
+        raise ValueError("settlement requires a finite deadline")
+    deadline = time.monotonic() + min(
+        max(timeout_seconds, 0), POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
     )
+    if absolute_deadline is not None:
+        deadline = min(deadline, absolute_deadline)
+    progress = _ReplayProgress()
     live_readiness_retries = 0
-    if validate_selection is not None:
-        validate_selection()
-    last = run_doctor(include_synthetic_proof=False)
-    while True:
+    last: dict[str, Any] = {"status": "failed", "checks": []}
+
+    def check_budget(
+        *,
+        reserve_seconds: float = 0,
+        phase: str | None = None,
+        check_progress: bool = True,
+    ) -> None:
         if validate_selection is not None:
             validate_selection()
-        if last.get("status") == "healthy":
-            last = run_doctor(include_synthetic_proof=True)
+        now = time.monotonic()
+        if now >= deadline:
+            raise _SettlementStopped("deadline_exhausted", phase=phase)
+        if check_progress:
+            progress.check_stalls(now)
+        if now + reserve_seconds > deadline:
+            raise _SettlementStopped("proof_budget_exhausted", phase=phase)
+
+    def checked_call(
+        callback: Callable[[], Any],
+        *,
+        reserve_seconds: float,
+        phase: str,
+        check_progress: bool = True,
+    ) -> Any:
+        # Preserve the existing callbacks and their subprocess/HTTP limits.
+        # Do not start a bounded operation unless its whole limit fits. Check
+        # again after returning: a late healthy report is never an acceptance.
+        check_budget(
+            reserve_seconds=reserve_seconds,
+            phase=phase,
+            check_progress=check_progress,
+        )
+        result = callback()
+        check_budget(phase=phase, check_progress=check_progress)
+        return result
+
+    def doctor(*, include_synthetic_proof: bool) -> dict[str, Any]:
+        return checked_call(
+            lambda: run_doctor(include_synthetic_proof=include_synthetic_proof),
+            reserve_seconds=RELEASE_DOCTOR_TIMEOUT_SECONDS,
+            phase="full_doctor" if include_synthetic_proof else "doctor",
+        )
+
+    def pause() -> None:
+        check_budget(check_progress=False)
+        until = progress.next_deadline(deadline)
+        time.sleep(min(max(poll_seconds, 0), max(until - time.monotonic(), 0)))
+        check_budget(check_progress=False)
+
+    try:
+        last = doctor(include_synthetic_proof=False)
+        while True:
+            check_budget(check_progress=False)
             if last.get("status") == "healthy":
+                last = doctor(include_synthetic_proof=True)
+                if last.get("status") == "healthy":
+                    return last
+            failed = failed_check_names(last)
+            if not failed_checks_are_known_transients(last):
                 return last
-        failed = failed_check_names(last)
-        if not failed_checks_are_known_transients(last):
-            return last
-        if test_mode:
-            return last
+            if test_mode:
+                return last
 
-        diagnostics = services.runtime_diagnostics()
-        if diagnostics is None:
-            # Readiness is the only cheap proof that an otherwise hidden
-            # capability has not degraded during an allowed wait.  Before
-            # the runtime is live, launch/port failures may still be a
-            # genuine cold-start transient.  Once it is live—or for every
-            # other transient class—missing readiness fails closed.
-            cold_start_only = failed.issubset(
-                {"launchd_and_process_state", "ports_and_loopback_binding"}
+            diagnostics = checked_call(
+                services.runtime_diagnostics,
+                reserve_seconds=RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
+                phase="readiness",
+                check_progress=False,
             )
-            deployment_check_failed = (
-                "deployment_topology_and_recovery_readiness" in failed
-            )
-            source_settlement_only = (
-                "source_assurance_terminal_dispositions" in failed
-                and (
-                    not deployment_check_failed
-                    or doctor_has_only_transient_deployment_readiness_gap(last)
+            if diagnostics is None:
+                # Only the same three live-readiness misses are tolerated.
+                # Missing reports do not refresh any consumer progress timer.
+                progress.check_stalls(time.monotonic())
+                cold_start_only = failed.issubset(
+                    {"launchd_and_process_state", "ports_and_loopback_binding"}
                 )
-            )
-            if (
-                cold_start_only
-                and not services.runtime_is_live()
-                and time.monotonic() < deadline
+                deployment_check_failed = (
+                    "deployment_topology_and_recovery_readiness" in failed
+                )
+                source_settlement_only = (
+                    "source_assurance_terminal_dispositions" in failed
+                    and (
+                        not deployment_check_failed
+                        or doctor_has_only_transient_deployment_readiness_gap(last)
+                    )
+                )
+                can_retry_source = (
+                    source_settlement_only
+                    and live_readiness_retries < live_readiness_retry_limit
+                )
+                if not cold_start_only and not can_retry_source:
+                    return last
+                live = checked_call(
+                    services.runtime_is_live,
+                    reserve_seconds=_RUNTIME_LIVENESS_TIMEOUT_SECONDS,
+                    phase="liveness",
+                )
+                if (cold_start_only and not live) or (can_retry_source and live):
+                    if live:
+                        live_readiness_retries += 1
+                    pause()
+                    if time.monotonic() >= progress.next_deadline(deadline):
+                        # Recheck readiness at a due watchdog before repeating
+                        # Doctor; stale missing evidence cannot decide progress.
+                        continue
+                    last = doctor(include_synthetic_proof=False)
+                    continue
+                return last
+            live_readiness_retries = 0
+            if has_new_structural_degradation(
+                diagnostics,
+                allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
             ):
-                time.sleep(poll_seconds)
-                last = run_doctor(include_synthetic_proof=False)
-                continue
-            if (
-                source_settlement_only
-                and live_readiness_retries < live_readiness_retry_limit
-                and services.runtime_is_live()
-                and time.monotonic() < deadline
-            ):
-                live_readiness_retries += 1
-                time.sleep(poll_seconds)
-                last = run_doctor(include_synthetic_proof=False)
-                continue
-            return last
-        live_readiness_retries = 0
-        if has_new_structural_degradation(
-            diagnostics,
-            allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
-        ):
-            return run_doctor(include_synthetic_proof=False)
+                last = doctor(include_synthetic_proof=False)
+                if last.get("status") == "healthy":
+                    raise _SettlementStopped("structural_degradation")
+                return last
 
-        if "source_assurance_terminal_dispositions" in failed:
-            settled, _evidence = source_assurance_terminal_evidence(diagnostics)
-            if not settled and time.monotonic() < deadline:
-                time.sleep(poll_seconds)
+            progress.observe(diagnostics, time.monotonic())
+            # Observe once at the watchdog boundary before judging the last
+            # checkpoint. Work may have advanced during the final poll or HTTP
+            # call. The absolute deadline still bounds that entire observation.
+            progress.check_stalls(time.monotonic())
+            source = diagnostics["capabilities"].get("policy:source-assurance", {})
+            details = source.get("details", {}) if isinstance(source, dict) else {}
+            counts = details.get("counts", {}) if isinstance(details, dict) else {}
+            if isinstance(counts, dict) and isinstance(counts.get("failed"), int):
+                if counts["failed"] > 0:
+                    raise _SettlementStopped("source_assurance_failed")
+
+            if "source_assurance_terminal_dispositions" in failed:
+                settled, _evidence = source_assurance_terminal_evidence(diagnostics)
+                if not settled:
+                    pause()
+                    continue
+
+            pause()
+            if time.monotonic() >= progress.next_deadline(deadline):
                 continue
-
-        if time.monotonic() >= deadline:
-            final = run_doctor(include_synthetic_proof=False)
-            if final.get("status") == "healthy":
-                return run_doctor(include_synthetic_proof=True)
-            return final
-
-        time.sleep(poll_seconds)
-        last = run_doctor(include_synthetic_proof=False)
+            last = doctor(include_synthetic_proof=False)
+    except _SettlementStopped as stopped:
+        return _stopped_report(last, stopped)
 
 
 def run_release_doctor(
@@ -291,6 +513,7 @@ def run_release_doctor(
     require_runtime: bool = False,
     doctor_factory: Callable[..., Any] = Doctor,
     error_type: type[RuntimeError] = RuntimeError,
+    timeout_seconds: float = RELEASE_DOCTOR_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Run the selected release's coherent Python, registry, packs and Doctor.
 
@@ -298,6 +521,9 @@ def run_release_doctor(
     established in-process fallback for credential-free preparation fixtures.
     """
 
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise error_type("selected release Doctor has no remaining proof budget")
+    timeout_seconds = min(timeout_seconds, RELEASE_DOCTOR_TIMEOUT_SECONDS)
     release_python = release / ".venv" / "bin" / "python"
     if require_runtime and (
         not release_python.is_file() or not os.access(release_python, os.X_OK)
@@ -342,11 +568,12 @@ def run_release_doctor(
             check=False,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
         raise error_type(
-            "candidate Doctor exceeded 120 seconds; verify candidate-runtime "
+            f"candidate Doctor exceeded {timeout_seconds:g} seconds; "
+            "verify candidate-runtime "
             "Keychain access and inspect the redacted service logs"
         ) from exc
     try:

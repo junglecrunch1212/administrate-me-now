@@ -322,6 +322,56 @@ owner-created pending artifact validates. It does not execute human HTR rows,
 authorize deployment, promote fixture evidence, or complete post-switch
 privacy/browser/effect acceptance.
 
+### Deployment and recovery deadlines
+
+The deadline policy is **MODERNIZE** under this contract's activation-transaction
+and bounded recovery rules, [CO-008 section 10.6](CHANGE-ORDER-008-SOURCE-ASSURANCE-AND-UNIVERSAL-CAPTURE.md#106-settled-idle-and-sqlcipher-covering-index-correction),
+and [CO-030's replay contract](CHANGE-ORDER-030-SOURCE-AWARE-PERSONAL-OBLIGATION-TRIAGE.md#replay-runtime-and-deployment).
+Profiling retained-source replay identified a generic capacity mismatch: several
+thousand anchors processed in bounded batches can exceed the former one-hour
+limit at observed per-call latency. Faster metadata reads remove avoidable
+encrypted table reads; they do not eliminate the time
+required for authorized language assessment. This policy supplies a larger
+finite window and reserves recovery time before selector mutation.
+
+The fixed updater guardian owns one thirteen-hour monotonic deadline. A controller
+inherits that exact deadline; another phase or child process within the same
+guarded attempt cannot renew it. Before the first active selector mutation, at
+least six hours for candidate settlement, six hours for predecessor recovery,
+and ten minutes for final proof
+and cleanup must remain. Insufficient remaining time refuses the switch while
+the predecessor is still selected. Preparation and backup use the same outer
+budget rather than borrowing the recovery reserve.
+
+Candidate and recovery settlement each have a six-hour hard limit. The recovery
+deadline is also capped by the inherited outer deadline minus the ten-minute
+reserve. Reentering recovery within that attempt cannot restart its elapsed
+allowance. A separately invoked supported recovery of an interrupted journal
+starts a new bounded operation; the journal does not persist a host monotonic
+deadline across attempts. Progress never extends a hard deadline. While waiting
+for settlement, each observed lagging pipeline or projection consumer must
+independently advance its durable checkpoint within ten minutes. Decreasing
+lag, new ingress, timestamps, and another consumer's
+progress cannot reset a stalled consumer's timer. Structural degradation,
+unavailable proof after the existing bounded readiness retries, or a
+watchdog/deadline failure remains a failed candidate and invokes the existing
+automatic predecessor recovery.
+
+The implementation authority is `bootstrap/deployment_budget.py`, the fixed
+supervisor/guardian deadline propagation, `UpgradeManager`, and the shared
+`wait_for_settled_doctor` policy. Acceptance requires simulated-clock process
+proof through the real upgrade manager that candidate timeout restores the
+captured predecessor and completes its full Doctor before the outer guardian
+deadline, plus insufficient-budget and interrupted-recovery coverage. Tests
+use synthetic deployment state and providers; they do not authorize live work.
+
+This is **PRESERVE** for immutable protected-main selection, verified encrypted
+backup, exact predecessor restoration, full selected-release Doctor, privacy and
+tenant isolation, observation suppression, and zero unintended provider effects.
+It changes no source admission, source skip rule, language model, replay version,
+consumer concurrency, event truth, or member decision. A replay that cannot finish
+within the hard budget still fails and recovers; waiting is never readiness.
+
 The authenticated backup container is versioned independently from its strict
 manifest. Version 2 streams the complete tar archive through AES-256-GCM,
 authenticates the bounded header as associated data, appends the terminal tag,

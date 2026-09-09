@@ -16,7 +16,13 @@ from bootstrap.activation_transaction import (
     ActivationJournalError,
 )
 from bootstrap.contracts import DeploymentPaths, atomic_write
-from bootstrap.upgrade import UpgradeManager
+from bootstrap.deployment_budget import (
+    CONTROLLER_SECONDS,
+    FINALIZATION_RESERVE_SECONDS,
+    RECOVERY_SECONDS,
+    SETTLEMENT_SECONDS,
+)
+from bootstrap.upgrade import UpgradeError, UpgradeManager
 
 
 PREDECESSOR_COMMIT = "1" * 40
@@ -24,6 +30,62 @@ CANDIDATE_COMMIT = "2" * 40
 PENDING_ID = "3" * 32
 PENDING_SHA = "4" * 64
 SETTINGS_PAYLOAD = b'{"revision":0,"schema_version":2}\n'
+
+
+def test_activation_capacity_is_fixed_and_reserves_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ADMINME_UPDATE_SUPERVISED",
+        "ADMINME_CONTROLLER_STARTED_MONOTONIC",
+        "ADMINME_CONTROLLER_DEADLINE_MONOTONIC",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    clock = [1000.0]
+    monkeypatch.setattr("bootstrap.upgrade.time.monotonic", lambda: clock[0])
+    manager = UpgradeManager(_paths(tmp_path), root=tmp_path, test_mode=True)
+    budget = manager._begin_deployment_budget()  # noqa: SLF001
+    manager._require_activation_capacity()  # noqa: SLF001
+    candidate_deadline = manager._settlement_deadline  # noqa: SLF001
+    assert candidate_deadline == 1000 + SETTLEMENT_SECONDS
+    assert budget.deadline == 1000 + CONTROLLER_SECONDS
+    clock[0] += 50 * 60
+    manager._require_activation_capacity()  # noqa: SLF001
+    assert manager._settlement_deadline == candidate_deadline  # noqa: SLF001
+    clock[0] += 1
+    with pytest.raises(UpgradeError, match="before switch"):
+        manager._require_activation_capacity()  # noqa: SLF001
+    assert manager._settlement_deadline == candidate_deadline  # noqa: SLF001
+
+    clock[0] = candidate_deadline
+    manager._begin_recovery_settlement()  # noqa: SLF001
+    recovery_deadline = manager._settlement_deadline  # noqa: SLF001
+    assert recovery_deadline == candidate_deadline + RECOVERY_SECONDS
+    assert recovery_deadline <= budget.deadline - FINALIZATION_RESERVE_SECONDS
+    clock[0] += 100
+    manager._begin_recovery_settlement()  # noqa: SLF001
+    assert manager._settlement_deadline == recovery_deadline  # noqa: SLF001
+    assert manager._deployment_budget is budget  # noqa: SLF001
+
+
+def test_recovery_deadline_cannot_take_finalization_reserve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ADMINME_UPDATE_SUPERVISED",
+        "ADMINME_CONTROLLER_STARTED_MONOTONIC",
+        "ADMINME_CONTROLLER_DEADLINE_MONOTONIC",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    clock = [1000.0]
+    monkeypatch.setattr("bootstrap.upgrade.time.monotonic", lambda: clock[0])
+    manager = UpgradeManager(_paths(tmp_path), root=tmp_path, test_mode=True)
+    budget = manager._begin_deployment_budget()  # noqa: SLF001
+    clock[0] += 8 * 60 * 60
+    manager._begin_recovery_settlement()  # noqa: SLF001
+    assert manager._settlement_deadline == (  # noqa: SLF001
+        budget.deadline - FINALIZATION_RESERVE_SECONDS
+    )
 
 
 def _paths(tmp_path: Path) -> DeploymentPaths:
@@ -307,6 +369,11 @@ def test_interrupted_activation_restores_exact_predecessor_bytes(
 
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
     events: list[str] = []
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: events.append("doctor") or {"status": "healthy", "checks": []},
+    )
     manager.services = SimpleNamespace(
         stop=lambda *args, **kwargs: events.append("stop"),
         start=lambda: (
@@ -338,7 +405,7 @@ def test_interrupted_activation_restores_exact_predecessor_bytes(
     assert pointer_path.read_bytes() == pointer_payload
     assert readiness_path.read_bytes() == readiness_payload
     assert settings_path.read_bytes() == SETTINGS_PAYLOAD
-    assert events == ["stop", "openclaw", "plugin", "launchagents", "start"]
+    assert events == ["stop", "openclaw", "plugin", "launchagents", "start", "doctor"]
     assert not owner.path.exists()
     history = (
         paths.app_dir / "activation" / "history" / f"{value['transaction_id']}.json"
@@ -375,6 +442,11 @@ def test_interrupted_activation_refreshes_binding_after_plugin_selection(
     owner.create(value)
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
     events: list[str] = []
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: events.append("doctor") or {"status": "healthy", "checks": []},
+    )
     manager.services = SimpleNamespace(
         stop=lambda *args, **kwargs: events.append("stop"),
         start=lambda: (
@@ -426,6 +498,7 @@ def test_interrupted_activation_refreshes_binding_after_plugin_selection(
         "launchagents",
         "binding",
         "start",
+        "doctor",
     ]
 
 
@@ -522,15 +595,22 @@ def test_activation_recovery_waits_for_bounded_source_settlement(
     assert not owner.path.exists()
 
 
+@pytest.mark.parametrize(
+    "proof_issue",
+    [None, "structural", "late", "pointer_changed", "adapter_changed", "deadline"],
+)
 def test_activation_recovery_accepts_only_isolated_degraded_adapter_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    proof_issue: str | None,
 ) -> None:
     paths = _paths(tmp_path)
     _documents(paths)
     owner = ActivationJournal(paths)
     owner.create(_journal_value(paths))
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    clock = [1000.0]
+    monkeypatch.setattr("bootstrap.upgrade.time.monotonic", lambda: clock[0])
     diagnostics = {
         "status": "degraded",
         "ready": False,
@@ -555,8 +635,50 @@ def test_activation_recovery_accepts_only_isolated_degraded_adapter_boundary(
     monkeypatch.setattr(
         manager,
         "_post_switch_doctor",
-        lambda _release: {"status": "failed", "checks": []},
+        lambda _release: {
+            "status": "failed",
+            "checks": [
+                {
+                    "name": "bounded_service_settlement"
+                    if proof_issue == "deadline"
+                    else "launchd_and_process_state",
+                    "ok": False,
+                }
+            ],
+        },
     )
+    full_calls: list[Path] = []
+
+    def full_doctor(
+        release: Path, *, include_synthetic_proof: bool, timeout_seconds: float
+    ) -> dict[str, Any]:
+        assert include_synthetic_proof is True
+        assert timeout_seconds == 120
+        assert release == paths.app_dir / "releases" / PREDECESSOR_COMMIT
+        full_calls.append(release)
+        checks = [
+            {"name": "launchd_and_process_state", "ok": False},
+            {"name": "synthetic_event_replay", "ok": True},
+        ]
+        if proof_issue == "structural":
+            checks.append({"name": "encrypted_event_log", "ok": False})
+        elif proof_issue == "late":
+            clock[0] = manager._settlement_deadline  # noqa: SLF001
+        elif proof_issue == "pointer_changed":
+            atomic_write(
+                paths.app_dir / "current-release.json",
+                json.dumps(
+                    {"path": str(tmp_path / "other"), "commit": CANDIDATE_COMMIT}
+                ).encode(),
+                mode=0o600,
+            )
+        elif proof_issue == "adapter_changed":
+            diagnostics["capabilities"]["adapter:other"] = diagnostics[
+                "capabilities"
+            ].pop("adapter:provider")
+        return {"status": "failed", "checks": checks}
+
+    monkeypatch.setattr(manager, "_run_release_doctor", full_doctor)
     monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
@@ -567,10 +689,15 @@ def test_activation_recovery_accepts_only_isolated_degraded_adapter_boundary(
         lambda *_args, **_kwargs: None,
     )
 
-    result = manager._recover_interrupted_transaction()  # noqa: SLF001
-
-    assert result is not None and result["status"] == "recovered"
-    assert not owner.path.exists()
+    if proof_issue is None:
+        result = manager._recover_interrupted_transaction()  # noqa: SLF001
+        assert result is not None and result["status"] == "recovered"
+        assert not owner.path.exists()
+    else:
+        with pytest.raises(UpgradeError, match="did not become healthy"):
+            manager._recover_interrupted_transaction()  # noqa: SLF001
+        assert owner.path.exists()
+    assert len(full_calls) == (0 if proof_issue == "deadline" else 1)
 
 
 def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
@@ -592,6 +719,11 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     fixed_controller.mkdir()
     manager = UpgradeManager(paths, root=fixed_controller, test_mode=False)
     events: list[str] = []
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: events.append("doctor") or {"status": "healthy", "checks": []},
+    )
     observed: dict[str, Path] = {}
 
     def reviewed_commit(repository: Path) -> str:
@@ -651,7 +783,7 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     assert observed["repository"] == reviewed_candidate
     assert pointer_path.read_bytes() == pointer_payload
     assert readiness_path.read_bytes() == readiness_payload
-    assert events == ["stop", "openclaw", "plugin", "launchagents", "start"]
+    assert events == ["stop", "openclaw", "plugin", "launchagents", "start", "doctor"]
     assert not owner.path.exists()
     history = (
         paths.app_dir / "activation" / "history" / f"{value['transaction_id']}.json"
@@ -785,6 +917,11 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
     monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
 
     topology_reconciled_after_restore = False
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: {"status": "healthy", "checks": []},
+    )
 
     def reconcile_after_restore(*_args: Any, **_kwargs: Any) -> None:
         nonlocal topology_reconciled_after_restore

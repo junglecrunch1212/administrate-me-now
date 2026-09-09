@@ -84,6 +84,11 @@ jobs:
           tests/acceptance/test_event_log_metadata_migration.py
           tests/acceptance/test_source_assurance_metadata_replay.py
           tests/acceptance/test_release_candidate_hardening.py::test_v1_encrypted_log_migrates_in_place_and_preserves_append_only_truth
+          tests/unit/bootstrap/test_restore_settlement.py
+          tests/unit/bootstrap/test_phase5_operations.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_activation_transaction.py
+          tests/acceptance/test_upgrade_deadline_rollback.py
 
       - name: Validate shell entrypoints
         run: |
