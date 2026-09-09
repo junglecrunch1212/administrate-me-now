@@ -331,6 +331,21 @@ protected-source payloads use V2 with explicit upcasters. Omitted scope preserve
 existing matching and request fingerprints without inferring historical source
 identity. The member sees the draft's source and conversation scope before preview.
 
+Member readiness reads are **MODERNIZE** under CO-008's shared runtime and this
+order's usable member controls. Each subscriber status query returns the exact
+checkpoint used for its single lag count, even if delivery advances during the
+await. It must not wait for replay to pause or pair that count with a newer
+checkpoint. Failure and poison information observed after the count remains
+visible. Capability collection and publication stay serialized. Settings uses
+one capability refresh and reuses that observation for its diagnostics instead
+of repeating the collection. Capability refresh omits unused projection table
+counts; ordinary full projection status retains its existing count output.
+Omitted counts mean not collected, never zero. The source inventory, privacy
+checks, assessment versions, and full deployment health/watchdog requirements
+are **PRESERVE**. Production acceptance must force checkpoint advancement
+during status queries and prove bounded Settings work, member isolation, and
+zero external effects without raising browser timeouts.
+
 ## Acceptance and constitutional disposition
 
 AC-60 requires production-composition tests for the source-grounded pipeline,

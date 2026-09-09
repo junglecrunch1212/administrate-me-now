@@ -369,6 +369,17 @@ unavailable proof after the existing bounded readiness retries, or a
 watchdog/deadline failure remains a failed candidate and invokes the existing
 automatic predecessor recovery.
 
+Readiness sampling has finite work during active replay: one lag query is paired
+with the captured checkpoint supplied to that query, rather than retrying until
+delivery becomes stationary. The checkpoint may be older than the consumer's
+current position; its lag must never be attached to a newer checkpoint. Newly
+observed failure and poison state remains visible, and capability collection
+and publication remain serialized. This is **MODERNIZE** under the shared
+runtime contract. Per-consumer checkpoint progress, fail-closed source and
+privacy checks, absolute deadlines, and full selected-release Doctor acceptance
+are **PRESERVE**. A bounded status observation cannot itself establish settlement
+or authorize deployment.
+
 Absent readiness handling is **MODERNIZE**; the existing retry budget, absolute
 deadline, per-consumer progress watchdog, and full Doctor acceptance are
 **PRESERVE**. Only Doctor's exact missing-readiness evidence shape can enter the

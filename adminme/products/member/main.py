@@ -5403,7 +5403,8 @@ async def surface(
         triage_item=triage_item,
     )
     if surface == "settings":
-        diagnostics = await runtime.diagnostics()
+        # This request already refreshed before composing its Settings views.
+        diagnostics = await runtime.diagnostics(refresh_capabilities=False)
         result["system"]["runtime"] = {
             **result["system"]["runtime"],
             **diagnostics,

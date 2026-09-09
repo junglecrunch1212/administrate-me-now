@@ -116,6 +116,14 @@ async def test_projection_native_lifecycle_stays_on_one_owner_worker(
         == "Thread-affinity proof"
     )
     assert (await runner.status())["tasks"]["row_counts"]["tasks"] == 1
+    full_status = await runner.status()
+    count_calls = len(observed["_collect_row_counts_for"])
+    lightweight_status = await runner.status(include_row_counts=False)
+    assert len(observed["_collect_row_counts_for"]) == count_calls
+    assert "row_counts" not in lightweight_status["tasks"]
+    assert lightweight_status["tasks"] == {
+        key: value for key, value in full_status["tasks"].items() if key != "row_counts"
+    }
     await runner.rebuild("tasks")
     assert (
         facade.execute(
