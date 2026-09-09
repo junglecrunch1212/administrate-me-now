@@ -4055,15 +4055,70 @@ async function runSourcePreferenceMutation(request, success) {
   }
 }
 
+function sourceRuleScopeLabel(label) {
+  return String(label || "").split(" · ").filter((value) => !/(?:provider-account|protected-source):[a-f0-9]{32,64}/i.test(value)).join(" · ");
+}
+
 function sourceRuleSummary(rule, label = null) {
   const facts = document.createElement("dl"); facts.className = "settings-facts source-rule-summary";
   const conditions = rule.conditions || {};
-  const scope = [label, conditions.provider_account_id && `Account ${conditions.provider_account_id}`, conditions.adapter_instance_id && `Connection ${conditions.adapter_instance_id}`, conditions.native_container_id && "This exact conversation or container", conditions.sender_digest && "This exact sender"].filter(Boolean).join(" · ");
+  facts.dataset.ruleConditions = JSON.stringify(conditions);
+  const readableLabel = sourceRuleScopeLabel(label);
+  const scope = [readableLabel, conditions.provider_account_id && "This account", conditions.adapter_instance_id && "This connection", conditions.protected_source_id && "This source", conditions.native_container_id && "This exact conversation or container", conditions.sender_digest && "This exact sender"].filter(Boolean).join(" · ");
   const when = [conditions.message_purpose && sourcePurposeLabel(conditions.message_purpose), conditions.candidate_kind && titleCase(conditions.candidate_kind)].filter(Boolean).join(" · ") || "The exact sender or conversation in scope";
   const exceptions = (rule.exceptions || []).map((item) => Object.entries(item).map(([key, value]) => key === "message_purpose" ? sourcePurposeLabel(value) : key === "sender_digest" ? "Exact excluded sender" : `${titleCase(key)}: ${value}`).join(" and "));
   const duration = rule.expires_at ? `Until ${new Date(rule.expires_at).toLocaleString()} or ${rule.max_observations} future matches (${rule.observed_count || 0} observed)` : rule.status === "active" ? "Until you change or undo it" : "Choose after preview";
   for (const [name, value] of [["Applies to", scope || "Your exact private source"], ["When", when], ["Except", [...exceptions, "Independent obligations and direct requests remain protected"].join("; ")], ["Then", sourceRuleRoute(rule.action)], ["Duration", duration]]) facts.append(text("dt", name), text("dd", value));
   return facts;
+}
+
+function sourceRuleRecordScope(rule, matrix) {
+  const section = document.createElement("section"); section.className = "source-rule-record-scope";
+  const conditions = rule.conditions || {};
+  const sources = matrix?.owner_visible ? (matrix.sources || []).filter((source) => source.coordinate && !source.direct_authenticated_intent) : [];
+  const boundary = ["provider", "provider_account_id", "adapter_instance_id", "protected_source_id", "native_container_id"];
+  let matches = sources.filter((source) => boundary.every((key) => !conditions[key] || source.coordinate[key] === conditions[key]));
+  if (!conditions.native_container_id && matches.some((source) => source.source_scope === "account")) matches = matches.filter((source) => source.source_scope === "account");
+  const ordinal = (rows, value, key) => [...new Set(rows.map((source) => key(source.coordinate)))].sort().indexOf(value) + 1;
+  const accountKey = (coordinate) => JSON.stringify([coordinate.provider, coordinate.provider_account_id]);
+  const names = (source) => {
+    const coordinate = source.coordinate;
+    const title = sourceRuleScopeLabel(source.label) || source.provider_label || "Unnamed source";
+    const account = source.account_hint !== coordinate.provider_account_id || String(source.account_hint || "").includes("@") ? sourceRuleScopeLabel(source.account_hint) : "";
+    const container = conditions.native_container_id && source.native_container_label !== coordinate.native_container_id ? sourceRuleScopeLabel(source.native_container_label) : "";
+    return { label: [...new Set([title, account, container].filter(Boolean))].join(" · "), complete: Boolean((account || title !== source.provider_label) && (!conditions.native_container_id || container)) };
+  };
+  let numbered = false;
+  const labels = matches.map((source) => {
+    const coordinate = source.coordinate;
+    const accountSources = sources.filter((value) => accountKey(value.coordinate) === accountKey(coordinate));
+    const connectionSources = accountSources.filter((value) => value.coordinate.adapter_instance_id === coordinate.adapter_instance_id);
+    const protectedSources = connectionSources.filter((value) => value.coordinate.protected_source_id === coordinate.protected_source_id);
+    const readable = names(source);
+    const ambiguous = sources.some((value) => value.source_scope === source.source_scope && value.policy_key !== source.policy_key && names(value).label === readable.label);
+    const label = [readable.label];
+    if (!readable.complete || ambiguous) {
+      numbered = true;
+      label.push(`Account ${ordinal(sources, accountKey(coordinate), accountKey)}`, `Connection ${ordinal(accountSources, coordinate.adapter_instance_id, (value) => value.adapter_instance_id)}`);
+      if (coordinate.protected_source_id) label.push(`Source ${ordinal(connectionSources, coordinate.protected_source_id, (value) => value.protected_source_id || "")}`);
+      if (conditions.native_container_id) {
+        const containerRows = protectedSources.filter((value) => value.coordinate.native_container_kind === coordinate.native_container_kind);
+        label.push(`${titleCase(coordinate.native_container_kind || "container")} ${ordinal(containerRows, coordinate.native_container_id, (value) => value.native_container_id)}`);
+      }
+    }
+    if (source.connection_state === "disconnected") label.push("Disconnected · history retained");
+    return label.filter(Boolean).join(" · ");
+  });
+  const label = [...new Set(labels)].join("; ") || "Source label unavailable";
+  section.dataset.scopePolicyKeys = JSON.stringify(matches.map((source) => source.policy_key));
+  section.append(text("p", label, "source-rule-scope-label"));
+  if (!matches.length || matches.length > 1 || numbered) section.append(text("p", !matches.length ? "The available private inventory cannot identify a readable source label. Inspect the saved identifiers below before changing this rule." : matches.length > 1 ? "This rule covers each listed source. It has no narrower source boundary." : "A friendly source name is missing or shared. Numbers distinguish entries in your current private inventory; exact saved identifiers are available below.", "state-note"));
+  section.append(sourceRuleSummary(rule));
+  const audit = document.createElement("details"); audit.className = "settings-technical";
+  audit.append(text("summary", "Exact saved source identifiers"));
+  const identifiers = document.createElement("dl"); identifiers.className = "settings-facts";
+  for (const key of [...boundary, "sender_digest"]) if (conditions[key]) identifiers.append(text("dt", titleCase(key)), text("dd", conditions[key]));
+  audit.append(identifiers); section.append(audit); return section;
 }
 
 function sourceRulePreview(result) {
@@ -4088,7 +4143,7 @@ function sourceRulePreview(result) {
 function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) {
   const panel = document.createElement("section"); panel.className = "source-rule-builder";
   const initial = scope.conditions || {};
-  panel.append(text("h3", "A rule for similar messages"), text("p", scope.label || "Your exact private source", "state-note"));
+  panel.append(text("h3", "A rule for similar messages"), text("p", sourceRuleScopeLabel(scope.label) || "Your exact private source", "state-note"));
   const fields = document.createElement("div"); fields.className = "preference-grid";
   const purpose = selectControl([{ value: "", label: "Choose a message purpose…" }, ...SOURCE_PURPOSE_OPTIONS], initial.message_purpose || scope.message_purpose || "", "");
   const action = selectControl([{ value: "reference", label: "Keep as reference" }, { value: "ask", label: "Ask me" }, { value: "review", label: "Keep for review" }], "reference", "");
@@ -4096,6 +4151,7 @@ function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) 
   fields.append(field("When the message purpose is", purpose), field("Then", action), field("Except this type of candidate", exception)); panel.append(fields);
   panel.append(text("p", "Only this account, connection, and any specified conversation or sender. Other people's sources are never included. Independent obligations remain visible.", "state-note"));
   const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
+  const draft = document.createElement("div"); draft.setAttribute("aria-label", "Rule draft scope");
   const buttons = document.createElement("div"); buttons.className = "button-row";
   const previewButton = text("button", "Preview matches and exceptions", "button button-quiet"); previewButton.type = "button";
   const activate = text("button", "Save this rule", "button button-primary"); activate.type = "button";
@@ -4105,7 +4161,7 @@ function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) 
   let preview = null; let generation = 0; let reading = false;
   const enabled = canMutate && Boolean(initial.provider_account_id || initial.adapter_instance_id);
   function values() { return { conditions: { ...initial, message_purpose: purpose.value }, exceptions: exception.value ? [{ candidate_kind: exception.value }] : [], action: action.value, origin: "explicit", feedback_event_ids: [] }; }
-  function invalidate() { if (sourcePreferenceInteractionLocked()) return; generation += 1; preview = null; reading = false; output.replaceChildren(); sourcePreferenceControlState(previewButton, !enabled); for (const button of [activate, trial, shadow, remember]) button.hidden = true; }
+  function invalidate() { if (sourcePreferenceInteractionLocked()) return; generation += 1; preview = null; reading = false; output.replaceChildren(); draft.replaceChildren(sourceRuleSummary(values(), scope.label)); sourcePreferenceControlState(previewButton, !enabled); for (const button of [activate, trial, shadow, remember]) button.hidden = true; }
   for (const control of [purpose, action, exception]) { control.disabled = !enabled; control.addEventListener("change", invalidate); }
   previewButton.disabled = !enabled;
   for (const button of [activate, trial, shadow, remember]) button.hidden = true;
@@ -4134,13 +4190,14 @@ function sourceRuleBuilder(scope, { canMutate = false, candidate = null } = {}) 
     const payload = { request_id: crypto.randomUUID(), expected_last_event_id: candidate.last_event_id, proposal_id: candidate.proposal_id, kind: "future_attention_preference", rule: values() };
     runSourcePreferenceMutation(() => api("/api/member/v1/triage-learning/v2/feedback", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(payload) }), "Future preference recorded. Nothing activated. Consistent preferences from independent observations may produce a rule suggestion for you to review.");
   });
-  buttons.append(previewButton, activate, trial, shadow, remember); panel.append(buttons, output); return panel;
+  draft.append(sourceRuleSummary(values(), scope.label));
+  buttons.append(previewButton, activate, trial, shadow, remember); panel.append(draft, buttons, output); return panel;
 }
 
-function sourceLearningSuggestion(suggestion, canMutate) {
+function sourceLearningSuggestion(suggestion, canMutate, matrix) {
   const section = document.createElement("article"); section.className = "source-rule-record";
   const rule = suggestion.rule;
-  section.append(text("h3", "Suggested from your explicit preferences"), text("p", `${suggestion.independent_observations} independent observations. This suggestion has not activated.`, "state-note"), sourceRuleSummary(rule));
+  section.append(text("h3", "Suggested from your explicit preferences"), text("p", `${suggestion.independent_observations} independent observations. This suggestion has not activated.`, "state-note"), sourceRuleRecordScope(rule, matrix));
   const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
   const previewButton = text("button", "Preview suggested rule", "button button-quiet"); previewButton.type = "button"; previewButton.disabled = !canMutate;
   const trial = text("button", "Try suggested rule for 7 days / 50 messages", "button button-primary"); trial.type = "button"; trial.hidden = true;
@@ -4160,7 +4217,7 @@ function sourceLearningSuggestion(suggestion, canMutate) {
   const actions = document.createElement("div"); actions.className = "button-row"; actions.append(previewButton, trial); section.append(actions, output); return section;
 }
 
-function sourceLearningRulesCard(canMutate) {
+function sourceLearningRulesCard(canMutate, sourceMatrix = null) {
   const section = document.createElement("section"); section.className = "card source-learning-rules";
   section.append(text("p", "YOUR LEARNING RULES", "eyebrow"), text("h2", "Review, pause, or undo a rule"), text("p", "Completed tasks, duplicate corrections, and ignored messages do not create preferences. Every rule below comes from an explicit preference or an approved learning proposal.", "state-note"));
   const output = document.createElement("div"); output.setAttribute("aria-live", "polite");
@@ -4173,11 +4230,18 @@ function sourceLearningRulesCard(canMutate) {
     try {
       const response = await api("/api/member/v1/triage-learning/v2/rules");
       if (!section.isConnected || sourcePreferenceInteractionLocked()) return;
+      let matrix = sourceMatrix;
+      if (!matrix && ((response.rules || []).length || (response.suggestions || []).length)) {
+        try { matrix = (await api("/api/member/v1/surfaces/settings")).control?.source_policy_v2; }
+        catch { matrix = null; }
+        if (!section.isConnected || sourcePreferenceInteractionLocked()) return;
+      }
       output.replaceChildren();
-      for (const suggestion of response.suggestions || []) output.append(sourceLearningSuggestion(suggestion, canMutate && response.active !== false));
+      for (const suggestion of response.suggestions || []) output.append(sourceLearningSuggestion(suggestion, canMutate && response.active !== false, matrix));
       for (const rule of response.rules || []) {
         const card = document.createElement("article"); card.className = "source-rule-record";
-        card.append(text("h3", `${sourcePurposeLabel(rule.conditions?.message_purpose || "Scoped messages")} → ${sourceRuleRoute(rule.action)}`), text("span", titleCase(rule.status), "pill pill-lavender"), sourceRuleSummary(rule, rule.scope_label));
+        card.dataset.attentionRuleId = rule.rule_id;
+        card.append(text("h3", `${sourcePurposeLabel(rule.conditions?.message_purpose || "Scoped messages")} → ${sourceRuleRoute(rule.action)}`), text("span", titleCase(rule.status), "pill pill-lavender"), sourceRuleRecordScope(rule, matrix));
         if (rule.status === "shadow") card.append(text("p", "Observation only. This rule does not change visibility.", "state-note"));
         if (["expired", "revoked", "suspended"].includes(rule.status)) card.append(text("p", "This rule no longer changes attention. Its history is retained.", "state-note"));
         if (canMutate && ["active", "trial", "shadow", "suspended"].includes(rule.status)) {
@@ -4299,7 +4363,8 @@ function sourcePolicyV2Card(source, matrix) {
   actions.append(previewButton, reset, save); form.append(actions, preview);
   const rules = document.createElement("details"); rules.className = "source-similar-rule"; rules.append(text("summary", "Create a narrower rule with exceptions"));
   const coordinate = source.coordinate;
-  const conditions = { provider_account_id: coordinate.provider_account_id, adapter_instance_id: coordinate.adapter_instance_id, ...(coordinate.native_container_id ? { native_container_id: coordinate.native_container_id } : {}) };
+  const hasNativeContainer = coordinate.native_container_kind && coordinate.native_container_kind !== "source" && coordinate.native_container_id;
+  const conditions = { provider_account_id: coordinate.provider_account_id, adapter_instance_id: coordinate.adapter_instance_id, ...(coordinate.protected_source_id ? { protected_source_id: coordinate.protected_source_id } : {}), ...(hasNativeContainer ? { native_container_id: coordinate.native_container_id } : {}) };
   rules.append(sourceRuleBuilder({ conditions, label: [source.label, source.account_hint, source.native_container_label].filter(Boolean).join(" · ") }, { canMutate: editable })); form.append(rules);
   return form;
 }
@@ -4516,7 +4581,7 @@ function capabilitySettings(data) {
 }
 
 function learningTrustSettings(data) {
-  const fragment = document.createDocumentFragment(); fragment.append(sourceLearningRulesCard(data.control.identity.can_mutate)); const model = data.control.learning_and_trust || { proposals: [], operating_agreement_proposals: [], rules: [], trials: [], suspended_or_revoked: [], inactive_operating_agreements: [] }; const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Trust is capability-specific and evidence-backed."), text("p", "A proposal never self-activates, and success in one domain never silently promotes another.")); fragment.append(intro); for (const [title, rows, empty] of [["Source-policy proposals", model.proposals || [], "No source-policy proposals await review."], ["Operating-agreement proposals", model.operating_agreement_proposals || [], "No operating-agreement proposals await review."], ["Active rules and trials", model.rules || [], "No active learning rules."], ["Suspended, expired, or revoked", [...(model.suspended_or_revoked || []), ...(model.inactive_operating_agreements || [])], "No suspended, expired, or revoked policy."]]) { const section = document.createElement("section"); section.className = "card"; section.append(text("h2", title)); const list = document.createElement("ul"); list.className = "settings-contract-list"; for (const item of rows) { const row = document.createElement("li"); row.append(text("strong", item.policy_proposal_id || item.rule_id || item.agreement_id || "Scoped policy"), text("small", `${titleCase(item.scope_kind || item.authority_scope)} · ${titleCase(item.instruction || item.trust_stage)} · ${titleCase(item.state || item.effective_state || "proposed")}`)); list.append(row); } if (!rows.length) list.append(text("li", empty, "empty")); section.append(list); fragment.append(section); } return fragment;
+  const fragment = document.createDocumentFragment(); fragment.append(sourceLearningRulesCard(data.control.identity.can_mutate, data.control.source_policy_v2)); const model = data.control.learning_and_trust || { proposals: [], operating_agreement_proposals: [], rules: [], trials: [], suspended_or_revoked: [], inactive_operating_agreements: [] }; const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Trust is capability-specific and evidence-backed."), text("p", "A proposal never self-activates, and success in one domain never silently promotes another.")); fragment.append(intro); for (const [title, rows, empty] of [["Source-policy proposals", model.proposals || [], "No source-policy proposals await review."], ["Operating-agreement proposals", model.operating_agreement_proposals || [], "No operating-agreement proposals await review."], ["Active rules and trials", model.rules || [], "No active learning rules."], ["Suspended, expired, or revoked", [...(model.suspended_or_revoked || []), ...(model.inactive_operating_agreements || [])], "No suspended, expired, or revoked policy."]]) { const section = document.createElement("section"); section.className = "card"; section.append(text("h2", title)); const list = document.createElement("ul"); list.className = "settings-contract-list"; for (const item of rows) { const row = document.createElement("li"); row.append(text("strong", item.policy_proposal_id || item.rule_id || item.agreement_id || "Scoped policy"), text("small", `${titleCase(item.scope_kind || item.authority_scope)} · ${titleCase(item.instruction || item.trust_stage)} · ${titleCase(item.state || item.effective_state || "proposed")}`)); list.append(row); } if (!rows.length) list.append(text("li", empty, "empty")); section.append(list); fragment.append(section); } return fragment;
 }
 
 function adminRequestsSettings(data) {

@@ -79,4 +79,98 @@ async def seed_attention_sources(
                 "quote": clause,
             }
         )
+    if not future:
+        sources.extend(await _seed_retained_messages_account(runtime, member_id, now))
     return {"sources": sources, "provider_effects": 0}
+
+
+async def _seed_retained_messages_account(
+    runtime: Any, member_id: str, now: Any
+) -> list[dict[str, Any]]:
+    """Exercise real Messages provenance without enrolling a provider or bridge."""
+    account = "provider-account:" + "a" * 64
+    sources = []
+    for index in (11, 12, 13):
+        # A replaced local source can retain the same account and enrollment.
+        # Its historical candidates must not acquire another source's rules.
+        protected_source = "protected-source:" + ("d" if index == 13 else "b") * 64
+        chat = f"visual-messages-conversation-{index}"
+        sender = f"visual-messages-sender-{index}"
+        local_endpoint = f"self:{account}"
+        clause = (
+            f"If you decide to attend activity {index}, complete the preparation form."
+        )
+        source = EventEnvelope(
+            event_at_ms=int(now.timestamp() * 1000),
+            tenant_id=runtime.settings.instance.tenant_id,
+            occurred_at=now.isoformat(),
+            source_account_id=account,
+            owner_scope=f"private:{member_id}",
+            visibility_scope=f"private:{member_id}",
+            sensitivity="normal",
+            actor_identity=member_id,
+            type="messaging.received",
+            schema_version=7,
+            source_adapter="messaging-bluebubbles",
+            idempotency_key=f"visual-attention-messages-source:{index}",
+            payload={
+                "member_id": member_id,
+                "provider": "bluebubbles",
+                "provider_account_id": account,
+                "workspace": "personal",
+                "routing_scope": "member_private",
+                "routing_target_id": member_id,
+                "source_channel": "imessage",
+                "from_identifier": sender,
+                "to_identifier": local_endpoint,
+                "to_identifiers": [local_endpoint],
+                "thread_id": chat,
+                "native_message_id": f"visual-messages-message-{index}",
+                "subject": f"Fixture Messages preparation {index}",
+                "body_text": (
+                    f"[fixture:attention-controls:preparation:conditional:{index}]\n"
+                    f"{clause}"
+                ),
+                "received_at": now.isoformat(),
+                "bridge_enrollment_id": "visual-messages-retained-enrollment",
+                "device_identity_sha256": "c" * 64,
+                "connector_id": "messaging-bluebubbles",
+                "protected_source_id": protected_source,
+                "native_chat_id": chat,
+                "native_revision": "1:fixture",
+                "native_revision_ms": int(now.timestamp() * 1000),
+                "direction": "incoming",
+                "participants": [
+                    {"participant_id": sender, "role": "sender", "is_self": False},
+                    {
+                        "participant_id": local_endpoint,
+                        "role": "self",
+                        "is_self": True,
+                    },
+                ],
+                "sender_id": sender,
+                "observed_at": now.isoformat(),
+                "transport_class": "imessage",
+                "is_group": False,
+                "message_state": "active",
+                "attachments": [],
+                "transport_version": "1.9.9",
+                "transport_commit": "ba31cd1cf6c03e154c18ffa2cd6da47a934c3be1",
+                "correlation_id": f"visual-messages-observation-{index}",
+            },
+        )
+        source_id = await runtime.events.write(source)
+        await runtime.wait_for_subscriber(
+            "pipeline:pipeline:noise_filtering", source_id
+        )
+        sources.append(
+            {
+                "index": index,
+                "source_event_id": source_id,
+                "quote": clause,
+                "provider_account_id": account,
+                "native_chat_id": chat,
+                "protected_source_id": protected_source,
+            }
+        )
+    return sources

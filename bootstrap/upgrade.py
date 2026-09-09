@@ -51,7 +51,18 @@ from bootstrap.provider_binding_transition import (
 from bootstrap.services import (
     ServiceManager,
     isolated_degraded_adapter_ids,
-    source_assurance_terminal_evidence,
+)
+from bootstrap.service_settlement import (
+    POST_SWITCH_LIVE_READINESS_RETRIES,
+    POST_SWITCH_POLL_SECONDS,
+    POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
+    doctor_has_only_transient_deployment_readiness_gap,
+    failed_check_names,
+    failed_checks_are_known_transients,
+    has_new_structural_degradation,
+    runtime_has_only_transient_deployment_readiness_gap,
+    run_release_doctor,
+    wait_for_settled_doctor,
 )
 from bootstrap.source_assessment_repair import (
     SourceAssessmentRepairPolicy,
@@ -70,56 +81,13 @@ from bootstrap.source_identity import (
     verify_release_source_identity,
     write_source_marker_at,
 )
-from bootstrap.wizard import install_launch_agents, service_environment_path
+from bootstrap.wizard import install_launch_agents
 
 
 class UpgradeError(RuntimeError):
     pass
 
 
-_TRANSIENT_POST_SWITCH_CHECKS = frozenset(
-    {
-        "fifteen_projections_and_checkpoints",
-        "openclaw_compatibility_and_plugin_discovery",
-        "openclaw_cron_reconciliation",
-        "launchd_and_process_state",
-        "ports_and_loopback_binding",
-        "source_assurance_terminal_dispositions",
-    }
-)
-_SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
-    {
-        "policy:source-assurance",
-        "product:member",
-        "surface:triage-processing",
-    }
-)
-_OPENCLAW_HEARTBEAT_TRANSIENT_CAPABILITY_KINDS = frozenset(
-    {
-        "openclaw_standing_order",
-        "openclaw_chat_transport",
-    }
-)
-_TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS = frozenset(
-    {
-        # The source-assurance projection settles after the candidate starts.
-        "observation_effects",
-        # The pinned gateway reports its topology only after the runtime is live.
-        "openclaw",
-    }
-)
-# A full reviewed language-bound replay can traverse more than one thousand
-# immutable message facts on a household instance.  Keep this bounded, but do
-# not make a healthy, advancing replay race an unrealistically short rollback
-# clock.
-POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 60 * 60
-POST_SWITCH_POLL_SECONDS = 2
-# A live runtime can briefly make the full readiness document unavailable
-# while the source-settlement audit contends for the encrypted event log. Each
-# miss has already consumed the bounded diagnostics timeout. Retry only while
-# the cheap liveness proof succeeds and Doctor reports no non-settlement gap;
-# an unresolved blackout still fails closed after this small fixed allowance.
-POST_SWITCH_LIVE_READINESS_RETRIES = 3
 _PREPARATION_STATE_CONTRACT = "administrateme-release-preparation-v1"
 _PREPARATION_STATE_PHASES = frozenset(
     {"publishing", "publishing_unreaped", "preparing", "complete", "consumed"}
@@ -1082,115 +1050,17 @@ class UpgradeManager:
         except SourceIdentityError as exc:
             raise UpgradeError("fixed upgrade-controller source is invalid") from exc
 
-    @staticmethod
-    def _failed_check_names(result: dict[str, Any]) -> set[str]:
-        return {
-            str(check.get("name"))
-            for check in result.get("checks", [])
-            if isinstance(check, dict) and not check.get("ok")
-        }
-
-    @staticmethod
-    def _doctor_has_only_transient_deployment_readiness_gap(
-        result: dict[str, Any],
-    ) -> bool:
-        """Recognize only bounded readiness dimensions that settle after startup."""
-
-        for check in result.get("checks", []):
-            if not isinstance(check, dict) or check.get("name") != (
-                "deployment_topology_and_recovery_readiness"
-            ):
-                continue
-            evidence = check.get("evidence")
-            if not isinstance(evidence, dict):
-                return False
-            blocking = evidence.get("blocking_dimensions")
-            return (
-                evidence.get("contract") == "deployment-readiness-v1"
-                and evidence.get("state") == "blocked"
-                and isinstance(blocking, list)
-                and bool(blocking)
-                and all(isinstance(value, str) for value in blocking)
-                and set(blocking).issubset(_TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS)
-            )
-        return False
-
-    @classmethod
-    def _failed_checks_are_known_transients(cls, result: dict[str, Any]) -> bool:
-        failed = cls._failed_check_names(result)
-        if not failed:
-            return False
-        allowed = set(_TRANSIENT_POST_SWITCH_CHECKS)
-        if cls._doctor_has_only_transient_deployment_readiness_gap(result):
-            allowed.add("deployment_topology_and_recovery_readiness")
-        return failed.issubset(allowed)
-
-    @staticmethod
-    def _runtime_has_only_transient_deployment_readiness_gap(
-        diagnostics: dict[str, Any],
-    ) -> bool:
-        readiness = diagnostics.get("deployment_readiness")
-        if not isinstance(readiness, dict):
-            return False
-        blocking = readiness.get("blocking_dimensions")
-        return (
-            diagnostics.get("service_ready") is True
-            and diagnostics.get("safe_reads") is True
-            and diagnostics.get("event_ingest_ready") is True
-            and readiness.get("contract") == "deployment-readiness-v1"
-            and readiness.get("state") == "blocked"
-            and isinstance(blocking, list)
-            and bool(blocking)
-            and all(isinstance(value, str) for value in blocking)
-            and set(blocking).issubset(_TRANSIENT_DEPLOYMENT_READINESS_DIMENSIONS)
-        )
-
-    @staticmethod
-    def _has_new_structural_degradation(
-        diagnostics: dict[str, Any],
-        *,
-        allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
-    ) -> bool:
-        """Reject a runtime capability failure that emerges during replay."""
-
-        adapter_boundary = isolated_degraded_adapter_ids(diagnostics)
-        if adapter_boundary and adapter_boundary.issubset(allowed_degraded_adapter_ids):
-            return False
-
-        if (
-            diagnostics.get("ready") is not True
-            and not UpgradeManager._runtime_has_only_transient_deployment_readiness_gap(
-                diagnostics
-            )
-        ):
-            return True
-        capabilities = diagnostics.get("capabilities")
-        if not isinstance(capabilities, dict):
-            return True
-        readiness = diagnostics.get("deployment_readiness")
-        blocking = (
-            set(readiness.get("blocking_dimensions") or [])
-            if isinstance(readiness, dict)
-            else set()
-        )
-        openclaw_heartbeat_pending = "openclaw" in blocking
-        for capability_id, capability in capabilities.items():
-            if capability_id in _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS:
-                continue
-            if not isinstance(capability, dict):
-                continue
-            state = capability.get("state")
-            if state not in {"degraded", "blocked"}:
-                continue
-            if (
-                openclaw_heartbeat_pending
-                and state == "degraded"
-                and capability.get("kind")
-                in _OPENCLAW_HEARTBEAT_TRANSIENT_CAPABILITY_KINDS
-            ):
-                continue
-            return True
-        return False
+    _failed_check_names = staticmethod(failed_check_names)
+    _doctor_has_only_transient_deployment_readiness_gap = staticmethod(
+        doctor_has_only_transient_deployment_readiness_gap
+    )
+    _failed_checks_are_known_transients = staticmethod(
+        failed_checks_are_known_transients
+    )
+    _runtime_has_only_transient_deployment_readiness_gap = staticmethod(
+        runtime_has_only_transient_deployment_readiness_gap
+    )
+    _has_new_structural_degradation = staticmethod(has_new_structural_degradation)
 
     def _post_switch_doctor(
         self,
@@ -1198,98 +1068,15 @@ class UpgradeManager:
         *,
         allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
-        """Wait for only known launch transients, then run the full proof once."""
-
-        # Historical source replay may walk tens of thousands of encrypted
-        # facts before its candidate-bearing source prefix. Repeating full
-        # Doctor during that work competes for the same log and proves nothing
-        # new. Poll only the content-free readiness document until source
-        # settlement, then rerun the complete proof. Structural failures still
-        # return on their first observation.
-        deadline = time.monotonic() + (
-            0 if self.test_mode else POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
+        return wait_for_settled_doctor(
+            run_doctor=lambda **kwargs: self._run_release_doctor(release, **kwargs),
+            services=self.services,
+            test_mode=self.test_mode,
+            timeout_seconds=POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
+            poll_seconds=POST_SWITCH_POLL_SECONDS,
+            live_readiness_retry_limit=POST_SWITCH_LIVE_READINESS_RETRIES,
+            allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
         )
-        live_readiness_retries = 0
-        last = self._run_release_doctor(release, include_synthetic_proof=False)
-        while True:
-            if last.get("status") == "healthy":
-                last = self._run_release_doctor(release, include_synthetic_proof=True)
-                if last.get("status") == "healthy":
-                    return last
-            failed = self._failed_check_names(last)
-            if not self._failed_checks_are_known_transients(last):
-                return last
-            if self.test_mode:
-                return last
-
-            diagnostics = self.services.runtime_diagnostics()
-            if diagnostics is None:
-                # Readiness is the only cheap proof that an otherwise hidden
-                # capability has not degraded during an allowed wait.  Before
-                # the runtime is live, launch/port failures may still be a
-                # genuine cold-start transient.  Once it is live—or for every
-                # other transient class—missing readiness fails closed.
-                cold_start_only = failed.issubset(
-                    {"launchd_and_process_state", "ports_and_loopback_binding"}
-                )
-                deployment_check_failed = (
-                    "deployment_topology_and_recovery_readiness" in failed
-                )
-                source_settlement_only = (
-                    "source_assurance_terminal_dispositions" in failed
-                    and (
-                        not deployment_check_failed
-                        or self._doctor_has_only_transient_deployment_readiness_gap(
-                            last
-                        )
-                    )
-                )
-                if (
-                    cold_start_only
-                    and not self.services.runtime_is_live()
-                    and time.monotonic() < deadline
-                ):
-                    time.sleep(POST_SWITCH_POLL_SECONDS)
-                    last = self._run_release_doctor(
-                        release, include_synthetic_proof=False
-                    )
-                    continue
-                if (
-                    source_settlement_only
-                    and live_readiness_retries < POST_SWITCH_LIVE_READINESS_RETRIES
-                    and self.services.runtime_is_live()
-                    and time.monotonic() < deadline
-                ):
-                    live_readiness_retries += 1
-                    time.sleep(POST_SWITCH_POLL_SECONDS)
-                    last = self._run_release_doctor(
-                        release, include_synthetic_proof=False
-                    )
-                    continue
-                return last
-            live_readiness_retries = 0
-            if self._has_new_structural_degradation(
-                diagnostics,
-                allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
-            ):
-                return self._run_release_doctor(release, include_synthetic_proof=False)
-
-            if "source_assurance_terminal_dispositions" in failed:
-                settled, _evidence = source_assurance_terminal_evidence(diagnostics)
-                if not settled and time.monotonic() < deadline:
-                    time.sleep(POST_SWITCH_POLL_SECONDS)
-                    continue
-
-            if time.monotonic() >= deadline:
-                final = self._run_release_doctor(release, include_synthetic_proof=False)
-                if final.get("status") == "healthy":
-                    return self._run_release_doctor(
-                        release, include_synthetic_proof=True
-                    )
-                return final
-
-            time.sleep(POST_SWITCH_POLL_SECONDS)
-            last = self._run_release_doctor(release, include_synthetic_proof=False)
 
     def _service_start_reached_doctor_boundary(self, status: Any) -> bool:
         """Require a live runtime before Doctor adjudicates blocked readiness."""
@@ -1301,66 +1088,14 @@ class UpgradeManager:
     def _run_release_doctor(
         self, release: Path, *, include_synthetic_proof: bool
     ) -> dict[str, Any]:
-        """Run Doctor with one coherent release registry, packs, and projections."""
-
-        release_python = release / ".venv" / "bin" / "python"
-        if self.test_mode or not release_python.is_file():
-            return Doctor(
-                self.paths,
-                root=release,
-                test_mode=self.test_mode,
-            ).run(include_synthetic_proof=include_synthetic_proof)
-        environment = os.environ.copy()
-        environment.pop("PYTHONPATH", None)
-        environment.pop("VIRTUAL_ENV", None)
-        environment.update(
-            {
-                "ADMINME_INSTANCE_ROOT": str(self.paths.root),
-                "ADMINME_INSTANCE_DIR": str(self.paths.instance_dir),
-                "ADMINME_REPOSITORY_ROOT": str(release),
-                "OPENCLAW_STATE_DIR": str(
-                    self.paths.instance_dir / "openclaw" / "runtime"
-                ),
-                "OPENCLAW_CONFIG_PATH": str(
-                    self.paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
-                ),
-                "PATH": service_environment_path(self.paths, release),
-            }
+        return run_release_doctor(
+            self.paths,
+            release,
+            include_synthetic_proof=include_synthetic_proof,
+            test_mode=self.test_mode,
+            doctor_factory=Doctor,
+            error_type=UpgradeError,
         )
-        command = [
-            str(release_python),
-            "-m",
-            "bootstrap.cli",
-            "--instance-root",
-            str(self.paths.root),
-            "doctor",
-        ]
-        if not include_synthetic_proof:
-            command.append("--no-synthetic-proof")
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=release,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise UpgradeError(
-                "candidate Doctor exceeded 120 seconds; verify candidate-runtime "
-                "Keychain access and inspect the redacted service logs"
-            ) from exc
-        try:
-            result = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise UpgradeError(
-                "candidate Doctor did not return a valid diagnostic report"
-            ) from exc
-        if not isinstance(result, dict):
-            raise UpgradeError("candidate Doctor returned an invalid diagnostic report")
-        return result
 
     def _refresh_active_runtime_binding(
         self,

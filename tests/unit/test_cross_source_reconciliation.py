@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 from pydantic import ValidationError
 
+import adminme.reconciliation as reconciliation
 from adminme.events.schemas.reconciliation import (
     ReconciliationEvidenceRelationshipV1,
     ReconciliationPolicySnapshotV1,
     ReconciliationTypedFactSharedV1,
 )
 from adminme.reconciliation import (
+    ReconciliationAdmissionEvaluator,
     assessed_signals,
     choose_decision,
     evidence_profile,
@@ -420,3 +425,135 @@ def test_imperative_complete_language_is_not_completion_evidence() -> None:
     )
 
     assert evidence_profile(source, proposal).current_state == "current"
+
+
+def test_profile_cache_keys_both_immutable_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluator = ReconciliationAdmissionEvaluator(Mock(), Mock(), Mock())
+    source = _source("source-cache", subject="Invoice CACHE-1000 payment due")
+    proposal = _proposal("proposal-cache", "source-cache", "Pay invoice CACHE-1000")
+    revised_proposal = {
+        **proposal,
+        "event_id": "event-revised-proposal",
+        "payload": {**proposal["payload"], "title": "Check invoice CACHE-1000"},
+    }
+    revised_source = {
+        **source,
+        "event_id": "source-revised",
+        "payload": {**source["payload"], "subject": "Invoice CACHE-2000 payment due"},
+    }
+    profiler = Mock(wraps=evidence_profile)
+    monkeypatch.setattr(reconciliation, "evidence_profile", profiler)
+
+    for candidate_source, candidate_proposal in (
+        (source, proposal),
+        (source, revised_proposal),
+        (revised_source, proposal),
+    ):
+        expected = evidence_profile(candidate_source, candidate_proposal)
+        for _ in range(3):
+            assert evaluator._profile(candidate_source, candidate_proposal) == expected
+    assert profiler.call_count == 3
+
+
+async def test_terminal_profile_reuse_preserves_decisions_and_scope_guards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source("source-terminal", subject="Invoice CACHE-1000 payment due")
+    unmatched_source = _source("source-unmatched", subject="Invoice OTHER-2000 due")
+    proposal = _proposal(
+        "proposal-terminal", "source-terminal", "Pay invoice CACHE-1000"
+    )
+    unmatched = _proposal(
+        "proposal-unmatched", "source-unmatched", "Pay invoice OTHER-2000"
+    )
+    other_member = {
+        **proposal,
+        "event_id": "event-private-other-member",
+        "owner_scope": "private:member-other",
+    }
+    other_tenant = {
+        **proposal,
+        "event_id": "event-private-other-tenant",
+        "tenant_id": "tenant-other",
+    }
+    proposals = [proposal, unmatched, other_member, other_tenant]
+    sources = {str(value["event_id"]): value for value in (source, unmatched_source)}
+    queried_scopes: list[str | None] = []
+
+    async def read_since(
+        cursor: str | None = None, *, types: list[str], owner_scope: str | None
+    ):
+        assert types == ["triage.item.proposed"]
+        queried_scopes.append(owner_scope)
+        for value in sorted(proposals, key=lambda value: str(value["event_id"])):
+            if value["owner_scope"] == owner_scope and (
+                cursor is None or str(value["event_id"]) > cursor
+            ):
+                yield value
+
+    digest = reference_digest(
+        TENANT, "exact_payment_reference", issuer_reference(source, "CACHE-1000")
+    )
+    triggers = [
+        {
+            "event_id": f"terminal-{state}",
+            "tenant_id": TENANT,
+            "type": "context.reconciliation.typed_fact_shared",
+            "owner_scope": "shared:household",
+            "visibility_scope": "shared:household",
+            "actor_identity": "member-source",
+            "payload": {
+                "source_member_id": "member-source",
+                "shared_with_member_ids": [MEMBER],
+                "references": [{"kind": "payment_reference", "digest": digest}],
+                "current_state": state,
+            },
+        }
+        for state in ("satisfied", "superseded")
+    ]
+    profiler = Mock(wraps=evidence_profile)
+    monkeypatch.setattr(reconciliation, "evidence_profile", profiler)
+    emitted: list[list[Any]] = []
+    for cached in (False, True):
+        log = Mock()
+        log.read_since = read_since
+        log.get = AsyncMock(side_effect=sources.get)
+        evaluator = ReconciliationAdmissionEvaluator(Mock(), log, Mock())
+        evaluator._prior_correspondence = AsyncMock(return_value=None)
+        evaluator._policy_snapshot = AsyncMock(
+            return_value=("exact-coordinate", _policy())
+        )
+        evaluator._emit_decision = AsyncMock()
+        if not cached:
+            # The pre-optimization path remains an executable equivalence oracle.
+            evaluator._profile = evidence_profile
+        profiler.reset_mock()
+        for trigger in triggers:
+            await evaluator.handle(trigger)
+        emitted.append(evaluator._emit_decision.await_args_list)
+        pair_calls = [call for call in profiler.call_args_list if len(call.args) == 2]
+        if cached:
+            assert [
+                (call.args[0]["event_id"], call.args[1]["event_id"])
+                for call in pair_calls
+            ] == [
+                ("source-terminal", "event-proposal-terminal"),
+                ("source-unmatched", "event-proposal-unmatched"),
+            ]
+        assert log.get.await_count == 2
+        assert [call.kwargs["decision"] for call in emitted[-1]] == [
+            "already_satisfied",
+            "superseded",
+        ]
+        assert all(call.kwargs["proposal"] == proposal for call in emitted[-1])
+        for invalid in (
+            {**triggers[0], "actor_identity": "member-impostor"},
+            {**triggers[0], "visibility_scope": f"private:{MEMBER}"},
+            {**triggers[0], "owner_scope": f"private:{MEMBER}"},
+        ):
+            await evaluator.handle(invalid)
+        assert evaluator._emit_decision.await_count == 2
+    assert emitted[0] == emitted[1]
+    assert set(queried_scopes) == {f"private:{MEMBER}"}

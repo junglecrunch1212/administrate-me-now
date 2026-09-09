@@ -41,12 +41,32 @@ jobs:
       - name: Install locked dependencies
         run: poetry sync --with dev
 
-      - name: Validate production triage activation and rollback
+      - name: Validate architecture, style, and types
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run python scripts/generate_event_lifecycle_catalog.py --check
+          poetry run mypy adminme bridge/adminme_bridge bootstrap
+          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
+          bash scripts/verify_invariants.sh
+          poetry check --lock
+
+      - name: Validate production triage replay, activation, and rollback
         run: >-
           poetry run pytest -p no:cacheprovider -q
           tests/acceptance/test_runtime_triage_activation.py
           tests/acceptance/test_triage_rollback_compatibility.py
           tests/acceptance/test_runtime_spine.py
+          tests/acceptance/test_cross_source_reconciliation.py
+          tests/acceptance/test_message_context_replay_throughput.py
+          tests/acceptance/test_context_correctness_vertical_slice.py
+          tests/unit/test_cross_source_reconciliation.py
+          tests/unit/test_message_context.py
+          tests/unit/bootstrap/test_restore_settlement.py
+          tests/acceptance/test_macos_bootstrap_operations.py::test_encrypted_restore_settles_late_sources_and_quiesces_failed_state
+          tests/acceptance/test_macos_bootstrap_operations.py::test_newer_restore_controller_proves_selected_predecessor_in_its_real_process
+          tests/unit/test_attention_rule_scope.py
+          tests/acceptance/test_attention_rule_lifecycle.py
 
       - name: Validate Python behavior
         run: |
@@ -59,15 +79,6 @@ jobs:
           poetry -C bridge run pytest -p no:cacheprovider -q
           poetry -C bridge run ruff check adminme_bridge tests
           poetry -C bridge run mypy adminme_bridge
-
-      - name: Validate architecture, style, and types
-        run: |
-          poetry run ruff check .
-          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
-          poetry run mypy adminme bridge/adminme_bridge bootstrap
-          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
-          bash scripts/verify_invariants.sh
-          poetry check --lock
 
       - name: Validate OpenClaw plugin
         run: |

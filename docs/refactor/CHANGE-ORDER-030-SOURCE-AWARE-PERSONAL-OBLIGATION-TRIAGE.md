@@ -244,6 +244,18 @@ content-revision checks remain authoritative for retirement. This is
 **PRESERVE**: it changes lookup cost without changing candidate eligibility or
 member correction semantics.
 
+Context replay checks episode eligibility and explicit member confirmations
+before parsing corroborating text. A source outside the time window cannot
+contribute context unless a current member confirmation admits it; confirmed
+cross-window sources retain their existing evidence and correction behavior.
+Corroborating identifiers and tokens are computed only for admitted related
+sources. Terminal reconciliation reuses the same immutable source/proposal
+profile cache as proposal admission. These are **PRESERVE** under CO-018 and
+this change order: selected context, evidence relationships, privacy checks,
+member decisions, and immutable consumer identities remain unchanged. Regression
+proofs must measure avoided work as well as equivalent production outcomes;
+increasing a timeout does not establish bounded replay cost.
+
 New supersession V4 writers also retain `expected_last_event_id` for retained
 predecessors that read this field for every schema version at or above V3. The
 original proposal event is a conservative legacy comparison: a predecessor may
@@ -264,6 +276,32 @@ authenticated read-only browser acceptance, and zero unintended provider
 effects remain prerequisites and post-switch gates. New degradation invokes
 automatic rollback. Installed-release edits or unrelated live repairs are not
 an acceptable way to satisfy these gates.
+
+Backup restoration uses the same bounded settlement policy as activation after
+restarting services. New source observations may arrive while restored adapters
+resume; an initial source-assurance gap is not by itself a failed restoration.
+The shared policy polls content-free readiness within the existing time limit,
+fails closed on structural degradation or unavailable proof, and runs the full
+Doctor proof once ready. A failed restoration quiesces services before replacing
+state directories. These are **PRESERVE** under the bootstrap backup, recovery,
+observation, and source-accounting invariants: neither required proof nor rollback
+is waived, and installed releases and durable checkpoints are never patched.
+
+When a newer recovery controller restores an older selected release, its Doctor
+must execute with that installed release's Python, registry, packs, and plugin
+path. Validate the selected release before replacing state and throughout the
+settlement wait. An unavailable runtime or changed selection fails closed; the
+controller checkout is not a substitute for the selected runtime's proof.
+
+Exact learning scope includes an optional `protected_source_id`, independently
+of account, enrollment, and conversation. Reconfiguring a connection can leave
+retained observations from several protected sources under the same account;
+a rule made for one source must not silently match another. This is
+**MODERNIZE** under CO-007's canonical payload-version rule and this order's exact
+source scope. Existing V1 rule and feedback models remain registered unchanged;
+protected-source payloads use V2 with explicit upcasters. Omitted scope preserves
+existing matching and request fingerprints without inferring historical source
+identity. The member sees the draft's source and conversation scope before preview.
 
 ## Acceptance and constitutional disposition
 

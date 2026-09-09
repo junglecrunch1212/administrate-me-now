@@ -39,7 +39,7 @@ from adminme.events.schemas.triage import (
     TriageSourceSurface,
     TriageTargetKind,
 )
-from adminme.events.schemas.triage_management import AttentionRuleV1
+from adminme.events.schemas.triage_management import AttentionRuleV2
 from adminme.events.schemas.knowledge import KnowledgeGrantPermission
 from adminme.events.schemas.reminder_context import (
     ContextKind,
@@ -8884,11 +8884,11 @@ async def temporary_surface_action(
     return {**result, "next_action": result.get("what_now")}
 
 
-class AttentionRulePreviewRequest(AttentionRuleV1):
+class AttentionRulePreviewRequest(AttentionRuleV2):
     pass
 
 
-class AttentionRuleSaveRequest(AttentionRuleV1):
+class AttentionRuleSaveRequest(AttentionRuleV2):
     request_id: str = Field(min_length=8, max_length=120)
     preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     mode: Literal["active", "trial", "shadow"] = "trial"
@@ -8925,13 +8925,44 @@ class AttentionFeedbackRequest(BaseModel):
         "ownership",
         "duplicate",
     ]
-    rule: AttentionRuleV1 | None = None
+    rule: AttentionRuleV2 | None = None
 
 
-def _attention_rule_body(body: AttentionRuleV1) -> dict[str, Any]:
-    return AttentionRuleV1.model_validate(
-        body.model_dump(include=set(AttentionRuleV1.model_fields))
+def _attention_rule_body(body: AttentionRuleV2) -> dict[str, Any]:
+    return AttentionRuleV2.model_validate(
+        body.model_dump(include=set(AttentionRuleV2.model_fields))
     ).model_dump(mode="json", exclude_none=True)
+
+
+def _attention_request_fingerprint(proposal_id: str, body: BaseModel) -> str:
+    payload = body.model_dump(mode="json")
+    # An omitted V2 boundary must not invalidate retries of V1 requests.
+    for rule in (payload, payload.get("rule")):
+        if not isinstance(rule, dict):
+            continue
+        for terms in [rule.get("conditions", {}), *rule.get("exceptions", [])]:
+            if terms.get("protected_source_id") is None:
+                terms.pop("protected_source_id", None)
+    canonical = json.dumps(
+        {"proposal_id": proposal_id, "body": payload},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _attention_event_version(payload: dict[str, Any]) -> int:
+    rule = payload.get("rule") if "rule" in payload else payload
+    if not isinstance(rule, dict):
+        return 1
+    return (
+        2
+        if any(
+            terms.get("protected_source_id") is not None
+            for terms in [rule.get("conditions", {}), *rule.get("exceptions", [])]
+        )
+        else 1
+    )
 
 
 def _attention_connection(runtime: Any) -> Any:
@@ -8979,7 +9010,7 @@ def _attention_rules(runtime: Any, session: Session) -> list[dict[str, Any]]:
 async def _attention_preview(
     runtime: Any,
     session: Session,
-    body: AttentionRuleV1,
+    body: AttentionRuleV2,
 ) -> dict[str, Any]:
     conn = _attention_connection(runtime)
     rule = _attention_rule_body(body)
@@ -9007,7 +9038,7 @@ async def _attention_preview(
         for value in evidence:
             if value["last_event_id"] not in evidence_ids:
                 continue
-            prior_rule = AttentionRuleV1.model_validate(
+            prior_rule = AttentionRuleV2.model_validate(
                 json.loads(value["rule_json"] or "{}")
             ).model_dump(mode="json", exclude_none=True)
             if all(
@@ -9097,7 +9128,7 @@ async def list_attention_rules(request: Request, session: SessionDep) -> dict[st
         )
         .fetchall()
     ):
-        rule = AttentionRuleV1.model_validate(
+        rule = AttentionRuleV2.model_validate(
             json.loads(row["rule_json"] or "{}")
         ).model_dump(mode="json", exclude_none=True)
         terms = {key: rule.get(key) for key in ("conditions", "exceptions", "action")}
@@ -9134,7 +9165,7 @@ async def save_attention_rule(
     _require_self_triage_policy(session)
     runtime = _runtime(request)
     _require_human_triage_management(runtime)
-    fingerprint = _triage_request_fingerprint("attention-rule", body)
+    fingerprint = _attention_request_fingerprint("attention-rule", body)
     prior = await _prior_triage_command(
         runtime,
         session,
@@ -9181,6 +9212,7 @@ async def save_attention_rule(
         _triage_event(
             session,
             event_type="triage.attention_rule.saved",
+            schema_version=_attention_event_version(payload),
             payload=payload,
             request_id=body.request_id,
             request_fingerprint=fingerprint,
@@ -9277,7 +9309,7 @@ async def record_attention_feedback(
     _require_self_triage_policy(session)
     runtime = _runtime(request)
     _require_human_triage_management(runtime)
-    fingerprint = _triage_request_fingerprint(body.proposal_id, body)
+    fingerprint = _attention_request_fingerprint(body.proposal_id, body)
     prior = await _prior_triage_command(
         runtime,
         session,
@@ -9333,6 +9365,7 @@ async def record_attention_feedback(
         _triage_event(
             session,
             event_type="triage.attention_feedback.recorded",
+            schema_version=_attention_event_version(payload),
             payload=payload,
             request_id=body.request_id,
             request_fingerprint=fingerprint,

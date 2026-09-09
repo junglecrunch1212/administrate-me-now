@@ -89,6 +89,13 @@ jobs:
           npm run check --prefix openclaw/administrateme
           npm test --prefix openclaw/administrateme
 
+      - name: Validate member browser behavior
+        run: |
+          npm ci --prefix tools/console-reference-harness --ignore-scripts
+          ADMINME_GATE7_PYTHON="$(poetry env info --executable)" \
+          ADMINME_GATE7_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adminme-gate7-early.XXXXXX")" \
+          npm run test:gate7 --prefix tools/console-reference-harness
+
       - name: Build and verify the exact reviewed OpenClaw source
         run: bash scripts/acceptance/openclaw-source-install.sh
 

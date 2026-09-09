@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
 from itertools import count
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
+import pytest
 from fastapi.testclient import TestClient
 
+import adminme.reconciliation as reconciliation
 from adminme.events.envelope import EventEnvelope
-from adminme.reconciliation import issuer_reference, reference_digest
+from adminme.reconciliation import (
+    evidence_profile,
+    evidence_relationships,
+    issuer_reference,
+    reference_digest,
+)
 from adminme.runtime.application import RuntimeSettings, create_application
 
 
@@ -381,6 +390,163 @@ def test_reconciliation_remains_shadow_only_by_default(tmp_path: Path) -> None:
                 "WHERE proposal_id='proposal-shadow'"
             ).fetchone()
         ) == ("admit", 0)
+
+
+def test_repeated_terminal_evidence_reuses_profiles_without_changing_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = tmp_path / "instance-terminal-profile-cache"
+    instance.mkdir()
+    profiler = Mock(wraps=evidence_profile)
+    monkeypatch.setattr(reconciliation, "evidence_profile", profiler)
+    with TestClient(create_application(_settings(instance, admission=True))) as client:
+        runtime = client.app.state.runtime
+        fixture_proposals: dict[str, dict[str, Any]] = {}
+        for key, member, reference in (
+            ("target", A, "CACHE-3100"),
+            ("unmatched", A, "OTHER-4200"),
+            ("private", B, "CACHE-3100"),
+        ):
+            source_id = _write_message(
+                client,
+                runtime,
+                member=member,
+                key=f"cache-{key}",
+                subject=f"Invoice {reference} payment due",
+                body=f"Please pay invoice {reference}.",
+                sender="billing@example.invalid",
+                provider_account_id=f"fixture-account-{member}",
+            )
+            initial = _write_proposal(
+                client,
+                runtime,
+                proposal_id=f"proposal-cache-{key}",
+                source_event_id=source_id,
+                title=f"Pay invoice {reference}",
+                member=member,
+            )
+            assert initial["payload"]["decision"] == "admit"
+            fixture_proposals[key] = client.portal.call(
+                runtime.event_log.get, initial["causation_id"]
+            )
+        client.portal.call(_settle_runtime, runtime)
+        unchanged = {
+            key: _triage_row(runtime, f"proposal-cache-{key}")
+            for key in ("unmatched", "private")
+        }
+        target = fixture_proposals["target"]
+        source = client.portal.call(
+            runtime.event_log.get, target["payload"]["source_event_id"]
+        )
+        digest = reference_digest(
+            runtime.settings.instance.tenant_id,
+            "exact_payment_reference",
+            issuer_reference(source, "CACHE-3100"),
+        )
+        triggers: list[dict[str, Any]] = []
+        for index, state in enumerate(
+            ("satisfied", "satisfied", "superseded"), start=2
+        ):
+            decisions = _write_shared_state(
+                client,
+                runtime,
+                key=f"profile-cache-{index}",
+                reference_kind="payment_reference",
+                reference_digest_value=digest,
+                current_state=state,
+            )
+            [decision] = [
+                row
+                for row in decisions
+                if row["payload"]["proposal_id"] == "proposal-cache-target"
+            ]
+            trigger = client.portal.call(
+                runtime.event_log.get, decision["causation_id"]
+            )
+            triggers.append(trigger)
+            payload = decision["payload"]
+            assert payload["decision"] == (
+                "already_satisfied" if state == "satisfied" else "superseded"
+            )
+            assert payload["decision_revision"] == index
+            assert payload["relationships"] == [
+                relation.model_dump(mode="json")
+                for relation in evidence_relationships(
+                    evidence_profile(trigger), evidence_profile(source, target)
+                )
+            ]
+            assert all(row["payload"]["owner_member_id"] == A for row in decisions)
+        watermark = client.portal.call(_settle_runtime, runtime)
+        computed_pairs = Counter(
+            (str(call.args[0]["event_id"]), str(call.args[1]["event_id"]))
+            for call in profiler.call_args_list
+            if len(call.args) == 2
+        )
+        for proposal in fixture_proposals.values():
+            assert (
+                computed_pairs[
+                    (proposal["payload"]["source_event_id"], proposal["event_id"])
+                ]
+                == 1
+            )
+        assert all(count == 1 for count in computed_pairs.values())
+        assert _triage_row(runtime, "proposal-cache-target")["state"] == "dismissed"
+        assert unchanged == {
+            key: _triage_row(runtime, f"proposal-cache-{key}") for key in unchanged
+        }
+        before = {
+            key: _triage_row(runtime, f"proposal-cache-{key}")
+            for key in fixture_proposals
+        }
+        receipts = client.portal.call(_events, runtime, "triage.reconciliation.decided")
+
+        # Cache contents have no durable authority: warm and cold redelivery
+        # retain the exact immutable receipts, scope, and projected member state.
+        for cold in (False, True):
+            if cold:
+                runtime.reconciliation_admission._profile_cache.clear()
+            profiler.reset_mock()
+            for trigger in triggers:
+                client.portal.call(runtime.reconciliation_admission.handle, trigger)
+            assert client.portal.call(_settle_runtime, runtime) == watermark
+            assert (
+                client.portal.call(_events, runtime, "triage.reconciliation.decided")
+                == receipts
+            )
+            pairs = Counter(
+                (str(call.args[0]["event_id"]), str(call.args[1]["event_id"]))
+                for call in profiler.call_args_list
+                if len(call.args) == 2
+            )
+            expected_count = 1 if cold else 0
+            for key in ("target", "unmatched"):
+                proposal = fixture_proposals[key]
+                assert (
+                    pairs[
+                        (proposal["payload"]["source_event_id"], proposal["event_id"])
+                    ]
+                    == expected_count
+                )
+            private_event_id = fixture_proposals["private"]["event_id"]
+            assert all(pair[1] != private_event_id for pair in pairs)
+        client.portal.call(runtime.projections.rebuild, "triage")
+        client.portal.call(runtime.projections.rebuild, "context_fabric")
+        assert client.portal.call(_settle_runtime, runtime) == watermark
+        assert before == {
+            key: _triage_row(runtime, f"proposal-cache-{key}")
+            for key in fixture_proposals
+        }
+        assert (
+            client.portal.call(_events, runtime, "triage.reconciliation.decided")
+            == receipts
+        )
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
+        assert (
+            client.portal.call(_events, runtime, "provider.operation.requested") == []
+        )
 
 
 def test_cross_source_scenarios_priority_privacy_corrections_and_replay(

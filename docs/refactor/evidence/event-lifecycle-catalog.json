@@ -3783,7 +3783,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 132,
-    "technical_event_schemas": 322,
+    "technical_event_schemas": 324,
     "technical_event_types": 259,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -34094,6 +34094,93 @@
     },
     {
       "additional_properties": false,
+      "event_type": "triage.attention_feedback.recorded",
+      "family": "triage",
+      "properties": {
+        "feedback_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Feedback Id",
+          "type": "string"
+        },
+        "independent_observation_key": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Independent Observation Key",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "future_attention_preference",
+            "interpretation_correction",
+            "completion",
+            "ownership",
+            "duplicate"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "recorded_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Recorded By Member Id",
+          "type": "string"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttentionRuleV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "feedback_id",
+        "member_id",
+        "proposal_id",
+        "source_event_id",
+        "independent_observation_key",
+        "kind",
+        "recorded_by_member_id",
+        "recorded_at"
+      ],
+      "schema_version": 2
+    },
+    {
+      "additional_properties": false,
       "event_type": "triage.attention_rule.reviewed",
       "family": "triage",
       "properties": {
@@ -34319,6 +34406,149 @@
         "saved_by_member_id"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.attention_rule.saved",
+      "family": "triage",
+      "properties": {
+        "access_widening": {
+          "const": false,
+          "default": false,
+          "title": "Access Widening",
+          "type": "boolean"
+        },
+        "action": {
+          "enum": [
+            "review",
+            "reference",
+            "ask"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "conditions": {
+          "$ref": "#/$defs/AttentionConditionsV2"
+        },
+        "cross_member_effect": {
+          "const": false,
+          "default": false,
+          "title": "Cross Member Effect",
+          "type": "boolean"
+        },
+        "exceptions": {
+          "items": {
+            "$ref": "#/$defs/AttentionConditionsV2"
+          },
+          "maxItems": 20,
+          "title": "Exceptions",
+          "type": "array"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "feedback_event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Feedback Event Ids",
+          "type": "array"
+        },
+        "max_observations": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Observations"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "active",
+            "trial",
+            "shadow"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "origin": {
+          "default": "explicit",
+          "enum": [
+            "explicit",
+            "suggested"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "preserve_independent_obligations": {
+          "const": true,
+          "default": true,
+          "title": "Preserve Independent Obligations",
+          "type": "boolean"
+        },
+        "preview_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Preview Digest",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "rule_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "saved_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Saved By Member Id",
+          "type": "string"
+        },
+        "starts_at": {
+          "format": "date-time",
+          "title": "Starts At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conditions",
+        "action",
+        "rule_id",
+        "member_id",
+        "preview_digest",
+        "mode",
+        "starts_at",
+        "saved_by_member_id"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,

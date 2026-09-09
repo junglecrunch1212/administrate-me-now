@@ -121,6 +121,7 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "provider_account_id",
             "adapter_instance_id",
+            "protected_source_id",
             "native_container_id",
             "sender_digest",
             "message_purpose",

@@ -1455,7 +1455,7 @@ class ReconciliationAdmissionEvaluator:
                 )
                 if source is None:
                     continue
-                proposal_profile = evidence_profile(source, proposal)
+                proposal_profile = self._profile(source, proposal)
                 relationships = evidence_relationships(
                     trigger_profile, proposal_profile
                 )

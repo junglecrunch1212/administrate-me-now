@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -395,4 +395,48 @@ registry.register("triage.attention_rule.saved", 1, TriageAttentionRuleSavedV1)
 registry.register("triage.attention_rule.reviewed", 1, TriageAttentionRuleReviewedV1)
 registry.register(
     "triage.attention_feedback.recorded", 1, TriageAttentionFeedbackRecordedV1
+)
+
+
+class AttentionConditionsV2(AttentionConditionsV1):
+    """Retain an exact historical source when an enrollment is reconfigured."""
+
+    protected_source_id: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class AttentionRuleV2(AttentionRuleV1):
+    # Versioned Pydantic schemas validate fresh payloads; these narrower fields
+    # do not mutate V1 instances. Keep the registered V1 schema unchanged.
+    conditions: AttentionConditionsV2  # type: ignore[assignment]
+    exceptions: list[AttentionConditionsV2] = Field(  # type: ignore[assignment]
+        default_factory=list, max_length=20
+    )
+
+
+class TriageAttentionRuleSavedV2(TriageAttentionRuleSavedV1):
+    conditions: AttentionConditionsV2  # type: ignore[assignment]
+    exceptions: list[AttentionConditionsV2] = Field(  # type: ignore[assignment]
+        default_factory=list, max_length=20
+    )
+
+
+class TriageAttentionFeedbackRecordedV2(TriageAttentionFeedbackRecordedV1):
+    rule: AttentionRuleV2 | None = None  # type: ignore[assignment]
+
+
+def _upcast_attention_scope_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Old rules retain their declared scope; never infer a historical source."""
+
+    return dict(payload)
+
+
+registry.register("triage.attention_rule.saved", 2, TriageAttentionRuleSavedV2)
+registry.register(
+    "triage.attention_feedback.recorded", 2, TriageAttentionFeedbackRecordedV2
+)
+registry.register_upcaster(
+    "triage.attention_rule.saved", 1, _upcast_attention_scope_v1_to_v2
+)
+registry.register_upcaster(
+    "triage.attention_feedback.recorded", 1, _upcast_attention_scope_v1_to_v2
 )

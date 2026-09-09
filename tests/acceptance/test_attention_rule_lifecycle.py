@@ -397,6 +397,141 @@ def test_exact_rule_preview_exceptions_conflicts_undo_isolation_and_replay(
         assert after == before
 
 
+def test_protected_source_rules_keep_reconfigured_account_history_separate(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "reconfigured-source"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        tenant = runtime.settings.instance.tenant_id
+        source_a = "protected-source:" + "a" * 64
+        source_b = "protected-source:" + "b" * 64
+        base = _coordinate(tenant).model_copy(
+            update={"bridge_enrollment_id": "fixture-reused-enrollment"}
+        )
+        # Reconfiguration retains the same account, enrollment, sender, and
+        # conversation identifier. Only the immutable protected source differs.
+        first = [
+            _emit(
+                client,
+                index,
+                source_coordinate=base.model_copy(
+                    update={"protected_source_id": source_a}
+                ),
+            )
+            for index in (201, 202, 203)
+        ]
+        second = [
+            _emit(
+                client,
+                index,
+                source_coordinate=base.model_copy(
+                    update={"protected_source_id": source_b}
+                ),
+            )
+            for index in (204, 205, 206)
+        ]
+        unattributed = _emit(client, 207, source_coordinate=base)
+        other_account = _emit(client, 208, account="fixture-other-account")
+        rule = _rule(
+            conditions={
+                **_rule()["conditions"],
+                "protected_source_id": source_a,
+                "native_container_id": base.native_container_id,
+                "sender_digest": "a" * 64,
+            }
+        )
+        preview = _preview(client, rule)
+        assert preview["rule"]["conditions"] == rule["conditions"]
+        assert preview["recent_impact"] == {
+            "total": 8,
+            "matched": 3,
+            "exceptions": 0,
+            "nonmatches": 5,
+            "protected": 0,
+        }
+        replaced_rule = {
+            **rule,
+            "conditions": {**rule["conditions"], "protected_source_id": source_b},
+        }
+        replaced_preview = _preview(client, replaced_rule)
+        assert replaced_preview["preview_digest"] != preview["preview_digest"]
+        assert {
+            item["proposal_id"]
+            for item in replaced_preview["examples"]
+            if item["match"] == "match"
+        } == set(second)
+        feedback_ids = []
+        for proposal in first:
+            response = client.post(
+                f"{API}/feedback",
+                headers=HEADERS,
+                json={
+                    "request_id": f"protected-source-feedback-{proposal}",
+                    "proposal_id": proposal,
+                    "expected_last_event_id": _row(client, proposal)["last_event_id"],
+                    "kind": "future_attention_preference",
+                    "rule": rule,
+                },
+            )
+            assert response.status_code == 200, response.text
+            event = client.portal.call(
+                runtime.event_log.get, response.json()["event_id"]
+            )
+            assert event["schema_version"] == 2
+            assert (
+                event["payload"]["rule"]["conditions"]["protected_source_id"]
+                == source_a
+            )
+            feedback_ids.append(event["event_id"])
+        rejected = client.post(
+            f"{API}/feedback",
+            headers=HEADERS,
+            json={
+                "request_id": "protected-source-wrong-observation",
+                "proposal_id": second[0],
+                "expected_last_event_id": _row(client, second[0])["last_event_id"],
+                "kind": "future_attention_preference",
+                "rule": rule,
+            },
+        )
+        assert rejected.status_code == 422
+        suggestions = client.get(f"{API}/rules", headers=HEADERS).json()["suggestions"]
+        assert len(suggestions) == 1
+        assert suggestions[0]["rule"]["conditions"] == rule["conditions"]
+        assert set(suggestions[0]["rule"]["feedback_event_ids"]) == set(feedback_ids)
+        saved = _save(client, suggestions[0]["rule"], "protected-source-save")
+        saved_event = client.portal.call(runtime.event_log.get, saved["event_id"])
+        assert saved_event["schema_version"] == 2
+        assert _rules(client)[0]["conditions"] == rule["conditions"]
+        assert client.get(f"{API}/rules", headers=OTHER_HEADERS).json()["rules"] == []
+        for proposal in first:
+            assert _row(client, proposal)["learned_policy_state"] == "context_only"
+        for proposal in [*second, unattributed, other_account]:
+            assert _row(client, proposal)["learned_policy_state"] == "none"
+        page = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert page.status_code == 200, page.text
+        public = {item["proposal_id"]: item for item in page.json()["items"]}
+        for proposal in first + second:
+            assert public[proposal]["learning_scope"]["conditions"][
+                "protected_source_id"
+            ] == (source_a if proposal in first else source_b)
+        before = {
+            proposal: _row(client, proposal)["learned_policy_state"]
+            for proposal in [*first, *second, unattributed, other_account]
+        }
+        client.portal.call(runtime.projections.rebuild, "triage")
+        assert {
+            proposal: _row(client, proposal)["learned_policy_state"]
+            for proposal in before
+        } == before
+        assert _rules(client)[0]["conditions"]["protected_source_id"] == source_a
+
+
 def test_trial_counts_future_independent_sources_and_restores_on_limit(
     tmp_path: Path,
 ) -> None:

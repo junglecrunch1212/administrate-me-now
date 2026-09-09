@@ -580,6 +580,7 @@ def attention_values(item: Mapping[str, Any]) -> dict[str, str]:
             "provider",
             "provider_account_id",
             "adapter_instance_id",
+            "protected_source_id",
             "native_container_id",
         )
     }

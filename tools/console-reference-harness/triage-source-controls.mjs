@@ -34,6 +34,37 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   await futureGroup.locator(":scope > summary").click();
   record("Unconnected sources do not present save or activation controls", await futureGroup.locator("button[type='submit']").count() === 0, await futureGroup.textContent());
 
+  const messagesSources = initialSeed.sources.filter((value) => value.protected_source_id);
+  const messagesAccount = settings.control.source_policy_v2.sources.find((value) => value.configurable && value.coordinate?.provider_account_id === messagesSources[0].provider_account_id && value.coordinate.native_container_kind === "source" && value.coordinate.protected_source_id === messagesSources[0].protected_source_id);
+  const messagesConversation = settings.control.source_policy_v2.sources.find((value) => value.configurable && value.coordinate?.provider_account_id === messagesSources[0].provider_account_id && value.coordinate.native_container_id === messagesSources[0].native_chat_id);
+  record("Retained iMessage account preserves its protected source coordinate", messagesAccount?.connection_state === "disconnected" && messagesAccount.coordinate.native_container_id === messagesSources[0].protected_source_id && messagesAccount.coordinate.protected_source_id === messagesSources[0].protected_source_id, messagesAccount);
+  record("Retained iMessage conversation has exact independent controls", messagesConversation?.connection_state === "disconnected" && messagesConversation.coordinate.native_container_kind === "conversation", messagesConversation);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    for (const [scopeName, messagesScope] of [["account", messagesAccount], ["conversation", messagesConversation]]) {
+      const messagesCard = page.locator(`[data-source-policy-key="${messagesScope.policy_key}"]`);
+      const disclosure = messagesCard.locator(".source-similar-rule");
+      if (await disclosure.getAttribute("open") === null) await disclosure.locator(":scope > summary").click();
+      const messagesBuilder = disclosure.locator(".source-rule-builder");
+      await messagesBuilder.getByRole("combobox", { name: "When the message purpose is", exact: true }).selectOption("preparation");
+      const draftScope = messagesBuilder.getByLabel("Rule draft scope", { exact: true });
+      const scopeText = await draftScope.textContent();
+      const draftConditions = JSON.parse(await draftScope.locator(".source-rule-summary").getAttribute("data-rule-conditions"));
+      record(`iMessage ${scopeName} draft scope is rendered before preview at ${width}`, await draftScope.isVisible() && scopeText.includes("This account") && scopeText.includes("This connection") && scopeText.includes("This source") && !scopeText.includes(messagesScope.coordinate.provider_account_id) && !scopeText.includes(messagesSources[0].protected_source_id) && scopeText.includes("This exact conversation or container") === (scopeName === "conversation") && draftConditions.provider_account_id === messagesScope.coordinate.provider_account_id && draftConditions.adapter_instance_id === messagesScope.coordinate.adapter_instance_id && draftConditions.protected_source_id === messagesSources[0].protected_source_id && (scopeName === "account" ? !draftConditions.native_container_id : draftConditions.native_container_id === messagesSources[0].native_chat_id), { scopeText, draftConditions });
+      const previewPromise = page.waitForResponse((response) => response.url().endsWith("/triage-learning/v2/preview") && response.request().method() === "POST");
+      await messagesBuilder.getByRole("button", { name: "Preview matches and exceptions", exact: true }).click();
+      const previewResponse = await previewPromise;
+      const messagesPreview = await previewResponse.json();
+      const conditions = messagesPreview.rule?.conditions || {};
+      record(`iMessage ${scopeName} rule sends only its real container scope at ${width}`, previewResponse.ok() && conditions.provider_account_id === messagesScope.coordinate.provider_account_id && conditions.adapter_instance_id === messagesScope.coordinate.adapter_instance_id && conditions.protected_source_id === messagesSources[0].protected_source_id && (scopeName === "account" ? !conditions.native_container_id : conditions.native_container_id === messagesSources[0].native_chat_id), messagesPreview);
+      record(`iMessage ${scopeName} preview matches real pipeline candidates and excludes a replaced protected source at ${width}`, messagesSources.every((value, index) => messagesPreview.examples.some((example) => example.source_event_id === value.source_event_id && example.proposal_id && example.match === (value.protected_source_id === messagesSources[0].protected_source_id && (scopeName === "account" || index === 0) ? "match" : "nonmatch"))), messagesPreview.examples);
+      await messagesBuilder.locator('[data-rule-match="match"]').first().waitFor();
+      record(`Expanded iMessage ${scopeName} controls fit at ${width}`, await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), await messagesBuilder.textContent());
+      await screenshot(page, `source-messages-${scopeName}-${width}.png`);
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
   const attention = card.getByRole("combobox", { name: "What should reach me?", exact: true });
   await attention.selectOption("possibilities");
   await card.locator(".source-purpose-settings > summary").click();
@@ -95,7 +126,13 @@ export async function auditTriageSourceControls({ page, baseUrl, record, screens
   await page.goto(`${baseUrl}/member/settings?section=learning-trust`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Load my rules", exact: true }).click();
   await page.getByRole("button", { name: "Undo this rule", exact: true }).waitFor();
+  const savedRuleCard = page.locator(`[data-attention-rule-id="${trial.rule_id}"]`);
+  const savedScope = savedRuleCard.locator(".source-rule-record-scope");
+  const savedLabel = await savedScope.locator(".source-rule-scope-label").textContent();
+  record("Saved rule identifies its exact readable retained source", savedLabel.includes(source.label) && savedLabel.includes("Account ") && savedLabel.includes("Connection ") && savedLabel.includes("Disconnected") && !savedLabel.includes(source.coordinate.provider_account_id) && JSON.parse(await savedScope.getAttribute("data-scope-policy-keys")).includes(source.policy_key), savedLabel);
+  record("Exact saved identifiers remain available outside default prose", await savedScope.getByRole("button").count() === 0 && await savedScope.locator("details").getAttribute("open") === null && (await savedScope.locator("details").textContent()).includes(source.coordinate.provider_account_id), await savedScope.locator("details > summary").textContent());
   await page.setViewportSize({ width: 390, height: 844 });
+  record("Saved source label remains visible on a narrow screen", await savedScope.locator(".source-rule-scope-label").isVisible(), await savedScope.locator(".source-rule-scope-label").textContent());
   await auditAccessibility(page, "narrow source learning");
   record("Rule controls fit a narrow viewport", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), await page.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth })));
   await screenshot(page, "source-attention-learning-narrow.png");
