@@ -416,9 +416,13 @@ async def test_opt_in_delivery_concurrency_is_bounded_and_checkpoints_batch(
     await log.close()
 
 
-async def test_subscriber_status_retries_until_checkpoint_and_lag_are_consistent(
+@pytest.mark.parametrize("has_checkpoint", [False, True])
+@pytest.mark.parametrize("failure_during_count", [False, True])
+async def test_subscriber_status_pairs_one_count_with_its_captured_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    has_checkpoint: bool,
+    failure_during_count: bool,
 ) -> None:
     log = EventLog(tmp_path / "events.db", TEST_KEY)
     bus = EventBus(log, tmp_path / "bus.db")
@@ -429,6 +433,8 @@ async def test_subscriber_status_retries_until_checkpoint_and_lag_are_consistent
 
     bus.subscribe("status-race", "*", callback)
     state = bus._subscribers["status-race"]
+    captured_checkpoint = event_ids[0] if has_checkpoint else None
+    state.checkpoint = captured_checkpoint
     entered_count = asyncio.Event()
     release_count = asyncio.Event()
     original_count_since = log.count_since
@@ -450,12 +456,25 @@ async def test_subscriber_status_retries_until_checkpoint_and_lag_are_consistent
     status_task = asyncio.create_task(bus.subscriber_status("status-race"))
     await entered_count.wait()
     state.checkpoint = event_ids[-1]
+    state.last_success_at_ms = 100
+    if failure_during_count:
+        state.last_failure_at_ms = 200
+        state.consecutive_failures = 3
+        state.degraded = True
+        state.poison_event_id = event_ids[-1]
     release_count.set()
     status = await status_task
 
-    assert call_count == 2
-    assert status["checkpoint_event_id"] == event_ids[-1]
-    assert status["lag_count"] == 0
+    assert call_count == 1
+    assert status["checkpoint_event_id"] == captured_checkpoint
+    assert status["lag_count"] == (1 if has_checkpoint else 2)
+    assert status["last_success_at"] == 100
+    assert status["degraded"] is failure_during_count
+    assert status["consecutive_failures"] == (3 if failure_during_count else 0)
+    assert status["last_failure_at"] == (200 if failure_during_count else None)
+    assert status["poison_event_id"] == (
+        event_ids[-1] if failure_during_count else None
+    )
     await bus.stop()
     await log.close()
 

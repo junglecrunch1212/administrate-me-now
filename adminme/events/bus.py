@@ -329,14 +329,12 @@ class EventBus:
             raise KeyError(subscriber_id)
         # ``count_since`` yields while the encrypted log query runs. A
         # concurrent delivery batch may advance the in-memory checkpoint in
-        # that interval. Retry until the checkpoint used for the count is the
-        # checkpoint returned to the caller; otherwise Doctor can report the
-        # impossible combination of a final checkpoint and stale positive lag.
-        while True:
-            checkpoint = state.checkpoint
-            lag = await self._log.count_since(checkpoint, types=state.types_filter)
-            if checkpoint == state.checkpoint:
-                break
+        # that interval. Return the exact checkpoint used by this one query:
+        # waiting for a stationary checkpoint can starve during healthy replay.
+        # Failure and poison fields below remain current after the await, so
+        # an older progress observation cannot conceal a new delivery failure.
+        checkpoint = state.checkpoint
+        lag = await self._log.count_since(checkpoint, types=state.types_filter)
         return {
             "checkpoint_event_id": checkpoint,
             "lag_count": lag,

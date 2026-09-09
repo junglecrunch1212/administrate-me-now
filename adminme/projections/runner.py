@@ -847,21 +847,18 @@ class ProjectionRunner:
     # ------------------------------------------------------------------
     # status
     # ------------------------------------------------------------------
-    async def status(self) -> dict[str, dict[str, Any]]:
+    async def status(
+        self, *, include_row_counts: bool = True
+    ) -> dict[str, dict[str, Any]]:
         """Per-projection dict: name, version, row_counts, checkpoint,
-        lag_count, last_event_applied."""
+        lag_count, last_event_applied. Omit uncollected row counts when requested."""
         out: dict[str, dict[str, Any]] = {}
         for name, projection in self._projections.items():
             subscriber_id = f"projection:{name}"
             bus_status = await self._bus.subscriber_status(subscriber_id)
-            row_counts = await self._run_on_worker(
-                self._collect_row_counts_for,
-                name,
-            )
             out[name] = {
                 "name": name,
                 "version": projection.version,
-                "row_counts": row_counts,
                 "checkpoint": bus_status.get("checkpoint_event_id"),
                 "lag_count": bus_status.get("lag_count"),
                 "last_event_applied": bus_status.get("checkpoint_event_id"),
@@ -872,6 +869,11 @@ class ProjectionRunner:
                 "poison_event_id": bus_status.get("poison_event_id"),
                 "retry_policy": bus_status.get("retry_policy"),
             }
+            if include_row_counts:
+                out[name]["row_counts"] = await self._run_on_worker(
+                    self._collect_row_counts_for,
+                    name,
+                )
         return out
 
     # ------------------------------------------------------------------

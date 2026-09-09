@@ -2415,7 +2415,7 @@ class AdministrateMeRuntime:
         assert self.pipelines is not None
         assert self.observation is not None
         self._observation_active = await self.observation.is_active()
-        projection_status = await self.projections.status()
+        projection_status = await self.projections.status(include_row_counts=False)
         for name in self.projections.projection_names():
             status = projection_status[name]
             state: CapabilityState = "degraded" if status.get("degraded") else "healthy"
@@ -2898,8 +2898,9 @@ class AdministrateMeRuntime:
             source_assurance=current_source_assurance,
         )
 
-    async def diagnostics(self) -> dict[str, Any]:
-        if self.started:
+    async def diagnostics(self, *, refresh_capabilities: bool = True) -> dict[str, Any]:
+        """Read diagnostics, optionally reusing the caller's completed refresh."""
+        if self.started and refresh_capabilities:
             await self._refresh_capability_registry()
         observation_active = (
             await self.observation.is_active() if self.observation is not None else True

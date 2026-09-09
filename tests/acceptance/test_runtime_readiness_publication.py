@@ -94,11 +94,11 @@ def test_ready_serializes_deferred_projection_snapshots_and_releases_on_failure(
                     second_entered_refresh.set()
                 await original_refresh()
 
-            async def deferred_status() -> dict[str, dict[str, Any]]:
+            async def deferred_status(**kwargs: Any) -> dict[str, dict[str, Any]]:
                 name = request_name.get()
                 if name == "second":
                     second_started_collection.set()
-                result = await original_status()
+                result = await original_status(**kwargs)
                 if name is not None:
                     collected[name] = result["tasks"]
                 if name == "first":

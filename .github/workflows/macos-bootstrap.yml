@@ -81,6 +81,7 @@ jobs:
         run: >-
           poetry run pytest -p no:cacheprovider -q
           tests/unit/test_event_log.py
+          tests/unit/test_event_bus.py
           tests/acceptance/test_event_log_metadata_migration.py
           tests/acceptance/test_source_assurance_metadata_replay.py
           tests/acceptance/test_release_candidate_hardening.py::test_v1_encrypted_log_migrates_in_place_and_preserves_append_only_truth
@@ -91,6 +92,7 @@ jobs:
           tests/acceptance/test_upgrade_deadline_rollback.py
           tests/acceptance/test_upgrade_readiness_blackout.py
           tests/acceptance/test_runtime_readiness_publication.py
+          tests/acceptance/test_bounded_member_readiness.py
           tests/acceptance/test_triage_vertical_slice.py::test_member_evidence_uses_exact_lookup_after_private_history
           tests/unit/bootstrap/test_settlement_readiness_blackout.py
           tests/unit/bootstrap/test_deployment_failure.py
