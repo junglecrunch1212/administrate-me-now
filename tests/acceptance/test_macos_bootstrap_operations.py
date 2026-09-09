@@ -732,10 +732,9 @@ def test_newer_restore_controller_proves_selected_predecessor_in_its_real_proces
 
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     paths = DeploymentPaths.from_root(tmp_path / "selected-predecessor-restore")
-    paths.create()
     predecessor = "890a0b5b5a86650806fcda54ac319f00a0d636cb"
     release = paths.app_dir / "releases" / predecessor
-    release.parent.mkdir(mode=0o700)
+    release.parent.mkdir(parents=True, mode=0o700)
     _extract_git_archive(REPO_ROOT, predecessor, release)
     assert (
         "version: 22.0.0"
