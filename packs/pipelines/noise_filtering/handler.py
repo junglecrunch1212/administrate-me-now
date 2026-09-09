@@ -842,7 +842,7 @@ class NoiseFilteringPipeline:
         event: dict[str, Any],
         ctx: PipelineContext,
         skill_ctx: SkillContext,
-        error: Exception,
+        error: BaseException,
     ) -> bool:
         """An execution patch cannot rewrite an already completed v23 receipt."""
         receipt_id = getattr(error, "compatible_receipt_event_id", None)
