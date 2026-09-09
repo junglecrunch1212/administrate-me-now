@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import time
 from pathlib import Path
@@ -253,31 +252,25 @@ def test_large_source_metadata_replay_preserves_readiness_and_private_accounting
             assert assessment["causation_id"] == source_id
             assert assessment["payload"]["assessment_outcome"] == "failed"
             runtime.pipelines._run_skill_fn = healthy_skill
-            client.portal.call(
-                runtime.events.write,
-                _envelope(
-                    settings,
-                    "source.assessment.recovery_requested",
-                    "recover-message",
-                    {
-                        "request_id": "fixture-source-assurance-recovery",
-                        "batch_fingerprint": hashlib.sha256(
-                            f"{source_id}:{assessment['event_id']}".encode()
-                        ).hexdigest(),
-                        "source_event_id": source_id,
-                        "failed_assessment_event_id": assessment["event_id"],
-                        "expected_failure_reason": "language_seam_OpenClawUnreachable",
-                        "owner_member_id": MEMBER,
-                        "requested_by_actor": "fixture-source-assurance",
-                        "authority": "guarded_release_exception",
-                        "policy": "source-assessment-recovery-v1",
-                        "attempt_limit": 3,
-                        "max_concurrency": 2,
-                    },
-                    version=1,
-                    causation_id=assessment["event_id"],
-                ),
+            recovery = client.post(
+                "/api/system/source-assessment-recoveries",
+                headers=AUTH,
+                json={
+                    "request_id": "fixture-source-assurance-recovery",
+                    "targets": [
+                        {
+                            "source_event_id": source_id,
+                            "failed_assessment_event_id": assessment["event_id"],
+                            "expected_failure_reason": (
+                                "language_seam_OpenClawUnreachable"
+                            ),
+                        }
+                    ],
+                },
             )
+            assert recovery.status_code == 202, recovery.text
+            assert recovery.json()["accepted"] == 1
+            assert recovery.json()["external_write_requests"] == 0
             client.portal.call(_wait_for_composition_quiescence, runtime, 60)
             recovered = _current_assurance(client, pending=0, failed=0, missing=0)
             assert recovered["state"] == "healthy"
