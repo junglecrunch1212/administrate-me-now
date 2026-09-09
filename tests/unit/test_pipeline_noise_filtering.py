@@ -13,12 +13,12 @@ import asyncio
 import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import pytest
 
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import IdempotencyConflict
+from adminme.events.log import CursorNotFound, IdempotencyConflict
 from adminme.lib.skill_runner import (
     OpenClawTimeout,
     OpenClawUnreachable,
@@ -70,7 +70,7 @@ class _FakeEventLog:
         causation_id: str | None = None,
     ) -> str:
         self._next_id += 1
-        event_id = f"fake-event-id-{self._next_id}"
+        event_id = f"fake-event-id-{self._next_id:08d}"
         self.calls.append(
             _RecordedAppend(
                 event_id=event_id,
@@ -88,6 +88,42 @@ class _FakeEventLog:
             )
             for envelope in envelopes
         ]
+
+    async def read_since(
+        self,
+        cursor: str | None = None,
+        *,
+        through: str | None = None,
+        limit: int = 1000,
+        owner_scope: str | None = None,
+        types: list[str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Read committed appends with the production cursor/filter contract.
+
+        This simple dataclass intentionally remains unhashable, exercising the
+        uncached reader fallback. ``limit`` is a page size, not a result cap.
+        The context-specific subclasses separately preload their source rows.
+        """
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        calls = list(self.calls)
+        if cursor is not None and not any(call.event_id == cursor for call in calls):
+            raise CursorNotFound(cursor)
+        for call in calls:
+            if cursor is not None and call.event_id <= cursor:
+                continue
+            if through is not None and call.event_id > through:
+                continue
+            if owner_scope is not None and call.envelope.owner_scope != owner_scope:
+                continue
+            if types is not None and call.envelope.type not in types:
+                continue
+            yield {
+                **call.envelope.model_dump(mode="json"),
+                "event_id": call.event_id,
+                "correlation_id": call.correlation_id,
+                "causation_id": call.causation_id,
+            }
 
     async def get_by_idempotency(
         self, tenant_id: str, idempotency_key: str
@@ -154,6 +190,7 @@ class _FakeEventLog:
 class _RacingProposalEventLog(_FakeEventLog):
     """Force two proposal producers through the read-before-append window."""
 
+    force_proposal_race: bool = False
     proposal_reads: int = 0
     proposal_gate: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -162,8 +199,9 @@ class _RacingProposalEventLog(_FakeEventLog):
     ) -> dict[str, Any] | None:
         existing = await super().get_by_idempotency(tenant_id, idempotency_key)
         if (
-            existing is None
-            and idempotency_key.startswith("triage:message-candidate:v19:")
+            self.force_proposal_race
+            and existing is None
+            and idempotency_key.startswith("triage:message-candidate:v23:")
             and self.proposal_reads < 2
         ):
             self.proposal_reads += 1
@@ -1351,7 +1389,7 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
     assert proposal["source_occurred_at"] == event["payload"]["received_at"]
     assert log.calls[2].envelope.schema_version == 3
     assert log.calls[4].envelope.schema_version == 4
-    assert log.calls[4].causation_id == "fake-event-id-3"
+    assert log.calls[4].causation_id == "fake-event-id-00000003"
 
 
 @pytest.mark.asyncio
@@ -1602,7 +1640,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
 
 @pytest.mark.asyncio
 async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -> None:
-    log = _RacingProposalEventLog()
+    log = _RacingProposalEventLog(force_proposal_race=True)
     received_at = "2026-08-08T12:00:00Z"
 
     async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
@@ -1634,10 +1672,14 @@ async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -
     }
 
     pipeline = NoiseFilteringPipeline()
-    await asyncio.gather(
-        pipeline.handle(first, _make_ctx(log, recovered)),
-        pipeline.handle(second, _make_ctx(log, recovered)),
+    await asyncio.wait_for(
+        asyncio.gather(
+            pipeline.handle(first, _make_ctx(log, recovered)),
+            pipeline.handle(second, _make_ctx(log, recovered)),
+        ),
+        timeout=5,
     )
+    assert log.proposal_reads == 2
 
     proposals = [
         call.envelope

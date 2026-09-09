@@ -81,6 +81,8 @@ jobs:
           tests/unit/bootstrap/test_service_process_ownership.py
           tests/unit/test_source_assessment_recovery.py
           tests/unit/test_pipeline_runner.py
+          tests/unit/test_pipeline_noise_filtering.py
+          tests/unit/test_skill_wrapper.py
           tests/unit/test_source_assurance.py
           tests/acceptance/test_triage_vertical_slice.py::test_member_evidence_uses_exact_lookup_after_private_history
           tests/unit/bootstrap/test_settlement_readiness_blackout.py
