@@ -405,21 +405,23 @@ class AttentionConditionsV2(AttentionConditionsV1):
 
 
 class AttentionRuleV2(AttentionRuleV1):
-    conditions: AttentionConditionsV2
+    # Versioned Pydantic schemas validate fresh payloads; these narrower fields
+    # do not mutate V1 instances. Keep the registered V1 schema unchanged.
+    conditions: AttentionConditionsV2  # type: ignore[assignment]
     exceptions: list[AttentionConditionsV2] = Field(  # type: ignore[assignment]
         default_factory=list, max_length=20
     )
 
 
 class TriageAttentionRuleSavedV2(TriageAttentionRuleSavedV1):
-    conditions: AttentionConditionsV2
+    conditions: AttentionConditionsV2  # type: ignore[assignment]
     exceptions: list[AttentionConditionsV2] = Field(  # type: ignore[assignment]
         default_factory=list, max_length=20
     )
 
 
 class TriageAttentionFeedbackRecordedV2(TriageAttentionFeedbackRecordedV1):
-    rule: AttentionRuleV2 | None = None
+    rule: AttentionRuleV2 | None = None  # type: ignore[assignment]
 
 
 def _upcast_attention_scope_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:

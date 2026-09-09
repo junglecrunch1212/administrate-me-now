@@ -41,6 +41,16 @@ jobs:
       - name: Install locked dependencies
         run: poetry sync --with dev
 
+      - name: Validate architecture, style, and types
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run python scripts/generate_event_lifecycle_catalog.py --check
+          poetry run mypy adminme bridge/adminme_bridge bootstrap
+          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
+          bash scripts/verify_invariants.sh
+          poetry check --lock
+
       - name: Validate production triage replay, activation, and rollback
         run: >-
           poetry run pytest -p no:cacheprovider -q
@@ -69,16 +79,6 @@ jobs:
           poetry -C bridge run pytest -p no:cacheprovider -q
           poetry -C bridge run ruff check adminme_bridge tests
           poetry -C bridge run mypy adminme_bridge
-
-      - name: Validate architecture, style, and types
-        run: |
-          poetry run ruff check .
-          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
-          poetry run python scripts/generate_event_lifecycle_catalog.py --check
-          poetry run mypy adminme bridge/adminme_bridge bootstrap
-          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
-          bash scripts/verify_invariants.sh
-          poetry check --lock
 
       - name: Validate OpenClaw plugin
         run: |
