@@ -39,6 +39,11 @@ from bootstrap.contracts import (
     load_versions,
 )
 from bootstrap.doctor import Doctor
+from bootstrap.deployment_budget import (
+    DeploymentBudget,
+    DeploymentBudgetError,
+    deployment_clock,
+)
 from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
@@ -49,6 +54,7 @@ from bootstrap.provider_binding_transition import (
     prepare_live_provider_binding_transition,
 )
 from bootstrap.services import (
+    RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
     ServiceManager,
     isolated_degraded_adapter_ids,
 )
@@ -56,6 +62,7 @@ from bootstrap.service_settlement import (
     POST_SWITCH_LIVE_READINESS_RETRIES,
     POST_SWITCH_POLL_SECONDS,
     POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
+    RELEASE_DOCTOR_TIMEOUT_SECONDS,
     doctor_has_only_transient_deployment_readiness_gap,
     failed_check_names,
     failed_checks_are_known_transients,
@@ -232,9 +239,58 @@ class UpgradeManager:
         self.pending_attestation_id = pending_attestation_id
         self.services = ServiceManager(paths, test_mode=test_mode)
         self.activation_journal = ActivationJournal(paths)
+        self._deployment_budget: DeploymentBudget | None = None
+        self._settlement_deadline: float | None = None
+        self._candidate_settlement_deadline: float | None = None
+        self._recovery_settlement_deadline: float | None = None
         self._active_preparation_activity_descriptor: int | None = None
         self._active_preparation_activity_path: Path | None = None
         self._active_preparation_activity_coordinate: tuple[int, int] | None = None
+
+    def _begin_deployment_budget(self) -> DeploymentBudget:
+        if self._deployment_budget is None:
+            supervised = os.environ.get("ADMINME_UPDATE_SUPERVISED") == "1"
+            if supervised and (
+                not os.environ.get("ADMINME_UPGRADE_OPERATION_LOCK_FD")
+                or not os.environ.get("ADMINME_UPGRADE_CONTROLLER_COMMIT")
+                or os.environ.get("ADMINME_UPGRADE_CONTROLLER_ROOT")
+                != str(Path(__file__).resolve().parents[1])
+            ):
+                raise UpgradeError(
+                    "supervised controller deadline provenance is missing"
+                )
+            try:
+                self._deployment_budget = DeploymentBudget.from_environment(
+                    os.environ, now=deployment_clock(), supervised=supervised
+                )
+            except DeploymentBudgetError as exc:
+                raise UpgradeError(str(exc)) from exc
+        return self._deployment_budget
+
+    def _require_activation_capacity(self, *, begin_settlement: bool = True) -> None:
+        try:
+            deadline = self._begin_deployment_budget().candidate_deadline(
+                now=deployment_clock()
+            )
+        except DeploymentBudgetError as exc:
+            raise UpgradeError(str(exc)) from exc
+        if not begin_settlement:
+            return
+        if self._candidate_settlement_deadline is None:
+            self._candidate_settlement_deadline = deadline
+        self._settlement_deadline = self._candidate_settlement_deadline
+
+    def _begin_recovery_settlement(self) -> None:
+        if self._recovery_settlement_deadline is None:
+            try:
+                self._recovery_settlement_deadline = (
+                    self._begin_deployment_budget().recovery_deadline(
+                        now=deployment_clock()
+                    )
+                )
+            except DeploymentBudgetError as exc:
+                raise UpgradeError(str(exc)) from exc
+        self._settlement_deadline = self._recovery_settlement_deadline
 
     @staticmethod
     def _close_descriptors(*descriptors: int | None) -> BaseException | None:
@@ -1076,6 +1132,7 @@ class UpgradeManager:
             poll_seconds=POST_SWITCH_POLL_SECONDS,
             live_readiness_retry_limit=POST_SWITCH_LIVE_READINESS_RETRIES,
             allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
+            absolute_deadline=self._settlement_deadline,
         )
 
     def _service_start_reached_doctor_boundary(self, status: Any) -> bool:
@@ -1086,7 +1143,11 @@ class UpgradeManager:
         return status.status == "failed" and self.services.runtime_is_live()
 
     def _run_release_doctor(
-        self, release: Path, *, include_synthetic_proof: bool
+        self,
+        release: Path,
+        *,
+        include_synthetic_proof: bool,
+        timeout_seconds: float = 120,
     ) -> dict[str, Any]:
         return run_release_doctor(
             self.paths,
@@ -1095,6 +1156,52 @@ class UpgradeManager:
             test_mode=self.test_mode,
             doctor_factory=Doctor,
             error_type=UpgradeError,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _isolated_recovery_has_full_proof(self, release: Path) -> bool:
+        """Verify the existing isolated adapter boundary without waiving Doctor."""
+        deadline = self._settlement_deadline
+        # Two bounded runtime diagnostics and one complete Doctor must all fit.
+        full_budget = (
+            RELEASE_DOCTOR_TIMEOUT_SECONDS + 2 * RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
+        )
+        if deadline is None or deployment_clock() + full_budget > deadline:
+            return False
+        pointer_path = self.paths.app_dir / "current-release.json"
+        pointer_bytes, pointer = self._read_private_json_payload(pointer_path)
+        if pointer is None or pointer.get("path") != str(release):
+            return False
+        boundary = isolated_degraded_adapter_ids(self.services.runtime_diagnostics())
+        if (
+            not boundary
+            or deployment_clock()
+            + RELEASE_DOCTOR_TIMEOUT_SECONDS
+            + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
+            > deadline
+        ):
+            return False
+        full = self._run_release_doctor(
+            release,
+            include_synthetic_proof=True,
+            timeout_seconds=RELEASE_DOCTOR_TIMEOUT_SECONDS,
+        )
+        if (
+            deployment_clock() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS > deadline
+            or not full.get("checks")
+            or not self._failed_check_names(full).issubset(
+                {"launchd_and_process_state"}
+            )
+            or self._read_private_json_payload(pointer_path)[0] != pointer_bytes
+        ):
+            return False
+        final_boundary = isolated_degraded_adapter_ids(
+            self.services.runtime_diagnostics()
+        )
+        return (
+            final_boundary == boundary
+            and deployment_clock() < deadline
+            and self._read_private_json_payload(pointer_path)[0] == pointer_bytes
         )
 
     def _refresh_active_runtime_binding(
@@ -1400,6 +1507,7 @@ class UpgradeManager:
             }
 
         predecessor_commit = journal["predecessor_commit"]
+        self._begin_recovery_settlement()
         predecessor = Path(journal["predecessor_path"])
         expected = self.paths.app_dir / "releases" / predecessor_commit
         if predecessor != expected:
@@ -1493,20 +1601,21 @@ class UpgradeManager:
             if journal["was_running"] and not recovery_errors:
                 try:
                     restored = self.services.start()
-                    recovery_healthy = restored.status == "healthy"
+                    recovery_healthy = False
+                    recovery_proof: dict[str, Any] | None = None
+                    if self._service_start_reached_doctor_boundary(restored):
+                        recovery_proof = self._post_switch_doctor(predecessor)
+                        recovery_healthy = recovery_proof.get("status") == "healthy"
                     if (
                         not recovery_healthy
-                        and self._service_start_reached_doctor_boundary(restored)
+                        and recovery_proof is not None
+                        and self._failed_check_names(recovery_proof).issubset(
+                            {"launchd_and_process_state"}
+                        )
                     ):
-                        recovery_healthy = (
-                            self._post_switch_doctor(predecessor).get("status")
-                            == "healthy"
+                        recovery_healthy = self._isolated_recovery_has_full_proof(
+                            predecessor
                         )
-                    if not recovery_healthy:
-                        recovered_boundary = isolated_degraded_adapter_ids(
-                            self.services.runtime_diagnostics()
-                        )
-                        recovery_healthy = bool(recovered_boundary)
                     if not recovery_healthy:
                         raise UpgradeError(
                             "recovered predecessor did not become healthy: "
@@ -1596,6 +1705,7 @@ class UpgradeManager:
 
     def activate(self, candidate: Path) -> dict[str, Any]:
         with self._operation_lock():
+            self._begin_deployment_budget()
             recovered = self._recover_interrupted_transaction(candidate)
             if recovered is not None:
                 return recovered
@@ -1892,6 +2002,7 @@ class UpgradeManager:
                 rollback_eligibility_sha256=eligibility_sha256,
                 tested_at=str(rehearsal["tested_at"]),
             )
+            self._require_activation_capacity(begin_settlement=False)
             journal = self.activation_journal.transition(
                 journal,
                 "selector_mutation_authorized",
@@ -1935,6 +2046,7 @@ class UpgradeManager:
                     journal,
                     "preparation_consumed",
                 )
+                self._require_activation_capacity()
                 journal = self.activation_journal.transition(
                     journal,
                     "openclaw_selecting",
@@ -2243,6 +2355,7 @@ class UpgradeManager:
         openclaw_switched = False
         plugin_registration_attempted = False
         source_repair_evidence: dict[str, Any] | None = None
+        self._require_activation_capacity(begin_settlement=False)
         try:
             if repair_policy is not None:
                 # Backup quiescing restarts the active release. Take the final
@@ -2265,6 +2378,7 @@ class UpgradeManager:
                 candidate, commit, release
             )
             try:
+                self._require_activation_capacity()
                 self._install_reviewed_openclaw(release)
                 openclaw_switched = True
             finally:
@@ -2308,6 +2422,7 @@ class UpgradeManager:
                 self.services.stop()
         except Exception as candidate_error:
             rollback_errors: list[Exception] = []
+            self._begin_recovery_settlement()
             try:
                 self.services.stop()
             except Exception as exc:
@@ -2354,7 +2469,16 @@ class UpgradeManager:
             if was_running:
                 try:
                     restored = self.services.start()
-                    if restored.status != "healthy":
+                    recovered_healthy = restored.status == "healthy"
+                    if (
+                        previous_release is not None
+                        and self._service_start_reached_doctor_boundary(restored)
+                    ):
+                        recovered_healthy = (
+                            self._post_switch_doctor(previous_release).get("status")
+                            == "healthy"
+                        )
+                    if not recovered_healthy:
                         raise UpgradeError(
                             "previous release restart did not become healthy: "
                             f"status={restored.status}, runtime={restored.runtime}, "
@@ -2387,6 +2511,7 @@ class UpgradeManager:
         recovery_repository: Path | None = None,
     ) -> dict[str, Any]:
         with self._operation_lock():
+            self._begin_deployment_budget()
             if not self.test_mode:
                 if recovery_repository is None:
                     raise UpgradeError(
@@ -2612,6 +2737,7 @@ class UpgradeManager:
 
         history: Path | None = None
         try:
+            self._require_activation_capacity()
             journal = self.activation_journal.transition(
                 journal,
                 "openclaw_selecting",
@@ -2804,6 +2930,7 @@ class UpgradeManager:
             allow_openclaw_rollback=True,
         )
         stopped = self.services.status().status == "stopped"
+        self._require_activation_capacity()
         try:
             self._install_reviewed_openclaw(release)
             if not stopped:
@@ -2825,6 +2952,7 @@ class UpgradeManager:
             if stopped:
                 self.services.stop()
         except Exception as rollback_candidate_error:
+            self._begin_recovery_settlement()
             restoration_errors: list[Exception] = []
             try:
                 self.services.stop()
@@ -2857,7 +2985,13 @@ class UpgradeManager:
             if not stopped:
                 try:
                     restored = self.services.start()
-                    if restored.status != "healthy":
+                    recovered_healthy = False
+                    if self._service_start_reached_doctor_boundary(restored):
+                        recovered_healthy = (
+                            self._post_switch_doctor(current_release).get("status")
+                            == "healthy"
+                        )
+                    if not recovered_healthy:
                         raise UpgradeError(
                             "current release restart did not become healthy: "
                             f"status={restored.status}, runtime={restored.runtime}, "

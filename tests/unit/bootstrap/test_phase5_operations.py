@@ -2633,7 +2633,7 @@ def test_upgrade_aborts_transient_wait_when_readiness_is_not_ready(
 
 
 def test_upgrade_replay_settlement_window_covers_household_language_backlog() -> None:
-    assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 60 * 60
+    assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 6 * 60 * 60
 
 
 def test_upgrade_does_not_treat_absent_readiness_as_advancing_replay(

@@ -33,9 +33,15 @@ MAX_ARCHIVE_MEMBERS = 200_000
 MAX_ARCHIVE_PATH_BYTES = 4096
 MAX_ARCHIVE_STREAM_BYTES = MAX_ARCHIVE_BYTES + (MAX_ARCHIVE_MEMBERS * 1024)
 MAX_GIT_CONTROL_OUTPUT_BYTES = 1024 * 1024
-CONTROLLER_TIMEOUT_SECONDS = 2 * 60 * 60
+CONTROLLER_TIMEOUT_SECONDS = 13 * 60 * 60
 SOURCE_MARKER = ".administrateme-source-commit"
 CONTROLLER_LIFECYCLE = ".controller-lifecycle.lock"
+
+
+def _deployment_clock() -> float:
+    # This fixed-blob entrypoint cannot import the controller package yet.
+    # Match deployment_budget.deployment_clock across macOS Python versions.
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
 
 
 class SupervisorError(RuntimeError):
@@ -1019,6 +1025,16 @@ def _run() -> int:
         guardian: subprocess.Popen[bytes] | None = None
         controller_terminal = False
         try:
+            controller_started = _deployment_clock()
+            controller_deadline = controller_started + CONTROLLER_TIMEOUT_SECONDS
+            # The supervisor's clean environment owns this immutable deadline.
+            # Ambient caller values are never copied into the controller.
+            environment["ADMINME_CONTROLLER_STARTED_MONOTONIC"] = repr(
+                controller_started
+            )
+            environment["ADMINME_CONTROLLER_DEADLINE_MONOTONIC"] = repr(
+                controller_deadline
+            )
             guardian = subprocess.Popen(
                 [
                     "/usr/bin/python3",
@@ -1061,7 +1077,9 @@ def _run() -> int:
             readable, _writable, _exceptional = select.select([ready_read], [], [], 30)
             if not readable or os.read(ready_read, 1) != b"1":
                 raise SupervisorError("fixed update controller did not start safely")
-            return_code = guardian.wait(timeout=CONTROLLER_TIMEOUT_SECONDS + 60)
+            return_code = guardian.wait(
+                timeout=max(0, controller_deadline - _deployment_clock()) + 60
+            )
             controller_terminal = os.read(terminal_read, 2) == b"1"
             if not controller_terminal:
                 raise SupervisorError("fixed update controller terminality is unknown")

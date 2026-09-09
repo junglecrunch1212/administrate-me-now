@@ -168,6 +168,7 @@ class EventLog:
         (3, "0003_idempotency_keys.sql"),
         (4, "0004_source_assurance_covering_index.sql"),
         (5, "0005_b03_execution_recovery.sql"),
+        (6, "0006_source_assurance_causation_covering_index.sql"),
     )
 
     def __init__(
@@ -206,6 +207,9 @@ class EventLog:
             )
             if not self._read_only:
                 self._executor.submit(self._migrate).result()
+            self._metadata_index_hint = self._executor.submit(
+                self._metadata_index_hint_for_schema
+            ).result()
             ensure_autoloaded()
         except BaseException:
             connection = getattr(self, "_conn", None)
@@ -261,6 +265,25 @@ class EventLog:
                 except Exception:
                     _log.exception("failed to close rejected event log connection")
             raise
+
+    def _metadata_index_hint_for_schema(self) -> str:
+        # Read-only backup inspection must not require a newer migration.
+        # Resolve this once on the connection worker, never on each audit page.
+        preferred_indexes = (
+            "idx_events_type_id_time_causation",
+            "idx_events_type_id_time",
+        )
+        available = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name IN (?, ?)",
+                preferred_indexes,
+            )
+        }
+        for name in preferred_indexes:
+            if name in available:
+                return f" INDEXED BY {name}"
+        return ""
 
     def _migrate(self) -> None:
         cur = self._conn.cursor()
@@ -738,7 +761,7 @@ class EventLog:
             branches.append(
                 "SELECT event_id, type, occurred_at, recorded_at, causation_id, "
                 "NULL AS payload "
-                "FROM events INDEXED BY idx_events_type_id_time WHERE " + metadata_where
+                f"FROM events{self._metadata_index_hint} WHERE " + metadata_where
             )
             params.extend(metadata_params)
         if payload_types:

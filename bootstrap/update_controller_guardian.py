@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import select
 import signal
@@ -11,6 +12,49 @@ import sys
 import time
 from pathlib import Path
 from typing import NoReturn
+
+
+CONTROLLER_TIMEOUT_SECONDS = 13 * 60 * 60
+
+
+def _deployment_clock() -> float:
+    # Match the supervisor and deployment_budget clock without package imports.
+    # Older macOS system Python gives time.monotonic() a process-local origin.
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
+def _controller_deadline(timeout_seconds: float, *, now: float) -> float:
+    """Keep supervisor preparation and guardian launch inside the same budget."""
+    if (
+        not math.isfinite(now)
+        or now < 0
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+        or timeout_seconds > CONTROLLER_TIMEOUT_SECONDS
+    ):
+        raise SystemExit("invalid update-controller guardian boundary")
+    raw_start = os.environ.get("ADMINME_CONTROLLER_STARTED_MONOTONIC")
+    raw_deadline = os.environ.get("ADMINME_CONTROLLER_DEADLINE_MONOTONIC")
+    if raw_start is None and raw_deadline is None:
+        if os.environ.get("ADMINME_UPDATE_SUPERVISED") == "1":
+            raise SystemExit("missing supervised controller deadline")
+        return now + timeout_seconds
+    try:
+        start = float(raw_start) if raw_start is not None else float("nan")
+        deadline = float(raw_deadline) if raw_deadline is not None else float("nan")
+    except ValueError as exc:
+        raise SystemExit("invalid supervised controller deadline") from exc
+    if (
+        not math.isfinite(start)
+        or not math.isfinite(deadline)
+        or start < 0
+        or start > now
+        or deadline <= now
+        or not math.isclose(deadline - start, timeout_seconds, rel_tol=0, abs_tol=0.001)
+        or deadline > now + timeout_seconds
+    ):
+        raise SystemExit("expired or invalid supervised controller deadline")
+    return deadline
 
 
 def _process_group_exists(group_id: int) -> bool:
@@ -84,8 +128,9 @@ def main() -> int:
     lifecycle_coordinate = (int(sys.argv[6]), int(sys.argv[7]))
     timeout_seconds = float(sys.argv[8])
     command = sys.argv[10:]
-    if timeout_seconds <= 0 or not command:
+    if not command:
         raise SystemExit("invalid update-controller guardian boundary")
+    deadline = _controller_deadline(timeout_seconds, now=_deployment_clock())
     lock = os.fstat(operation_lock_descriptor)
     if (
         not stat.S_ISREG(lock.st_mode)
@@ -150,9 +195,8 @@ def main() -> int:
         os.write(ready_descriptor, b"1")
         os.close(ready_descriptor)
         ready_descriptor = -1
-        deadline = time.monotonic() + timeout_seconds
         while process.poll() is None:
-            remaining = deadline - time.monotonic()
+            remaining = deadline - _deployment_clock()
             if remaining <= 0:
                 terminal_proven = _terminate_group(process)
                 if not terminal_proven:

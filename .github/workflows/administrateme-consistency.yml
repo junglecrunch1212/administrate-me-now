@@ -44,7 +44,7 @@ jobs:
       - name: Validate architecture, style, and types
         run: |
           poetry run ruff check .
-          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run ruff format --check --diff adminme bootstrap bridge packs scripts tests tools
           poetry run python scripts/generate_event_lifecycle_catalog.py --check
           poetry run mypy adminme bridge/adminme_bridge bootstrap
           poetry run pyright adminme bridge/adminme_bridge bootstrap packs
@@ -54,6 +54,10 @@ jobs:
       - name: Validate production triage replay, activation, and rollback
         run: >-
           poetry run pytest -p no:cacheprovider -q
+          tests/unit/test_event_log.py
+          tests/acceptance/test_release_candidate_hardening.py::test_v1_encrypted_log_migrates_in_place_and_preserves_append_only_truth
+          tests/acceptance/test_event_log_metadata_migration.py
+          tests/acceptance/test_source_assurance_metadata_replay.py
           tests/acceptance/test_runtime_triage_activation.py
           tests/acceptance/test_triage_rollback_compatibility.py
           tests/acceptance/test_runtime_spine.py
@@ -63,6 +67,10 @@ jobs:
           tests/unit/test_cross_source_reconciliation.py
           tests/unit/test_message_context.py
           tests/unit/bootstrap/test_restore_settlement.py
+          tests/unit/bootstrap/test_phase5_operations.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_activation_transaction.py
+          tests/acceptance/test_upgrade_deadline_rollback.py
           tests/acceptance/test_macos_bootstrap_operations.py::test_encrypted_restore_settles_late_sources_and_quiesces_failed_state
           tests/acceptance/test_macos_bootstrap_operations.py::test_newer_restore_controller_proves_selected_predecessor_in_its_real_process
           tests/unit/test_attention_rule_scope.py

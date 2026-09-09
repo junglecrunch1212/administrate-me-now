@@ -1082,6 +1082,10 @@ def _reap_materializer_group(process: subprocess.Popen[bytes]) -> None:
             os.killpg(group_id, signal.SIGTERM)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # Darwin can retain a zombie-only group briefly after TERM and
+            # report EPERM. Only the bounded absence proof below may clear it.
+            pass
         except OSError as exc:
             raise SourceProcessNotReaped(
                 "reviewed Git blob materializer could not be signaled"
@@ -1094,6 +1098,10 @@ def _reap_materializer_group(process: subprocess.Popen[bytes]) -> None:
         try:
             os.killpg(group_id, signal.SIGKILL)
         except ProcessLookupError:
+            pass
+        except PermissionError:
+            # EPERM is never absence: reap the leader and require ESRCH from
+            # the existing final group probe before cleanup can succeed.
             pass
         except OSError as exc:
             raise SourceProcessNotReaped(

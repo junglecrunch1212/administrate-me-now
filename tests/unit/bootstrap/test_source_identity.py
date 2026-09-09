@@ -36,6 +36,14 @@ from bootstrap.source_identity import (
     write_source_marker,
 )
 from bootstrap.contracts import DeploymentPaths
+from bootstrap.deployment_budget import (
+    CONTROLLER_SECONDS,
+    DEADLINE_ENV,
+    START_ENV,
+    DeploymentBudget,
+    DeploymentBudgetError,
+    deployment_clock,
+)
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 
 
@@ -253,6 +261,99 @@ def test_supervisor_accepts_safe_root_owned_system_python(
     assert environment["ADMINME_TEST_MODE"] == "1"
 
 
+def test_supervisor_discards_ambient_deadline_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_home = tmp_path / "private-home"
+    private_home.mkdir(mode=0o700)
+    monkeypatch.setenv(START_ENV, "nan")
+    monkeypatch.setenv(DEADLINE_ENV, "inf")
+    environment = update_supervisor._controller_environment(  # noqa: SLF001
+        private_home, test_mode=False
+    )
+    assert START_ENV not in environment
+    assert DEADLINE_ENV not in environment
+    assert CONTROLLER_SECONDS == update_supervisor.CONTROLLER_TIMEOUT_SECONDS
+    assert CONTROLLER_SECONDS == update_controller_guardian.CONTROLLER_TIMEOUT_SECONDS
+    assert CONTROLLER_SECONDS == 13 * 60 * 60
+
+
+def test_deployment_clocks_share_explicit_os_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_clocks: list[int] = []
+
+    def os_clock(clock_id: int) -> float:
+        requested_clocks.append(clock_id)
+        return 200_000.0
+
+    def reject_process_clock() -> float:
+        pytest.fail("inherited deadlines cannot use process-local clock origins")
+
+    monkeypatch.setattr(time, "clock_gettime", os_clock)
+    monkeypatch.setattr(time, "monotonic", reject_process_clock)
+    assert deployment_clock() == 200_000.0
+    assert update_supervisor._deployment_clock() == 200_000.0  # noqa: SLF001
+    assert update_controller_guardian._deployment_clock() == 200_000.0  # noqa: SLF001
+    assert requested_clocks == [time.CLOCK_MONOTONIC] * 3
+
+
+@pytest.mark.parametrize(
+    ("start", "deadline"),
+    [
+        (None, None),
+        ("100", None),
+        (None, "46900"),
+        ("nan", "46900"),
+        ("100", "inf"),
+        ("-100", "46700"),
+        ("201", "47001"),
+        ("100", "46901"),
+        ("100", "200"),
+        ("invalid", "46900"),
+    ],
+)
+def test_controller_deadline_rejects_missing_or_untrusted_budget(
+    monkeypatch: pytest.MonkeyPatch, start: str | None, deadline: str | None
+) -> None:
+    environment: dict[str, str] = {}
+    monkeypatch.setenv("ADMINME_UPDATE_SUPERVISED", "1")
+    for name, value in ((START_ENV, start), (DEADLINE_ENV, deadline)):
+        monkeypatch.delenv(name, raising=False)
+        if value is not None:
+            environment[name] = value
+            monkeypatch.setenv(name, value)
+    with pytest.raises(DeploymentBudgetError):
+        DeploymentBudget.from_environment(environment, now=200, supervised=True)
+    with pytest.raises(SystemExit):
+        update_controller_guardian._controller_deadline(  # noqa: SLF001
+            CONTROLLER_SECONDS, now=200
+        )
+
+
+def test_guardian_and_controller_share_deadline_after_delayed_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = {START_ENV: "100", DEADLINE_ENV: str(100 + CONTROLLER_SECONDS)}
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("ADMINME_UPDATE_SUPERVISED", "1")
+    inherited = update_controller_guardian._controller_deadline(  # noqa: SLF001
+        CONTROLLER_SECONDS, now=1000
+    )
+    budget = DeploymentBudget.from_environment(environment, now=1200, supervised=True)
+    assert inherited == budget.deadline == 100 + CONTROLLER_SECONDS
+    assert inherited < 1000 + CONTROLLER_SECONDS
+    with pytest.raises(DeploymentBudgetError, match="untrusted"):
+        DeploymentBudget.from_environment(environment, now=1200, supervised=False)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), 46801])
+def test_guardian_timeout_cannot_exceed_reviewed_ceiling(timeout: float) -> None:
+    with pytest.raises(SystemExit):
+        update_controller_guardian._controller_deadline(timeout, now=100)  # noqa: SLF001
+
+
 def test_supervisor_rejects_writable_test_interpreter_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -291,6 +392,74 @@ def test_fixed_blob_supervisor_owns_lock_controller_and_cleanup(tmp_path: Path) 
     assert lock.is_file() and not lock.is_symlink()
     assert stat.S_IMODE(lock.stat().st_mode) == 0o600
     assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+
+
+def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, _old_commit = _supervisor_repository(tmp_path)
+    bootstrap = repository / "bootstrap"
+    # A real package keeps an installed editable checkout from replacing this
+    # fixture's CLI and deadline module during the production -m handoff.
+    (bootstrap / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copy2(REPO_ROOT / "bootstrap" / "common.sh", bootstrap)
+    shutil.copy2(REPO_ROOT / "bootstrap" / "deployment_budget.py", bootstrap)
+    # Execute the exact production final shell-to-CLI block, after the real
+    # common.sh environment setup. Preparation dependencies remain synthetic.
+    production_shell = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")
+    handoff = production_shell[
+        production_shell.rindex('(\n  cd "$fixed_controller_root"') :
+    ]
+    (bootstrap / "update.sh").write_text(
+        "#!/bin/bash -p\nset -Eeuo pipefail\n"
+        'fixed_controller_root="$ADMINME_FIXED_CONTROLLER_ROOT"\n'
+        'source "$fixed_controller_root/bootstrap/common.sh"\n'
+        "resolve_instance_root\n"
+        'supervised_commit="$ADMINME_SUPERVISED_CANDIDATE_COMMIT"\n'
+        'controller="${ADMINME_ACCEPTANCE_PYTHON%/bin/python}"\n'
+        'node_bin_dir="/usr/bin"\npoetry_venv="$controller"\n'
+        "upgrade_args=(deadline-proof)\n" + handoff,
+        encoding="utf-8",
+    )
+    (bootstrap / "cli.py").write_text(
+        "import json, os, time\nfrom pathlib import Path\n"
+        "import bootstrap.deployment_budget as budget_module\n"
+        "from bootstrap.deployment_budget import DeploymentBudget, START_ENV, DEADLINE_ENV\n"
+        "now = time.clock_gettime(time.CLOCK_MONOTONIC)\n"
+        "budget = DeploymentBudget.from_environment(os.environ, now=now, supervised=True)\n"
+        "report = {name: os.environ[name] for name in (START_ENV, DEADLINE_ENV, "
+        "'ADMINME_UPGRADE_CONTROLLER_COMMIT', 'ADMINME_UPGRADE_CONTROLLER_ROOT')}\n"
+        "report.update(now=now, deadline=budget.deadline, started=budget.started_at)\n"
+        "report.update(cli_file=__file__, budget_file=budget_module.__file__)\n"
+        "Path(os.environ['ADMINME_SUPERVISOR_REPORT']).write_text(json.dumps(report))\n",
+        encoding="utf-8",
+    )
+    commit = _commit(repository, "production deadline handoff")
+    paths, _active_commit = _supervisor_instance(tmp_path)
+    report = tmp_path / "deadline-report"
+    monkeypatch.setenv(START_ENV, "nan")
+    monkeypatch.setenv(DEADLINE_ENV, "inf")
+
+    before_launch = time.clock_gettime(time.CLOCK_MONOTONIC)
+    completed = _run_fixed_supervisor(
+        repository, commit, paths, report, "--test-mode", str(repository)
+    )
+    after_exit = time.clock_gettime(time.CLOCK_MONOTONIC)
+
+    assert completed.returncode == 0, completed.stderr
+    observed = json.loads(report.read_text("utf-8"))
+    assert before_launch <= observed["started"] <= observed["now"] <= after_exit
+    assert observed["started"] <= observed["now"] < observed["deadline"]
+    assert observed["deadline"] - observed["started"] == CONTROLLER_SECONDS
+    assert observed["ADMINME_UPGRADE_CONTROLLER_COMMIT"] == commit
+    assert Path(observed["ADMINME_UPGRADE_CONTROLLER_ROOT"]).name == "source"
+    controller_root = Path(observed["ADMINME_UPGRADE_CONTROLLER_ROOT"])
+    assert Path(observed["cli_file"]).resolve() == controller_root / "bootstrap/cli.py"
+    assert Path(observed["budget_file"]).resolve() == (
+        controller_root / "bootstrap/deployment_budget.py"
+    )
+    assert float(observed[DEADLINE_ENV]) == observed["deadline"]
+    assert float(observed[START_ENV]) == observed["started"]
 
 
 def test_fixed_blob_supervisor_bootstrap_creates_private_instance_and_cleans(
@@ -2262,6 +2431,119 @@ def test_upgrade_cleanliness_ignores_fsmonitor_and_git_environment(
     )
     assert manager._candidate_commit(repository) == commit  # noqa: SLF001
     assert not canary.exists()
+
+
+@pytest.mark.parametrize(
+    "denied_signals",
+    [(signal.SIGTERM,), (signal.SIGKILL,), (signal.SIGTERM, signal.SIGKILL)],
+)
+def test_materializer_permission_race_requires_reaped_leader_and_absent_group(
+    monkeypatch: pytest.MonkeyPatch, denied_signals: tuple[int, ...]
+) -> None:
+    waits: list[float] = []
+    signals: list[int] = []
+    clock = [100.0]
+    probes = 0
+    absence_proven = False
+    process = SimpleNamespace(
+        pid=43210, wait=lambda *, timeout: waits.append(timeout) or 0
+    )
+
+    def killpg(group_id: int, signum: int) -> None:
+        nonlocal probes, absence_proven
+        assert group_id == process.pid
+        signals.append(signum)
+        if signum:
+            if signum in denied_signals:
+                raise PermissionError("synthetic group signal permission race")
+            return
+        probes += 1
+        if probes == 3:
+            assert waits == [5, 30]
+            raise PermissionError("synthetic zombie-only group remains")
+        if probes == 4:
+            absence_proven = True
+            raise ProcessLookupError("synthetic group is now absent")
+
+    def pause(seconds: float) -> None:
+        assert seconds == 0.01
+        assert not absence_proven
+        clock[0] += seconds
+
+    monkeypatch.setattr(source_identity.os, "killpg", killpg)
+    monkeypatch.setattr(
+        source_identity,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=pause),
+    )
+
+    source_identity._reap_materializer_group(process)  # noqa: SLF001
+
+    assert waits == [5, 30]
+    assert signals == [0, signal.SIGTERM, 0, signal.SIGKILL, 0, 0]
+    assert absence_proven
+    assert clock[0] == 100.01
+
+
+@pytest.mark.parametrize("probe_permission_denied", [False, True])
+def test_materializer_persistent_permission_or_present_group_stays_unreaped(
+    monkeypatch: pytest.MonkeyPatch, probe_permission_denied: bool
+) -> None:
+    waits: list[float] = []
+    signals: list[int] = []
+    clock = [0.0]
+    process = SimpleNamespace(
+        pid=43210, wait=lambda *, timeout: waits.append(timeout) or 0
+    )
+
+    def killpg(group_id: int, signum: int) -> None:
+        assert group_id == process.pid
+        signals.append(signum)
+        if signum or probe_permission_denied:
+            raise PermissionError("synthetic persistent group permission denial")
+
+    def pause(seconds: float) -> None:
+        assert seconds == 0.01
+        clock[0] += seconds
+
+    monkeypatch.setattr(source_identity.os, "killpg", killpg)
+    monkeypatch.setattr(
+        source_identity,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=pause),
+    )
+
+    with pytest.raises(SourceProcessNotReaped, match="descendants could not be reaped"):
+        source_identity._reap_materializer_group(process)  # noqa: SLF001
+
+    assert waits == [5, 30]
+    assert [signum for signum in signals if signum] == [signal.SIGTERM, signal.SIGKILL]
+    assert 5 <= clock[0] <= 5.02
+
+
+def test_materializer_absent_group_cannot_replace_leader_reap_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+
+    def wait(*, timeout: float) -> int:
+        waits.append(timeout)
+        raise subprocess.TimeoutExpired("synthetic owned materializer", timeout)
+
+    process = SimpleNamespace(pid=43210, wait=wait)
+
+    def killpg(group_id: int, signum: int) -> None:
+        assert group_id == process.pid and signum == 0
+        raise ProcessLookupError("synthetic group is absent")
+
+    monkeypatch.setattr(source_identity.os, "killpg", killpg)
+
+    with pytest.raises(
+        SourceProcessNotReaped, match="materializer could not be reaped"
+    ):
+        source_identity._reap_materializer_group(process)  # noqa: SLF001
+
+    assert waits == [5, 30]
 
 
 def test_materializer_timeout_reaps_child_and_publisher_removes_stage(

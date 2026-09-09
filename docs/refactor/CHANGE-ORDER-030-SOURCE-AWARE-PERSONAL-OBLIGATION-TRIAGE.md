@@ -280,7 +280,7 @@ an acceptable way to satisfy these gates.
 Backup restoration uses the same bounded settlement policy as activation after
 restarting services. New source observations may arrive while restored adapters
 resume; an initial source-assurance gap is not by itself a failed restoration.
-The shared policy polls content-free readiness within the existing time limit,
+The shared policy polls content-free readiness within its fixed settlement limit,
 fails closed on structural degradation or unavailable proof, and runs the full
 Doctor proof once ready. A failed restoration quiesces services before replacing
 state directories. These are **PRESERVE** under the bootstrap backup, recovery,
@@ -292,6 +292,22 @@ must execute with that installed release's Python, registry, packs, and plugin
 path. Validate the selected release before replacing state and throughout the
 settlement wait. An unavailable runtime or changed selection fails closed; the
 controller checkout is not a substitute for the selected runtime's proof.
+
+The deployment deadline policy is **MODERNIZE** under the
+[bootstrap deadline contract](BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md#deployment-and-recovery-deadlines).
+Assessment of several thousand retained anchors in bounded batches can exceed
+the former one-hour wait at observed per-call latency even while consumers
+advance. The shared policy
+therefore allows six hours per settlement phase, with a ten-minute progress
+watchdog for each pending consumer. Activation reserves a separate six-hour
+predecessor recovery window and ten minutes for final proof/cleanup inside one
+immutable thirteen-hour guardian deadline before switching. Neither progress nor
+another phase or child process within that attempt renews the budget. A separate
+supported interrupted-journal recovery starts a new bounded attempt. Automatic
+recovery and the complete
+selected-release Doctor remain required; timeout is a failure, never successful
+settlement. Source admission, language routing, bounded consumer execution,
+replay versions, and durable member decisions are **PRESERVE**.
 
 Exact learning scope includes an optional `protected_source_id`, independently
 of account, enrollment, and conversation. Reconfiguring a connection can leave
