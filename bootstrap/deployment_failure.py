@@ -122,7 +122,7 @@ def _readiness_evidence(checks: list[Any]) -> dict[str, Any]:
                 }
             freshness = evidence.get("freshness")
             if isinstance(freshness, dict):
-                result["source_freshness"] = {
+                safe_freshness: dict[str, bool | str] = {
                     name: value
                     for name in (
                         "refresh_in_progress",
@@ -139,10 +139,11 @@ def _readiness_evidence(checks: list[Any]) -> dict[str, Any]:
                     "refreshing",
                     "failed",
                 }:
-                    result["source_freshness"]["state"] = state
-                result["source_freshness"]["refresh_error_present"] = (
+                    safe_freshness["state"] = state
+                safe_freshness["refresh_error_present"] = (
                     freshness.get("refresh_error_type") is not None
                 )
+                result["source_freshness"] = safe_freshness
     return result
 
 
