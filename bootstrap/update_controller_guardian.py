@@ -17,6 +17,12 @@ from typing import NoReturn
 CONTROLLER_TIMEOUT_SECONDS = 13 * 60 * 60
 
 
+def _deployment_clock() -> float:
+    # Match the supervisor and deployment_budget clock without package imports.
+    # Older macOS system Python gives time.monotonic() a process-local origin.
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
 def _controller_deadline(timeout_seconds: float, *, now: float) -> float:
     """Keep supervisor preparation and guardian launch inside the same budget."""
     if (
@@ -124,7 +130,7 @@ def main() -> int:
     command = sys.argv[10:]
     if not command:
         raise SystemExit("invalid update-controller guardian boundary")
-    deadline = _controller_deadline(timeout_seconds, now=time.monotonic())
+    deadline = _controller_deadline(timeout_seconds, now=_deployment_clock())
     lock = os.fstat(operation_lock_descriptor)
     if (
         not stat.S_ISREG(lock.st_mode)
@@ -190,7 +196,7 @@ def main() -> int:
         os.close(ready_descriptor)
         ready_descriptor = -1
         while process.poll() is None:
-            remaining = deadline - time.monotonic()
+            remaining = deadline - _deployment_clock()
             if remaining <= 0:
                 terminal_proven = _terminate_group(process)
                 if not terminal_proven:

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.contracts import DeploymentPaths
+from bootstrap.deployment_budget import deployment_clock
 from bootstrap.doctor import Doctor
 from bootstrap.services import (
     RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
@@ -352,7 +353,7 @@ def wait_for_settled_doctor(
         absolute_deadline is not None and not math.isfinite(absolute_deadline)
     ):
         raise ValueError("settlement requires a finite deadline")
-    deadline = time.monotonic() + min(
+    deadline = deployment_clock() + min(
         max(timeout_seconds, 0), POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
     )
     if absolute_deadline is not None:
@@ -369,7 +370,7 @@ def wait_for_settled_doctor(
     ) -> None:
         if validate_selection is not None:
             validate_selection()
-        now = time.monotonic()
+        now = deployment_clock()
         if now >= deadline:
             raise _SettlementStopped("deadline_exhausted", phase=phase)
         if check_progress:
@@ -406,7 +407,7 @@ def wait_for_settled_doctor(
     def pause() -> None:
         check_budget(check_progress=False)
         until = progress.next_deadline(deadline)
-        time.sleep(min(max(poll_seconds, 0), max(until - time.monotonic(), 0)))
+        time.sleep(min(max(poll_seconds, 0), max(until - deployment_clock(), 0)))
         check_budget(check_progress=False)
 
     try:
@@ -432,7 +433,7 @@ def wait_for_settled_doctor(
             if diagnostics is None:
                 # Only the same three live-readiness misses are tolerated.
                 # Missing reports do not refresh any consumer progress timer.
-                progress.check_stalls(time.monotonic())
+                progress.check_stalls(deployment_clock())
                 cold_start_only = failed.issubset(
                     {"launchd_and_process_state", "ports_and_loopback_binding"}
                 )
@@ -461,7 +462,7 @@ def wait_for_settled_doctor(
                     if live:
                         live_readiness_retries += 1
                     pause()
-                    if time.monotonic() >= progress.next_deadline(deadline):
+                    if deployment_clock() >= progress.next_deadline(deadline):
                         # Recheck readiness at a due watchdog before repeating
                         # Doctor; stale missing evidence cannot decide progress.
                         continue
@@ -478,11 +479,11 @@ def wait_for_settled_doctor(
                     raise _SettlementStopped("structural_degradation")
                 return last
 
-            progress.observe(diagnostics, time.monotonic())
+            progress.observe(diagnostics, deployment_clock())
             # Observe once at the watchdog boundary before judging the last
             # checkpoint. Work may have advanced during the final poll or HTTP
             # call. The absolute deadline still bounds that entire observation.
-            progress.check_stalls(time.monotonic())
+            progress.check_stalls(deployment_clock())
             source = diagnostics["capabilities"].get("policy:source-assurance", {})
             details = source.get("details", {}) if isinstance(source, dict) else {}
             counts = details.get("counts", {}) if isinstance(details, dict) else {}
@@ -497,7 +498,7 @@ def wait_for_settled_doctor(
                     continue
 
             pause()
-            if time.monotonic() >= progress.next_deadline(deadline):
+            if deployment_clock() >= progress.next_deadline(deadline):
                 continue
             last = doctor(include_synthetic_proof=False)
     except _SettlementStopped as stopped:

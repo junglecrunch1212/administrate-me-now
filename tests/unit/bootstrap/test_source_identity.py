@@ -42,6 +42,7 @@ from bootstrap.deployment_budget import (
     START_ENV,
     DeploymentBudget,
     DeploymentBudgetError,
+    deployment_clock,
 )
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 
@@ -277,6 +278,26 @@ def test_supervisor_discards_ambient_deadline_overrides(
     assert CONTROLLER_SECONDS == 13 * 60 * 60
 
 
+def test_deployment_clocks_share_explicit_os_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_clocks: list[int] = []
+
+    def os_clock(clock_id: int) -> float:
+        requested_clocks.append(clock_id)
+        return 200_000.0
+
+    def reject_process_clock() -> float:
+        pytest.fail("inherited deadlines cannot use process-local clock origins")
+
+    monkeypatch.setattr(time, "clock_gettime", os_clock)
+    monkeypatch.setattr(time, "monotonic", reject_process_clock)
+    assert deployment_clock() == 200_000.0
+    assert update_supervisor._deployment_clock() == 200_000.0  # noqa: SLF001
+    assert update_controller_guardian._deployment_clock() == 200_000.0  # noqa: SLF001
+    assert requested_clocks == [time.CLOCK_MONOTONIC] * 3
+
+
 @pytest.mark.parametrize(
     ("start", "deadline"),
     [
@@ -400,7 +421,7 @@ def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
     (bootstrap / "cli.py").write_text(
         "import json, os, time\nfrom pathlib import Path\n"
         "from bootstrap.deployment_budget import DeploymentBudget, START_ENV, DEADLINE_ENV\n"
-        "now = time.monotonic()\n"
+        "now = time.clock_gettime(time.CLOCK_MONOTONIC)\n"
         "budget = DeploymentBudget.from_environment(os.environ, now=now, supervised=True)\n"
         "report = {name: os.environ[name] for name in (START_ENV, DEADLINE_ENV, "
         "'ADMINME_UPGRADE_CONTROLLER_COMMIT', 'ADMINME_UPGRADE_CONTROLLER_ROOT')}\n"
@@ -414,12 +435,15 @@ def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
     monkeypatch.setenv(START_ENV, "nan")
     monkeypatch.setenv(DEADLINE_ENV, "inf")
 
+    before_launch = time.clock_gettime(time.CLOCK_MONOTONIC)
     completed = _run_fixed_supervisor(
         repository, commit, paths, report, "--test-mode", str(repository)
     )
+    after_exit = time.clock_gettime(time.CLOCK_MONOTONIC)
 
     assert completed.returncode == 0, completed.stderr
     observed = json.loads(report.read_text("utf-8"))
+    assert before_launch <= observed["started"] <= observed["now"] <= after_exit
     assert observed["started"] <= observed["now"] < observed["deadline"]
     assert observed["deadline"] - observed["started"] == CONTROLLER_SECONDS
     assert observed["ADMINME_UPGRADE_CONTROLLER_COMMIT"] == commit

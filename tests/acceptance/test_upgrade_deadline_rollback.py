@@ -93,6 +93,8 @@ def test_candidate_deadline_recovers_verified_predecessor_before_guardian(
     clock = _Clock()
     monkeypatch.setattr(upgrade, "time", clock)
     monkeypatch.setattr(service_settlement, "time", clock)
+    monkeypatch.setattr(upgrade, "deployment_clock", clock.monotonic)
+    monkeypatch.setattr(service_settlement, "deployment_clock", clock.monotonic)
     monkeypatch.setattr(upgrade, "POST_SWITCH_POLL_SECONDS", 120)
     original_publish = manager._publish_release
 

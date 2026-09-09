@@ -39,7 +39,11 @@ from bootstrap.contracts import (
     load_versions,
 )
 from bootstrap.doctor import Doctor
-from bootstrap.deployment_budget import DeploymentBudget, DeploymentBudgetError
+from bootstrap.deployment_budget import (
+    DeploymentBudget,
+    DeploymentBudgetError,
+    deployment_clock,
+)
 from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
@@ -257,7 +261,7 @@ class UpgradeManager:
                 )
             try:
                 self._deployment_budget = DeploymentBudget.from_environment(
-                    os.environ, now=time.monotonic(), supervised=supervised
+                    os.environ, now=deployment_clock(), supervised=supervised
                 )
             except DeploymentBudgetError as exc:
                 raise UpgradeError(str(exc)) from exc
@@ -266,7 +270,7 @@ class UpgradeManager:
     def _require_activation_capacity(self, *, begin_settlement: bool = True) -> None:
         try:
             deadline = self._begin_deployment_budget().candidate_deadline(
-                now=time.monotonic()
+                now=deployment_clock()
             )
         except DeploymentBudgetError as exc:
             raise UpgradeError(str(exc)) from exc
@@ -281,7 +285,7 @@ class UpgradeManager:
             try:
                 self._recovery_settlement_deadline = (
                     self._begin_deployment_budget().recovery_deadline(
-                        now=time.monotonic()
+                        now=deployment_clock()
                     )
                 )
             except DeploymentBudgetError as exc:
@@ -1162,16 +1166,16 @@ class UpgradeManager:
         full_budget = (
             RELEASE_DOCTOR_TIMEOUT_SECONDS + 2 * RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
         )
-        if deadline is None or time.monotonic() + full_budget > deadline:
+        if deadline is None or deployment_clock() + full_budget > deadline:
             return False
         pointer_path = self.paths.app_dir / "current-release.json"
         pointer_bytes, pointer = self._read_private_json_payload(pointer_path)
-        if pointer.get("path") != str(release):
+        if pointer is None or pointer.get("path") != str(release):
             return False
         boundary = isolated_degraded_adapter_ids(self.services.runtime_diagnostics())
         if (
             not boundary
-            or time.monotonic()
+            or deployment_clock()
             + RELEASE_DOCTOR_TIMEOUT_SECONDS
             + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
             > deadline
@@ -1183,7 +1187,7 @@ class UpgradeManager:
             timeout_seconds=RELEASE_DOCTOR_TIMEOUT_SECONDS,
         )
         if (
-            time.monotonic() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS > deadline
+            deployment_clock() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS > deadline
             or not full.get("checks")
             or not self._failed_check_names(full).issubset(
                 {"launchd_and_process_state"}
@@ -1196,7 +1200,7 @@ class UpgradeManager:
         )
         return (
             final_boundary == boundary
-            and time.monotonic() < deadline
+            and deployment_clock() < deadline
             and self._read_private_json_payload(pointer_path)[0] == pointer_bytes
         )
 

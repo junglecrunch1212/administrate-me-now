@@ -38,6 +38,12 @@ SOURCE_MARKER = ".administrateme-source-commit"
 CONTROLLER_LIFECYCLE = ".controller-lifecycle.lock"
 
 
+def _deployment_clock() -> float:
+    # This fixed-blob entrypoint cannot import the controller package yet.
+    # Match deployment_budget.deployment_clock across macOS Python versions.
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
 class SupervisorError(RuntimeError):
     """The fixed controller cannot be launched without weakening safety."""
 
@@ -1019,7 +1025,7 @@ def _run() -> int:
         guardian: subprocess.Popen[bytes] | None = None
         controller_terminal = False
         try:
-            controller_started = time.monotonic()
+            controller_started = _deployment_clock()
             controller_deadline = controller_started + CONTROLLER_TIMEOUT_SECONDS
             # The supervisor's clean environment owns this immutable deadline.
             # Ambient caller values are never copied into the controller.
@@ -1072,7 +1078,7 @@ def _run() -> int:
             if not readable or os.read(ready_read, 1) != b"1":
                 raise SupervisorError("fixed update controller did not start safely")
             return_code = guardian.wait(
-                timeout=max(0, controller_deadline - time.monotonic()) + 60
+                timeout=max(0, controller_deadline - _deployment_clock()) + 60
             )
             controller_terminal = os.read(terminal_read, 2) == b"1"
             if not controller_terminal:

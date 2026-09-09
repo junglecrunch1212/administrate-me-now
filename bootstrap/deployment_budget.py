@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -13,6 +14,16 @@ RECOVERY_SECONDS = 6 * 60 * 60
 FINALIZATION_RESERVE_SECONDS = 10 * 60
 START_ENV = "ADMINME_CONTROLLER_STARTED_MONOTONIC"
 DEADLINE_ENV = "ADMINME_CONTROLLER_DEADLINE_MONOTONIC"
+
+
+def deployment_clock() -> float:
+    """Read the same OS clock in system Python and the selected runtime.
+
+    macOS Python before 3.10 gives time.monotonic() a process-local origin:
+    https://docs.python.org/3/library/time.html#time.monotonic
+    Inherited deadlines must therefore name CLOCK_MONOTONIC explicitly.
+    """
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
 
 
 class DeploymentBudgetError(RuntimeError):

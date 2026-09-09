@@ -42,7 +42,7 @@ def test_activation_capacity_is_fixed_and_reserves_recovery(
     ):
         monkeypatch.delenv(name, raising=False)
     clock = [1000.0]
-    monkeypatch.setattr("bootstrap.upgrade.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("bootstrap.upgrade.deployment_clock", lambda: clock[0])
     manager = UpgradeManager(_paths(tmp_path), root=tmp_path, test_mode=True)
     budget = manager._begin_deployment_budget()  # noqa: SLF001
     manager._require_activation_capacity()  # noqa: SLF001
@@ -78,7 +78,7 @@ def test_recovery_deadline_cannot_take_finalization_reserve(
     ):
         monkeypatch.delenv(name, raising=False)
     clock = [1000.0]
-    monkeypatch.setattr("bootstrap.upgrade.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("bootstrap.upgrade.deployment_clock", lambda: clock[0])
     manager = UpgradeManager(_paths(tmp_path), root=tmp_path, test_mode=True)
     budget = manager._begin_deployment_budget()  # noqa: SLF001
     clock[0] += 8 * 60 * 60
@@ -610,7 +610,7 @@ def test_activation_recovery_accepts_only_isolated_degraded_adapter_boundary(
     owner.create(_journal_value(paths))
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
     clock = [1000.0]
-    monkeypatch.setattr("bootstrap.upgrade.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("bootstrap.upgrade.deployment_clock", lambda: clock[0])
     diagnostics = {
         "status": "degraded",
         "ready": False,

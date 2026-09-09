@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -91,7 +90,7 @@ def restore_proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     sleep = Mock()
     monkeypatch.setattr(
         "bootstrap.service_settlement.time",
-        SimpleNamespace(monotonic=time.monotonic, sleep=sleep),
+        SimpleNamespace(sleep=sleep),
     )
     return manager, services, doctor, doctor_run, sleep
 
@@ -174,7 +173,7 @@ def test_restore_source_settlement_has_one_fixed_six_hour_budget(
     run.return_value = transient
     services.runtime_diagnostics.return_value = _readiness(pending=1)
     now = [0.0]
-    monkeypatch.setattr("bootstrap.service_settlement.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("bootstrap.service_settlement.deployment_clock", lambda: now[0])
     sleep.side_effect = lambda _seconds: now.__setitem__(0, 21600.0)
 
     assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 21600
@@ -379,7 +378,7 @@ def test_restore_rejects_pointer_change_during_readiness_poll(
     monkeypatch.setattr("bootstrap.service_settlement.subprocess.run", doctor)
     monkeypatch.setattr(
         "bootstrap.service_settlement.time",
-        SimpleNamespace(monotonic=time.monotonic, sleep=mutate_pointer),
+        SimpleNamespace(sleep=mutate_pointer),
     )
     services = Mock(spec=ServiceManager)
     services.runtime_diagnostics.return_value = _readiness(pending=1)
@@ -400,7 +399,13 @@ def settlement_clock(monkeypatch):
 
     monkeypatch.setattr(
         "bootstrap.service_settlement.time",
-        SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
+        # The supervisor's Python and the selected runtime must never compare
+        # process-relative monotonic origins. Only the shared OS clock seam is
+        # available here, so any accidental local-clock fallback fails the test.
+        SimpleNamespace(sleep=sleep),
+    )
+    monkeypatch.setattr(
+        "bootstrap.service_settlement.deployment_clock", lambda: clock.now
     )
     return clock
 

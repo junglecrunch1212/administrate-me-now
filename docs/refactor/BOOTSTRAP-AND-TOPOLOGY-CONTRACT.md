@@ -343,6 +343,13 @@ and cleanup must remain. Insufficient remaining time refuses the switch while
 the predecessor is still selected. Preparation and backup use the same outer
 budget rather than borrowing the recovery reserve.
 
+Every inherited deadline uses the explicit OS `CLOCK_MONOTONIC` clock via
+`clock_gettime`, including the standalone system-Python supervisor and guardian.
+Python's default monotonic reference point was process-relative on older macOS
+interpreters ([Python timing contract](https://docs.python.org/3/library/time.html#time.monotonic));
+values from that clock must not be exchanged with the selected runtime. The
+shared clock changes neither the pinned runtimes nor the deadline validation.
+
 Candidate and recovery settlement each have a six-hour hard limit. The recovery
 deadline is also capped by the inherited outer deadline minus the ten-minute
 reserve. Reentering recovery within that attempt cannot restart its elapsed
