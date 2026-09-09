@@ -26,18 +26,31 @@ from bootstrap.wizard import install_launch_agents
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOST_PROCESS = """
-import http.server, json, os, signal, subprocess, sys
+import json, os, selectors, signal, subprocess, sys
 if sys.argv[1] == "parent":
     child = subprocess.Popen([sys.executable, "-u", __file__, "listener"], stdout=subprocess.PIPE, text=True)
-    print(child.stdout.readline().strip(), flush=True)
     def stop(*_):
-        child.terminate()
-        child.wait(timeout=5)
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, stop)
-    while True:
-        signal.pause()
+    try:
+        print("fixture parent waiting for listener receipt", file=sys.stderr, flush=True)
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            if not selector.select(timeout=8):
+                raise RuntimeError("fixture child did not publish its listener receipt")
+            receipt = child.stdout.readline().strip()
+            if not receipt:
+                raise RuntimeError("fixture child exited before its listener receipt")
+        print(receipt, flush=True)
+        while True:
+            signal.pause()
+    finally:
+        if child.poll() is None:
+            child.terminate()
+        child.wait(timeout=5)
+        child.stdout.close()
 else:
+    import http.server, socketserver
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             status = "alive" if self.path == "/api/system/live" else "healthy" if self.path == "/api/system/ready" else "live"
@@ -48,7 +61,15 @@ else:
             self.wfile.write(body)
         def log_message(self, *_):
             pass
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    class NumericLoopbackServer(http.server.HTTPServer):
+        def server_bind(self):
+            # HTTPServer normally resolves the host name before returning.
+            # This fixture needs only an ephemeral numeric loopback listener.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name = "fixture-loopback"
+            self.server_port = self.server_address[1]
+    print("fixture child binding numeric loopback", file=sys.stderr, flush=True)
+    server = NumericLoopbackServer(("127.0.0.1", 0), Handler)
     print(json.dumps({"pid": os.getpid(), "port": server.server_port}), flush=True)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
@@ -92,14 +113,24 @@ class HostBoundary:
         process = subprocess.Popen(
             [sys.executable, "-u", str(self.script), "parent"],
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
         )
         self.processes.append(process)
         assert process.stdout is not None
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
-            assert selector.select(timeout=10), "fixture listener did not start"
-            listener = json.loads(process.stdout.readline())
+            available = bool(selector.select(timeout=10))
+            receipt = process.stdout.readline() if available else ""
+        if not receipt:
+            if process.poll() is None:
+                process.terminate()
+            _stdout, stderr = process.communicate(timeout=10)
+            pytest.fail(
+                "fixture listener did not start; "
+                f"parent_exit={process.returncode}; stderr={stderr[-2000:]}"
+            )
+        listener = json.loads(receipt)
         self.jobs[label] = process
         self.listeners[label] = listener
         family, field = (
@@ -167,6 +198,8 @@ class HostBoundary:
             process.wait(timeout=10)
             if process.stdout is not None:
                 process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
 
 
 @pytest.fixture

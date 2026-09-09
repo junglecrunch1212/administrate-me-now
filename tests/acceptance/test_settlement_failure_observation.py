@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner import OpenClawUnreachable
+from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.simulations.source_pipeline_stress import (
     _wait_for_composition_quiescence,
@@ -30,6 +31,7 @@ from tests.unit.bootstrap.test_activation_transaction import _journal_value
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MEMBER = "fixture-settlement-owner"  # fixture:tenant_data:ok
 PRIVATE = "private-settlement-source-and-exception-fixture"
+HEALTH_SECRET = "fixture-settlement-health-secret-at-least-24-characters"
 
 
 def _task(settings: RuntimeSettings, key: str) -> EventEnvelope:
@@ -105,6 +107,8 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
         member_roles={MEMBER: "principal"},
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER,
+        openclaw_enabled=True,
+        openclaw_shared_secret=HEALTH_SECRET,
     )
     app = create_application(settings)
     with TestClient(app) as client:
@@ -112,6 +116,25 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
         assert client.portal is not None
         assert runtime.events is not None
         assert runtime.pipelines is not None
+        # An intentionally absent Gateway is a separate structural failure.
+        # Prove the synthetic integration through its real authenticated route
+        # so only the selected source assessment fails during settlement.
+        reported = client.post(
+            "/api/openclaw/v1/health/report",
+            headers={"Authorization": f"Bearer {HEALTH_SECRET}"},
+            json={
+                "state": "healthy",
+                "reason": "fixture integration heartbeat",
+                "openclaw_version": OPENCLAW_VERSION,
+                "openclaw_commit": OPENCLAW_COMMIT,
+                "dm_scope": "per_account_channel_peer",
+                "member_agent_ids": [],
+                "binding_fingerprints": [],
+                "unique_agents": True,
+                "unique_accounts": True,
+            },
+        )
+        assert reported.status_code == 200, reported.text
         client.portal.call(runtime.events.write, _task(settings, "initial"))
         client.portal.call(_wait_for_composition_quiescence, runtime, 30)
         _current_readiness(client, failed=0)
@@ -132,6 +155,7 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
         assert prior_source["counts"]["failed"] == 0
         assert prior_source["freshness"]["revision_current"] is False
         assert prior_source["freshness"]["refresh_in_progress"] is True
+        assert not service_settlement.has_new_structural_degradation(prior_readiness)
 
         # Doctor executes its real source-assurance predicate. Only its host
         # services use the disposable fixture; readiness comes from the actual
@@ -222,7 +246,9 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
             source_ids.append(client.portal.call(fail_source))
             client.portal.call(_wait_for_composition_quiescence, runtime, 30)
             client.portal.call(release_refresh.set)
-            return _current_readiness(client, failed=1)
+            diagnostics = _current_readiness(client, failed=1)
+            assert not service_settlement.has_new_structural_degradation(diagnostics)
+            return diagnostics
 
         monkeypatch.setattr(
             manager.services, "runtime_diagnostics", actual_failed_diagnostics

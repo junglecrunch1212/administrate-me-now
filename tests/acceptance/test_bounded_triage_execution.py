@@ -133,7 +133,7 @@ def _assurance(client: TestClient, failed: int):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         response = client.get("/api/system/ready")
-        capability = response.json()["capabilities"]["source_assurance"]
+        capability = response.json()["capabilities"]["policy:source-assurance"]
         details = capability["details"]
         counts = details["counts"]
         if (
