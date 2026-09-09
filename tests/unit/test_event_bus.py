@@ -163,6 +163,7 @@ async def test_callback_failure_retries_and_eventually_succeeds(rig) -> None:
     eid = await log.append(_event(1))
     await bus.notify(eid)
     await _wait_for(lambda: len(delivered) == 1, timeout=5.0)
+    await _wait_for(lambda: bus._subscribers["flaky"].checkpoint == eid, timeout=5.0)
     status = await bus.subscriber_status("flaky")
     assert status["consecutive_failures"] == 0
     assert status["checkpoint_event_id"] == eid
@@ -406,6 +407,11 @@ async def test_opt_in_delivery_concurrency_is_bounded_and_checkpoints_batch(
     bus.subscribe("bounded", "*", concurrent, delivery_concurrency=4)
     await bus.start()
     await _wait_for(lambda: len(completed) == len(event_ids), timeout=5.0)
+    # Callback completion precedes publication of the batch checkpoint.
+    # A status read captures its current checkpoint without waiting for replay.
+    await _wait_for(
+        lambda: bus._subscribers["bounded"].checkpoint == event_ids[-1], timeout=5.0
+    )
     status = await bus.subscriber_status("bounded")
 
     assert maximum_active == 4
@@ -544,6 +550,7 @@ async def test_subscriber_status_reflects_lag(rig) -> None:
     assert status["lag_count"] == 10  # none delivered yet
     block.set()
     await _wait_for(lambda: len(seen) == 10)
+    await _wait_for(lambda: bus._subscribers["slow"].checkpoint == seen[-1])
     status2 = await bus.subscriber_status("slow")
     assert status2["lag_count"] == 0
 
