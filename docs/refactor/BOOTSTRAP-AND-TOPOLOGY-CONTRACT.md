@@ -400,6 +400,26 @@ exception categories, and aggregate evidence-presence/readiness counters.
 Source text, full Doctor reports, raw exceptions, paths, and credentials are
 excluded. Sanitized failure reasons remain in the terminal error after recovery.
 An unavailable audit is reported but cannot prevent the existing rollback.
+The triggering runtime observation is retained separately from the earlier
+Doctor snapshot, with an explicit origin for each. Persist only allowlisted
+source counts, freshness, blocking dimensions, and failing-consumer version,
+counts, and checkpoint/poison presence. Re-sanitize this observation at the
+artifact boundary; source identifiers and text remain excluded. Deadline
+expiration must not relabel a prior observation as its trigger. These additive
+evidence fields change neither the stopping predicates nor acceptance proof.
+
+Service lifecycle proof is **MODERNIZE** under these quiescence and recovery
+requirements. A freshly bootstrapped RunAtLoad definition starts once; the
+controller must not force-kill its new process with an unconditional kickstart.
+Gateway liveness must be bracketed by the same managed process identity and its
+owned listener process or verified descendant. Anonymous port health alone
+cannot establish managed service health. Shutdown must retain the captured
+process identities through label removal and prove both their exit and listener
+closure within its bounded wait. An unloaded label with an orphan process is
+not proven quiescence. Unavailable or conflicting OS ownership fails closed;
+this controller does not kill unidentified processes. Process arguments and
+environments are excluded from ownership evidence. Runtime pins, service
+configuration, external-effect authority, and full Doctor are **PRESERVE**.
 
 The implementation authority is `bootstrap/deployment_budget.py`, the fixed
 supervisor/guardian deadline propagation, `UpgradeManager`, and the shared

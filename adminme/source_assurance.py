@@ -20,7 +20,14 @@ import yaml
 
 from adminme.events.log import EventLog
 from adminme.lib.pack_registry.models import SourceAssuranceRule
-from adminme.source_assessment_recovery import assessment_outcome
+from adminme.source_assessment_recovery import (
+    assessment_outcome,
+    assessment_reason,
+    legacy_default_assessment_candidate,
+    legacy_default_failure_candidate,
+    legacy_required_language_failure_candidate,
+    resolved_assessment_disposition,
+)
 
 
 @dataclass(frozen=True)
@@ -399,6 +406,7 @@ async def audit_source_assurance(
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
             "external_sync.legacy_effect_reconciled",
+            "skill.call.failed",
         }
     )
     payload_types = {
@@ -416,6 +424,7 @@ async def audit_source_assurance(
             "source.assessment.recovery_refused",
             "external_sync.legacy_effect_reconciled",
             "messaging.source_observed",
+            "skill.call.failed",
         }
     )
     watermark_event_id = through_event_id
@@ -424,6 +433,9 @@ async def audit_source_assurance(
     source_events: list[dict[str, Any]] = []
 
     assessments: dict[str, dict[str, Any]] = {}
+    assessment_sources: dict[str, dict[str, Any]] = {}
+    assessment_dispositions: dict[str, tuple[str, str]] = {}
+    legacy_default_sources: set[str] = set()
     action_terminals: set[str] = set()
     action_terminal_events: dict[str, list[dict[str, Any]]] = {}
     effect_reconciliations: dict[str, list[dict[str, Any]]] = {}
@@ -447,6 +459,8 @@ async def audit_source_assurance(
             )
             if recovery_request_event_id:
                 recovery_assessments[recovery_request_event_id] = event
+        elif legacy_default_failure_candidate(event):
+            legacy_default_sources.add(str(event.get("causation_id") or ""))
         elif event.get("type") == "source.assessment.recovery_requested":
             recovery_requests[str(event.get("event_id") or "")] = event
         elif event.get("type") == "source.assessment.recovery_refused":
@@ -502,8 +516,45 @@ async def audit_source_assurance(
             if obligation.mode == "candidate_assessment":
                 assessment = assessments.get(event_id)
                 if assessment is not None:
+                    assessment_id = str(assessment["event_id"])
+                    check_default = (
+                        event_id in legacy_default_sources
+                        and legacy_default_assessment_candidate(assessment)
+                    )
+                    if (
+                        legacy_required_language_failure_candidate(assessment)
+                        or check_default
+                    ) and assessment_id not in assessment_sources:
+                        # Only the latest assessment matters. Metadata omits
+                        # privacy/provenance headers, so this closed legacy
+                        # contradiction needs indexed envelope/source proof.
+                        # Successful replacements restore metadata-only reads.
+                        envelope = await event_log.get(assessment_id)
+                        source = await event_log.get(event_id)
+                        if envelope is None or source is None:
+                            raise RuntimeError(
+                                "legacy assessment identity proof unavailable"
+                            )
+                        assessment = envelope
+                        assessments[event_id] = envelope
+                        assessment_sources[assessment_id] = source
                     payload = assessment.get("payload") or {}
-                    outcome = assessment_outcome(assessment)
+                    if check_default:
+                        if assessment_id not in assessment_dispositions:
+                            assessment_dispositions[
+                                assessment_id
+                            ] = await resolved_assessment_disposition(
+                                event_log,
+                                assessment,
+                                source_event=assessment_sources[assessment_id],
+                            )
+                        outcome, reason = assessment_dispositions[assessment_id]
+                    else:
+                        outcome = assessment_outcome(
+                            assessment,
+                            source_event=assessment_sources.get(assessment_id),
+                        )
+                        reason = assessment_reason(assessment)
                     counts[str(outcome)] += 1
                     detail = str(outcome)
                     if outcome == "failed" and len(failures) < 20:
@@ -512,12 +563,7 @@ async def audit_source_assurance(
                                 "event_id": event_id,
                                 "event_type": event_type,
                                 "mode": obligation.mode,
-                                "reason": str(
-                                    (
-                                        payload.get("reason_codes")
-                                        or ["assessment_failed"]
-                                    )[0]
-                                ),
+                                "reason": reason,
                             }
                         )
                 else:

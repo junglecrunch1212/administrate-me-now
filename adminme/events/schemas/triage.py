@@ -248,6 +248,78 @@ class TriageItemProposedV5(TriageItemProposedV2):
     source_occurred_at: datetime | None = None
 
 
+class TriageSourceProposalDraftV1(BaseModel):
+    """Exact already-assessed proposal, awaiting its generated extraction ID."""
+
+    model_config = {"extra": "forbid"}
+    idempotency_key: str = Field(min_length=1, max_length=240)
+    proposal_schema_version: Literal[4, 5]
+    payload: dict[str, Any]
+
+    @model_validator(mode="after")
+    def valid_proposal_without_extraction_id(self) -> "TriageSourceProposalDraftV1":
+        model = (
+            TriageItemProposedV5
+            if self.proposal_schema_version == 5
+            else TriageItemProposedV4
+        )
+        proposal = model.model_validate(self.payload)
+        if proposal.extraction_event_id is not None:
+            raise ValueError("publication draft cannot invent an extraction event ID")
+        return self
+
+
+class TriageSourcePublicationPlannedV1(BaseModel):
+    """Private durable suffix, committed atomically with its source assessment."""
+
+    model_config = {"extra": "forbid"}
+    contract: Literal["triage-source-publication-v1"]
+    source_event_id: str = Field(min_length=1, max_length=240)
+    assessment_idempotency_key: str = Field(min_length=1, max_length=240)
+    assessment_schema_version: Literal[3, 4]
+    proposals: list[TriageSourceProposalDraftV1] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def unique_exact_source_drafts(self) -> "TriageSourcePublicationPlannedV1":
+        keys = [proposal.idempotency_key for proposal in self.proposals]
+        if len(keys) != len(set(keys)):
+            raise ValueError("publication draft keys must be unique")
+        if any(
+            proposal.payload["source_event_id"] != self.source_event_id
+            for proposal in self.proposals
+        ):
+            raise ValueError("publication draft must belong to the assessed source")
+        return self
+
+
+class TriageSourcePublicationCompletedV1(BaseModel):
+    """Content-free acknowledgement of every exact private publication draft."""
+
+    model_config = {"extra": "forbid"}
+    contract: Literal["triage-source-publication-completed-v1"]
+    plan_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    assessment_event_id: str = Field(min_length=1, max_length=240)
+    planned_count: int = Field(ge=1, le=20)
+    published_count: int = Field(ge=0, le=20)
+    already_present_count: int = Field(ge=0, le=20)
+    member_decided_count: int = Field(ge=0, le=20)
+    superseded_count: int = Field(ge=0, le=20)
+
+    @model_validator(mode="after")
+    def all_drafts_terminal(self) -> "TriageSourcePublicationCompletedV1":
+        if self.planned_count != (
+            self.published_count
+            + self.already_present_count
+            + self.member_decided_count
+            + self.superseded_count
+        ):
+            raise ValueError(
+                "every publication draft requires one terminal disposition"
+            )
+        return self
+
+
 TriageSourceSurface = Literal[
     "today",
     "triage",
@@ -469,6 +541,12 @@ class TriageItemSupersededV4(TriageItemSupersededV2):
     )
 
 
+registry.register(
+    "triage.source_publication.planned", 1, TriageSourcePublicationPlannedV1
+)
+registry.register(
+    "triage.source_publication.completed", 1, TriageSourcePublicationCompletedV1
+)
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.proposed", 2, TriageItemProposedV2)
 registry.register("triage.item.proposed", 3, TriageItemProposedV3)

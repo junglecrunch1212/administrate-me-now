@@ -346,6 +346,88 @@ are **PRESERVE**. Production acceptance must force checkpoint advancement
 during status queries and prove bounded Settings work, member isolation, and
 zero external effects without raising browser timeouts.
 
+Classification execution is **MODERNIZE** under CO-012's pinned language seam
+and this order's bounded source assessment. Skill 8.0.1 retains the 8.0.0 prompt,
+schemas, model routing, and token limit, with a 120-second completion budget and
+a total HTTP wait bounded at 122 seconds. Each source retains three sequential
+attempts and bounded backoff; the existing eight-source normal batch does not
+serialize every source's retries through one global lock. Its language waits
+therefore total at most 368.5 seconds, plus local processing, within the unchanged
+ten-minute progress watchdog. Explicit request-bound recovery retains its own
+two-call limit and is not covered by this normal-batch calculation.
+
+Exact compatible 8.0.0 successes may be reused only with the same scoped inputs,
+validated current schemas, and original receipt and version provenance. A paired
+failure receipt is not a reusable success. Previously spent failures cannot be
+silently converted to success; authorized recovery remains request-bound.
+Existing v23 assessment event payloads and replay generation are **PRESERVE**:
+new receipt metadata must not rewrite earlier idempotent assessment facts.
+If an older failed call also recorded a defensive default and already completed
+an exact v23 assessment, refusal of that default must preserve the existing
+assessment and proposals. This narrow historical guard requires the validated
+scoped invocation receipt to precede that exact assessment; it appends no new
+success and grants no recovery or provider authority.
+
+Source failure precedence is **MODERNIZE** under
+[CO-008](CHANGE-ORDER-008-SOURCE-ASSURANCE-AND-UNIVERSAL-CAPTURE.md) and
+[CO-017](CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md). When a required language
+assessment fails, a new terminal source assessment remains `failed` even if
+deterministic extraction found useful candidates. Those proposals remain
+available separately; their existence cannot establish complete source
+assessment or clear failure health. Restart preserves the failure, and only the
+existing explicit recovery path may append a replacement assessment.
+
+The classifier explicitly requires a clean skill result. Handler and output
+validation failures append their existing typed failure receipt and raise;
+they cannot return a defensive default as a completed required assessment.
+Same-version cached results with an exact paired failure are likewise refused
+without another model call. This option defaults off for other skill consumers,
+preserving their existing defensive-default behavior. Nonretryable failures do
+not gain attempts.
+
+Earlier v23 receipts remain immutable even when their recorded completion enum
+contradicts a proven required language failure. The shared current assurance and
+recovery read model derives failed health only from exact source, privacy,
+producer, assessment-policy, and failed-invocation evidence. It does not rewrite
+historical bytes or infer failure from candidate confidence. Retained proposals
+remain separately usable. Only the existing explicit recovery command may
+replace a retryable failure; refusal of a legacy defensive default grants no
+new provider or correction authority.
+
+Crash-safe proposal publication is **MODERNIZE** under
+[CO-007](CHANGE-ORDER-007-TRUSTWORTHY-CAPTURE-TRIAGE-AND-SSOT.md), CO-008, and
+CO-017. A newly assessed source with pending proposals atomically appends its
+unchanged v3/v4 assessment and a private `triage.source_publication.planned`
+receipt. The plan holds exact, bounded proposal drafts and their existing
+idempotency identities. Publication fills only the generated extraction ID and
+causation from that assessment; it does not recalculate source context, model
+output, routing, or candidate eligibility. Normal source processing, explicit
+recovery, and plan delivery serialize on the same exact source. Existing member
+decisions remain authoritative; a newer valid assessment can retire an old
+unpublished suffix. Fresh append ordering preserves late delivery after a cold
+reopen while historical occurrence times remain unchanged.
+
+A private, content-free completion receipt accounts for every planned draft as
+published, already present, member-decided, or superseded. Startup finds
+unfinished plans through one fixed metadata watermark and bounded header
+lookups, without decrypting completed draft history or depending on the normal
+pipeline cursor. This preserves resumption after a predecessor ignores the new
+internal event and advances its existing cursor. The pipeline/replay version
+remains 23; old assessment schemas, proposal schemas, member state, and provider
+authority are **PRESERVE**. Existing assessments without plans are not rewritten
+or given invented draft identities. Production regressions cover interruption
+before the first proposal and after one proposal plus member dismissal, normal
+and explicit recovery, retained cursor advancement, immutable receipts, current
+failure health, and zero external effects.
+
+Settlement failure evidence is **MODERNIZE** under the bootstrap recovery
+contract. Persist the allowlisted runtime observation that triggered failure
+separately from the retained Doctor report. Counts and freshness from an earlier
+Doctor must not be presented as the triggering observation. Consumer metadata
+retains versions, counts, and checkpoint or poison presence without source IDs
+or content. Revalidate this evidence before persistence. Immediate failure,
+full Doctor, immutable deadlines, progress watchdogs, and privacy are **PRESERVE**.
+
 ## Acceptance and constitutional disposition
 
 AC-60 requires production-composition tests for the source-grounded pipeline,

@@ -698,6 +698,15 @@ def test_consumer_poison_and_failure_fail_even_with_a_healthy_state_label(
     )
 
     assert _settlement_failure(result)["reason"] == "consumer_failed"
+    trigger = _settlement_failure(result)["triggering_readiness"]
+    assert trigger["origin"] == "runtime_diagnostics"
+    assert trigger["consumer"]["kind"] == consumer["kind"]
+    assert (
+        trigger["consumer"]["consecutive_failures"]
+        == consumer["details"]["consecutive_failures"]
+    )
+    assert "checkpoint_event_id" not in trigger["consumer"]
+    assert "poison_event_id" not in trigger["consumer"]
     assert settlement_clock.now == 0
     run.assert_called_once_with(include_synthetic_proof=False)
 
@@ -713,7 +722,51 @@ def test_failed_source_assurance_is_not_waitable_pending_work(settlement_clock):
         test_mode=False,
     )
     assert _settlement_failure(result)["reason"] == "source_assurance_failed"
+    trigger = _settlement_failure(result)["triggering_readiness"]
+    assert trigger["origin"] == "runtime_diagnostics"
+    assert trigger["source_counts"]["failed"] == 1
     assert settlement_clock.now == 0
+
+
+@pytest.mark.parametrize("eventually_settled", [True, False])
+def test_zero_failure_refresh_waits_within_the_original_deadline(
+    settlement_clock, eventually_settled
+):
+    clock = settlement_clock
+    calls = []
+    transient = _report("source_assurance_terminal_dispositions")
+
+    def run(*, include_synthetic_proof):
+        calls.append(include_synthetic_proof)
+        return _report() if eventually_settled and clock.now >= 120 else transient
+
+    def diagnostics():
+        result = _readiness()
+        fresh = result["capabilities"]["policy:source-assurance"]["details"][
+            "freshness"
+        ]
+        fresh["revision_current"] = eventually_settled and clock.now >= 120
+        fresh["refresh_in_progress"] = not fresh["revision_current"]
+        fresh["pending_recheck_required"] = False
+        return result
+
+    result = wait_for_settled_doctor(
+        run_doctor=run,
+        services=_settlement_services(diagnostics),
+        test_mode=False,
+        timeout_seconds=360,
+        poll_seconds=60,
+    )
+    if eventually_settled:
+        assert result["status"] == "healthy"
+        assert calls == [False, False, True]
+        assert clock.now == 180
+    else:
+        assert result["status"] == "failed"
+        assert _settlement_failure(result)["reason"] == "deadline_exhausted"
+        assert calls == [False]
+        assert clock.now == 360
+        assert "triggering_readiness" not in _settlement_failure(result)
 
 
 def test_readiness_blackouts_do_not_reset_consumer_progress(settlement_clock):

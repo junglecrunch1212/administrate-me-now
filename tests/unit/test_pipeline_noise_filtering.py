@@ -13,12 +13,12 @@ import asyncio
 import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import pytest
 
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import IdempotencyConflict
+from adminme.events.log import CursorNotFound, IdempotencyConflict
 from adminme.lib.skill_runner import (
     OpenClawTimeout,
     OpenClawUnreachable,
@@ -70,7 +70,7 @@ class _FakeEventLog:
         causation_id: str | None = None,
     ) -> str:
         self._next_id += 1
-        event_id = f"fake-event-id-{self._next_id}"
+        event_id = f"fake-event-id-{self._next_id:08d}"
         self.calls.append(
             _RecordedAppend(
                 event_id=event_id,
@@ -80,6 +80,50 @@ class _FakeEventLog:
             )
         )
         return event_id
+
+    async def write_batch(self, envelopes, *, correlation_id=None, causation_id=None):
+        return [
+            await self.write(
+                envelope, correlation_id=correlation_id, causation_id=causation_id
+            )
+            for envelope in envelopes
+        ]
+
+    async def read_since(
+        self,
+        cursor: str | None = None,
+        *,
+        through: str | None = None,
+        limit: int = 1000,
+        owner_scope: str | None = None,
+        types: list[str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Read committed appends with the production cursor/filter contract.
+
+        This simple dataclass intentionally remains unhashable, exercising the
+        uncached reader fallback. ``limit`` is a page size, not a result cap.
+        The context-specific subclasses separately preload their source rows.
+        """
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        calls = list(self.calls)
+        if cursor is not None and not any(call.event_id == cursor for call in calls):
+            raise CursorNotFound(cursor)
+        for call in calls:
+            if cursor is not None and call.event_id <= cursor:
+                continue
+            if through is not None and call.event_id > through:
+                continue
+            if owner_scope is not None and call.envelope.owner_scope != owner_scope:
+                continue
+            if types is not None and call.envelope.type not in types:
+                continue
+            yield {
+                **call.envelope.model_dump(mode="json"),
+                "event_id": call.event_id,
+                "correlation_id": call.correlation_id,
+                "causation_id": call.causation_id,
+            }
 
     async def get_by_idempotency(
         self, tenant_id: str, idempotency_key: str
@@ -95,6 +139,40 @@ class _FakeEventLog:
                     "causation_id": call.causation_id,
                 }
         return None
+
+    async def get(self, event_id: str) -> dict[str, Any] | None:
+        for event in getattr(self, "source_events", []):
+            if event.get("event_id") == event_id:
+                return dict(event)
+        for call in self.calls:
+            if call.event_id == event_id:
+                return {
+                    **call.envelope.model_dump(mode="json"),
+                    "event_id": call.event_id,
+                    "causation_id": call.causation_id,
+                }
+        return None
+
+    async def get_causal_event_headers(
+        self,
+        tenant_id: str,
+        source_event_id: str,
+        *,
+        types: list[str],
+        through: str,
+    ) -> list[dict[str, Any]]:
+        events = await self.get_by_causation(source_event_id)
+        return [
+            {
+                key: value
+                for key, value in event.items()
+                if key not in {"payload", "raw_ref", "actor_identity"}
+            }
+            for event in events
+            if event.get("tenant_id") == tenant_id
+            and event.get("type") in types
+            and event["event_id"] <= through
+        ]
 
     async def get_by_causation(self, causation_id: str) -> list[dict[str, Any]]:
         return [
@@ -112,6 +190,7 @@ class _FakeEventLog:
 class _RacingProposalEventLog(_FakeEventLog):
     """Force two proposal producers through the read-before-append window."""
 
+    force_proposal_race: bool = False
     proposal_reads: int = 0
     proposal_gate: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -120,8 +199,9 @@ class _RacingProposalEventLog(_FakeEventLog):
     ) -> dict[str, Any] | None:
         existing = await super().get_by_idempotency(tenant_id, idempotency_key)
         if (
-            existing is None
-            and idempotency_key.startswith("triage:message-candidate:v19:")
+            self.force_proposal_race
+            and existing is None
+            and idempotency_key.startswith("triage:message-candidate:v23:")
             and self.proposal_reads < 2
         ):
             self.proposal_reads += 1
@@ -798,7 +878,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "8.0.0"
+    assert envelope.payload["skill_version"] == "8.0.1"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -822,9 +902,34 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "8.0.0"
+    assert envelope.payload["skill_version"] == "8.0.1"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_required_language_failure_stays_failed_with_a_useful_fallback() -> None:
+    log = _FakeEventLog()
+
+    async def unavailable(*args, **kwargs):
+        raise OpenClawTimeout("fixture required assessment unavailable")
+
+    await NoiseFilteringPipeline().handle(
+        _messaging_received_event(
+            body_text="Please complete the required preparation form for activity 1."
+        ),
+        _make_ctx(log, unavailable),
+    )
+    [assessment] = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    ]
+    assert assessment.payload["candidates"]
+    assert assessment.payload["assessment_outcome"] == "failed"
+    assert assessment.payload["extraction_state"] == "unavailable"
+    assert assessment.payload["reason_codes"][0] == "language_seam_OpenClawTimeout"
+    assert any(call.envelope.type == "triage.item.proposed" for call in log.calls)
 
 
 @pytest.mark.asyncio
@@ -890,7 +995,7 @@ async def test_second_recovery_uses_its_own_durable_invocation_identity() -> Non
 
 
 @pytest.mark.asyncio
-async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None:
+async def test_concurrent_transient_recoveries_keep_existing_delivery_slots() -> None:
     log = _FakeEventLog()
     attempts: dict[str, int] = {}
     invocation_keys: dict[str, list[str]] = {}
@@ -926,7 +1031,7 @@ async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None
 
     assert attempts == {"transient-source-1": 2, "transient-source-2": 2}
     assert all(keys[1] == f"{keys[0]}:recovery-1" for keys in invocation_keys.values())
-    assert max_active_recoveries == 1
+    assert max_active_recoveries == 2
     assessments = [
         call.envelope
         for call in log.calls
@@ -937,6 +1042,127 @@ async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None
         assessment.payload["assessment_outcome"] == "no_candidate"
         for assessment in assessments
     )
+
+
+@pytest.mark.asyncio
+async def test_eight_simultaneous_timeouts_finish_in_three_parallel_attempt_waves() -> (
+    None
+):
+    log = _FakeEventLog()
+    barriers = [asyncio.Barrier(8) for _ in range(3)]
+    attempts: dict[str, list[str]] = {}
+
+    async def timeout_every_attempt(_skill_id, _inputs, skill_ctx):
+        source = str(skill_ctx.triggering_event_id)
+        keys = attempts.setdefault(source, [])
+        keys.append(str(skill_ctx.invocation_idempotency_key))
+        # A shared retry lock deadlocks at wave two: all eight delivery slots
+        # must enter each wave before any one can finish its simulated timeout.
+        await asyncio.wait_for(barriers[len(keys) - 1].wait(), timeout=5)
+        raise OpenClawTimeout("fixture bounded total timeout")
+
+    pipeline = NoiseFilteringPipeline()
+    events = []
+    for index in range(8):
+        event = _messaging_received_event(body_text=f"Fixture source {index}.")
+        event["event_id"] = f"fixture-timeout-source-{index}"
+        events.append(event)
+    await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                pipeline.handle(event, _make_ctx(log, timeout_every_attempt))
+                for event in events
+            )
+        ),
+        timeout=15,
+    )
+    assert len(attempts) == 8
+    assert all(len(keys) == 3 for keys in attempts.values())
+    assert all(
+        keys == [keys[0], keys[0] + ":recovery-1", keys[0] + ":recovery-2"]
+        for keys in attempts.values()
+    )
+    assessments = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    ]
+    assert len(assessments) == 8
+    assert all(item.payload["assessment_outcome"] == "failed" for item in assessments)
+    # The separately tested total HTTP attempt cap applies in parallel to
+    # each wave; the retry count and backoffs do not multiply by eight.
+    assert 3 * 122 + sum(_handler._TRANSIENT_RECOVERY_DELAYS_SECONDS) < 600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch", [None, "owner", "causation", "identity", "intervening", "unmarked"]
+)
+async def test_retained_default_guard_requires_the_exact_completed_history(
+    mismatch,
+) -> None:
+    event = _messaging_received_event()
+    event["sensitivity"] = "normal"
+    source_id = event["event_id"]
+    identity = "message-nature:fixture-fingerprint"
+    assessment = {
+        "event_id": "0003",
+        "type": "triage.intent.features_extracted",
+        "schema_version": 3,
+        "causation_id": source_id,
+        "source_adapter": "deterministic_candidate_eligibility",
+        "source_account_id": "pipeline",
+        **{
+            key: event[key]
+            for key in ("tenant_id", "owner_scope", "visibility_scope", "sensitivity")
+        },
+        "payload": {
+            "source_event_id": source_id,
+            "extraction_state": "complete",
+            "assessment_outcome": "no_candidate",
+        },
+    }
+    recorded = [
+        {
+            "event_id": "0001",
+            "type": "skill.call.recorded",
+            "payload": {"skill_name": "skill:classify_message_nature"},
+        }
+    ]
+    error = SkillInputInvalid("fixture refused old default")
+    if mismatch != "unmarked":
+        error.compatible_receipt_event_id = "0001"
+        error.compatible_receipt_key = (
+            f"skill:{identity if mismatch != 'identity' else 'other'}:"
+            "skill:classify_message_nature:8.0.0"
+        )
+    if mismatch == "owner":
+        assessment["owner_scope"] = "private:another-fixture-member"
+    elif mismatch == "causation":
+        assessment["causation_id"] = "another-fixture-source"
+    elif mismatch == "intervening":
+        recorded.append({**recorded[0], "event_id": "0002"})
+
+    class GuardLog:
+        async def get_by_idempotency(self, tenant, key):
+            return assessment
+
+        async def get_by_causation(self, cause):
+            return recorded
+
+        async def write(self, *args, **kwargs):
+            raise AssertionError("a compatibility preservation check must never write")
+
+    ctx = _make_ctx(GuardLog(), None)
+    skill_ctx = SkillContext(
+        session=ctx.session,
+        invocation_idempotency_key=identity,
+        compatible_success_identities=(identity,),
+    )
+    retained = await NoiseFilteringPipeline()._retain_assessed_default(
+        event, ctx, skill_ctx, error
+    )
+    assert retained is (mismatch is None)
 
 
 @pytest.mark.asyncio
@@ -1091,7 +1317,11 @@ async def test_outbound_member_promise_can_enter_triage_as_grounded_commitment()
         _make_ctx(log, stub_run_skill),
     )
 
-    proposal = log.calls[-1].envelope.payload
+    proposal = next(
+        call.envelope.payload
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+    )
     assert proposal["target_kind"] == "commitment"
     assert proposal["title"] == source_text
     assert proposal["candidate"] == {
@@ -1142,9 +1372,11 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
         "messaging.classified",
         "messaging.semantic_features_extracted",
         "triage.intent.features_extracted",
+        "triage.source_publication.planned",
         "triage.item.proposed",
+        "triage.source_publication.completed",
     ]
-    proposal = log.calls[3].envelope.payload
+    proposal = log.calls[4].envelope.payload
     assert proposal["target_kind"] == "calendar_event"
     assert proposal["route"] == {"member_id": "member-fixture"}
     assert proposal["source_event_id"] == "trigger-eid-001"
@@ -1156,8 +1388,8 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
     assert proposal["confidence"] == 0.91
     assert proposal["source_occurred_at"] == event["payload"]["received_at"]
     assert log.calls[2].envelope.schema_version == 3
-    assert log.calls[3].envelope.schema_version == 4
-    assert log.calls[3].causation_id == "fake-event-id-3"
+    assert log.calls[4].envelope.schema_version == 4
+    assert log.calls[4].causation_id == "fake-event-id-00000003"
 
 
 @pytest.mark.asyncio
@@ -1209,13 +1441,24 @@ async def test_unexpected_language_seam_runtime_error_cannot_poison_ingestion() 
         "messaging.classified",
         "messaging.semantic_features_extracted",
         "triage.intent.features_extracted",
+        "triage.source_publication.planned",
         "triage.item.proposed",
+        "triage.source_publication.completed",
     ]
-    assert log.calls[-1].envelope.payload["target_kind"] == "task"
+    assert (
+        next(
+            call.envelope.payload["target_kind"]
+            for call in log.calls
+            if call.envelope.type == "triage.item.proposed"
+        )
+        == "task"
+    )
 
 
 @pytest.mark.asyncio
-async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() -> None:
+async def test_authorized_recovery_adds_new_nlp_kind_without_rewriting_fallback() -> (
+    None
+):
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="Pay the electric bill by Friday.")
     event["owner_scope"] = "private:member-fixture"
@@ -1251,7 +1494,24 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
             ]
         )
 
-    await NoiseFilteringPipeline().handle(event, _make_ctx(log, recovered))
+    failed = next(
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    recovery_source = {
+        **event,
+        "_assessment_recovery": {
+            "request_event_id": "fixture-authorized-recovery",
+            "failed_assessment_event_id": failed.event_id,
+            "failure_reason": "language_seam_OpenClawTimeout",
+        },
+    }
+    # The process acceptance suite validates the external recovery command.
+    # This focused case starts at its already-validated internal source seam.
+    await NoiseFilteringPipeline()._handle_source(
+        recovery_source, _make_ctx(log, recovered)
+    )
 
     proposals = [
         call.envelope
@@ -1380,7 +1640,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
 
 @pytest.mark.asyncio
 async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -> None:
-    log = _RacingProposalEventLog()
+    log = _RacingProposalEventLog(force_proposal_race=True)
     received_at = "2026-08-08T12:00:00Z"
 
     async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
@@ -1412,10 +1672,14 @@ async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -
     }
 
     pipeline = NoiseFilteringPipeline()
-    await asyncio.gather(
-        pipeline.handle(first, _make_ctx(log, recovered)),
-        pipeline.handle(second, _make_ctx(log, recovered)),
+    await asyncio.wait_for(
+        asyncio.gather(
+            pipeline.handle(first, _make_ctx(log, recovered)),
+            pipeline.handle(second, _make_ctx(log, recovered)),
+        ),
+        timeout=5,
     )
+    assert log.proposal_reads == 2
 
     proposals = [
         call.envelope
@@ -2268,3 +2532,136 @@ async def test_replay_supersedes_untouched_weak_cross_thread_candidate() -> None
     assert len(superseded) == 1
     assert superseded[0].payload["proposal_id"] == "weak-context-prior-proposal"
     assert superseded[0].payload["reason"] == "eligibility_rule_replaced"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "plan_owner",
+        "plan_producer",
+        "plan_cause",
+        "source_member",
+        "source_type",
+        "assessment_owner",
+        "assessment_key",
+        "draft_scope",
+        "draft_key",
+        "draft_id",
+        "existing_conflict",
+        "newer_owner",
+        "newer_producer",
+        "trigger_owner",
+    ],
+)
+async def test_source_publication_resume_rejects_wrong_identity_without_suffix_writes(
+    mismatch,
+):
+    source = _messaging_received_event(
+        body_text="Please complete the required fixture form."
+    )
+    source["sensitivity"] = "normal"
+    log = _RacingProposalEventLog()
+    pipeline = NoiseFilteringPipeline()
+
+    async def failure(*args, **kwargs):
+        raise SkillInputInvalid("fixture unavailable interpretation")
+
+    ctx = _make_ctx(log, failure)
+    await pipeline.handle(source, ctx)
+    assessment = await log.get_by_idempotency(
+        source["tenant_id"], f"triage:message-features:v23:{source['event_id']}"
+    )
+    assert assessment is not None
+    plan_call = next(
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.source_publication.planned"
+    )
+    proposal_call = next(
+        call for call in log.calls if call.envelope.type == "triage.item.proposed"
+    )
+    log.calls = [
+        call
+        for call in log.calls
+        if call.envelope.type
+        not in {
+            "triage.item.proposed",
+            "triage.source_publication.completed",
+        }
+    ]
+    if mismatch.startswith("plan_"):
+        field = {
+            "plan_owner": "owner_scope",
+            "plan_producer": "source_adapter",
+            "plan_cause": "causation_id",
+        }[mismatch]
+        if field == "causation_id":
+            plan_call.causation_id = "different-source"
+        else:
+            plan_call.envelope = plan_call.envelope.model_copy(
+                update={field: "different-fixture"}
+            )
+    elif mismatch == "source_member":
+        source = {
+            **source,
+            "payload": {**source["payload"], "member_id": "different-fixture"},
+        }
+    elif mismatch == "source_type":
+        source = {**source, "type": "calendar.event_observed"}
+    elif mismatch == "assessment_owner":
+        assessment = {**assessment, "owner_scope": "private:different-fixture"}
+    elif mismatch == "assessment_key":
+        plan_call.envelope = plan_call.envelope.model_copy(
+            update={
+                "payload": {
+                    **plan_call.envelope.payload,
+                    "assessment_idempotency_key": "different-assessment",
+                }
+            }
+        )
+    elif mismatch.startswith("draft_"):
+        draft = plan_call.envelope.payload["proposals"][0]
+        if mismatch == "draft_scope":
+            draft["payload"]["owner_member_id"] = "different-fixture"
+        elif mismatch == "draft_key":
+            draft["idempotency_key"] += ":unrelated"
+        else:
+            draft["payload"]["proposal_id"] = "triage:message:unrelated"
+    elif mismatch == "existing_conflict":
+        proposal_call.envelope = proposal_call.envelope.model_copy(
+            update={"owner_scope": "private:different-fixture"}
+        )
+        log.calls.append(proposal_call)
+    elif mismatch.startswith("newer_"):
+        field = "owner_scope" if mismatch == "newer_owner" else "source_adapter"
+        original = next(
+            call
+            for call in log.calls
+            if call.envelope.type == "triage.intent.features_extracted"
+        )
+        log.calls.append(
+            _RecordedAppend(
+                event_id="newer-fixture-assessment",
+                envelope=original.envelope.model_copy(
+                    update={field: "different-fixture"}
+                ),
+                causation_id=source["event_id"],
+                correlation_id=None,
+            )
+        )
+    plan = await log.get_by_idempotency(
+        source["tenant_id"], plan_call.envelope.idempotency_key
+    )
+    assert plan is not None
+    expected_plan = (
+        {**plan, "owner_scope": "private:different-fixture"}
+        if mismatch == "trigger_owner"
+        else None
+    )
+    before = len(log.calls)
+    with pytest.raises((RuntimeError, IdempotencyConflict)):
+        await pipeline._resume_source_publication(
+            source, ctx, assessment, expected_plan=expected_plan
+        )
+    assert len(log.calls) == before

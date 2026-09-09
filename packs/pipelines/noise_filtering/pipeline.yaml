@@ -14,6 +14,7 @@ triggers:
     - messaging.sent
     - telephony.sms_received
     - source.assessment.recovery_requested
+    - triage.source_publication.planned
 replay:
   # v23 deliberately reassesses retained immutable message facts after a
   # guarded v21 attempt appended partial history. Non-anchor sources receive
@@ -25,10 +26,10 @@ delivery:
   # prefix if one of these bounded language calls fails. Eight-way delivery is
   # the reviewed maximum for context-linked messages. Deliberately shared
   # cross-source identities use atomic first-equivalent-writer handling, and
-  # only transport-failure recovery attempts serialize behind a local lock and
-  # use two separate durable invocation identities so recovery is real,
-  # bounded, serialized, and reusable on replay even when one provider stream
-  # reaches its terminal timeout.
+  # transport-failure retries remain sequential within each delivery slot and
+  # use two separate durable invocation identities. They never queue behind
+  # other sources' retries, so eight simultaneous timeouts cannot serialize
+  # into an unbounded checkpoint stall. The width remains eight throughout.
   # One recorded interpretation is collapsed to one typed candidate identity
   # before any terminal assessment or proposal append.
   concurrency: 8
@@ -40,6 +41,8 @@ events_emitted:
   - messaging.classified
   - messaging.semantic_features_extracted
   - triage.intent.features_extracted
+  - triage.source_publication.planned
+  - triage.source_publication.completed
   - triage.item.proposed
   - triage.item.superseded
   - source.assessment.recovery_refused

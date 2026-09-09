@@ -22,6 +22,7 @@ def test_pack_loads_cleanly() -> None:
         "messaging.sent",
         "telephony.sms_received",
         "source.assessment.recovery_requested",
+        "triage.source_publication.planned",
     ]
     assert "messaging.classified" in pack.events_emitted
     assert "messaging.semantic_features_extracted" in pack.events_emitted

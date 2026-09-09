@@ -17,6 +17,7 @@ bus checkpoint behavior, not to assert about anything else.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,12 @@ from adminme.pipelines import (
 )
 from adminme.pipelines.runner import PipelineRunner
 from adminme.source_assessment_recovery import recovery_refusal_idempotency_key
+from adminme.source_publication import (
+    COMPLETION_EVENT_TYPE,
+    PLAN_EVENT_TYPE,
+    publication_completion_key,
+    publication_plan_key,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ECHO_LOGGER_ROOT = REPO_ROOT / "tests" / "fixtures" / "pipelines" / "echo_logger"
@@ -383,6 +390,320 @@ async def test_startup_reconciliation_is_bounded_terminal_and_checkpoint_free(
         }
         status = await bus.subscriber_status("pipeline:pipeline:noise_filtering")
         assert status["checkpoint_event_id"] is None
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()
+        invalidate_cache()
+
+
+async def _source_publication_plan(
+    log: EventLog, *, tenant_id: str, index: int
+) -> dict[str, Any]:
+    owner = "private:member-publication"
+    source_id = await log.append(
+        _envelope(
+            "messaging.received",
+            _messaging_received_payload(),
+            tenant_id=tenant_id,
+        ).model_copy(update={"owner_scope": owner, "visibility_scope": owner})
+    )
+    assessment_key = f"triage:message-features:v23:{source_id}"
+    candidate_key = f"publication-fixture-{index}"
+    title = f"Review fixture request {index}"
+    proposal_key = f"triage:message-candidate:v23:{'a' * 64}:{candidate_key}:task"
+    proposal_id = (
+        "triage:message:"
+        + hashlib.sha256(f"{proposal_key}:{source_id}:{title}".encode()).hexdigest()[
+            :24
+        ]
+    )
+    draft = {
+        "idempotency_key": proposal_key,
+        "proposal_schema_version": 4,
+        "payload": {
+            "proposal_id": proposal_id,
+            "target_kind": "task",
+            "owner_member_id": "member-publication",
+            "title": title,
+            "candidate": {},
+            "route": {"member_id": "member-publication"},
+            "source_event_id": source_id,
+            "candidate_key": candidate_key,
+            "eligibility_rule_ids": ["fixture-reviewed-rule"],
+            "extraction_event_id": None,
+        },
+    }
+    assessment = _envelope(
+        "triage.intent.features_extracted",
+        {
+            "intent_id": f"source:{source_id}",
+            "source_event_id": source_id,
+            "skill_call_event_id": None,
+            "extractor_id": "fixture-publication-assessor",
+            "language": None,
+            "candidates": [
+                {"candidate_key": candidate_key, "target_kind": "task", "title": title}
+            ],
+            "extraction_state": "complete",
+            "extracted_at": EventEnvelope.now_utc_iso(),
+            "assessment_outcome": "eligible_candidates",
+            "reason_codes": [
+                "language_assessment_completed",
+                "eligible_candidate_found",
+            ],
+        },
+        tenant_id=tenant_id,
+    ).model_copy(
+        update={
+            "schema_version": 3,
+            "owner_scope": owner,
+            "visibility_scope": owner,
+            "source_adapter": "deterministic_candidate_eligibility",
+            "source_account_id": "pipeline",
+            "idempotency_key": assessment_key,
+        }
+    )
+    plan = assessment.model_copy(
+        update={
+            "type": PLAN_EVENT_TYPE,
+            "schema_version": 1,
+            "idempotency_key": publication_plan_key(assessment_key),
+            "payload": {
+                "contract": "triage-source-publication-v1",
+                "source_event_id": source_id,
+                "assessment_idempotency_key": assessment_key,
+                "assessment_schema_version": 3,
+                "proposals": [draft],
+            },
+        }
+    )
+    _, plan_id = await log.append_batch([assessment, plan], causation_id=source_id)
+    event = await log.get(plan_id)
+    assert event is not None
+    return event
+
+
+async def test_publication_startup_uses_headers_for_completed_plans_and_bounds_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+
+    async def forbidden_skill(*_args, **_kwargs):
+        raise AssertionError("publication recovery must never call a language skill")
+
+    runner = PipelineRunner(
+        bus, log, EventWriter(log, bus), config, run_skill_fn=forbidden_skill
+    )
+    invalidate_cache()
+    pack = load_pipeline_pack(NOISE_FILTERING_ROOT)
+    runner.register(pack)
+    await runner.start(start_bus=False)
+    try:
+        completed_ids: set[str] = set()
+        for index in range(35):
+            plan = await _source_publication_plan(
+                log, tenant_id=config.tenant_id, index=index
+            )
+            await runner._make_callback(pack)(plan)  # noqa: SLF001
+            completed_ids.add(plan["event_id"])
+        pending = [
+            await _source_publication_plan(log, tenant_id=config.tenant_id, index=index)
+            for index in (35, 36)
+        ]
+        foreign = await _source_publication_plan(
+            log, tenant_id="other-tenant", index=37
+        )
+        # Reproduce the offset left by a stopped predecessor that did not
+        # understand plan events. Startup reconciliation must not rewind it.
+        predecessor_checkpoint = foreign["event_id"]
+        await bus.set_checkpoint(
+            "pipeline:pipeline:noise_filtering", predecessor_checkpoint
+        )
+        get = log.get
+        get_headers = log.get_event_headers
+        hydrated: list[str] = []
+        header_batches: list[int] = []
+
+        async def observed_get(event_id: str):
+            assert event_id not in completed_ids, "completed private draft was hydrated"
+            assert event_id != foreign["event_id"], "foreign private draft was hydrated"
+            hydrated.append(event_id)
+            return await get(event_id)
+
+        async def observed_headers(tenant_id: str, event_ids: list[str]):
+            assert tenant_id == config.tenant_id
+            header_batches.append(len(event_ids))
+            return await get_headers(tenant_id, event_ids)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(log, "get", observed_get)
+            patch.setattr(log, "get_event_headers", observed_headers)
+            before = await log.latest_event_id()
+            with pytest.raises(RuntimeError, match="ceiling exceeded"):
+                await runner.reconcile_pending_source_publications(max_pending=1)
+            assert hydrated == []  # Preflight ceiling precedes bodies and writes.
+            assert await log.latest_event_id() == before
+            assert await runner.reconcile_pending_source_publications() == 2
+            assert {plan["event_id"] for plan in pending}.issubset(hydrated)
+            hydrated.clear()
+            assert await runner.reconcile_pending_source_publications() == 0
+            assert hydrated == []
+        assert max(header_batches) == 32
+        assert all(0 < count <= 32 for count in header_batches)
+        for plan in pending:
+            completion = await log.get_by_idempotency(
+                config.tenant_id, publication_completion_key(plan["event_id"])
+            )
+            assert completion is not None
+            assert completion["payload"]["published_count"] == 1
+        status = await bus.subscriber_status("pipeline:pipeline:noise_filtering")
+        assert status["checkpoint_event_id"] == predecessor_checkpoint
+        for invalid_limit in (0, -1, 65):
+            with pytest.raises(ValueError, match="between 1 and 64"):
+                await runner.reconcile_pending_source_publications(
+                    max_pending=invalid_limit
+                )
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()
+        invalidate_cache()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("owner_scope", "private:other-member"),
+        ("tenant_id", "other-tenant"),
+        ("idempotency_key", "wrong-completion-key"),
+        ("source_adapter", "other-producer"),
+        ("source_account_id", "other-account"),
+        ("assessment_event_id", "wrong-assessment"),
+        ("source_event_id", "wrong-source"),
+        ("plan_event_id", "wrong-plan"),
+        ("visibility_scope", "shared:household"),
+        ("sensitivity", "sensitive"),
+    ],
+)
+async def test_mismatched_completion_cannot_hide_pending_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    invalidate_cache()
+    runner.register(load_pipeline_pack(NOISE_FILTERING_ROOT))
+    await runner.start(start_bus=False)
+    try:
+        plan = await _source_publication_plan(log, tenant_id=config.tenant_id, index=0)
+        assessment = await log.get_by_idempotency(
+            config.tenant_id, plan["payload"]["assessment_idempotency_key"]
+        )
+        assert assessment is not None
+        completion = _envelope(
+            COMPLETION_EVENT_TYPE,
+            {
+                "contract": "triage-source-publication-completed-v1",
+                "plan_event_id": plan["event_id"],
+                "source_event_id": plan["payload"]["source_event_id"],
+                "assessment_event_id": assessment["event_id"],
+                "planned_count": 1,
+                "published_count": 1,
+                "already_present_count": 0,
+                "member_decided_count": 0,
+                "superseded_count": 0,
+            },
+            tenant_id=config.tenant_id,
+        ).model_copy(
+            update={
+                "source_adapter": "deterministic_candidate_eligibility",
+                "source_account_id": "pipeline",
+                "owner_scope": plan["owner_scope"],
+                "visibility_scope": plan["visibility_scope"],
+                "idempotency_key": publication_completion_key(plan["event_id"]),
+            }
+        )
+        if field in {"assessment_event_id", "source_event_id", "plan_event_id"}:
+            completion.payload[field] = value
+        else:
+            setattr(completion, field, value)
+        await log.append(completion, causation_id=plan["event_id"])
+        dispatched: list[str] = []
+
+        async def stop_at_pending(event):
+            dispatched.append(event["event_id"])
+            raise RuntimeError("fixture reached pending publication handler")
+
+        monkeypatch.setattr(runner, "_make_callback", lambda _pack: stop_at_pending)
+        with pytest.raises(RuntimeError, match="reached pending publication handler"):
+            await runner.reconcile_pending_source_publications()
+        assert dispatched == [plan["event_id"]]
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()
+        invalidate_cache()
+
+
+async def test_publication_startup_snapshot_does_not_expand_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    invalidate_cache()
+    runner.register(load_pipeline_pack(NOISE_FILTERING_ROOT))
+    await runner.start(start_bus=False)
+    try:
+        metadata = log.read_metadata_since
+        plan: dict[str, Any] | None = None
+
+        async def append_after_snapshot(*args, **kwargs):
+            nonlocal plan
+            assert kwargs["through"] == ""
+            assert kwargs["types"] == [PLAN_EVENT_TYPE, COMPLETION_EVENT_TYPE]
+            assert kwargs["include_payload_for"] == [COMPLETION_EVENT_TYPE]
+            plan = await _source_publication_plan(
+                log, tenant_id=config.tenant_id, index=0
+            )
+            async for item in metadata(*args, **kwargs):
+                yield item
+
+        with monkeypatch.context() as patch:
+            patch.setattr(log, "read_metadata_since", append_after_snapshot)
+            assert await runner.reconcile_pending_source_publications() == 0
+        assert plan is not None
+        assert (
+            await log.get_by_idempotency(
+                config.tenant_id, publication_completion_key(plan["event_id"])
+            )
+            is None
+        )
+
+        async def nonterminal_handler(_event):
+            return None
+
+        with monkeypatch.context() as patch:
+            patch.setattr(runner, "_make_callback", lambda _pack: nonterminal_handler)
+            with pytest.raises(RuntimeError, match="remained non-terminal"):
+                await runner.reconcile_pending_source_publications()
+        assert await runner.reconcile_pending_source_publications() == 1
     finally:
         await runner.stop()
         await bus.stop()

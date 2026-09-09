@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import subprocess
 import time
 import urllib.error
@@ -27,6 +28,8 @@ OPENCLAW_LIVENESS_TIMEOUT_SECONDS = 120
 OPENCLAW_LIVENESS_POLL_SECONDS = 1
 SERVICE_READINESS_TIMEOUT_SECONDS = 120
 RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS = 30
+SERVICE_QUIESCENCE_TIMEOUT_SECONDS = 5
+SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS = 5
 SOURCE_ASSURANCE_COUNT_NAMES = (
     "source_facts",
     "obligations",
@@ -202,6 +205,22 @@ class ServiceStatus:
         }
 
 
+@dataclass(frozen=True)
+class _ProcessIdentity:
+    pid: int
+    parent_pid: int
+    uid: int
+    started_at: str
+
+    def same_process(self, other: _ProcessIdentity) -> bool:
+        # Parentage can change during shutdown; PID alone can be recycled.
+        return (self.pid, self.uid, self.started_at) == (
+            other.pid,
+            other.uid,
+            other.started_at,
+        )
+
+
 class ServiceManager:
     def __init__(self, paths: DeploymentPaths, *, test_mode: bool = False) -> None:
         self.paths = paths
@@ -218,15 +237,10 @@ class ServiceManager:
             json.dumps(values, sort_keys=True).encode("utf-8"),
         )
 
-    def _launchctl_loaded(self, label: str) -> bool:
-        uid = int(getattr(os, "getuid", lambda: 0)())
-        completed = subprocess.run(
-            ["launchctl", "print", f"gui/{uid}/{label}"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return completed.returncode == 0
+    def _launchctl_loaded(
+        self, label: str, timeout: float = SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS
+    ) -> bool:
+        return self._launchctl_job(label, timeout) is not None
 
     def _wait_until_unloaded(self, label: str) -> bool:
         for _ in range(50):
@@ -235,7 +249,213 @@ class ServiceManager:
             time.sleep(0.1)
         return False
 
-    def _launchctl_definition_matches(self, label: str, path: Path) -> bool:
+    @staticmethod
+    def _process_probe(
+        command: list[str], timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        if timeout <= 0:
+            raise RuntimeError("service process proof deadline expired")
+        try:
+            return subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                "service process ownership could not be verified"
+            ) from exc
+
+    def _managed_pid(self, label: str, timeout: float) -> int | None:
+        result = self._launchctl_job(label, timeout)
+        if result is None:
+            return None
+        matches = re.findall(
+            r"^\s*pid\s*=\s*([1-9][0-9]*)\s*$", result.stdout, re.MULTILINE
+        )
+        if len(matches) > 1 or ("pid =" in result.stdout and not matches):
+            raise RuntimeError("launchd process identity is malformed")
+        return int(matches[0]) if matches else None
+
+    def _launchctl_job(
+        self, label: str, timeout: float
+    ) -> subprocess.CompletedProcess[str] | None:
+        result = self._process_probe(
+            ["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout
+        )
+        if result.returncode == 0:
+            return result
+        # Permission, domain, and command errors are not evidence of absence.
+        if (
+            result.returncode == 113
+            and f'Could not find service "{label}"' in result.stderr
+        ):
+            return None
+        raise RuntimeError("launchd service absence could not be verified")
+
+    def _process_table(self, timeout: float) -> dict[int, _ProcessIdentity]:
+        # No arguments or environment are read: those may contain credentials.
+        result = self._process_probe(["ps", "-axo", "pid=,ppid=,uid=,lstart="], timeout)
+        if result.returncode or not result.stdout.strip():
+            raise RuntimeError("service process inventory is unavailable")
+        processes: dict[int, _ProcessIdentity] = {}
+        for line in result.stdout.splitlines():
+            fields = line.split(None, 3)
+            if len(fields) != 4 or not all(value.isdecimal() for value in fields[:3]):
+                raise RuntimeError("service process inventory is malformed")
+            pid, parent, uid = (int(value) for value in fields[:3])
+            if pid in processes or not fields[3].strip():
+                raise RuntimeError("service process inventory is malformed")
+            processes[pid] = _ProcessIdentity(pid, parent, uid, fields[3].strip())
+        return processes
+
+    def _listener_pids(self, label: str, timeout: float) -> frozenset[int]:
+        versions = load_versions()
+        port = (
+            versions["openclaw"]["gateway_port"]
+            if label == OPENCLAW_LABEL
+            else versions["administrateme"]["runtime_port"]
+        )
+        result = self._process_probe(
+            ["lsof", "-nP", "-a", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], timeout
+        )
+        if (
+            result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+            return frozenset()
+        lines = result.stdout.splitlines()
+        if (
+            result.returncode
+            or result.stderr.strip()
+            or not lines
+            or any(re.fullmatch(r"[1-9][0-9]*", line) is None for line in lines)
+        ):
+            raise RuntimeError("service listener ownership is unavailable")
+        return frozenset(int(line) for line in lines)
+
+    @staticmethod
+    def _managed_tree(
+        managed: int | None, processes: dict[int, _ProcessIdentity]
+    ) -> dict[int, _ProcessIdentity]:
+        if managed is None:
+            return {}
+        if managed not in processes or processes[managed].uid != os.getuid():
+            raise RuntimeError("managed service process identity is unavailable")
+        tree = {managed: processes[managed]}
+        while True:
+            children = {
+                pid: process
+                for pid, process in processes.items()
+                if pid not in tree
+                and process.parent_pid in tree
+                and process.uid == os.getuid()
+            }
+            if not children:
+                return tree
+            tree.update(children)
+
+    @staticmethod
+    def _proof_remaining(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("service process proof deadline expired")
+        return min(SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS, remaining)
+
+    def _owned_gateway_snapshot(
+        self, deadline: float
+    ) -> tuple[_ProcessIdentity, frozenset[_ProcessIdentity]] | None:
+        managed = self._managed_pid(OPENCLAW_LABEL, self._proof_remaining(deadline))
+        if managed is None:
+            return None
+        processes = self._process_table(self._proof_remaining(deadline))
+        tree = self._managed_tree(managed, processes)
+        listeners = self._listener_pids(OPENCLAW_LABEL, self._proof_remaining(deadline))
+        if not listeners or not listeners.issubset(tree):
+            return None
+        if (
+            self._managed_pid(OPENCLAW_LABEL, self._proof_remaining(deadline))
+            != managed
+        ):
+            return None
+        return tree[managed], frozenset(tree[pid] for pid in listeners)
+
+    def _managed_openclaw_liveness(self, *, deadline: float | None = None) -> bool:
+        if deadline is None:
+            deadline = time.monotonic() + SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS
+        try:
+            before = self._owned_gateway_snapshot(deadline)
+            if before is None or not self._openclaw_liveness(
+                timeout_seconds=self._proof_remaining(deadline)
+            ):
+                return False
+            # The HTTP reply must be bracketed by the same managed process
+            # and exact owned listeners, including a legitimate CLI child.
+            after = self._owned_gateway_snapshot(deadline)
+            return time.monotonic() < deadline and before == after
+        except RuntimeError:
+            return False
+
+    def _stop_label(self, label: str) -> None:
+        # Prove that every captured process (even if reparented) has exited
+        # and no listener remains. This is not a claim that an unobserved child
+        # can never escape its parent's ancestry while launchctl is stopping.
+        timeout = SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS
+        managed = self._managed_pid(label, timeout)
+        listeners = self._listener_pids(label, timeout)
+        processes = self._process_table(timeout)
+        captured = self._managed_tree(managed, processes)
+        for pid in listeners:
+            if pid not in processes:
+                raise RuntimeError("service listener identity changed before stop")
+            captured[pid] = processes[pid]
+        if self._launchctl_loaded(label, timeout):
+            result = self._process_probe(
+                ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], timeout
+            )
+            if result.returncode and self._launchctl_loaded(label, timeout):
+                raise RuntimeError(f"launchd could not stop {label}")
+        deadline = time.monotonic() + SERVICE_QUIESCENCE_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            managed_now = self._managed_pid(label, remaining)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            listeners_now = self._listener_pids(label, remaining)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            current = self._process_table(remaining)
+            survivors = any(
+                pid in current and identity.same_process(current[pid])
+                for pid, identity in captured.items()
+            )
+            if (
+                time.monotonic() < deadline
+                and managed_now is None
+                and not listeners_now
+                and not survivors
+            ):
+                unloaded = not self._launchctl_loaded(
+                    label, self._proof_remaining(deadline)
+                )
+                if unloaded and time.monotonic() < deadline:
+                    return
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        raise RuntimeError(
+            f"stopped {label} retains a process or listener; quiescence is unproven"
+        )
+
+    def _launchctl_definition_matches(
+        self,
+        label: str,
+        path: Path,
+        timeout: float = SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS,
+    ) -> bool:
         definition = plistlib.loads(path.read_bytes())
         arguments = definition.get("ProgramArguments") or []
         expected_program = str(arguments[0]) if arguments else ""
@@ -245,14 +465,8 @@ class ServiceManager:
                 "ADMINME_REPOSITORY_ROOT", ""
             )
         )
-        uid = int(getattr(os, "getuid", lambda: 0)())
-        completed = subprocess.run(
-            ["launchctl", "print", f"gui/{uid}/{label}"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode:
+        completed = self._launchctl_job(label, timeout)
+        if completed is None:
             return False
         output = completed.stdout
         return all(
@@ -272,6 +486,8 @@ class ServiceManager:
         data = plistlib.loads(path.read_bytes())
         if data.get("Label") != label:
             raise RuntimeError(f"launchd label mismatch in {path.name}")
+        if data.get("RunAtLoad") is not True:
+            raise RuntimeError(f"launchd definition must start on load: {path.name}")
         arguments = data.get("ProgramArguments") or []
         rendered = json.dumps(arguments).lower()
         if any(word in rendered for word in ("secret", "token", "password", "key_hex")):
@@ -298,53 +514,30 @@ class ServiceManager:
         # prevents an already-running runtime from consuming source events
         # while the Gateway is between exact releases.
         for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
-            if self._launchctl_loaded(label):
-                completed = subprocess.run(
-                    ["launchctl", "bootout", f"{domain}/{label}"],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if completed.returncode and self._launchctl_loaded(label):
-                    raise RuntimeError(
-                        f"launchd could not reload {label}: {completed.stderr.strip()}"
-                    )
-                if not self._wait_until_unloaded(label):
-                    raise RuntimeError(
-                        f"launchd retained the previous {label} definition"
-                    )
+            self._stop_label(label)
         for label in (OPENCLAW_LABEL, RUNTIME_LABEL):
             path = self.paths.launch_agent_dir / f"{label}.plist"
-            completed = subprocess.run(
+            completed = self._process_probe(
                 ["launchctl", "bootstrap", domain, str(path)],
-                check=False,
-                capture_output=True,
-                text=True,
+                SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS,
             )
             if completed.returncode and not self._launchctl_loaded(label):
                 raise RuntimeError(
                     f"launchd could not load {label}: {completed.stderr.strip()}"
                 )
-            for _ in range(50):
-                if self._launchctl_definition_matches(label, path):
+            definition_deadline = time.monotonic() + SERVICE_QUIESCENCE_TIMEOUT_SECONDS
+            while time.monotonic() < definition_deadline:
+                matches = self._launchctl_definition_matches(
+                    label, path, self._proof_remaining(definition_deadline)
+                )
+                if matches and time.monotonic() < definition_deadline:
                     break
-                time.sleep(0.1)
+                time.sleep(min(0.1, max(0, definition_deadline - time.monotonic())))
             else:
                 raise RuntimeError(f"launchd loaded a stale {label} release definition")
-            kickstart = subprocess.run(
-                ["launchctl", "kickstart", "-k", f"{domain}/{label}"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            # launchctl can return EX_OSERR (37) when RunAtLoad wins the race
-            # and starts a freshly bootstrapped job before kickstart executes.
-            # A loaded job is the authoritative result; the health wait below
-            # still proves that it actually reaches a terminal runtime state.
-            if kickstart.returncode and not self._launchctl_loaded(label):
-                raise RuntimeError(
-                    f"launchd could not start {label}: {kickstart.stderr.strip()}"
-                )
+            # Both reviewed definitions use RunAtLoad. Bootstrap already
+            # starts the job; kickstart -k here kills that just-started parent
+            # and can strand a CLI child outside launchd supervision.
             if label == OPENCLAW_LABEL:
                 if not self._wait_for_openclaw_liveness():
                     raise RuntimeError(
@@ -364,16 +557,18 @@ class ServiceManager:
                 break
             time.sleep(1)
             result = self.status()
+        if not self._managed_openclaw_liveness():
+            raise RuntimeError("OpenClaw health is not owned by its managed process")
         return result
 
-    def _openclaw_liveness(self) -> bool:
+    def _openclaw_liveness(self, *, timeout_seconds: float = 5) -> bool:
         """Use OpenClaw's credential-free local health endpoint."""
 
         port = load_versions()["openclaw"]["gateway_port"]
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/health",
-                timeout=5,
+                timeout=timeout_seconds,
             ) as response:
                 data = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError):
@@ -384,11 +579,13 @@ class ServiceManager:
         self, timeout_seconds: int = OPENCLAW_LIVENESS_TIMEOUT_SECONDS
     ) -> bool:
         deadline = time.monotonic() + timeout_seconds
-        gateway_live = self._openclaw_liveness()
-        while not gateway_live and time.monotonic() < deadline:
-            time.sleep(OPENCLAW_LIVENESS_POLL_SECONDS)
-            gateway_live = self._openclaw_liveness()
-        return gateway_live
+        while time.monotonic() < deadline:
+            if self._managed_openclaw_liveness(deadline=deadline):
+                return time.monotonic() < deadline
+            time.sleep(
+                min(OPENCLAW_LIVENESS_POLL_SECONDS, max(0, deadline - time.monotonic()))
+            )
+        return False
 
     def _wait_for_runtime_liveness(
         self, timeout_seconds: int = RUNTIME_LIVENESS_TIMEOUT_SECONDS
@@ -415,30 +612,16 @@ class ServiceManager:
                 {OPENCLAW_LABEL: "stopped", RUNTIME_LABEL: "stopped"}
             )
             return self.status()
-        uid = int(getattr(os, "getuid", lambda: 0)())
-        domain = f"gui/{uid}"
         for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
             if (
                 label == OPENCLAW_LABEL
                 and require_openclaw_live_before_stop
-                and not self._openclaw_liveness()
+                and not self._managed_openclaw_liveness()
             ):
                 raise RuntimeError(
                     "OpenClaw Gateway was not live at the repair quiescence boundary"
                 )
-            if self._launchctl_loaded(label):
-                completed = subprocess.run(
-                    ["launchctl", "bootout", f"{domain}/{label}"],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if completed.returncode and self._launchctl_loaded(label):
-                    raise RuntimeError(
-                        f"launchd could not stop {label}: {completed.stderr.strip()}"
-                    )
-                if not self._wait_until_unloaded(label):
-                    raise RuntimeError(f"launchd retained the stopped {label} job")
+            self._stop_label(label)
         return self.status()
 
     def mark_failed_for_test(self, label: str = RUNTIME_LABEL) -> None:
@@ -576,15 +759,34 @@ class ServiceManager:
         runtime_loaded = self._launchctl_loaded(RUNTIME_LABEL)
         openclaw_loaded = self._launchctl_loaded(OPENCLAW_LABEL)
         if not runtime_loaded and not openclaw_loaded:
+            try:
+                remaining_listener = any(
+                    self._listener_pids(label, SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS)
+                    for label in (RUNTIME_LABEL, OPENCLAW_LABEL)
+                )
+            except RuntimeError:
+                remaining_listener = True
+            if remaining_listener:
+                return ServiceStatus(
+                    "failed",
+                    "unknown",
+                    "unknown",
+                    observation,
+                    "unloaded services retain a listener or ownership is unproven",
+                )
             return ServiceStatus(
                 "stopped",
                 "stopped",
                 "stopped",
                 observation,
-                "both services are unloaded",
+                "both services and listeners are absent",
             )
         runtime = self._runtime_health() if runtime_loaded else "stopped"
-        openclaw = "running" if openclaw_loaded else "stopped"
+        openclaw = (
+            ("running" if self._managed_openclaw_liveness() else "degraded")
+            if openclaw_loaded
+            else "stopped"
+        )
         if runtime in {"healthy", "observation_only"} and openclaw == "running":
             overall = "healthy" if runtime == "healthy" else "healthy"
         elif runtime == "failed":

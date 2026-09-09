@@ -14,6 +14,7 @@ from typing import Any
 
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.deployment_budget import deployment_clock
+from bootstrap.deployment_failure import settlement_diagnostic_evidence
 from bootstrap.doctor import Doctor
 from bootstrap.services import (
     RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
@@ -202,9 +203,12 @@ class _ReplayProgress:
 
 
 def _stopped_report(
-    last: dict[str, Any], stopped: _SettlementStopped
+    last: dict[str, Any],
+    stopped: _SettlementStopped,
+    *,
+    triggering_readiness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    evidence = {
+    evidence: dict[str, Any] = {
         "contract": "bounded-service-settlement-v1",
         "reason": stopped.reason,
     }
@@ -212,6 +216,8 @@ def _stopped_report(
         evidence["consumer_id"] = stopped.consumer_id
     if stopped.phase is not None:
         evidence["phase"] = stopped.phase
+    if triggering_readiness is not None:
+        evidence["triggering_readiness"] = triggering_readiness
     return {
         **last,
         "status": "failed",
@@ -443,6 +449,7 @@ def wait_for_settled_doctor(
     live_readiness_retries = 0
     doctor_blackout_pending = False
     last: dict[str, Any] = {"status": "failed", "checks": []}
+    diagnostics: dict[str, Any] | None = None
 
     def check_budget(
         *,
@@ -616,7 +623,17 @@ def wait_for_settled_doctor(
                 continue
             last = doctor(include_synthetic_proof=False)
     except _SettlementStopped as stopped:
-        return _stopped_report(last, stopped)
+        # The last Doctor and the cheap observation that stopped settlement
+        # can differ. Preserve both without relabelling an older Doctor's
+        # source counts as the cause of this failure. Deadline failures do
+        # not claim that an earlier cheap observation triggered expiration.
+        trigger = (
+            settlement_diagnostic_evidence(diagnostics, consumer_id=stopped.consumer_id)
+            if diagnostics is not None
+            and stopped.reason not in {"deadline_exhausted", "proof_budget_exhausted"}
+            else None
+        )
+        return _stopped_report(last, stopped, triggering_readiness=trigger)
 
 
 def run_release_doctor(

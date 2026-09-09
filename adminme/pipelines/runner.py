@@ -46,6 +46,12 @@ from adminme.source_assessment_recovery import (
     recovery_assessment_idempotency_key,
     recovery_refusal_idempotency_key,
 )
+from adminme.source_publication import (
+    COMPLETION_EVENT_TYPE,
+    PLAN_EVENT_TYPE,
+    publication_completion_key,
+    publication_completion_valid,
+)
 
 if TYPE_CHECKING:
     import sqlcipher3
@@ -55,6 +61,7 @@ _log = logging.getLogger(__name__)
 _SOURCE_RECOVERY_EVENT = "source.assessment.recovery_requested"
 _SOURCE_RECOVERY_PACK_ID = "pipeline:noise_filtering"
 _SOURCE_RECOVERY_MAX_PENDING = 64
+_SOURCE_PUBLICATION_MAX_PENDING = 64
 
 
 class PipelineRunner:
@@ -275,6 +282,132 @@ class PipelineRunner:
             ),
         )
         return assessment is not None or refusal is not None
+
+    async def reconcile_pending_source_publications(
+        self, *, max_pending: int = _SOURCE_PUBLICATION_MAX_PENDING
+    ) -> int:
+        """Resume committed proposal suffixes independently of bus checkpoints.
+
+        A predecessor with the same pipeline version can skip these new derived
+        events while advancing its checkpoint. One fixed metadata snapshot plus
+        exact content-free header proof selects only unfinished plans. Their
+        ordinary production handler resumes already-assessed drafts without a
+        language call; source facts and completed draft bodies are never scanned.
+        """
+        if not self._started:
+            raise RuntimeError("pipeline runner must be started before reconciliation")
+        if max_pending <= 0 or max_pending > _SOURCE_PUBLICATION_MAX_PENDING:
+            raise ValueError("max_pending must be between 1 and 64")
+        pack = self._packs.get(_SOURCE_RECOVERY_PACK_ID)
+        if pack is None:
+            return 0
+        triggered_events = pack.triggers.get("events") if pack.triggers else None
+        if not triggered_events or PLAN_EVENT_TYPE not in triggered_events:
+            raise RuntimeError("noise-filtering publication trigger is not registered")
+
+        watermark = await self._log.latest_event_id()
+        plans: list[str] = []
+        completions: dict[str, list[dict[str, Any]]] = {}
+        async for metadata in self._log.read_metadata_since(
+            through=watermark or "",
+            types=[PLAN_EVENT_TYPE, COMPLETION_EVENT_TYPE],
+            include_payload_for=[COMPLETION_EVENT_TYPE],
+        ):
+            if metadata["type"] == PLAN_EVENT_TYPE:
+                plans.append(str(metadata["event_id"]))
+            else:
+                completions.setdefault(
+                    str(metadata.get("causation_id") or ""), []
+                ).append(metadata)
+
+        pending: list[str] = []
+        for offset in range(0, len(plans), 32):
+            plan_headers = await self._publication_headers(plans[offset : offset + 32])
+            candidates = [
+                completion
+                for plan_id in plan_headers
+                for completion in completions.get(plan_id, [])
+            ]
+            proof_ids = [str(completion["event_id"]) for completion in candidates]
+            for completion in candidates:
+                payload = completion.get("payload") or {}
+                proof_ids.extend(
+                    [
+                        str(payload.get("source_event_id") or ""),
+                        str(payload.get("assessment_event_id") or ""),
+                    ]
+                )
+            headers = await self._publication_headers(
+                [event_id for event_id in proof_ids if event_id <= (watermark or "")]
+            )
+            for plan_id, plan in plan_headers.items():
+                terminal = False
+                for metadata in completions.get(plan_id, []):
+                    payload = metadata.get("payload") or {}
+                    completion = {
+                        **headers.get(str(metadata["event_id"]), {}),
+                        "payload": payload,
+                    }
+                    if publication_completion_valid(
+                        plan=plan,
+                        completion=completion,
+                        source=headers.get(
+                            str(payload.get("source_event_id") or ""), {}
+                        ),
+                        assessment=headers.get(
+                            str(payload.get("assessment_event_id") or ""), {}
+                        ),
+                    ):
+                        terminal = True
+                        break
+                if not terminal:
+                    pending.append(plan_id)
+                    if len(pending) > max_pending:
+                        raise RuntimeError(
+                            "pending source-publication ceiling exceeded"
+                        )
+
+        callback = self._make_callback(pack)
+        for plan_id in pending:
+            pending_plan = await self._log.get(plan_id)
+            if pending_plan is None:
+                raise RuntimeError("publication plan disappeared from append-only log")
+            await callback(pending_plan)
+            if not await self._publication_terminal(pending_plan):
+                raise RuntimeError("source-publication plan remained non-terminal")
+        return len(pending)
+
+    async def _publication_headers(
+        self, event_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        ids = list(dict.fromkeys(event_id for event_id in event_ids if event_id))
+        headers: dict[str, dict[str, Any]] = {}
+        for offset in range(0, len(ids), 32):
+            for header in await self._log.get_event_headers(
+                self._config.tenant_id, ids[offset : offset + 32]
+            ):
+                headers[str(header["event_id"])] = header
+        return headers
+
+    async def _publication_terminal(self, plan: dict[str, Any]) -> bool:
+        completion = await self._log.get_by_idempotency(
+            self._config.tenant_id, publication_completion_key(str(plan["event_id"]))
+        )
+        if completion is None:
+            return False
+        payload = completion.get("payload") or {}
+        headers = await self._publication_headers(
+            [
+                str(payload.get("source_event_id") or ""),
+                str(payload.get("assessment_event_id") or ""),
+            ]
+        )
+        return publication_completion_valid(
+            plan=plan,
+            completion=completion,
+            source=headers.get(str(payload.get("source_event_id") or ""), {}),
+            assessment=headers.get(str(payload.get("assessment_event_id") or ""), {}),
+        )
 
     # ------------------------------------------------------------------
     # status

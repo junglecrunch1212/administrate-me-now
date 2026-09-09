@@ -114,6 +114,9 @@ class SkillContext:
     owner_scope: str = "shared:household"
     visibility_scope: str = "shared:household"
     sensitivity: str = "normal"
+    compatible_failure_recovery_authorized: bool = False
+    require_clean_result: bool = False
+    compatible_success_identities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,8 @@ class SkillResult:
     output_tokens: int | None
     cost_usd: float | None
     duration_ms: int
+    skill_version: str | None = None
+    recorded_event_id: str | None = None
 
 
 def _recorded_skill_result(event: dict[str, Any]) -> SkillResult:
@@ -139,7 +144,110 @@ def _recorded_skill_result(event: dict[str, Any]) -> SkillResult:
         output_tokens=payload.get("output_tokens"),
         cost_usd=payload.get("cost_usd"),
         duration_ms=int(payload["duration_ms"]),
+        skill_version=str(payload["skill_version"]),
+        recorded_event_id=str(event["event_id"]),
     )
+
+
+def _same_recorded_scope(event: dict[str, Any], ctx: SkillContext) -> bool:
+    return all(
+        event.get(key) == value
+        for key, value in {
+            "tenant_id": ctx.session.tenant_id,
+            "owner_scope": ctx.owner_scope,
+            "visibility_scope": ctx.visibility_scope,
+            "sensitivity": ctx.sensitivity,
+        }.items()
+    )
+
+
+_RECORDED_FAILURE_TYPES: dict[str, type[Exception]] = {
+    "input_invalid": SkillInputInvalid,
+    "sensitivity_refused": SkillSensitivityRefused,
+    "scope_insufficient": SkillScopeInsufficient,
+    "openclaw_malformed_response": OpenClawResponseMalformed,
+    "openclaw_timeout": OpenClawTimeout,
+    "openclaw_unreachable": OpenClawUnreachable,
+    "handler_raised": SkillHandlerError,
+    "output_invalid": SkillOutputInvalid,
+}
+
+
+def _raise_recorded_failure(
+    event: dict[str, Any],
+    *,
+    compatible_receipt: dict[str, Any] | None = None,
+    compatible_terminal: bool = False,
+) -> None:
+    payload = event["payload"]
+    failure_class = str(payload.get("failure_class") or "")
+    error_type = _RECORDED_FAILURE_TYPES.get(failure_class, OpenClawUnreachable)
+    error = error_type(str(payload.get("error_detail") or failure_class))
+    error.skill_version = payload.get("skill_version")  # type: ignore[attr-defined]
+    if compatible_receipt is not None:
+        error.compatible_receipt_event_id = compatible_receipt["event_id"]  # type: ignore[attr-defined]
+        error.compatible_receipt_key = compatible_receipt["idempotency_key"]  # type: ignore[attr-defined]
+    if compatible_terminal:
+        error.compatible_failure_event_id = event["event_id"]  # type: ignore[attr-defined]
+        error.compatible_failure_key = event["idempotency_key"]  # type: ignore[attr-defined]
+        error.compatible_failure_class = failure_class  # type: ignore[attr-defined]
+    raise error
+
+
+async def _compatible_recorded_result(
+    runtime: _Runtime,
+    pack: LoadedPack,
+    ctx: SkillContext,
+    inputs: dict,
+    event: dict[str, Any],
+    version: str,
+    identity: str,
+    receipts: list[dict[str, Any]],
+) -> SkillResult:
+    """Reuse a declared patch-compatible success without inventing a receipt."""
+    payload = event.get("payload") or {}
+    expected_key = f"skill:{identity}:{pack.pack_id}:{version}"
+    if (
+        event.get("type") != "skill.call.recorded"
+        or event.get("schema_version") not in {1, 2}
+        or event.get("idempotency_key") != expected_key
+        or not _same_recorded_scope(event, ctx)
+        or payload.get("skill_name") != pack.pack_id
+        or payload.get("skill_version") != version
+        or payload.get("provider") in {None, "", "suppressed"}
+    ):
+        raise SkillOutputInvalid("compatible receipt identity or scope is invalid")
+
+    recorded_inputs = payload.get("inputs")
+    if isinstance(recorded_inputs, dict) and set(recorded_inputs) == {"_spilled_to"}:
+        try:
+            spill = Path(recorded_inputs["_spilled_to"]).resolve(strict=True)
+            allowed = (runtime.raw_events_dir / "skill_large_inputs").resolve()
+            if not spill.is_relative_to(allowed):
+                raise ValueError("input spill is outside its owned directory")
+            recorded_inputs = json.loads(spill.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError) as exc:
+            raise SkillOutputInvalid(
+                "compatible receipt inputs are unavailable"
+            ) from exc
+    if recorded_inputs != inputs:
+        raise SkillInputInvalid("compatible receipt inputs do not match invocation")
+    try:
+        Draft202012Validator(pack.output_schema).validate(payload.get("outputs"))
+    except JsonSchemaValidationError as exc:
+        raise SkillOutputInvalid("compatible receipt output is invalid") from exc
+
+    # A defensive default can have both failed and recorded receipts. Only a
+    # clean success is compatible; a patch never converts a failure to success.
+    failure_prefix = f"skill:failed:{identity}:{pack.pack_id}:{version}:"
+    for prior in receipts:
+        if (
+            prior.get("type") == "skill.call.failed"
+            and _same_recorded_scope(prior, ctx)
+            and str(prior.get("idempotency_key") or "").startswith(failure_prefix)
+        ):
+            _raise_recorded_failure(prior, compatible_receipt=event)
+    return _recorded_skill_result(event)
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +479,7 @@ async def _emit_recorded(
     output_tokens: int | None,
     cost_usd: float | None,
     duration_ms: int,
-) -> None:
+) -> str:
     correlation = ctx.correlation_id or ctx.session.correlation_id
     envelope = _build_envelope(
         tenant_id=ctx.session.tenant_id,
@@ -400,7 +508,7 @@ async def _emit_recorded(
         if invocation_identity
         else None
     )
-    await runtime.event_sink.write(
+    return await runtime.event_sink.write(
         envelope,
         correlation_id=correlation,
         causation_id=ctx.triggering_event_id,
@@ -562,7 +670,8 @@ async def _post_one_provider(
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    # Wall-clock margin per the prompt: skill manifest's timeout +2s.
+    # HTTPX limits individual network operations. The surrounding asyncio
+    # deadline also bounds a streaming response and injected clients in total.
     httpx_timeout = httpx.Timeout(timeout_seconds + 2.0)
 
     if runtime.httpx_client_factory is not None:
@@ -574,8 +683,13 @@ async def _post_one_provider(
 
     try:
         try:
-            response = await client.post(
-                runtime.gateway_url, json=body, headers=headers
+            async with asyncio.timeout(timeout_seconds + 2.0):
+                response = await client.post(
+                    runtime.gateway_url, json=body, headers=headers
+                )
+        except TimeoutError:
+            return _OpenClawCallOutcome(
+                kind="timeout", error_detail="openclaw total invocation timeout"
             )
         except httpx.TimeoutException as exc:
             return _OpenClawCallOutcome(
@@ -669,6 +783,9 @@ async def _run_skill_unlocked(
     pack_id_str = pack.pack_id
     pack_version = pack.version
     fm = pack.skill_frontmatter
+    compatible_versions = tuple(fm.get("compatible_success_versions") or ())
+    compatible_prior: tuple[dict[str, Any], str, str] | None = None
+    compatible_receipts: list[dict[str, Any]] = []
 
     invocation_identity = ctx.invocation_idempotency_key or ctx.triggering_event_id
     idempotency_key = (
@@ -677,12 +794,82 @@ async def _run_skill_unlocked(
         else None
     )
     if idempotency_key and runtime.event_log is not None:
+        assert invocation_identity is not None
         prior = await runtime.event_log.get_by_idempotency(
             ctx.session.tenant_id, idempotency_key
         )
         if prior is not None:
+            if ctx.require_clean_result:
+                failures = await runtime.event_log.get_by_idempotency_keys(
+                    ctx.session.tenant_id,
+                    [
+                        f"skill:failed:{invocation_identity}:{pack_id_str}:{pack_version}:{failure}"
+                        for failure in _RECORDED_FAILURE_TYPES
+                    ],
+                )
+                try:
+                    Draft202012Validator(pack.input_schema).validate(inputs)
+                except JsonSchemaValidationError as exc:
+                    raise SkillInputInvalid(
+                        "recorded receipt inputs are invalid"
+                    ) from exc
+                return await _compatible_recorded_result(
+                    runtime=runtime,
+                    pack=pack,
+                    ctx=ctx,
+                    inputs=inputs,
+                    event=prior,
+                    version=pack_version,
+                    identity=invocation_identity,
+                    receipts=failures,
+                )
             return _recorded_skill_result(prior)
+        compatible_identities = tuple(
+            dict.fromkeys((invocation_identity, *ctx.compatible_success_identities))
+        )
+        if compatible_versions and len(compatible_identities) > 3:
+            raise SkillInputInvalid(
+                "compatible success lookup permits at most three identities"
+            )
+        for compatible_version in compatible_versions:
+            keys = [
+                key
+                for identity in compatible_identities
+                for key in (
+                    f"skill:{identity}:{pack_id_str}:{compatible_version}",
+                    *(
+                        f"skill:failed:{identity}:{pack_id_str}:{compatible_version}:{failure}"
+                        for failure in _RECORDED_FAILURE_TYPES
+                    ),
+                )
+            ]
+            receipts = await runtime.event_log.get_by_idempotency_keys(
+                ctx.session.tenant_id, keys
+            )
+            compatible_receipts.extend(receipts)
+            by_key = {receipt.get("idempotency_key"): receipt for receipt in receipts}
+            for compatible_identity in compatible_identities:
+                prior = by_key.get(
+                    f"skill:{compatible_identity}:{pack_id_str}:{compatible_version}"
+                )
+                if prior is not None:
+                    compatible_prior = (prior, compatible_version, compatible_identity)
+                    break
+            if compatible_prior is not None:
+                break
         related = await runtime.event_log.get_by_causation(ctx.triggering_event_id)
+        if compatible_prior is None and not ctx.compatible_failure_recovery_authorized:
+            for terminal in reversed([*compatible_receipts, *related]):
+                if (
+                    terminal["type"] == "skill.call.failed"
+                    and _same_recorded_scope(terminal, ctx)
+                    and terminal["payload"].get("skill_name") == pack_id_str
+                    and terminal["payload"].get("skill_version") in compatible_versions
+                ):
+                    # A patch is not permission to repeat a spent source call.
+                    # The pipeline's validated recovery-request path creates
+                    # a separate authorized identity when a retry is required.
+                    _raise_recorded_failure(terminal, compatible_terminal=True)
         related_terminals = [
             event
             for event in related
@@ -692,7 +879,6 @@ async def _run_skill_unlocked(
         ]
         prior_terminal = related_terminals[-1] if related_terminals else None
         if prior_terminal is not None:
-            payload = prior_terminal["payload"]
             if prior_terminal["type"] == "skill.call.suppressed":
                 defensive_default = fm.get("on_failure") or {}
                 return SkillResult(
@@ -731,20 +917,7 @@ async def _run_skill_unlocked(
                 # will make every replay terminal.
                 prior_terminal = None
         if prior_terminal is not None:
-            payload = prior_terminal["payload"]
-            failure_class = str(payload.get("failure_class") or "")
-            error_detail = str(payload.get("error_detail") or failure_class)
-            error_type: type[Exception] = {
-                "input_invalid": SkillInputInvalid,
-                "sensitivity_refused": SkillSensitivityRefused,
-                "scope_insufficient": SkillScopeInsufficient,
-                "openclaw_malformed_response": OpenClawResponseMalformed,
-                "openclaw_timeout": OpenClawTimeout,
-                "openclaw_unreachable": OpenClawUnreachable,
-                "handler_raised": SkillHandlerError,
-                "output_invalid": SkillOutputInvalid,
-            }.get(failure_class, OpenClawUnreachable)
-            raise error_type(error_detail)
+            _raise_recorded_failure(prior_terminal)
 
     # Step 2 — input validation.
     try:
@@ -826,6 +999,20 @@ async def _run_skill_unlocked(
             duration_ms=0,
         )
 
+    if compatible_prior is not None:
+        assert invocation_identity is not None
+        prior, compatible_version, compatible_identity = compatible_prior
+        return await _compatible_recorded_result(
+            runtime,
+            pack,
+            ctx,
+            inputs,
+            prior,
+            compatible_version,
+            compatible_identity,
+            compatible_receipts,
+        )
+
     # Step 6: one POST; OpenClaw owns provider/model routing and fallback.
     token = _resolve_gateway_token(runtime)
     timeout_seconds = int(fm.get("timeout_seconds", 15))
@@ -871,7 +1058,9 @@ async def _run_skill_unlocked(
             provider_attempted=None,
             duration_ms=duration_ms,
         )
-        raise exc_cls(outcome.error_detail)
+        error = exc_cls(outcome.error_detail)
+        error.skill_version = pack_version  # type: ignore[attr-defined]
+        raise error
     raw_response = outcome.raw_result
 
     # Step 7 — optional handler.post_process.
@@ -891,6 +1080,10 @@ async def _run_skill_unlocked(
                 provider_attempted=chosen_provider,
                 duration_ms=duration_ms,
             )
+            if ctx.require_clean_result:
+                handler_error = SkillHandlerError(str(exc))
+                handler_error.skill_version = pack_version  # type: ignore[attr-defined]
+                raise handler_error from exc
             defensive_default = fm.get("on_failure")
             if isinstance(defensive_default, dict):
                 processed = defensive_default
@@ -915,6 +1108,10 @@ async def _run_skill_unlocked(
             provider_attempted=chosen_provider,
             duration_ms=duration_ms,
         )
+        if ctx.require_clean_result:
+            output_error = SkillOutputInvalid(str(exc))
+            output_error.skill_version = pack_version  # type: ignore[attr-defined]
+            raise output_error from exc
         defensive_default = fm.get("on_failure")
         if isinstance(defensive_default, dict):
             processed = defensive_default
@@ -926,7 +1123,7 @@ async def _run_skill_unlocked(
     # Step 9 — emit skill.call.recorded with size-capped inputs.
     inputs_payload = _spill_inputs_if_large(runtime, inputs)
     try:
-        await _emit_recorded(
+        recorded_event_id = await _emit_recorded(
             runtime,
             ctx,
             pack_id_str=pack_id_str,
@@ -962,6 +1159,8 @@ async def _run_skill_unlocked(
         output_tokens=outcome.output_tokens,
         cost_usd=outcome.cost_usd,
         duration_ms=duration_ms,
+        skill_version=pack_version,
+        recorded_event_id=recorded_event_id,
     )
 
 

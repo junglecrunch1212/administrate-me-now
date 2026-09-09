@@ -144,10 +144,187 @@ async def test_idempotency_key_returns_original_committed_event(log: EventLog) -
     assert stored is not None and stored["event_id"] == first
 
 
+async def test_bounded_exact_receipt_lookup_is_indexed_tenant_scoped_and_complete(
+    log: EventLog,
+) -> None:
+    keys = [f"fixture-receipt:{index}" for index in range(32)]
+    ids = await log.append_batch(
+        [
+            _event(index, idempotency_key=key, causation_id=f"delivery:{index}")
+            for index, key in enumerate(keys)
+        ]
+    )
+    await log.append(_event(99, tenant_id="tenant-b", idempotency_key=keys[0]))
+    await log.append(_event(100, idempotency_key="fixture-receipt:0:suffix"))
+    statements = []
+    await log._run_locked(log._conn.set_trace_callback, statements.append)  # noqa: SLF001
+    try:
+        found = await log.get_by_idempotency_keys("tenant-a", list(reversed(keys)))
+    finally:
+        await log._run_locked(log._conn.set_trace_callback, None)  # noqa: SLF001
+    assert [event["event_id"] for event in found] == ids
+    assert [event["causation_id"] for event in found] == [
+        f"delivery:{index}" for index in range(32)
+    ]
+    assert [event["payload"] for event in found] == [
+        {"i": index} for index in range(32)
+    ]
+    queries = [
+        statement for statement in statements if "idempotency_key IN" in statement
+    ]
+    assert len(queries) == 1
+
+    def explain():
+        return [row[3] for row in log._conn.execute("EXPLAIN QUERY PLAN " + queries[0])]  # noqa: SLF001
+
+    plan = await log._run_locked(explain)  # noqa: SLF001
+    assert any("idx_events_tenant_idempotency" in row for row in plan), plan
+    assert await log.get_by_idempotency_keys("tenant-a", []) == []
+    assert (
+        await log.get_by_idempotency_keys("tenant-a", [keys[0], keys[0]]) == found[:1]
+    )
+    assert await log.get_by_idempotency_keys("tenant-a", ["%' OR 1=1 --"]) == []
+    with pytest.raises(ValueError, match="at most 32"):
+        await log.get_by_idempotency_keys("tenant-a", keys + ["extra"])
+    with pytest.raises(ValueError, match="nonempty"):
+        await log.get_by_idempotency_keys("tenant-a", [""])
+
+
 async def test_idempotency_key_rejects_different_event_family(log: EventLog) -> None:
     await log.append(_event(1, type="foo", idempotency_key="request:conflict"))
     with pytest.raises(IdempotencyConflict):
         await log.append(_event(1, type="bar", idempotency_key="request:conflict"))
+
+
+async def test_exact_event_headers_are_bounded_indexed_and_exclude_content(
+    log: EventLog,
+) -> None:
+    ids = await log.append_batch(
+        [
+            _event(
+                index,
+                owner_scope="private:fixture-member",
+                idempotency_key=f"header:{index}",
+            ).model_copy(
+                update={
+                    "raw_ref": "private raw fixture",
+                    "actor_identity": "private actor fixture",
+                }
+            )
+            for index in range(32)
+        ],
+        causation_id="fixture-source",
+    )
+    foreign_id = await log.append(_event(100, tenant_id="tenant-b"))
+    statements: list[str] = []
+    await log._run_locked(log._conn.set_trace_callback, statements.append)  # noqa: SLF001
+    try:
+        headers = await log.get_event_headers("tenant-a", list(reversed(ids)))
+    finally:
+        await log._run_locked(log._conn.set_trace_callback, None)  # noqa: SLF001
+    assert [header["event_id"] for header in headers] == ids
+    assert all(header["owner_scope"] == "private:fixture-member" for header in headers)
+    assert all(
+        header["visibility_scope"] == "private:fixture-member" for header in headers
+    )
+    assert all(header["tenant_id"] == "tenant-a" for header in headers)
+    assert all(header["causation_id"] == "fixture-source" for header in headers)
+    assert all(header["schema_version"] == 1 for header in headers)
+    assert all(header["source_adapter"] == "test:inproc" for header in headers)
+    assert all(header["source_account_id"] == "test-account" for header in headers)
+    assert all(header["sensitivity"] == "normal" for header in headers)
+    assert [header["idempotency_key"] for header in headers] == [
+        f"header:{index}" for index in range(32)
+    ]
+    assert all(
+        not {
+            "payload",
+            "raw_ref",
+            "actor_identity",
+            "source",
+            "correlation_id",
+        }.intersection(header)
+        for header in headers
+    )
+    queries = [statement for statement in statements if "event_id IN" in statement]
+    assert len(queries) == 1
+    selected_columns = queries[0].split("FROM events", 1)[0]
+    assert "payload" not in selected_columns
+    assert "raw_ref" not in selected_columns
+    assert "actor_identity" not in selected_columns
+
+    def explain():
+        return [row[3] for row in log._conn.execute("EXPLAIN QUERY PLAN " + queries[0])]  # noqa: SLF001
+
+    plan = await log._run_locked(explain)  # noqa: SLF001
+    assert any("event_id=?" in row and "USING INDEX" in row for row in plan), plan
+    assert await log.get_event_headers("tenant-a", [foreign_id]) == []
+    assert await log.get_event_headers("tenant-a", [ids[0], ids[0]]) == headers[:1]
+    assert await log.get_event_headers("tenant-a", ["missing", "%' OR 1=1 --"]) == []
+    assert await log.get_event_headers("tenant-a", []) == []
+    with pytest.raises(ValueError, match="at most 32"):
+        await log.get_event_headers("tenant-a", ids + [foreign_id])
+    with pytest.raises(ValueError, match="nonempty"):
+        await log.get_event_headers("tenant-a", [""])
+
+
+async def test_causal_headers_are_indexed_typed_tenant_scoped_and_snapshot_bounded(
+    log: EventLog,
+) -> None:
+    first = await log.append(_event(1, type="foo"), causation_id="family-source")
+    await log.append(_event(2, type="bar"), causation_id="family-source")
+    await log.append(
+        _event(3, type="foo", tenant_id="tenant-b"), causation_id="family-source"
+    )
+    await log.append(_event(4, type="foo"), causation_id="other-source")
+    second = await log.append(_event(5, type="foo"), causation_id="family-source")
+    await log.append(_event(6, type="foo"), causation_id="family-source")
+    statements: list[str] = []
+    await log._run_locked(log._conn.set_trace_callback, statements.append)  # noqa: SLF001
+    try:
+        headers = await log.get_causal_event_headers(
+            "tenant-a", "family-source", types=["foo"], through=second
+        )
+    finally:
+        await log._run_locked(log._conn.set_trace_callback, None)  # noqa: SLF001
+    assert [header["event_id"] for header in headers] == [first, second]
+    assert all(
+        not {"payload", "raw_ref", "actor_identity", "source"}.intersection(header)
+        for header in headers
+    )
+    [query] = [
+        statement
+        for statement in statements
+        if "INDEXED BY idx_events_causation" in statement
+    ]
+    assert "payload" not in query and "raw_ref" not in query
+    assert query.endswith("ORDER BY event_id ASC LIMIT 257")
+
+    def explain():
+        return [row[3] for row in log._conn.execute("EXPLAIN QUERY PLAN " + query)]  # noqa: SLF001
+
+    plan = await log._run_locked(explain)  # noqa: SLF001
+    assert any(
+        "USING INDEX idx_events_causation" in row and "causation_id=?" in row
+        for row in plan
+    ), plan
+    with pytest.raises(ValueError, match="explicit types"):
+        await log.get_causal_event_headers(
+            "tenant-a", "family-source", types=[], through=second
+        )
+    with pytest.raises(ValueError, match="identity and cutoff"):
+        await log.get_causal_event_headers(
+            "tenant-a", "family-source", types=["foo"], through=""
+        )
+    await log.append_batch(
+        [_event(index, type="foo") for index in range(257)], causation_id="large-family"
+    )
+    through = await log.latest_event_id()
+    assert through is not None
+    with pytest.raises(EventLogError, match="ceiling exceeded"):
+        await log.get_causal_event_headers(
+            "tenant-a", "large-family", types=["foo"], through=through
+        )
 
 
 async def test_idempotency_key_rejects_different_payload(log: EventLog) -> None:
@@ -422,6 +599,13 @@ async def test_legacy_encrypted_metadata_read_only_then_migration_and_reopen(
     try:
         original = await archived._run_locked(inventory, archived)  # noqa: SLF001
         assert original["versions"] == list(range(1, legacy_version + 1))
+        # The exact header API relies only on the unchanged primary key from
+        # 0001, including read-only snapshots predating the covering indexes.
+        assert "sqlite_autoindex_events_1" in original["indexes"]
+        headers = await archived.get_event_headers("tenant-a", [terminal, source])
+        assert [header["event_id"] for header in headers] == [source, terminal]
+        assert [header["causation_id"] for header in headers] == [None, source]
+        assert all("payload" not in header for header in headers)
         assert "idx_events_type_id_time_causation" not in original["indexes"]
         for payload_types in ([], ["bar"]):
             rows = [
