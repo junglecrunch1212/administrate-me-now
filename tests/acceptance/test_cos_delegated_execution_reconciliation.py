@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from adminme.delegated_execution import ACTION_SPECS, execution_policy_digest
@@ -731,7 +732,9 @@ def test_g07_observation_duplicate_missing_result_drift_and_manual_operator(
         assert client.portal.call(_provider_effect_count, runtime) == 0
 
 
-def test_g07_exact_authority_and_failure_states_fail_closed(tmp_path: Path) -> None:
+def test_g07_exact_authority_and_failure_states_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     instance = tmp_path / "instance"
     instance.mkdir()
     app = create_application(_settings(instance))
@@ -1022,25 +1025,62 @@ def test_g07_exact_authority_and_failure_states_fail_closed(tmp_path: Path) -> N
         assert ambiguous["standing_match_count"] == 2
         assert ambiguous["state"] == "awaiting_member_approval"
 
-        # Expiry fails closed at execution, and pending intent can be withdrawn.
-        expiring = _prepare(
-            client,
-            _prepare_body(
-                request_id="g07-expiring",
-                task=task,
-                action_class="google_calendar_create",
-                expires_at=datetime.now(timezone.utc) + timedelta(milliseconds=50),
-            ),
-        )
-        _approve_one_off(client, runtime, expiring, suffix="expiring")
-        time.sleep(0.06)
-        assert _execute(
-            client,
-            runtime,
-            expiring,
-            suffix="expired",
-            status=403,
-        )["detail"]
+        # Hold only the domain API clock across prepare/approval, then cross
+        # the exact expiry boundary. Real API scheduling and projection waits
+        # cannot consume the 50ms window before approval. OpenClaw signatures,
+        # receipt clocks, governance, and the provider boundary remain real.
+        clock = [datetime.now(timezone.utc)]
+
+        class ExecutionClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return (
+                    clock[0].replace(tzinfo=None)
+                    if tz is None
+                    else clock[0].astimezone(tz)
+                )
+
+        with monkeypatch.context() as expiry_clock:
+            expiry_clock.setattr("adminme.products.member.cos.datetime", ExecutionClock)
+            expiry_clock.setattr(
+                "adminme.products.openclaw.main.datetime", ExecutionClock
+            )
+            expires_at = clock[0] + timedelta(milliseconds=50)
+            expiring = _prepare(
+                client,
+                _prepare_body(
+                    request_id="g07-expiring",
+                    task=task,
+                    action_class="google_calendar_create",
+                    expires_at=expires_at,
+                ),
+            )
+            approved = _approve_one_off(client, runtime, expiring, suffix="expiring")
+            assert approved["state"] == "awaiting_openclaw_approval"
+            before_expiry = _action(runtime, expiring["action_id"])
+            assert datetime.fromisoformat(before_expiry["expires_at"]) == expires_at
+            assert (
+                datetime.fromisoformat(before_expiry["approvals"][0]["approved_at"])
+                == clock[0]
+            )
+            clock[0] = expires_at
+            assert _execute(
+                client,
+                runtime,
+                expiring,
+                suffix="expired",
+                status=403,
+            )["detail"] == {
+                "code": "write_denied",
+                "layer": "governance",
+                "reason": "action_expired",
+            }
+            after_expiry = _action(runtime, expiring["action_id"])
+            assert after_expiry["state"] == "awaiting_openclaw_approval"
+            assert after_expiry["last_event_id"] == before_expiry["last_event_id"]
+            assert after_expiry["command_event_id"] is None
+
+        # Pending intent can still be withdrawn after the scoped clock restores.
         pending = _action(runtime, mismatch["action_id"])
         withdrawn = _post(
             client,
