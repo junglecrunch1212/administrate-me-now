@@ -8303,61 +8303,60 @@ async def evidence(
     event_id: str, request: Request, session: SessionDep
 ) -> dict[str, Any]:
     runtime = _runtime(request)
-    async for event in runtime.event_log.read_since():
-        if event["event_id"] != event_id:
-            continue
-        visibility = str(event.get("visibility_scope") or "shared:household")
-        if visibility not in session.allowed_scopes or not allowed_read(
-            session,
-            str(event.get("sensitivity") or "normal"),
-            str(event.get("owner_scope") or "shared:household"),
-        ):
-            break
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        safe_fields = {
-            key: payload[key]
-            for key in (
-                "task_id",
-                "commitment_id",
-                "title",
-                "description",
-                "decision",
-                "outcome",
-                "state",
-                "reason",
-                "confidence",
-                "approval_state",
-                "delivery_result",
-                "correction_of",
-            )
-            if key in payload
-        }
-        return {
-            "event_id": event["event_id"],
-            "type": event["type"],
-            "source": {
-                "adapter": event["source_adapter"],
-                "account": event["source_account_id"],
-            },
-            "actor": event.get("actor_identity"),
-            "occurred_at": event["occurred_at"],
-            "ingested_at": event["recorded_at"],
-            "confidence": payload.get("confidence"),
-            "scope": {
-                "owner": event["owner_scope"],
-                "visibility": event["visibility_scope"],
-                "sensitivity": event["sensitivity"],
-            },
-            "why": {
-                "correlation_id": event.get("correlation_id"),
-                "causation_id": event.get("causation_id"),
-            },
-            "correction": payload.get("correction_of"),
-            "approval": payload.get("approval_state") or payload.get("decision"),
-            "delivery": payload.get("delivery_result") or payload.get("outcome"),
-            "subject": safe_fields,
-        }
-    raise HTTPException(404, "evidence not found")
+    event = await runtime.event_log.get(event_id)
+    if event is None:
+        raise HTTPException(404, "evidence not found")
+    visibility = str(event.get("visibility_scope") or "shared:household")
+    if visibility not in session.allowed_scopes or not allowed_read(
+        session,
+        str(event.get("sensitivity") or "normal"),
+        str(event.get("owner_scope") or "shared:household"),
+    ):
+        raise HTTPException(404, "evidence not found")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    safe_fields = {
+        key: payload[key]
+        for key in (
+            "task_id",
+            "commitment_id",
+            "title",
+            "description",
+            "decision",
+            "outcome",
+            "state",
+            "reason",
+            "confidence",
+            "approval_state",
+            "delivery_result",
+            "correction_of",
+        )
+        if key in payload
+    }
+    return {
+        "event_id": event["event_id"],
+        "type": event["type"],
+        "source": {
+            "adapter": event["source_adapter"],
+            "account": event["source_account_id"],
+        },
+        "actor": event.get("actor_identity"),
+        "occurred_at": event["occurred_at"],
+        "ingested_at": event["recorded_at"],
+        "confidence": payload.get("confidence"),
+        "scope": {
+            "owner": event["owner_scope"],
+            "visibility": event["visibility_scope"],
+            "sensitivity": event["sensitivity"],
+        },
+        "why": {
+            "correlation_id": event.get("correlation_id"),
+            "causation_id": event.get("causation_id"),
+        },
+        "correction": payload.get("correction_of"),
+        "approval": payload.get("approval_state") or payload.get("decision"),
+        "delivery": payload.get("delivery_result") or payload.get("outcome"),
+        "subject": safe_fields,
+    }
 
 
 @router.post("/api/member/v1/lifecycle")

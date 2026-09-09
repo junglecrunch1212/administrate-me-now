@@ -148,6 +148,18 @@ Rules, feedback, previews, and source evidence remain member-private. They
 cannot expand read scope, transfer private content to another adult, create
 household truth, or grant domain/OpenClaw/provider execution permission.
 
+**MODERNIZE retrieval; PRESERVE authority and response semantics:** the member
+evidence endpoint resolves its exact immutable event ID through the event log's
+existing primary-key lookup, rather than scanning preceding private history.
+[CO-011](CHANGE-ORDER-011-CANDIDATE-IDENTIFICATION-AND-TRIAGE-CONTEXT.md),
+[CO-012](CHANGE-ORDER-012-CONTEXTUAL-MESSAGE-REASONING.md), and the private-evidence
+boundary above still govern visibility,
+owner, and sensitivity checks, including privileged evidence under view-as.
+Missing and unauthorized evidence return the same 404 response; permitted
+responses retain the existing field allowlist. The production-composition
+regression in `test_triage_vertical_slice.py` places evidence after more than
+one history page and rejects any request-path history scan.
+
 ## Member workspace and mutation behavior
 
 With human management active, the main lenses are **Needs you**, **Alerts**,
