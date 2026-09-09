@@ -850,6 +850,33 @@ class EventLog:
             (tenant_id, idempotency_key),
         ).fetchone()
 
+    async def get_by_idempotency_keys(
+        self, tenant_id: str, idempotency_keys: list[str]
+    ) -> list[dict[str, Any]]:
+        """Read one bounded, tenant-scoped group of exact immutable receipts."""
+        if len(idempotency_keys) > 32:
+            raise ValueError("at most 32 exact idempotency keys may be read")
+        if any(not isinstance(key, str) or not key for key in idempotency_keys):
+            raise ValueError("idempotency keys must be nonempty strings")
+        keys = tuple(dict.fromkeys(idempotency_keys))
+        if not keys:
+            return []
+        rows = await self._run_locked(self._get_idempotency_keys, tenant_id, keys)
+        return [_row_to_event(row) for row in rows]
+
+    def _get_idempotency_keys(
+        self, tenant_id: str, keys: tuple[str, ...]
+    ) -> list[sqlcipher3.Row]:
+        placeholders = ",".join("?" for _ in keys)
+        return list(
+            self._conn.execute(
+                _SELECT_COLUMNS
+                + f" FROM events WHERE tenant_id = ? AND idempotency_key IN ({placeholders})"
+                + " ORDER BY event_id ASC",
+                (tenant_id, *keys),
+            )
+        )
+
     def _get_correlation(self, correlation_id: str) -> list[sqlcipher3.Row]:
         cur = self._conn.cursor()
         return list(

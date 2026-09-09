@@ -144,6 +144,52 @@ async def test_idempotency_key_returns_original_committed_event(log: EventLog) -
     assert stored is not None and stored["event_id"] == first
 
 
+async def test_bounded_exact_receipt_lookup_is_indexed_tenant_scoped_and_complete(
+    log: EventLog,
+) -> None:
+    keys = [f"fixture-receipt:{index}" for index in range(32)]
+    ids = await log.append_batch(
+        [
+            _event(index, idempotency_key=key, causation_id=f"delivery:{index}")
+            for index, key in enumerate(keys)
+        ]
+    )
+    await log.append(_event(99, tenant_id="tenant-b", idempotency_key=keys[0]))
+    await log.append(_event(100, idempotency_key="fixture-receipt:0:suffix"))
+    statements = []
+    await log._run_locked(log._conn.set_trace_callback, statements.append)  # noqa: SLF001
+    try:
+        found = await log.get_by_idempotency_keys("tenant-a", list(reversed(keys)))
+    finally:
+        await log._run_locked(log._conn.set_trace_callback, None)  # noqa: SLF001
+    assert [event["event_id"] for event in found] == ids
+    assert [event["causation_id"] for event in found] == [
+        f"delivery:{index}" for index in range(32)
+    ]
+    assert [event["payload"] for event in found] == [
+        {"i": index} for index in range(32)
+    ]
+    queries = [
+        statement for statement in statements if "idempotency_key IN" in statement
+    ]
+    assert len(queries) == 1
+
+    def explain():
+        return [row[3] for row in log._conn.execute("EXPLAIN QUERY PLAN " + queries[0])]  # noqa: SLF001
+
+    plan = await log._run_locked(explain)  # noqa: SLF001
+    assert any("idx_events_tenant_idempotency" in row for row in plan), plan
+    assert await log.get_by_idempotency_keys("tenant-a", []) == []
+    assert (
+        await log.get_by_idempotency_keys("tenant-a", [keys[0], keys[0]]) == found[:1]
+    )
+    assert await log.get_by_idempotency_keys("tenant-a", ["%' OR 1=1 --"]) == []
+    with pytest.raises(ValueError, match="at most 32"):
+        await log.get_by_idempotency_keys("tenant-a", keys + ["extra"])
+    with pytest.raises(ValueError, match="nonempty"):
+        await log.get_by_idempotency_keys("tenant-a", [""])
+
+
 async def test_idempotency_key_rejects_different_event_family(log: EventLog) -> None:
     await log.append(_event(1, type="foo", idempotency_key="request:conflict"))
     with pytest.raises(IdempotencyConflict):

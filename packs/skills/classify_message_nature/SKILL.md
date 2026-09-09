@@ -1,7 +1,8 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 8.0.0
+version: 8.0.1
+compatible_success_versions: [8.0.0]
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -12,7 +13,7 @@ max_tokens: 6000
 temperature: 0.1
 sensitivity_required: normal
 context_scopes_required: []
-timeout_seconds: 60
+timeout_seconds: 120
 outbound_affecting: false
 on_failure:
   classification: personal

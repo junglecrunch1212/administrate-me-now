@@ -79,7 +79,8 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "8.0.0"
+SKILL_VERSION = "8.0.1"
+_RETAINED_CLASSIFICATION_VERSION = "8.0.0"
 DEFAULT_CLASSIFICATION = "personal"
 _REPLAY_GENERATION = 23
 _DEFERRED_THREAD_ASSESSOR_ID = "thread-anchor-deferred-v1"
@@ -295,10 +296,7 @@ class NoiseFilteringPipeline:
     }
 
     def __init__(self) -> None:
-        # Ordinary deliveries retain the reviewed pack concurrency. Only
-        # recovery after a transport failure is serialized so a failed batch
-        # cannot stampede the pinned Gateway with synchronized retries.
-        self._transient_retry_lock = asyncio.Lock()
+        # Explicit operator recovery keeps its separate reviewed concurrency.
         self._recovery_request_semaphore = asyncio.Semaphore(RECOVERY_MAX_CONCURRENCY)
         # One immutable source may be named by distinct command ids. Serialize
         # selection through terminal append so only the first request can
@@ -511,29 +509,32 @@ class NoiseFilteringPipeline:
                 # message fingerprint. Without it, a second provider attempt
                 # could not be durably bounded or replayed.
                 raise
-            async with self._transient_retry_lock:
-                for attempt, delay_seconds in enumerate(
-                    _TRANSIENT_RECOVERY_DELAYS_SECONDS, start=1
-                ):
-                    recovery_ctx = replace(
-                        skill_ctx,
-                        invocation_idempotency_key=(
-                            f"{invocation_identity}:recovery-{attempt}"
-                        ),
-                        retry_prior_failure=True,
+            # Each source keeps its existing EventBus delivery slot through
+            # both retries. A shared retry lock would serialize eight failing
+            # sources and starve the batch's ordered checkpoint. There are
+            # still at most eight calls, and at most three calls per source.
+            for attempt, delay_seconds in enumerate(
+                _TRANSIENT_RECOVERY_DELAYS_SECONDS, start=1
+            ):
+                recovery_ctx = replace(
+                    skill_ctx,
+                    invocation_idempotency_key=(
+                        f"{invocation_identity}:recovery-{attempt}"
+                    ),
+                    retry_prior_failure=True,
+                )
+                await asyncio.sleep(delay_seconds)
+                try:
+                    return await ctx.run_skill_fn(SKILL_ID, inputs, recovery_ctx)
+                except _TRANSIENT_SKILL_FAILURE_TYPES as recovery_exc:
+                    if attempt == len(_TRANSIENT_RECOVERY_DELAYS_SECONDS):
+                        raise
+                    _log.warning(
+                        "noise_filtering recovery attempt %s failed (%s); "
+                        "queueing final recovery",
+                        attempt,
+                        type(recovery_exc).__name__,
                     )
-                    await asyncio.sleep(delay_seconds)
-                    try:
-                        return await ctx.run_skill_fn(SKILL_ID, inputs, recovery_ctx)
-                    except _TRANSIENT_SKILL_FAILURE_TYPES as recovery_exc:
-                        if attempt == len(_TRANSIENT_RECOVERY_DELAYS_SECONDS):
-                            raise
-                        _log.warning(
-                            "noise_filtering recovery attempt %s failed (%s); "
-                            "queueing final recovery",
-                            attempt,
-                            type(recovery_exc).__name__,
-                        )
 
             raise AssertionError("unreachable transient recovery state")
 
@@ -766,6 +767,14 @@ class NoiseFilteringPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
+            compatible_failure_recovery_authorized=isinstance(recovery, dict),
+            compatible_success_identities=(
+                invocation_identity,
+                *(
+                    f"{invocation_identity}:recovery-{attempt}"
+                    for attempt in range(1, len(_TRANSIENT_RECOVERY_DELAYS_SECONDS) + 1)
+                ),
+            ),
         )
 
         try:
@@ -773,6 +782,14 @@ class NoiseFilteringPipeline:
                 ctx, inputs, skill_ctx
             )
         except _SKILL_FAILURE_TYPES as exc:
+            if not isinstance(recovery, dict) and await self._retain_assessed_default(
+                event, ctx, skill_ctx, exc
+            ):
+                _log.warning(
+                    "noise_filtering retained immutable assessment after refusing "
+                    "a paired failed/default compatible receipt"
+                )
+                return
             _log.warning(
                 "noise_filtering skill failure (%s); emitting defensive default",
                 type(exc).__name__,
@@ -800,6 +817,7 @@ class NoiseFilteringPipeline:
                 policy=policy,
                 context_pack=context_pack,
                 recovery=recovery if isinstance(recovery, dict) else None,
+                skill_version=str(getattr(exc, "skill_version", SKILL_VERSION)),
             )
             return
 
@@ -816,7 +834,62 @@ class NoiseFilteringPipeline:
             policy=policy,
             context_pack=context_pack,
             recovery=recovery if isinstance(recovery, dict) else None,
+            skill_version=str(getattr(result, "skill_version", None) or SKILL_VERSION),
         )
+
+    async def _retain_assessed_default(
+        self,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        skill_ctx: SkillContext,
+        error: Exception,
+    ) -> bool:
+        """An execution patch cannot rewrite an already completed v23 receipt."""
+        receipt_id = getattr(error, "compatible_receipt_event_id", None)
+        receipt_key = getattr(error, "compatible_receipt_key", None)
+        if not receipt_id or receipt_key not in {
+            f"skill:{identity}:{SKILL_ID}:8.0.0"
+            for identity in skill_ctx.compatible_success_identities
+        }:
+            return False
+        source_id = str(event["event_id"])
+        assessment = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"],
+            f"triage:message-features:v{_REPLAY_GENERATION}:{source_id}",
+        )
+        if (
+            assessment is None
+            or assessment.get("type") != "triage.intent.features_extracted"
+            or assessment.get("schema_version") != 3
+            or assessment.get("causation_id") != source_id
+            or assessment.get("source_adapter") != "deterministic_candidate_eligibility"
+            or assessment.get("source_account_id") != "pipeline"
+            or assessment.get("payload", {}).get("source_event_id") != source_id
+            or assessment.get("payload", {}).get("extraction_state") != "complete"
+            or assessment.get("payload", {}).get("assessment_outcome")
+            not in {"eligible_candidates", "no_candidate"}
+            or any(
+                assessment.get(key) != event.get(key)
+                for key in (
+                    "tenant_id",
+                    "owner_scope",
+                    "visibility_scope",
+                    "sensitivity",
+                )
+            )
+        ):
+            return False
+        # v23 predates an explicit assessment -> skill-receipt link. Require
+        # the validated exact-fingerprint receipt to be the last classification
+        # recorded for this source before its assessment, not an unrelated call.
+        recorded = [
+            prior
+            for prior in await ctx.event_log.get_by_causation(source_id)
+            if prior.get("type") == "skill.call.recorded"
+            and prior.get("payload", {}).get("skill_name") == SKILL_ID
+            and prior["event_id"] < assessment["event_id"]
+        ]
+        return bool(recorded and recorded[-1]["event_id"] == receipt_id)
 
     async def _emit_results(
         self,
@@ -832,6 +905,7 @@ class NoiseFilteringPipeline:
         policy: dict[str, Any],
         context_pack: MessageContextPack,
         recovery: dict[str, str] | None,
+        skill_version: str = SKILL_VERSION,
     ) -> None:
         await self._emit_classified(
             event=event,
@@ -839,12 +913,14 @@ class NoiseFilteringPipeline:
             source_event_id=source_event_id,
             classification=str(output.get("classification", DEFAULT_CLASSIFICATION)),
             confidence=float(output.get("confidence", 0.0)),
+            skill_version=skill_version,
         )
         await self._emit_semantic_features(
             event=event,
             ctx=ctx,
             source_event_id=source_event_id,
             output=output,
+            skill_version=skill_version,
         )
         await self._emit_triage_candidates(
             event=event,
@@ -882,13 +958,14 @@ class NoiseFilteringPipeline:
         source_event_id: str,
         classification: str,
         confidence: float,
+        skill_version: str = _RETAINED_CLASSIFICATION_VERSION,
     ) -> None:
         payload = {
             "source_event_id": source_event_id,
             "classification": classification,
             "confidence": round(confidence, 4),
             "skill_name": SKILL_NAME,
-            "skill_version": SKILL_VERSION,
+            "skill_version": skill_version,
         }
         idempotency_key = await _select_payload_idempotency_key(
             ctx=ctx,
@@ -924,6 +1001,7 @@ class NoiseFilteringPipeline:
         ctx: PipelineContext,
         source_event_id: str,
         output: dict[str, Any],
+        skill_version: str = _RETAINED_CLASSIFICATION_VERSION,
     ) -> None:
         payload = {
             "source_event_id": source_event_id,
@@ -936,7 +1014,7 @@ class NoiseFilteringPipeline:
             "confidence": round(float(output.get("confidence", 0.0)), 4),
             "reasons": [str(value) for value in output.get("reasons") or []][:20],
             "skill_name": SKILL_NAME,
-            "skill_version": SKILL_VERSION,
+            "skill_version": skill_version,
         }
         idempotency_key = await _select_payload_idempotency_key(
             ctx=ctx,

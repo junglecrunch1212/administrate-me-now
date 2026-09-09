@@ -18,6 +18,7 @@ from bootstrap.deployment_failure import (
     failure_evidence,
     failure_summary,
     persist_failure,
+    settlement_diagnostic_evidence,
 )
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from tests.unit.bootstrap.test_activation_transaction import (
@@ -29,6 +30,77 @@ from tests.unit.bootstrap.test_activation_transaction import (
 
 
 PRIVATE = "fixture-private-source-and-exception-text"
+
+
+def test_triggering_readiness_is_detached_and_resanitized_before_persistence():
+    consumer_id = "projection:triage"
+    diagnostics = {
+        "private_body": PRIVATE,
+        "ready": False,
+        "deployment_readiness": {
+            "contract": "deployment-readiness-v1",
+            "blocking_dimensions": ["observation_effects", PRIVATE],
+        },
+        "capabilities": {
+            "policy:source-assurance": {
+                "details": {
+                    "contract": "source-assurance-v1",
+                    "counts": {"failed": 1, "pending": 0, "private": PRIVATE},
+                    "freshness": {
+                        "state": "fresh",
+                        "revision_current": True,
+                        "refresh_in_progress": False,
+                        "refresh_error_type": PRIVATE,
+                    },
+                },
+            },
+            consumer_id: {
+                "kind": "projection",
+                "state": "degraded",
+                "details": {
+                    "version": 12,
+                    "lag_count": 7,
+                    "consecutive_failures": 3,
+                    "checkpoint_event_id": PRIVATE,
+                    "poison_event_id": PRIVATE,
+                },
+            },
+        },
+    }
+    trigger = settlement_diagnostic_evidence(diagnostics, consumer_id=consumer_id)
+    diagnostics["capabilities"]["policy:source-assurance"]["details"]["counts"][
+        "failed"
+    ] = 0
+    assert trigger["source_counts"]["failed"] == 1
+    assert trigger["consumer"] == {
+        "kind": "projection",
+        "state": "degraded",
+        "version": 12,
+        "lag_count": 7,
+        "consecutive_failures": 3,
+        "checkpoint_present": True,
+        "poison_present": True,
+    }
+    assert PRIVATE not in json.dumps(trigger)
+    # Recheck even an allegedly sanitized record from another process.
+    trigger["raw_exception"] = PRIVATE
+    trigger["consumer"]["checkpoint_event_id"] = PRIVATE
+    trigger["consumer"]["version"] = PRIVATE
+    report = _report()
+    bounded = report["checks"][2]["evidence"]
+    bounded["reason"] = "source_assurance_failed"
+    bounded["triggering_readiness"] = trigger
+    safe = failure_evidence(report, allowed_consumers=frozenset({consumer_id}))
+    assert safe["readiness"]["source_counts"]["failed"] == 0
+    assert safe["readiness_origin"] == "retained_doctor"
+    actual = safe["bounded"][0]["triggering_readiness"]
+    assert actual["origin"] == "runtime_diagnostics"
+    assert actual["source_counts"]["failed"] == 1
+    assert actual["source_freshness"]["refresh_error_present"] is True
+    assert "version" not in actual["consumer"]
+    assert PRIVATE not in json.dumps(safe)
+    assert "trigger_source_failed=1" in failure_summary(safe)
+    assert "readiness_origin=retained_doctor" in failure_summary(safe)
 
 
 def test_failure_allowlists_cover_reviewed_doctor_and_settlement_codes() -> None:

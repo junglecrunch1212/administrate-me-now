@@ -798,7 +798,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "8.0.0"
+    assert envelope.payload["skill_version"] == "8.0.1"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -822,7 +822,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "8.0.0"
+    assert envelope.payload["skill_version"] == "8.0.1"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -890,7 +890,7 @@ async def test_second_recovery_uses_its_own_durable_invocation_identity() -> Non
 
 
 @pytest.mark.asyncio
-async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None:
+async def test_concurrent_transient_recoveries_keep_existing_delivery_slots() -> None:
     log = _FakeEventLog()
     attempts: dict[str, int] = {}
     invocation_keys: dict[str, list[str]] = {}
@@ -926,7 +926,7 @@ async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None
 
     assert attempts == {"transient-source-1": 2, "transient-source-2": 2}
     assert all(keys[1] == f"{keys[0]}:recovery-1" for keys in invocation_keys.values())
-    assert max_active_recoveries == 1
+    assert max_active_recoveries == 2
     assessments = [
         call.envelope
         for call in log.calls
@@ -937,6 +937,127 @@ async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None
         assessment.payload["assessment_outcome"] == "no_candidate"
         for assessment in assessments
     )
+
+
+@pytest.mark.asyncio
+async def test_eight_simultaneous_timeouts_finish_in_three_parallel_attempt_waves() -> (
+    None
+):
+    log = _FakeEventLog()
+    barriers = [asyncio.Barrier(8) for _ in range(3)]
+    attempts: dict[str, list[str]] = {}
+
+    async def timeout_every_attempt(_skill_id, _inputs, skill_ctx):
+        source = str(skill_ctx.triggering_event_id)
+        keys = attempts.setdefault(source, [])
+        keys.append(str(skill_ctx.invocation_idempotency_key))
+        # A shared retry lock deadlocks at wave two: all eight delivery slots
+        # must enter each wave before any one can finish its simulated timeout.
+        await asyncio.wait_for(barriers[len(keys) - 1].wait(), timeout=5)
+        raise OpenClawTimeout("fixture bounded total timeout")
+
+    pipeline = NoiseFilteringPipeline()
+    events = []
+    for index in range(8):
+        event = _messaging_received_event(body_text=f"Fixture source {index}.")
+        event["event_id"] = f"fixture-timeout-source-{index}"
+        events.append(event)
+    await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                pipeline.handle(event, _make_ctx(log, timeout_every_attempt))
+                for event in events
+            )
+        ),
+        timeout=15,
+    )
+    assert len(attempts) == 8
+    assert all(len(keys) == 3 for keys in attempts.values())
+    assert all(
+        keys == [keys[0], keys[0] + ":recovery-1", keys[0] + ":recovery-2"]
+        for keys in attempts.values()
+    )
+    assessments = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    ]
+    assert len(assessments) == 8
+    assert all(item.payload["assessment_outcome"] == "failed" for item in assessments)
+    # The separately tested total HTTP attempt cap applies in parallel to
+    # each wave; the retry count and backoffs do not multiply by eight.
+    assert 3 * 122 + sum(_handler._TRANSIENT_RECOVERY_DELAYS_SECONDS) < 600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch", [None, "owner", "causation", "identity", "intervening", "unmarked"]
+)
+async def test_retained_default_guard_requires_the_exact_completed_history(
+    mismatch,
+) -> None:
+    event = _messaging_received_event()
+    event["sensitivity"] = "normal"
+    source_id = event["event_id"]
+    identity = "message-nature:fixture-fingerprint"
+    assessment = {
+        "event_id": "0003",
+        "type": "triage.intent.features_extracted",
+        "schema_version": 3,
+        "causation_id": source_id,
+        "source_adapter": "deterministic_candidate_eligibility",
+        "source_account_id": "pipeline",
+        **{
+            key: event[key]
+            for key in ("tenant_id", "owner_scope", "visibility_scope", "sensitivity")
+        },
+        "payload": {
+            "source_event_id": source_id,
+            "extraction_state": "complete",
+            "assessment_outcome": "no_candidate",
+        },
+    }
+    recorded = [
+        {
+            "event_id": "0001",
+            "type": "skill.call.recorded",
+            "payload": {"skill_name": "skill:classify_message_nature"},
+        }
+    ]
+    error = SkillInputInvalid("fixture refused old default")
+    if mismatch != "unmarked":
+        error.compatible_receipt_event_id = "0001"
+        error.compatible_receipt_key = (
+            f"skill:{identity if mismatch != 'identity' else 'other'}:"
+            "skill:classify_message_nature:8.0.0"
+        )
+    if mismatch == "owner":
+        assessment["owner_scope"] = "private:another-fixture-member"
+    elif mismatch == "causation":
+        assessment["causation_id"] = "another-fixture-source"
+    elif mismatch == "intervening":
+        recorded.append({**recorded[0], "event_id": "0002"})
+
+    class GuardLog:
+        async def get_by_idempotency(self, tenant, key):
+            return assessment
+
+        async def get_by_causation(self, cause):
+            return recorded
+
+        async def write(self, *args, **kwargs):
+            raise AssertionError("a compatibility preservation check must never write")
+
+    ctx = _make_ctx(GuardLog(), None)
+    skill_ctx = SkillContext(
+        session=ctx.session,
+        invocation_idempotency_key=identity,
+        compatible_success_identities=(identity,),
+    )
+    retained = await NoiseFilteringPipeline()._retain_assessed_default(
+        event, ctx, skill_ctx, error
+    )
+    assert retained is (mismatch is None)
 
 
 @pytest.mark.asyncio

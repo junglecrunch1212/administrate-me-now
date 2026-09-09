@@ -1116,12 +1116,12 @@ def test_live_services_start_openclaw_before_runtime_replay(
     monkeypatch.setattr(
         manager, "_validate_plist", lambda label: Path(f"/{label}.plist")
     )
-    monkeypatch.setattr(manager, "_launchctl_loaded", lambda _label: True)
-    monkeypatch.setattr(manager, "_wait_until_unloaded", lambda _label: True)
+    stopped: list[str] = []
+    monkeypatch.setattr(manager, "_stop_label", stopped.append)
     monkeypatch.setattr(
-        manager, "_launchctl_definition_matches", lambda _label, _path: True
+        manager, "_launchctl_definition_matches", lambda _label, _path, _timeout: True
     )
-    monkeypatch.setattr(manager, "_openclaw_liveness", lambda: True)
+    monkeypatch.setattr(manager, "_managed_openclaw_liveness", lambda **_: True)
     monkeypatch.setattr(manager, "_runtime_liveness", lambda: True)
     monkeypatch.setattr(manager, "status", lambda: healthy)
 
@@ -1131,15 +1131,11 @@ def test_live_services_start_openclaw_before_runtime_replay(
 
     monkeypatch.setattr("bootstrap.services.subprocess.run", run)
     assert manager.start() == healthy
-    bootouts = [command[-1] for command in commands if "bootout" in command]
-    assert bootouts == [
-        f"gui/{os.getuid()}/com.administrateme.runtime",
-        f"gui/{os.getuid()}/com.administrateme.openclaw",
-    ]
-    kickstarts = [command[-1] for command in commands if "kickstart" in command]
-    assert kickstarts == [
-        f"gui/{os.getuid()}/com.administrateme.openclaw",
-        f"gui/{os.getuid()}/com.administrateme.runtime",
+    assert stopped == [RUNTIME_LABEL, OPENCLAW_LABEL]
+    assert not any("kickstart" in command for command in commands)
+    assert [command[3] for command in commands if "bootstrap" in command] == [
+        str(test_paths.launch_agent_dir / f"{OPENCLAW_LABEL}.plist"),
+        str(test_paths.launch_agent_dir / f"{RUNTIME_LABEL}.plist"),
     ]
 
 
@@ -1148,42 +1144,22 @@ def test_repair_stop_checks_gateway_after_runtime_quiesces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = ServiceManager(test_paths)
-    commands: list[list[str]] = []
     sequence: list[str] = []
 
-    def run(command, **_kwargs):
-        commands.append(command)
-        sequence.append("runtime-bootout")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    def wait_until_unloaded(label: str) -> bool:
-        sequence.append(f"unloaded:{label}")
-        return True
+    def stop_label(label: str) -> None:
+        sequence.append(f"quiesced:{label}")
 
     def openclaw_liveness() -> bool:
         sequence.append("openclaw-health")
         return False
 
-    monkeypatch.setattr(manager, "_launchctl_loaded", lambda _label: True)
-    monkeypatch.setattr(manager, "_wait_until_unloaded", wait_until_unloaded)
-    monkeypatch.setattr(manager, "_openclaw_liveness", openclaw_liveness)
-    monkeypatch.setattr("bootstrap.services.subprocess.run", run)
+    monkeypatch.setattr(manager, "_stop_label", stop_label)
+    monkeypatch.setattr(manager, "_managed_openclaw_liveness", openclaw_liveness)
 
     with pytest.raises(RuntimeError, match="repair quiescence boundary"):
         manager.stop(require_openclaw_live_before_stop=True)
 
-    assert commands == [
-        [
-            "launchctl",
-            "bootout",
-            f"gui/{os.getuid()}/com.administrateme.runtime",
-        ]
-    ]
-    assert sequence == [
-        "runtime-bootout",
-        f"unloaded:{RUNTIME_LABEL}",
-        "openclaw-health",
-    ]
+    assert sequence == [f"quiesced:{RUNTIME_LABEL}", "openclaw-health"]
 
 
 def test_openclaw_launch_probe_uses_local_health_endpoint(

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +52,12 @@ from adminme.lib.skill_runner.wrapper import (
     SkillSensitivityRefused,
     _Runtime,
     _set_runtime_for_tests,
+    _emit_failed,
+    _emit_recorded,
     run_skill,
 )
+
+import adminme.lib.skill_runner.wrapper as skill_wrapper
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLASSIFY_TEST_PACK = REPO_ROOT / "packs" / "skills" / "classify_test"
@@ -878,3 +884,207 @@ async def test_reviewed_generation_does_not_repeat_its_own_terminal_failure(
         "skill.call.failed",
         "skill.call.failed",
     ]
+
+
+def _versioned_test_pack(tmp_path: Path) -> Path:
+    pack = tmp_path / "versioned-skill"
+    shutil.copytree(CLASSIFY_TEST_PACK, pack)
+    for name in ("pack.yaml", "SKILL.md"):
+        path = pack / name
+        path.write_text(path.read_text().replace("0.1.0", "8.0.0"))
+    return pack
+
+
+def _upgrade_test_pack(pack: Path) -> None:
+    for name in ("pack.yaml", "SKILL.md"):
+        path = pack / name
+        text = path.read_text().replace("8.0.0", "8.0.1")
+        if name == "SKILL.md":
+            text = text.replace(
+                "version: 8.0.1",
+                "version: 8.0.1\ncompatible_success_versions: [8.0.0]",
+            ).replace("timeout_seconds: 5", "timeout_seconds: 120")
+        path.write_text(text)
+    invalidate_cache()
+
+
+@pytest.mark.parametrize("suffix", ["", ":recovery-1", ":recovery-2"])
+@pytest.mark.parametrize("spilled", [False, True])
+async def test_compatible_patch_preserves_clean_success_and_actual_provenance(
+    event_log: EventLog, tmp_path: Path, suffix: str, spilled: bool
+) -> None:
+    pack = _versioned_test_pack(tmp_path)
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    base = "fixture-scoped-fingerprint"
+    context = SkillContext(
+        session=_session(),
+        triggering_event_id="fixture-original-delivery",
+        invocation_idempotency_key=base + suffix,
+        owner_scope="private:m-test",
+        visibility_scope="private:m-test",
+    )
+    inputs = {"text": "same" * (20_000 if spilled else 1)}
+    original = await run_skill(str(pack), inputs, context, _runtime=runtime)
+    baseline = await _read_all_events(event_log)
+    _upgrade_test_pack(pack)
+    # A duplicate source delivery can have a different event id while keeping
+    # the exact scoped input fingerprint, including a successful retry.
+    replay_context = replace(
+        context,
+        triggering_event_id="fixture-duplicate-delivery",
+        invocation_idempotency_key=base,
+        compatible_success_identities=(base + ":recovery-1", base + ":recovery-2"),
+    )
+    for _restart in range(2):
+        invalidate_cache()
+        restarted = _runtime_for(event_log, tmp_path, transport=transport)
+        reused = await run_skill(str(pack), inputs, replay_context, _runtime=restarted)
+        assert reused == original
+        assert reused.skill_version == "8.0.0"
+        assert reused.recorded_event_id == baseline[0]["event_id"]
+    assert len(transport.requests) == 1
+    assert await _read_all_events(event_log) == baseline
+
+
+@pytest.mark.parametrize(
+    "field", ["owner_scope", "visibility_scope", "sensitivity", "inputs"]
+)
+async def test_compatible_patch_refuses_mismatched_scope_or_inputs(
+    event_log: EventLog, tmp_path: Path, field: str
+) -> None:
+    pack = _versioned_test_pack(tmp_path)
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    context = SkillContext(session=_session(), triggering_event_id="fixture-exact")
+    await run_skill(str(pack), {"text": "same"}, context, _runtime=runtime)
+    _upgrade_test_pack(pack)
+    changed = context if field == "inputs" else replace(context, **{field: "different"})
+    with pytest.raises((SkillInputInvalid, SkillOutputInvalid)):
+        await run_skill(
+            str(pack),
+            {"text": "different" if field == "inputs" else "same"},
+            changed,
+            _runtime=runtime,
+        )
+    assert len(transport.requests) == 1
+
+
+async def test_patch_does_not_renew_failure_without_authorized_recovery(
+    event_log: EventLog, tmp_path: Path
+) -> None:
+    pack = _versioned_test_pack(tmp_path)
+    unavailable = _MockTransport(lambda request: httpx.Response(503))
+    context = SkillContext(
+        session=_session(),
+        triggering_event_id="fixture-failed-source",
+        invocation_idempotency_key="fixture-failed-invocation",
+        retry_prior_failure=True,
+    )
+    runtime = _runtime_for(event_log, tmp_path, transport=unavailable)
+    with pytest.raises(OpenClawUnreachable):
+        await run_skill(str(pack), {"text": "same"}, context, _runtime=runtime)
+    failure = (await _read_all_events(event_log))[0]
+    _upgrade_test_pack(pack)
+    success = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=success)
+    for suffix in ("", ":recovery-1", ":recovery-2"):
+        with pytest.raises(OpenClawUnreachable):
+            await run_skill(
+                str(pack),
+                {"text": "same"},
+                replace(
+                    context,
+                    triggering_event_id="fixture-second-delivery",
+                    invocation_idempotency_key="fixture-failed-invocation" + suffix,
+                    compatible_success_identities=(
+                        "fixture-failed-invocation",
+                        "fixture-failed-invocation:recovery-1",
+                        "fixture-failed-invocation:recovery-2",
+                    ),
+                ),
+                _runtime=runtime,
+            )
+    assert success.requests == []
+    recovery = replace(
+        context,
+        invocation_idempotency_key="fixture-authorized-recovery-request",
+        compatible_failure_recovery_authorized=True,
+    )
+    result = await run_skill(str(pack), {"text": "same"}, recovery, _runtime=runtime)
+    assert result.skill_version == "8.0.1"
+    assert json.loads(success.requests[0].content)["args"]["timeoutMs"] == 120_000
+    assert await event_log.get(failure["event_id"]) == failure
+    assert len(success.requests) == 1
+
+
+async def test_compatible_patch_refuses_failed_default_recorded_as_success(
+    event_log: EventLog, tmp_path: Path
+) -> None:
+    pack = _versioned_test_pack(tmp_path)
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    context = SkillContext(session=_session(), triggering_event_id="fixture-default")
+    await _emit_failed(
+        runtime,
+        context,
+        pack_id_str="skill:classify_test",
+        pack_version="8.0.0",
+        failure_class="output_invalid",
+        error_detail="fixture invalid model output",
+        provider_attempted="fixture",
+        duration_ms=1,
+    )
+    await _emit_recorded(
+        runtime,
+        context,
+        pack_id_str="skill:classify_test",
+        pack_version="8.0.0",
+        invocation_id="fixture-default-call",
+        inputs_payload={"text": "same"},
+        outputs={"is_thing": False, "confidence": 0.0},
+        provider="fixture",
+        input_tokens=1,
+        output_tokens=1,
+        cost_usd=0.0,
+        duration_ms=1,
+    )
+    _upgrade_test_pack(pack)
+    with pytest.raises(SkillOutputInvalid):
+        await run_skill(str(pack), {"text": "same"}, context, _runtime=runtime)
+    assert transport.requests == []
+    assert len(await _read_all_events(event_log)) == 2
+
+
+async def test_total_http_deadline_covers_injected_streaming_client(
+    event_log: EventLog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pack = _versioned_test_pack(tmp_path)
+    _upgrade_test_pack(pack)
+    actual_timeout = asyncio.timeout
+    deadlines = []
+
+    def short_deadline(seconds):
+        deadlines.append(seconds)
+        return actual_timeout(0.01)
+
+    class StalledClient:
+        async def post(self, *args, **kwargs):
+            await asyncio.Event().wait()
+
+    runtime = replace(
+        _runtime_for(event_log, tmp_path), httpx_client_factory=StalledClient
+    )
+    monkeypatch.setattr(skill_wrapper.asyncio, "timeout", short_deadline)
+    with pytest.raises(OpenClawTimeout):
+        await run_skill(
+            str(pack),
+            {"text": "same"},
+            SkillContext(session=_session(), triggering_event_id="fixture-stalled"),
+            _runtime=runtime,
+        )
+    assert deadlines == [122.0]
+    [failure] = await _read_all_events(event_log)
+    assert failure["type"] == "skill.call.failed"
+    assert failure["payload"]["failure_class"] == "openclaw_timeout"
+    assert failure["payload"]["skill_version"] == "8.0.1"

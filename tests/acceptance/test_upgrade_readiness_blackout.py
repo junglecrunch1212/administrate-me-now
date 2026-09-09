@@ -73,6 +73,7 @@ def _actual_blackout_report(paths, release, monkeypatch):
             "_launchctl_loaded",
             lambda label: fixture_services._read_test_state().get(label) == "running",
         )
+        fixture.setattr(boundary, "_managed_openclaw_liveness", lambda **_: True)
         fixture.setattr(boundary, "runtime_diagnostics", lambda: None)
         fixture.setattr(
             doctor_module, "ServiceManager", lambda *_args, **_kwargs: boundary

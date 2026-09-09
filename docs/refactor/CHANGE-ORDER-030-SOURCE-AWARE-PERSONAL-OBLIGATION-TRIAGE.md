@@ -346,6 +346,36 @@ are **PRESERVE**. Production acceptance must force checkpoint advancement
 during status queries and prove bounded Settings work, member isolation, and
 zero external effects without raising browser timeouts.
 
+Classification execution is **MODERNIZE** under CO-012's pinned language seam
+and this order's bounded source assessment. Skill 8.0.1 retains the 8.0.0 prompt,
+schemas, model routing, and token limit, with a 120-second completion budget and
+a total HTTP wait bounded at 122 seconds. Each source retains three sequential
+attempts and bounded backoff; the existing eight-source normal batch does not
+serialize every source's retries through one global lock. Its language waits
+therefore total at most 368.5 seconds, plus local processing, within the unchanged
+ten-minute progress watchdog. Explicit request-bound recovery retains its own
+two-call limit and is not covered by this normal-batch calculation.
+
+Exact compatible 8.0.0 successes may be reused only with the same scoped inputs,
+validated current schemas, and original receipt and version provenance. A paired
+failure receipt is not a reusable success. Previously spent failures cannot be
+silently converted to success; authorized recovery remains request-bound.
+Existing v23 assessment event payloads and replay generation are **PRESERVE**:
+new receipt metadata must not rewrite earlier idempotent assessment facts.
+If an older failed call also recorded a defensive default and already completed
+an exact v23 assessment, refusal of that default must preserve the existing
+assessment and proposals. This narrow historical guard requires the validated
+scoped invocation receipt to precede that exact assessment; it appends no new
+success and grants no recovery or provider authority.
+
+Settlement failure evidence is **MODERNIZE** under the bootstrap recovery
+contract. Persist the allowlisted runtime observation that triggered failure
+separately from the retained Doctor report. Counts and freshness from an earlier
+Doctor must not be presented as the triggering observation. Consumer metadata
+retains versions, counts, and checkpoint or poison presence without source IDs
+or content. Revalidate this evidence before persistence. Immediate failure,
+full Doctor, immutable deadlines, progress watchdogs, and privacy are **PRESERVE**.
+
 ## Acceptance and constitutional disposition
 
 AC-60 requires production-composition tests for the source-grounded pipeline,

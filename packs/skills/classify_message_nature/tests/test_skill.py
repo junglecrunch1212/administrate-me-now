@@ -4,6 +4,7 @@ Catches structural drift in pack.yaml, SKILL.md frontmatter, or either
 schema, and exercises the defensive-default coercion handler directly
 (no wrapper, no HTTP)."""
 
+import hashlib
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -26,11 +27,37 @@ ALL_TRIAGE_TARGETS = {
 }
 
 
+def test_declared_8_0_0_compatibility_preserves_the_exact_result_contract() -> None:
+    """Only execution timeout/version may differ from the reviewed 8.0.0 pack."""
+    preserved = {
+        "prompt.jinja2": "f3b35ec4601805bb07bc9ab46ea85c835bebf14008b3db7c51b8890c86ca8d92",
+        "handler.py": "19ec6cc927d8b41c3417a0f9db1f74a5d1a5a96270c6bdfdbcf5f53c2e83ff81",
+        "schemas/input.schema.json": "5b003406118a7c3e94651e50e74e0d90032961207599e55405a82dc66f6dc9e0",
+        "schemas/output.schema.json": "84f83092b29fe3d3e0cc4d69608165d7ea24154bfdf0977aeb23627b22b25c3c",
+    }
+    for name, digest in preserved.items():
+        assert hashlib.sha256((PACK_ROOT / name).read_bytes()).hexdigest() == digest
+    previous_metadata = (
+        (PACK_ROOT / "SKILL.md")
+        .read_text()
+        .replace(
+            "version: 8.0.1\ncompatible_success_versions: [8.0.0]",
+            "version: 8.0.0",
+        )
+        .replace("timeout_seconds: 120", "timeout_seconds: 60")
+    )
+    assert hashlib.sha256(previous_metadata.encode()).hexdigest() == (
+        "047f80f7ad69fcee1b7edfb98b882aa1b1f0a032e5f65787be72c8b09de90b24"
+    )
+
+
 def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "8.0.0"
+    assert loaded.version == "8.0.1"
+    assert loaded.skill_frontmatter["compatible_success_versions"] == ["8.0.0"]
+    assert loaded.skill_frontmatter["timeout_seconds"] == 120
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (
         "anthropic/claude-haiku-4-5" in loaded.skill_frontmatter["provider_preferences"]

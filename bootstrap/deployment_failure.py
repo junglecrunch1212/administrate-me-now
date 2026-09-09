@@ -78,6 +78,120 @@ READINESS_DIMENSIONS = frozenset(
 )
 
 
+def settlement_diagnostic_evidence(
+    diagnostics: Any, *, consumer_id: str | None = None
+) -> dict[str, Any]:
+    """Detach the allowlisted cheap-read evidence used to stop settlement.
+
+    This is deliberately separate from the earlier Doctor report. Consumer
+    checkpoints and poison event IDs identify retained source facts, so only
+    their presence is retained; the caller separately filters the consumer ID.
+    """
+
+    document = diagnostics if isinstance(diagnostics, dict) else {}
+    capabilities = document.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, dict) else {}
+    source = capabilities.get("policy:source-assurance")
+    source = source if isinstance(source, dict) else {}
+    result = _readiness_evidence(
+        [
+            {
+                "name": "deployment_topology_and_recovery_readiness",
+                "evidence": document.get("deployment_readiness"),
+            },
+            {
+                "name": "source_assurance_terminal_dispositions",
+                "evidence": source.get("details"),
+            },
+        ]
+    )
+    for name in ("ready", "service_ready", "safe_reads", "event_ingest_ready"):
+        if type(value := document.get(name)) is bool:
+            result[name] = value
+    consumer = capabilities.get(consumer_id) if consumer_id is not None else None
+    if isinstance(consumer, dict):
+        result["consumer"] = _consumer_evidence(consumer)
+    return _sanitize_settlement_observation(result)
+
+
+def _consumer_evidence(consumer: dict[str, Any]) -> dict[str, Any]:
+    details = consumer.get("details")
+    details = details if isinstance(details, dict) else {}
+    result = {
+        "kind": consumer.get("kind"),
+        "state": consumer.get("state"),
+        "version": details.get("version"),
+        "lag_count": details.get("lag_count"),
+        "consecutive_failures": details.get("consecutive_failures"),
+        "checkpoint_present": bool(details.get("checkpoint_event_id")),
+        "poison_present": bool(details.get("poison_event_id")),
+    }
+    return result
+
+
+def _sanitize_settlement_observation(value: Any) -> dict[str, Any]:
+    """Recheck the compact snapshot before it reaches a persisted artifact."""
+
+    raw = value if isinstance(value, dict) else {}
+    source_freshness = raw.get("source_freshness")
+    source_freshness = source_freshness if isinstance(source_freshness, dict) else {}
+    result = _readiness_evidence(
+        [
+            {
+                "name": "deployment_topology_and_recovery_readiness",
+                "evidence": {
+                    "contract": "deployment-readiness-v1"
+                    if raw.get("deployment_evidence_present") is True
+                    else None,
+                    "blocking_dimensions": raw.get("blocking_dimensions"),
+                },
+            },
+            {
+                "name": "source_assurance_terminal_dispositions",
+                "evidence": {
+                    "contract": "source-assurance-v1"
+                    if raw.get("source_evidence_present") is True
+                    else None,
+                    "counts": raw.get("source_counts"),
+                    "freshness": {
+                        **source_freshness,
+                        "refresh_error_type": "present"
+                        if source_freshness.get("refresh_error_present") is True
+                        else None,
+                    },
+                },
+            },
+        ]
+    )
+    result["origin"] = "runtime_diagnostics"
+    for name in ("ready", "service_ready", "safe_reads", "event_ingest_ready"):
+        if type(flag := raw.get(name)) is bool:
+            result[name] = flag
+    consumer = raw.get("consumer")
+    if isinstance(consumer, dict):
+        safe: dict[str, Any] = {}
+        for name, allowed in (
+            ("kind", {"projection", "reactive_pipeline"}),
+            ("state", {"healthy", "degraded", "blocked", "unavailable"}),
+        ):
+            if isinstance(text := consumer.get(name), str) and text in allowed:
+                safe[name] = text
+        version = consumer.get("version")
+        if (type(version) is int and 0 < version <= 1_000_000_000) or (
+            isinstance(version, str)
+            and re.fullmatch(r"[0-9]{1,9}(?:\.[0-9]{1,9}){0,2}", version) is not None
+        ):
+            safe["version"] = version
+        for name in ("lag_count", "consecutive_failures"):
+            if type(count := consumer.get(name)) is int and 0 <= count <= 1_000_000_000:
+                safe[name] = count
+        for name in ("checkpoint_present", "poison_present"):
+            if type(flag := consumer.get(name)) is bool:
+                safe[name] = flag
+        result["consumer"] = safe
+    return result
+
+
 def _readiness_evidence(checks: list[Any]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "deployment_evidence_present": False,
@@ -155,7 +269,7 @@ def failure_evidence(
 ) -> dict[str, Any]:
     """Project diagnostic input onto closed names, never arbitrary evidence."""
     names: set[str] = set()
-    bounded: list[dict[str, str]] = []
+    bounded: list[dict[str, Any]] = []
     checks = report.get("checks", []) if isinstance(report, dict) else []
     for check in checks[:64] if isinstance(checks, list) else []:
         if not isinstance(check, dict) or check.get("ok") is True:
@@ -172,7 +286,7 @@ def failure_evidence(
         if evidence.get("contract") != "bounded-service-settlement-v1":
             continue
         reason = evidence.get("reason")
-        item = {
+        item: dict[str, Any] = {
             "reason": reason
             if isinstance(reason, str) and reason in FAILURE_REASONS
             else "unrecognized_reason"
@@ -191,6 +305,10 @@ def failure_evidence(
                 if isinstance(phase, str) and phase in FAILURE_PHASES
                 else "unrecognized_phase"
             )
+        if isinstance(evidence.get("triggering_readiness"), dict):
+            item["triggering_readiness"] = _sanitize_settlement_observation(
+                evidence["triggering_readiness"]
+            )
         if item not in bounded:
             bounded.append(item)
     result: dict[str, Any] = {
@@ -198,6 +316,8 @@ def failure_evidence(
         "bounded": bounded,
         "readiness": _readiness_evidence(checks if isinstance(checks, list) else []),
     }
+    if any("triggering_readiness" in item for item in bounded):
+        result["readiness_origin"] = "retained_doctor"
     if exception is not None:
         causes: list[Exception] = []
         current: BaseException | None = exception
@@ -226,7 +346,18 @@ def failure_evidence(
 def failure_summary(evidence: dict[str, Any]) -> str:
     parts = [", ".join(evidence["failed_checks"]) or "unknown check"]
     for bounded in evidence["bounded"]:
-        parts.append(", ".join(f"{key}={value}" for key, value in bounded.items()))
+        parts.append(
+            ", ".join(
+                f"{key}={bounded[key]}"
+                for key in ("reason", "consumer_id", "phase")
+                if key in bounded
+            )
+        )
+        trigger = bounded.get("triggering_readiness") or {}
+        for key, value in (trigger.get("source_counts") or {}).items():
+            parts.append(f"trigger_source_{key}={value}")
+    if evidence.get("readiness_origin"):
+        parts.append("readiness_origin=retained_doctor")
     if evidence.get("exception_category"):
         parts.append(f"exception={evidence['exception_category']}")
     readiness = evidence["readiness"]

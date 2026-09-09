@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,26 @@ def test_invalidate_cache_forces_reload() -> None:
     assert pack_a is not pack_b
     # Same content, just a new dataclass instance.
     assert pack_a.pack_id == pack_b.pack_id
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    ['["0.1.0"]', '["0.1.2"]', '["0.0.9"]', '["*"]', '"0.1.0"', "[{}]"],
+)
+def test_success_compatibility_rejects_non_previous_exact_patch(
+    tmp_path: Path, declaration: str
+) -> None:
+    pack = tmp_path / "invalid-compatibility"
+    shutil.copytree(CLASSIFY_TEST_PACK, pack)
+    skill = pack / "SKILL.md"
+    skill.write_text(
+        skill.read_text().replace(
+            "version: 0.1.0",
+            f"version: 0.1.0\ncompatible_success_versions: {declaration}",
+        )
+    )
+    with pytest.raises(PackLoadError, match="compatible_success_versions"):
+        load_pack(pack)
 
 
 def test_malformed_pack_yaml_raises_pack_load_error(tmp_path: Path) -> None:

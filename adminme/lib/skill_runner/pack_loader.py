@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -172,6 +173,26 @@ def load_pack(pack_root: Path) -> LoadedPack:
     except OSError as exc:
         raise PackLoadError(f"failed to read SKILL.md: {exc}") from exc
     frontmatter, body = _split_frontmatter(skill_text)
+    compatible = frontmatter.get("compatible_success_versions", [])
+    if (
+        not isinstance(compatible, list)
+        or any(not isinstance(value, str) for value in compatible)
+        or len(set(compatible)) != len(compatible)
+    ):
+        raise PackLoadError("compatible_success_versions must be unique exact versions")
+    if compatible:
+        current = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+        for previous in compatible:
+            prior = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", previous)
+            if (
+                current is None
+                or prior is None
+                or prior.group(1, 2) != current.group(1, 2)
+                or int(prior.group(3)) >= int(current.group(3))
+            ):
+                raise PackLoadError(
+                    "compatible_success_versions permits only earlier exact patches"
+                )
 
     input_schema = _read_json(input_schema_path)
     output_schema = _read_json(output_schema_path)

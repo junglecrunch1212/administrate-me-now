@@ -75,6 +75,10 @@ jobs:
           tests/acceptance/test_upgrade_readiness_blackout.py
           tests/acceptance/test_runtime_readiness_publication.py
           tests/acceptance/test_bounded_member_readiness.py
+          tests/acceptance/test_bounded_triage_execution.py
+          tests/acceptance/test_settlement_failure_observation.py
+          tests/acceptance/test_service_process_lifecycle.py
+          tests/unit/bootstrap/test_service_process_ownership.py
           tests/acceptance/test_triage_vertical_slice.py::test_member_evidence_uses_exact_lookup_after_private_history
           tests/unit/bootstrap/test_settlement_readiness_blackout.py
           tests/unit/bootstrap/test_deployment_failure.py
