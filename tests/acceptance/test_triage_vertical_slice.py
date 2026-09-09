@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1145,6 +1147,193 @@ def test_post_capture_governance_conflict_replays_one_recorded_interpretation(
             and item["candidate"].get("exact_text") == body["text"]
             for item in surface["items"]
         )
+
+
+def test_member_evidence_uses_exact_lookup_after_private_history(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    instance = tmp_path / "instance-evidence-lookup"
+    instance.mkdir()
+    other_member = "member_triage_evidence_other"
+    other_auth = {"Tailscale-User-Login": "triage-evidence-other.ts.net"}
+    original_settings = _settings(instance)
+    settings = replace(
+        original_settings,
+        member_identities={
+            **original_settings.member_identities,
+            other_auth["Tailscale-User-Login"]: other_member,
+        },
+        member_roles={**original_settings.member_roles, other_member: "principal"},
+    )
+    app = create_application(settings)
+    evidence_request: ContextVar[bool] = ContextVar("evidence_request", default=False)
+
+    @app.middleware("http")
+    async def mark_evidence_request(request, call_next):
+        token = evidence_request.set(
+            request.url.path.startswith("/api/member/v1/evidence/")
+        )
+        try:
+            return await call_next(request)
+        finally:
+            evidence_request.reset(token)
+
+    def envelope(event_type, key, payload, *, owner=MEMBER, sensitivity="normal"):
+        return EventEnvelope(
+            event_at_ms=0,
+            tenant_id=settings.instance.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at="2026-08-07T12:00:00Z",
+            source_adapter="fixture-evidence",
+            source_account_id=f"fixture-account:{owner}",
+            owner_scope=f"private:{owner}",
+            visibility_scope=f"private:{owner}",
+            sensitivity=sensitivity,
+            actor_identity=owner,
+            correlation_id=f"fixture-evidence:{key}",
+            idempotency_key=f"fixture-evidence:{key}",
+            raw_ref="fixture-private-raw-reference",
+            payload=payload,
+        )
+
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        # More than one original read_since page, using inert typed history so
+        # the late lookup proof needs neither network calls nor model fixtures.
+        history = [
+            envelope(
+                "xlsx.reverse_skipped_during_forward",
+                f"history:{index}",
+                {
+                    "workbook_name": "adminme-ops.xlsx",
+                    "detected_at": "2026-08-07T12:00:00Z",
+                    "skip_reason": "forward_lock_held",
+                },
+            )
+            for index in range(1025)
+        ]
+        history_ids = client.portal.call(runtime.events.write_batch, history)
+        message = envelope(
+            "messaging.received",
+            "late-message",
+            {
+                "source_channel": "fixture",
+                "from_identifier": "fixture-source-sender",
+                "to_identifier": MEMBER,
+                "received_at": "2026-08-07T12:00:00Z",
+                "subject": "Private source title fixture",
+                "body_text": "Private source body must remain outside evidence response.",
+            },
+        )
+        task = envelope(
+            "task.created",
+            "late-task",
+            {
+                "task_id": "fixture-evidence-task",
+                "title": "Review the fixture document",
+                "description": "Source-grounded fixture task description",
+                "owner_member_id": other_member,
+                "notes": "Private task notes must remain outside evidence response.",
+            },
+            owner=other_member,
+        )
+        privileged = envelope(
+            "task.created",
+            "privileged-task",
+            {
+                "task_id": "fixture-evidence-privileged-task",
+                "title": "Private fixture review",
+                "owner_member_id": MEMBER,
+            },
+            sensitivity="privileged",
+        )
+        target_ids = client.portal.call(
+            runtime.events.write_batch, [message, task, privileged]
+        )
+        assert len(history_ids) == 1025 and max(history_ids) < min(target_ids)
+        stored = [client.portal.call(runtime.event_log.get, key) for key in target_ids]
+        original_get = runtime.event_log.get
+        original_read_since = runtime.event_log.read_since
+        requested_ids: list[str] = []
+
+        async def exact_lookup(event_id):
+            if evidence_request.get():
+                requested_ids.append(event_id)
+            return await original_get(event_id)
+
+        async def forbid_evidence_scan(*args, **kwargs):
+            # Background consumers retain their real log; only this request
+            # must not scan and decode unrelated private history.
+            assert not evidence_request.get(), (
+                "evidence route scanned unrelated history"
+            )
+            async for event in original_read_since(*args, **kwargs):
+                yield event
+
+        monkeypatch.setattr(runtime.event_log, "get", exact_lookup)
+        monkeypatch.setattr(runtime.event_log, "read_since", forbid_evidence_scan)
+
+        def request(event_id, headers):
+            before = len(requested_ids)
+            response = client.get(
+                f"/api/member/v1/evidence/{event_id}", headers=headers
+            )
+            assert requested_ids[before:] == [event_id]
+            return response
+
+        for index, headers, subject in (
+            (0, AUTH, {}),
+            (
+                1,
+                other_auth,
+                {key: task.payload[key] for key in ("task_id", "title", "description")},
+            ),
+            (2, AUTH, {key: privileged.payload[key] for key in ("task_id", "title")}),
+        ):
+            response = request(target_ids[index], headers)
+            event = stored[index]
+            assert response.status_code == 200, response.text
+            assert response.json() == {
+                "event_id": event["event_id"],
+                "type": event["type"],
+                "source": {
+                    "adapter": event["source_adapter"],
+                    "account": event["source_account_id"],
+                },
+                "actor": event["actor_identity"],
+                "occurred_at": event["occurred_at"],
+                "ingested_at": event["recorded_at"],
+                "confidence": None,
+                "scope": {
+                    "owner": event["owner_scope"],
+                    "visibility": event["visibility_scope"],
+                    "sensitivity": event["sensitivity"],
+                },
+                "why": {
+                    "correlation_id": event["correlation_id"],
+                    "causation_id": None,
+                },
+                "correction": None,
+                "approval": None,
+                "delivery": None,
+                "subject": subject,
+            }
+        for event_id, headers in (
+            (target_ids[0], other_auth),
+            (target_ids[1], AUTH),
+            (target_ids[0], CHILD_AUTH),
+            (target_ids[2], {**other_auth, "X-AdminMe-View-Member": MEMBER}),
+            ("fixture-evidence-missing-id", AUTH),
+        ):
+            response = request(event_id, headers)
+            assert response.status_code == 404
+            assert response.json() == {"detail": "evidence not found"}
+        before = len(requested_ids)
+        unauthenticated = client.get(f"/api/member/v1/evidence/{target_ids[0]}")
+        assert unauthenticated.status_code == 401
+        assert len(requested_ids) == before
+        assert runtime.fixture_adapter.delivered == []
 
 
 def test_proposal_requires_member_triage_before_official_task(

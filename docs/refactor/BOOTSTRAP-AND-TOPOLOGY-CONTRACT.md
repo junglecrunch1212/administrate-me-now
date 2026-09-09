@@ -369,6 +369,27 @@ unavailable proof after the existing bounded readiness retries, or a
 watchdog/deadline failure remains a failed candidate and invokes the existing
 automatic predecessor recovery.
 
+Absent readiness handling is **MODERNIZE**; the existing retry budget, absolute
+deadline, per-consumer progress watchdog, and full Doctor acceptance are
+**PRESERVE**. Only Doctor's exact missing-readiness evidence shape can enter the
+existing bounded retry path. Fresh metadata permits another Doctor invocation;
+it cannot replace that proof or reset the retry count while Doctor evidence
+remains absent. Unknown contracts, invalid launch definitions, structural
+failures, failed source accounting, and failed consumers remain terminal.
+
+Failure observability is **MODERNIZE**; the activation journal schema and
+automatic recovery authority are **PRESERVE** under the rules above. Before a
+failed settlement report or exception leaves the selected-release Doctor gate,
+the updater attempts an atomic private audit at
+`app/activation/failures/<transaction>-<stage>.json`. This separate artifact
+retains the first failure for each candidate/recovery phase without changing
+the predecessor-readable journal. It contains only selected commit and
+transaction coordinates, allowlisted check/reason/consumer/phase names, safe
+exception categories, and aggregate evidence-presence/readiness counters.
+Source text, full Doctor reports, raw exceptions, paths, and credentials are
+excluded. Sanitized failure reasons remain in the terminal error after recovery.
+An unavailable audit is reported but cannot prevent the existing rollback.
+
 The implementation authority is `bootstrap/deployment_budget.py`, the fixed
 supervisor/guardian deadline propagation, `UpgradeManager`, and the shared
 `wait_for_settled_doctor` policy. Acceptance requires simulated-clock process

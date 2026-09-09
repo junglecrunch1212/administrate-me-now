@@ -115,6 +115,15 @@ an overdue checkpoint, an absent inline assessment, or an overdue action result
 is missing. Any missing obligation or failed assessment degrades
 `policy:source-assurance`, `surface:triage-processing`, and the member product.
 
+**MODERNIZE publication; PRESERVE evidence:** concurrent readiness requests,
+plugin heartbeats, and member operations serialize capability collection and
+publication in the runtime. An older deferred projection or pipeline snapshot
+cannot overwrite a newer published checkpoint. This does not clamp actual
+checkpoints, hide failures, alter scope, or relax the settlement watchdog;
+cancellation and sampling failures release the refresh boundary. The production
+composition regression in `test_runtime_readiness_publication.py` overlaps real
+`/ready` requests while canonical events advance the durable bus.
+
 Legacy v1 feature events are interpreted conservatively: an empty `complete`
 result is no-candidate, while `unavailable`, `invalid`, or defensive-default
 without candidates is failed. Historical failure can no longer appear as a

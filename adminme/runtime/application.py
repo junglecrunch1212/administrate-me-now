@@ -749,6 +749,7 @@ class AdministrateMeRuntime:
             settings.instance.config_dir / "temporary-surfaces.json"
         )
         self.capabilities: dict[str, CapabilityRecord] = {}
+        self._capability_refresh_lock = asyncio.Lock()
         self._source_assurance_cache: dict[str, Any] | None = None
         self._source_assurance_refreshed_at: str | None = None
         self._source_assurance_refreshed_monotonic = 0.0
@@ -2402,6 +2403,14 @@ class AdministrateMeRuntime:
         return "healthy"
 
     async def _refresh_capability_registry(self) -> None:
+        # Readiness, plugin heartbeats and member operations can overlap.
+        # Collect under the same lock as publication: an older projection
+        # snapshot must never overwrite a newer checkpoint after an await.
+        # The reads below do not call back into this refresh boundary.
+        async with self._capability_refresh_lock:
+            await self._refresh_capability_registry_locked()
+
+    async def _refresh_capability_registry_locked(self) -> None:
         assert self.projections is not None
         assert self.pipelines is not None
         assert self.observation is not None

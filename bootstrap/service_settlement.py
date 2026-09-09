@@ -265,6 +265,87 @@ def failed_checks_are_known_transients(result: dict[str, Any]) -> bool:
     return failed.issubset(allowed)
 
 
+def _doctor_has_absent_readiness(result: dict[str, Any]) -> bool:
+    """Recognize the exact evidence produced when Doctor receives no readiness.
+
+    This permits a bounded fresh observation, never an inferred passing check.
+    Present but unrecognized contracts and independent failures remain terminal.
+    """
+
+    checks = result.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return False
+    by_name: dict[str, dict[str, Any]] = {}
+    for check in checks:
+        if (
+            not isinstance(check, dict)
+            or not isinstance(check.get("name"), str)
+            or type(check.get("ok")) is not bool
+            or check["name"] in by_name
+        ):
+            return False
+        by_name[check["name"]] = check
+    failed = {name for name, check in by_name.items() if not check["ok"]}
+    required = {
+        "source_assurance_terminal_dispositions",
+        "deployment_topology_and_recovery_readiness",
+    }
+    if not required <= failed <= required | {"launchd_and_process_state"}:
+        return False
+    if by_name["deployment_topology_and_recovery_readiness"].get("evidence") != {}:
+        return False
+    if (
+        by_name["source_assurance_terminal_dispositions"].get("evidence")
+        != (source_assurance_terminal_evidence(None)[1])
+    ):
+        return False
+    if "launchd_and_process_state" in failed:
+        evidence = by_name["launchd_and_process_state"].get("evidence")
+        definitions = (
+            evidence.get("definitions") if isinstance(evidence, dict) else None
+        )
+        if (
+            not isinstance(definitions, dict)
+            or not definitions
+            or not all(value is True for value in definitions.values())
+        ):
+            return False
+    return True
+
+
+def _fresh_readiness_contracts_are_known(diagnostics: dict[str, Any]) -> bool:
+    deployment = diagnostics.get("deployment_readiness")
+    capabilities = diagnostics.get("capabilities")
+    source = (
+        capabilities.get("policy:source-assurance")
+        if isinstance(capabilities, dict)
+        else None
+    )
+    details = source.get("details") if isinstance(source, dict) else None
+    return (
+        isinstance(deployment, dict)
+        and deployment.get("contract") == "deployment-readiness-v1"
+        and isinstance(details, dict)
+        and details.get("contract") == "source-assurance-v1"
+    )
+
+
+def _doctor_has_present_readiness(result: dict[str, Any]) -> bool:
+    by_name = {
+        check.get("name"): check
+        for check in result.get("checks", [])
+        if isinstance(check, dict)
+    }
+    return all(
+        isinstance(evidence := by_name.get(name, {}).get("evidence"), dict)
+        and evidence.get("contract") == contract
+        for name, contract in (
+            ("source_assurance_terminal_dispositions", "source-assurance-v1"),
+            ("deployment_topology_and_recovery_readiness", "deployment-readiness-v1"),
+        )
+    )
+
+
 def runtime_has_only_transient_deployment_readiness_gap(
     diagnostics: dict[str, Any],
 ) -> bool:
@@ -360,6 +441,7 @@ def wait_for_settled_doctor(
         deadline = min(deadline, absolute_deadline)
     progress = _ReplayProgress()
     live_readiness_retries = 0
+    doctor_blackout_pending = False
     last: dict[str, Any] = {"status": "failed", "checks": []}
 
     def check_budget(
@@ -414,12 +496,20 @@ def wait_for_settled_doctor(
         last = doctor(include_synthetic_proof=False)
         while True:
             check_budget(check_progress=False)
+            if doctor_blackout_pending and _doctor_has_present_readiness(last):
+                # The actual Doctor ended this blackout. A later cheap-read or
+                # full-proof blackout begins a new bounded episode, even when
+                # the very next readiness observation is unavailable.
+                live_readiness_retries = 0
+                doctor_blackout_pending = False
             if last.get("status") == "healthy":
                 last = doctor(include_synthetic_proof=True)
                 if last.get("status") == "healthy":
                     return last
             failed = failed_check_names(last)
-            if not failed_checks_are_known_transients(last):
+            absent_readiness = _doctor_has_absent_readiness(last)
+            doctor_blackout_pending = doctor_blackout_pending or absent_readiness
+            if not failed_checks_are_known_transients(last) and not absent_readiness:
                 return last
             if test_mode:
                 return last
@@ -440,7 +530,7 @@ def wait_for_settled_doctor(
                 deployment_check_failed = (
                     "deployment_topology_and_recovery_readiness" in failed
                 )
-                source_settlement_only = (
+                source_settlement_only = absent_readiness or (
                     "source_assurance_terminal_dispositions" in failed
                     and (
                         not deployment_check_failed
@@ -469,7 +559,10 @@ def wait_for_settled_doctor(
                     last = doctor(include_synthetic_proof=False)
                     continue
                 return last
-            live_readiness_retries = 0
+            if absent_readiness and not _fresh_readiness_contracts_are_known(
+                diagnostics
+            ):
+                raise _SettlementStopped("readiness_contract_invalid")
             if has_new_structural_degradation(
                 diagnostics,
                 allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
@@ -491,6 +584,27 @@ def wait_for_settled_doctor(
                 if counts["failed"] > 0:
                     raise _SettlementStopped("source_assurance_failed")
 
+            if absent_readiness:
+                # A fresh document permits another actual Doctor; it cannot
+                # replace the missing evidence inside the retained report.
+                if live_readiness_retries >= live_readiness_retry_limit:
+                    return last
+                live = checked_call(
+                    services.runtime_is_live,
+                    reserve_seconds=_RUNTIME_LIVENESS_TIMEOUT_SECONDS,
+                    phase="liveness",
+                )
+                if not live:
+                    return last
+                live_readiness_retries += 1
+                pause()
+                if deployment_clock() >= progress.next_deadline(deadline):
+                    continue
+                last = doctor(include_synthetic_proof=False)
+                continue
+
+            if not doctor_blackout_pending:
+                live_readiness_retries = 0
             if "source_assurance_terminal_dispositions" in failed:
                 settled, _evidence = source_assurance_terminal_evidence(diagnostics)
                 if not settled:

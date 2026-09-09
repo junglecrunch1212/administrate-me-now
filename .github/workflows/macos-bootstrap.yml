@@ -89,6 +89,11 @@ jobs:
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/bootstrap/test_activation_transaction.py
           tests/acceptance/test_upgrade_deadline_rollback.py
+          tests/acceptance/test_upgrade_readiness_blackout.py
+          tests/acceptance/test_runtime_readiness_publication.py
+          tests/acceptance/test_triage_vertical_slice.py::test_member_evidence_uses_exact_lookup_after_private_history
+          tests/unit/bootstrap/test_settlement_readiness_blackout.py
+          tests/unit/bootstrap/test_deployment_failure.py
 
       - name: Validate shell entrypoints
         run: |

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import stat
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from tests.acceptance.test_macos_bootstrap_operations import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PRIVATE_FAILURE_MARKER = "fixture-private-doctor-evidence-must-not-persist"
 
 
 class _Clock:
@@ -134,6 +136,7 @@ def test_candidate_deadline_recovers_verified_predecessor_before_guardian(
     original_doctor = manager._run_release_doctor
     original_diagnostics = manager.services.runtime_diagnostics
     actual_full_proofs: list[tuple[Path, float, dict[str, Any]]] = []
+    failure_during_recovery: list[dict[str, Any]] = []
     recovery_started: float | None = None
     polls = 0
 
@@ -152,13 +155,31 @@ def test_candidate_deadline_recovers_verified_predecessor_before_guardian(
     ) -> dict[str, Any]:
         nonlocal recovery_started
         if release == predecessor_release and recovery_started is None:
+            # The original failed proof is durable before recovery's long
+            # settlement starts, while the real updater is still running.
+            [artifact] = (paths.app_dir / "activation" / "failures").glob(
+                "*-candidate_doctor.json"
+            )
+            assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+            assert stat.S_IMODE(artifact.parent.stat().st_mode) == 0o700
+            failure_document = json.loads(artifact.read_text("utf-8"))
+            assert failure_document["selected_commit"] == candidate_commit
+            assert failure_document["content_exposed"] is False
+            assert PRIVATE_FAILURE_MARKER not in artifact.read_text("utf-8")
+            assert failure_document["failure"]["bounded"]
+            failure_during_recovery.append(failure_document)
             recovery_started = clock.now
         if pending():
             assert include_synthetic_proof is False
             return {
                 "status": "failed",
                 "checks": [
-                    {"name": "source_assurance_terminal_dispositions", "ok": False}
+                    {
+                        "name": "source_assurance_terminal_dispositions",
+                        "ok": False,
+                        "detail": PRIVATE_FAILURE_MARKER,
+                        "evidence": {"raw_source": PRIVATE_FAILURE_MARKER},
+                    }
                 ],
             }
         result = original_doctor(
@@ -201,7 +222,7 @@ def test_candidate_deadline_recovers_verified_predecessor_before_guardian(
         if preparation_exhausts_reserve
         else "candidate failed post-switch Doctor"
     )
-    with pytest.raises(UpgradeError, match=failure):
+    with pytest.raises(UpgradeError, match=failure) as failed_activation:
         manager.activate(candidate)
 
     assert json.loads(pointer_path.read_text("utf-8")) == predecessor
@@ -214,8 +235,12 @@ def test_candidate_deadline_recovers_verified_predecessor_before_guardian(
         assert settlement_calls == []
         assert actual_full_proofs == []
         assert manager._candidate_settlement_deadline is None
+        assert failure_during_recovery == []
         return
 
+    assert len(failure_during_recovery) == 1
+    assert "reason=" in str(failed_activation.value)
+    assert PRIVATE_FAILURE_MARKER not in str(failed_activation.value)
     assert len(settlement_calls) == 2
     candidate_wait, recovery_wait = settlement_calls
     assert candidate_wait["result"]["status"] == "failed"
