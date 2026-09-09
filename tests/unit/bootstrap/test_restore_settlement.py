@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,12 @@ from bootstrap.backup_restore import BackupError, BackupManager
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.service_settlement import POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
 from bootstrap.services import ServiceManager
+from bootstrap.source_identity import write_source_marker
+
+
+@pytest.fixture(autouse=True)
+def credential_free_restore_lab(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
 
 
 def _report(*failed: str) -> dict:
@@ -67,6 +74,15 @@ def restore_proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     doctor_run = Mock()
     doctor = Mock(return_value=SimpleNamespace(run=doctor_run))
     monkeypatch.setattr("bootstrap.backup_restore.Doctor", doctor)
+    monkeypatch.setattr(
+        manager, "_selected_restore_release", lambda: (manager.root, lambda: None)
+    )
+    monkeypatch.setattr(
+        "bootstrap.backup_restore.run_release_doctor",
+        lambda paths, release, **kwargs: doctor(
+            paths, root=release, test_mode=kwargs["test_mode"]
+        ).run(include_synthetic_proof=kwargs["include_synthetic_proof"]),
+    )
     sleep = Mock()
     monkeypatch.setattr(
         "bootstrap.service_settlement.time",
@@ -96,7 +112,12 @@ def test_restore_waits_for_late_source_settlement_then_runs_full_doctor(restore_
     ]
     assert services.runtime_diagnostics.call_count == 3
     assert sleep.call_count == 3
-    doctor.assert_called_once_with(manager.paths, root=manager.root, test_mode=False)
+    assert doctor.call_count == 3
+    assert all(
+        call.args == (manager.paths,)
+        and call.kwargs == {"root": manager.root, "test_mode": False}
+        for call in doctor.call_args_list
+    )
     services.stop.assert_not_called()
     services.start.assert_not_called()
 
@@ -246,3 +267,116 @@ def test_failed_restore_quiesces_before_reverting_state(
         "stop:restored",
         *([] if stop_fails else ["move:restored", "start"]),
     ]
+
+
+@pytest.fixture
+def selected_release(tmp_path):
+    paths = DeploymentPaths.from_root(tmp_path / "selected-release-lab")
+    paths.create()
+    commit = "d" * 40
+    release = paths.app_dir / "releases" / commit
+    (release / ".venv" / "bin").mkdir(parents=True)
+    python = release / ".venv" / "bin" / "python"
+    python.write_text("#!/bin/sh\nexit 1\n")
+    python.chmod(0o700)
+    versions = release / "bootstrap" / "versions.json"
+    versions.parent.mkdir()
+    versions.write_bytes(
+        (
+            Path(__file__).resolve().parents[3] / "bootstrap" / "versions.json"
+        ).read_bytes()
+    )
+    write_source_marker(release, commit)
+    pointer = paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps({"commit": commit, "path": str(release)}))
+    pointer.chmod(0o600)
+    controller = tmp_path / "newer-controller"
+    controller.mkdir()
+    manager = BackupManager(paths, root=controller, test_mode=True)
+    manager.test_mode = False
+    return manager, release, pointer
+
+
+def test_restore_uses_selected_release_python_and_root_not_newer_controller(
+    selected_release, monkeypatch
+):
+    manager, release, _pointer = selected_release
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_report()), stderr="")
+
+    monkeypatch.setattr("bootstrap.service_settlement.subprocess.run", run)
+    monkeypatch.setattr(
+        "bootstrap.backup_restore.Doctor",
+        Mock(side_effect=AssertionError("controller Doctor must not run")),
+    )
+    assert manager._post_restore_doctor(services_restarted=False) == _report()
+    [(command, options)] = calls
+    assert command[0] == str(release / ".venv" / "bin" / "python")
+    assert command[-1] == "--no-synthetic-proof"
+    assert options["cwd"] == release
+    assert options["env"]["ADMINME_REPOSITORY_ROOT"] == str(release)
+    assert options["env"]["ADMINME_INSTANCE_DIR"] == str(manager.paths.instance_dir)
+    assert "PYTHONPATH" not in options["env"]
+    assert "VIRTUAL_ENV" not in options["env"]
+    assert manager.root != release
+
+
+@pytest.mark.parametrize(
+    "invalid", ["missing_pointer", "malformed_pointer", "wrong_path", "missing_runtime"]
+)
+def test_restore_invalid_selection_fails_before_state_or_secret_access(
+    selected_release, monkeypatch, invalid
+):
+    manager, release, pointer = selected_release
+    if invalid == "missing_pointer":
+        pointer.unlink()
+    elif invalid == "malformed_pointer":
+        pointer.write_text("{invalid json")
+    elif invalid == "wrong_path":
+        pointer.write_text(json.dumps({"commit": "d" * 40, "path": str(manager.root)}))
+    else:
+        (release / ".venv" / "bin" / "python").unlink()
+    backup = manager.paths.backup_dir / "fixture.ambackup"
+    backup.write_bytes(b"fixture-encrypted")
+    secret_access = Mock(side_effect=AssertionError("must fail before secret access"))
+    monkeypatch.setattr(manager, "_references", secret_access)
+    manager._services = Mock(spec=ServiceManager)
+    with pytest.raises(BackupError, match="release"):
+        manager.restore(backup)
+    secret_access.assert_not_called()
+    manager.services.stop.assert_not_called()
+    manager.services.start.assert_not_called()
+
+
+def test_restore_rejects_pointer_change_during_readiness_poll(
+    selected_release, monkeypatch
+):
+    manager, _release, pointer = selected_release
+    calls = []
+
+    def doctor(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps(_report("source_assurance_terminal_dispositions")),
+            stderr="",
+        )
+
+    def mutate_pointer(_seconds):
+        pointer.write_text("{}")
+
+    monkeypatch.setattr("bootstrap.service_settlement.subprocess.run", doctor)
+    monkeypatch.setattr(
+        "bootstrap.service_settlement.time",
+        SimpleNamespace(monotonic=time.monotonic, sleep=mutate_pointer),
+    )
+    services = Mock(spec=ServiceManager)
+    services.runtime_diagnostics.return_value = _readiness(pending=1)
+    manager._services = services
+    with pytest.raises(BackupError, match="selected release changed"):
+        manager._post_restore_doctor(services_restarted=True)
+    assert len(calls) == 1
+    assert services.runtime_diagnostics.call_count == 1

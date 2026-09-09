@@ -287,6 +287,22 @@ state directories. These are **PRESERVE** under the bootstrap backup, recovery,
 observation, and source-accounting invariants: neither required proof nor rollback
 is waived, and installed releases and durable checkpoints are never patched.
 
+When a newer recovery controller restores an older selected release, its Doctor
+must execute with that installed release's Python, registry, packs, and plugin
+path. Validate the selected release before replacing state and throughout the
+settlement wait. An unavailable runtime or changed selection fails closed; the
+controller checkout is not a substitute for the selected runtime's proof.
+
+Exact learning scope includes an optional `protected_source_id`, independently
+of account, enrollment, and conversation. Reconfiguring a connection can leave
+retained observations from several protected sources under the same account;
+a rule made for one source must not silently match another. This is
+**MODERNIZE** under CO-007's canonical payload-version rule and this order's exact
+source scope. Existing V1 rule and feedback models remain registered unchanged;
+protected-source payloads use V2 with explicit upcasters. Omitted scope preserves
+existing matching and request fingerprints without inferring historical source
+identity. The member sees the draft's source and conversation scope before preview.
+
 ## Acceptance and constitutional disposition
 
 AC-60 requires production-composition tests for the source-grounded pipeline,

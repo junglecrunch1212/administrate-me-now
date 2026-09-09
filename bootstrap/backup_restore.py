@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
+from collections.abc import Callable
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -49,10 +50,11 @@ from bootstrap.contracts import (
 from bootstrap.candidate_readiness import (
     CandidateReadinessError,
     capture_deployment_snapshot,
+    _pointer_snapshot,
 )
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
-from bootstrap.service_settlement import wait_for_settled_doctor
+from bootstrap.service_settlement import run_release_doctor, wait_for_settled_doctor
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import (
     SourceIdentityError,
@@ -1901,20 +1903,77 @@ class BackupManager:
             finally:
                 os.close(lock_descriptor)
 
-    def _post_restore_doctor(self, *, services_restarted: bool) -> dict[str, Any]:
-        doctor = Doctor(self.paths, root=self.root, test_mode=self.test_mode)
+    def _selected_restore_release(self) -> tuple[Path, Callable[[], None]]:
+        if self.test_mode:
+            return self.root, lambda: None
+        try:
+            snapshot = _pointer_snapshot(self.paths)
+            release = self.paths.app_dir / "releases" / snapshot[0]
+            identity = self._predecessor_evidence(snapshot[0])
+            if identity["pointer_sha256"] != snapshot[1]:
+                raise BackupError("selected release changed during source verification")
+            release_stat = release.stat()
+            python = release / ".venv" / "bin" / "python"
+            if not python.is_file() or not os.access(python, os.X_OK):
+                raise BackupError("selected release Doctor runtime is unavailable")
+        except (CandidateReadinessError, OSError) as exc:
+            raise BackupError(
+                "restore requires a valid installed release selection"
+            ) from exc
+
+        def validate_selection() -> None:
+            try:
+                current = _pointer_snapshot(self.paths)
+                current_stat = release.stat()
+            except (CandidateReadinessError, OSError) as exc:
+                raise BackupError("selected release changed during restore") from exc
+            if current != snapshot or (current_stat.st_dev, current_stat.st_ino) != (
+                release_stat.st_dev,
+                release_stat.st_ino,
+            ):
+                raise BackupError("selected release changed during restore")
+
+        validate_selection()
+        return release, validate_selection
+
+    def _post_restore_doctor(
+        self,
+        *,
+        services_restarted: bool,
+        selected_release: tuple[Path, Callable[[], None]] | None = None,
+    ) -> dict[str, Any]:
+        release, validate_selection = (
+            selected_release or self._selected_restore_release()
+        )
+
+        def doctor(*, include_synthetic_proof: bool) -> dict[str, Any]:
+            validate_selection()
+            result = run_release_doctor(
+                self.paths,
+                release,
+                include_synthetic_proof=include_synthetic_proof,
+                test_mode=self.test_mode,
+                require_runtime=not self.test_mode,
+                doctor_factory=Doctor,
+                error_type=BackupError,
+            )
+            validate_selection()
+            return result
+
         if not services_restarted:
-            return doctor.run(include_synthetic_proof=False)
+            return doctor(include_synthetic_proof=False)
         return wait_for_settled_doctor(
-            run_doctor=doctor.run,
+            run_doctor=doctor,
             services=self.services,
             test_mode=self.test_mode,
+            validate_selection=validate_selection,
         )
 
     def restore(self, backup: Path) -> dict[str, Any]:
         source = ensure_within(backup, self.paths.backup_dir)
         if not source.is_file():
             raise BackupError("backup file is missing")
+        selected_release = self._selected_restore_release()
         references = self._references()
         backup_key = self.store.get(references["backup"])
         event_key = self.store.get(references["event_log"])
@@ -1934,6 +1993,7 @@ class BackupManager:
                 raise BackupError("backup manifest identity does not match envelope")
             staged_state = staging_root / "state"
             replay = asyncio.run(self._prove_rebuild(staged_state, event_key))
+            selected_release[1]()
             previous = self.services.status()
             should_restart = previous.status in {"healthy", "degraded", "failed"}
             if should_restart:
@@ -1946,7 +2006,8 @@ class BackupManager:
                 if should_restart:
                     self.services.start()
                 diagnostics = self._post_restore_doctor(
-                    services_restarted=should_restart
+                    services_restarted=should_restart,
+                    selected_release=selected_release,
                 )
                 if diagnostics["status"] != "healthy":
                     failed_checks = ", ".join(

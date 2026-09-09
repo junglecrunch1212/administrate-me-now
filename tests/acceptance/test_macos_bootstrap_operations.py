@@ -610,6 +610,18 @@ def test_encrypted_restore_settles_late_sources_and_quiesces_failed_state(
     # Use the production waiting policy with fixture services and credentials.
     # The supplied Doctor still executes every actual proof in the lab root.
     manager.test_mode = False
+    # This case isolates the late-readiness contract. A separate process test
+    # below proves installed-release selection and its real Doctor subprocess.
+    monkeypatch.setattr(
+        manager, "_selected_restore_release", lambda: (REPO_ROOT, lambda: None)
+    )
+    monkeypatch.setattr(
+        backup_restore_module,
+        "run_release_doctor",
+        lambda actual_paths, release, **kwargs: kwargs["doctor_factory"](
+            actual_paths, root=release, test_mode=kwargs["test_mode"]
+        ).run(include_synthetic_proof=kwargs["include_synthetic_proof"]),
+    )
     doctor_calls: list[bool] = []
     proof_reports: list[dict] = []
     readiness_calls = 0
@@ -708,6 +720,90 @@ def test_encrypted_restore_settles_late_sources_and_quiesces_failed_state(
         assert proof["review_suppressed_by_observation"] is True
     assert readiness_calls == 3
     assert services.status().status == "healthy"
+    assert services.status().observation_mode is True
+
+
+def test_newer_restore_controller_proves_selected_predecessor_in_its_real_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exact older release owns Doctor even when a newer checkout restores."""
+    from bootstrap.source_identity import write_source_marker
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "selected-predecessor-restore")
+    paths.create()
+    predecessor = "890a0b5b5a86650806fcda54ac319f00a0d636cb"
+    release = paths.app_dir / "releases" / predecessor
+    release.parent.mkdir(mode=0o700)
+    _extract_git_archive(REPO_ROOT, predecessor, release)
+    assert (
+        "version: 22.0.0"
+        in (release / "packs/pipelines/noise_filtering/pipeline.yaml").read_text()
+    )
+    assert (
+        "version: 23.0.0"
+        in (REPO_ROOT / "packs/pipelines/noise_filtering/pipeline.yaml").read_text()
+    )
+    python = release / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True, mode=0o700)
+    python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o700)
+    write_source_marker(release, predecessor)
+    pointer = paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps({"commit": predecessor, "path": str(release)}))
+    pointer.chmod(0o600)
+    pointer_before = pointer.read_bytes()
+    BootstrapWizard(
+        paths,
+        root=release,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    services = ServiceManager(paths, test_mode=True)
+    services.start()
+    manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
+    manager._services = services
+    backup = manager.create()
+    manager.test_mode = False
+    # No Doctor/report mock: both invocations below execute bootstrap.cli from
+    # the selected archived predecessor using its installed interpreter path.
+    original_run = subprocess.run
+    doctor_calls = []
+
+    def run(command, **kwargs):
+        completed = original_run(command, **kwargs)
+        if command[0] == str(python):
+            doctor_calls.append((command, kwargs, json.loads(completed.stdout)))
+        return completed
+
+    monkeypatch.setattr("bootstrap.service_settlement.subprocess.run", run)
+    restored = manager.restore(Path(backup["path"]))
+    assert restored["status"] == "restored"
+    assert restored["projections_rebuilt"] == 15
+    assert len(doctor_calls) == 2
+    for command, options, report in doctor_calls:
+        assert command[:3] == [str(python), "-m", "bootstrap.cli"]
+        assert options["cwd"] == release
+        assert options["env"]["ADMINME_REPOSITORY_ROOT"] == str(release)
+        assert "PYTHONPATH" not in options["env"]
+        assert report["status"] == "healthy", report
+    assert doctor_calls[0][0][-1] == "--no-synthetic-proof"
+    assert doctor_calls[1][0][-1] == "doctor"
+    proof = next(
+        row["evidence"]
+        for row in doctor_calls[-1][2]["checks"]
+        if row["name"] == "canonical_synthetic_round_trip"
+    )
+    assert proof["external_side_effects"] == 0
+    assert proof["review_suppressed_by_observation"] is True
+    assert pointer.read_bytes() == pointer_before
     assert services.status().observation_mode is True
 
 

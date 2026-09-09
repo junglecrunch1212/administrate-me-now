@@ -61,6 +61,7 @@ from bootstrap.service_settlement import (
     failed_checks_are_known_transients,
     has_new_structural_degradation,
     runtime_has_only_transient_deployment_readiness_gap,
+    run_release_doctor,
     wait_for_settled_doctor,
 )
 from bootstrap.source_assessment_repair import (
@@ -80,7 +81,7 @@ from bootstrap.source_identity import (
     verify_release_source_identity,
     write_source_marker_at,
 )
-from bootstrap.wizard import install_launch_agents, service_environment_path
+from bootstrap.wizard import install_launch_agents
 
 
 class UpgradeError(RuntimeError):
@@ -1087,66 +1088,14 @@ class UpgradeManager:
     def _run_release_doctor(
         self, release: Path, *, include_synthetic_proof: bool
     ) -> dict[str, Any]:
-        """Run Doctor with one coherent release registry, packs, and projections."""
-
-        release_python = release / ".venv" / "bin" / "python"
-        if self.test_mode or not release_python.is_file():
-            return Doctor(
-                self.paths,
-                root=release,
-                test_mode=self.test_mode,
-            ).run(include_synthetic_proof=include_synthetic_proof)
-        environment = os.environ.copy()
-        environment.pop("PYTHONPATH", None)
-        environment.pop("VIRTUAL_ENV", None)
-        environment.update(
-            {
-                "ADMINME_INSTANCE_ROOT": str(self.paths.root),
-                "ADMINME_INSTANCE_DIR": str(self.paths.instance_dir),
-                "ADMINME_REPOSITORY_ROOT": str(release),
-                "OPENCLAW_STATE_DIR": str(
-                    self.paths.instance_dir / "openclaw" / "runtime"
-                ),
-                "OPENCLAW_CONFIG_PATH": str(
-                    self.paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
-                ),
-                "PATH": service_environment_path(self.paths, release),
-            }
+        return run_release_doctor(
+            self.paths,
+            release,
+            include_synthetic_proof=include_synthetic_proof,
+            test_mode=self.test_mode,
+            doctor_factory=Doctor,
+            error_type=UpgradeError,
         )
-        command = [
-            str(release_python),
-            "-m",
-            "bootstrap.cli",
-            "--instance-root",
-            str(self.paths.root),
-            "doctor",
-        ]
-        if not include_synthetic_proof:
-            command.append("--no-synthetic-proof")
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=release,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise UpgradeError(
-                "candidate Doctor exceeded 120 seconds; verify candidate-runtime "
-                "Keychain access and inspect the redacted service logs"
-            ) from exc
-        try:
-            result = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise UpgradeError(
-                "candidate Doctor did not return a valid diagnostic report"
-            ) from exc
-        if not isinstance(result, dict):
-            raise UpgradeError("candidate Doctor returned an invalid diagnostic report")
-        return result
 
     def _refresh_active_runtime_binding(
         self,

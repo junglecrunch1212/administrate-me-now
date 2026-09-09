@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import time
+import os
+import json
+import subprocess
+from pathlib import Path
 from collections.abc import Callable
 from typing import Any
+
+from bootstrap.contracts import DeploymentPaths
+from bootstrap.doctor import Doctor
+from bootstrap.wizard import service_environment_path
 
 from bootstrap.services import (
     ServiceManager,
@@ -175,6 +183,7 @@ def wait_for_settled_doctor(
     poll_seconds: float = POST_SWITCH_POLL_SECONDS,
     live_readiness_retry_limit: int = POST_SWITCH_LIVE_READINESS_RETRIES,
     allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
+    validate_selection: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Share the upgrade/restore proof without invoking either controller.
 
@@ -195,8 +204,12 @@ def wait_for_settled_doctor(
         else min(max(timeout_seconds, 0), POST_SWITCH_REPLAY_SETTLEMENT_SECONDS)
     )
     live_readiness_retries = 0
+    if validate_selection is not None:
+        validate_selection()
     last = run_doctor(include_synthetic_proof=False)
     while True:
+        if validate_selection is not None:
+            validate_selection()
         if last.get("status") == "healthy":
             last = run_doctor(include_synthetic_proof=True)
             if last.get("status") == "healthy":
@@ -267,3 +280,81 @@ def wait_for_settled_doctor(
 
         time.sleep(poll_seconds)
         last = run_doctor(include_synthetic_proof=False)
+
+
+def run_release_doctor(
+    paths: DeploymentPaths,
+    release: Path,
+    *,
+    include_synthetic_proof: bool,
+    test_mode: bool = False,
+    require_runtime: bool = False,
+    doctor_factory: Callable[..., Any] = Doctor,
+    error_type: type[RuntimeError] = RuntimeError,
+) -> dict[str, Any]:
+    """Run the selected release's coherent Python, registry, packs and Doctor.
+
+    Restore requires an installed executable. The upgrade caller retains its
+    established in-process fallback for credential-free preparation fixtures.
+    """
+
+    release_python = release / ".venv" / "bin" / "python"
+    if require_runtime and (
+        not release_python.is_file() or not os.access(release_python, os.X_OK)
+    ):
+        raise error_type("selected release Doctor runtime is unavailable")
+    if test_mode or not release_python.is_file():
+        return doctor_factory(
+            paths,
+            root=release,
+            test_mode=test_mode,
+        ).run(include_synthetic_proof=include_synthetic_proof)
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment.pop("VIRTUAL_ENV", None)
+    environment.update(
+        {
+            "ADMINME_INSTANCE_ROOT": str(paths.root),
+            "ADMINME_INSTANCE_DIR": str(paths.instance_dir),
+            "ADMINME_REPOSITORY_ROOT": str(release),
+            "OPENCLAW_STATE_DIR": str(paths.instance_dir / "openclaw" / "runtime"),
+            "OPENCLAW_CONFIG_PATH": str(
+                paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+            ),
+            "PATH": service_environment_path(paths, release),
+        }
+    )
+    command = [
+        str(release_python),
+        "-m",
+        "bootstrap.cli",
+        "--instance-root",
+        str(paths.root),
+        "doctor",
+    ]
+    if not include_synthetic_proof:
+        command.append("--no-synthetic-proof")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=release,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise error_type(
+            "candidate Doctor exceeded 120 seconds; verify candidate-runtime "
+            "Keychain access and inspect the redacted service logs"
+        ) from exc
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise error_type(
+            "candidate Doctor did not return a valid diagnostic report"
+        ) from exc
+    if not isinstance(result, dict):
+        raise error_type("candidate Doctor returned an invalid diagnostic report")
+    return result
