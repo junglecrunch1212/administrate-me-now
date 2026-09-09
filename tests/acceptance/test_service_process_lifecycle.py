@@ -306,8 +306,15 @@ def test_unloaded_job_with_live_child_cannot_prove_stop_or_fresh_start(lifecycle
     manager, host = lifecycle
     assert manager.start().status == "healthy"
     host.retain_gateway_on_bootout = True
+    # The final real OS probe may exhaust the shared short deadline before
+    # the polling loop reports the captured survivor. Both refuse quiescence.
+    proof_failure = (
+        r"quiescence is unproven|"
+        r"service process ownership could not be verified|"
+        r"service process proof deadline expired"
+    )
     started = time.monotonic()
-    with pytest.raises(RuntimeError, match="quiescence is unproven"):
+    with pytest.raises(RuntimeError, match=proof_failure):
         manager.stop()
     assert 0.4 <= time.monotonic() - started < 5
     assert not host.jobs
@@ -320,7 +327,7 @@ def test_unloaded_job_with_live_child_cannot_prove_stop_or_fresh_start(lifecycle
         for command in host.commands
         if command[0] == "launchctl"
     )
-    with pytest.raises(RuntimeError, match="quiescence is unproven"):
+    with pytest.raises(RuntimeError, match=proof_failure):
         manager.start()
     assert (
         sum(
