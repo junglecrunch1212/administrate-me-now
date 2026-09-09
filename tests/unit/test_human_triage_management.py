@@ -168,6 +168,39 @@ def test_required_human_lanes_are_deterministic() -> None:
     assert human_triage_lane(base) == "low_confidence_review"
 
 
+@pytest.mark.parametrize("target_kind", ["task", "commitment", "recurrence"])
+def test_unverified_candidate_kind_cannot_label_a_member_promise(
+    target_kind: str,
+) -> None:
+    item = {
+        "source_kind": "message_extraction",
+        "target_kind": target_kind,
+        "candidate": {},
+        "interpretation": {
+            "contract": "triage-context-interpretation-v3",
+            "assessment_state": "invalid",
+            "obligation_assessment": None,
+            "thread_state": "waiting_on_member",
+        },
+    }
+    assert (
+        human_triage_lane(
+            item,
+            {
+                "decision": "unresolved",
+                "priority_basis": ["standard_actionable_candidate"],
+            },
+        )
+        == "clarification_conflict"
+    )
+    assert (
+        human_triage_lane(
+            {"source_kind": "commitment_proposal", "target_kind": "commitment"}
+        )
+        == "member_promise"
+    )
+
+
 @pytest.mark.parametrize(
     ("basis", "expected"),
     [

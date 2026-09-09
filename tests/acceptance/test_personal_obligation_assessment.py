@@ -425,3 +425,140 @@ def test_source_qualified_obligation_reaches_production_triage(
             client.portal.call(_events, runtime, "external_sync.write_completed") == []
         )
         assert client.portal.call(_events, runtime, "external_sync.write_failed") == []
+
+
+@pytest.mark.parametrize("unsupported_kind", ["recurrence", "commitment"])
+def test_invalid_sibling_assessment_cannot_borrow_a_personal_promise(
+    tmp_path: Path, unsupported_kind: str
+) -> None:
+    """A real pipeline clarification must not inherit another action's authority."""
+    promise = "I will send the figures next week."
+    forecast = "The periodic report arrives monthly."
+    body = f"{forecast} {promise}"
+    promised_action = {
+        "body": body,
+        "quote": promise,
+        "purpose": "member_promise",
+        "actionability": "required",
+        "owner": "member",
+        "target_kind": "commitment",
+        "candidate": {},
+        "date_role": "none",
+        "qualifiers": [("ownership", "I will send the figures")],
+        "outbound": True,
+        "provider": "bluebubbles",
+        "channel": "imessage",
+    }
+    unsupported_action = {
+        **promised_action,
+        "quote": forecast,
+        "purpose": "status_update",
+        "actionability": "unknown",
+        "owner": "unknown",
+        "target_kind": unsupported_kind,
+        "candidate": {"rrule": "FREQ=MONTHLY"}
+        if unsupported_kind == "recurrence"
+        else {},
+        # Schema-valid model output is not proof of an actual source qualifier.
+        "qualifiers": [("ownership", "The member must prepare this report.")],
+    }
+    instance = tmp_path / unsupported_kind
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    output_schema = json.loads(
+        (
+            REPO_ROOT
+            / "packs/skills/classify_message_nature/schemas/output.schema.json"
+        ).read_text()
+    )
+    calls: list[str] = []
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+
+        async def language_seam(
+            skill_id: str, inputs: dict[str, Any], context: Any
+        ) -> SimpleNamespace:
+            assert skill_id == "skill:classify_message_nature"
+            output = _language_output(inputs, promised_action)
+            output["candidates"].extend(
+                _language_output(inputs, unsupported_action)["candidates"]
+            )
+            jsonschema.validate(output, output_schema)
+            calls.append(context.triggering_event_id)
+            return SimpleNamespace(output=output)
+
+        runtime.run_skill_fn = language_seam
+        runtime.pipelines._run_skill_fn = language_seam
+        source_id = client.portal.call(
+            runtime.events.write,
+            _source(runtime, f"mixed-promise-{unsupported_kind}", promised_action),
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber, "pipeline:pipeline:noise_filtering", source_id
+        )
+        assert calls == [source_id]
+        proposals = [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.proposed")
+            if event["payload"]["source_event_id"] == source_id
+        ]
+        assert len(proposals) == 2
+        by_quote = {event["payload"]["title"]: event for event in proposals}
+        assert set(by_quote) == {promise, forecast}
+        invalid = by_quote[forecast]["payload"]["interpretation"]
+        assert invalid["assessment_state"] == "invalid"
+        assert invalid["obligation_assessment"] is None
+        assert by_quote[forecast]["payload"]["target_kind"] == (
+            "task" if unsupported_kind == "recurrence" else "commitment"
+        )
+        for quote, proposal in by_quote.items():
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "triage-reconciliation:admission",
+                proposal["event_id"],
+            )
+            decisions = [
+                event
+                for event in client.portal.call(
+                    runtime.event_log.get_by_causation, proposal["event_id"]
+                )
+                if event["type"] == "triage.reconciliation.decided"
+            ]
+            assert decisions
+            decision = decisions[-1]
+            payload = decision["payload"]
+            if quote == promise:
+                assert payload["priority_basis"] == ["exact_member_commitment"]
+                assert payload["priority_rank"] == 10
+                assert payload["member_authored_text_digest"]
+                assert payload["decision"] == "admit"
+            else:
+                assert "exact_member_commitment" not in payload["priority_basis"]
+                assert "known_human_actionable_request" not in payload["priority_basis"]
+                assert payload["priority_rank"] == 60
+                assert payload["member_authored_text_digest"] is None
+                assert payload["decision"] == "unresolved"
+            client.portal.call(
+                runtime.wait_for_projection, "triage", decision["event_id"]
+            )
+        response = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+            headers={"Tailscale-User-Login": "obligation-process.ts.net"},
+        )
+        assert response.status_code == 200
+        by_proposal = {item["proposal_id"]: item for item in response.json()["items"]}
+        actual = by_proposal[by_quote[promise]["payload"]["proposal_id"]]
+        clarification = by_proposal[by_quote[forecast]["payload"]["proposal_id"]]
+        assert actual["disposition"]["lane"] == "member_promise"
+        assert clarification["disposition"]["lane"] == "clarification_conflict"
+        assert (
+            actual["attention_view"] == clarification["attention_view"] == "needs_you"
+        )
+        assert clarification["source_context"]["evidence"]["exactly_grounded"] is True
+        assert clarification["interpretation"]["unresolved_questions"]
+        for event_type in (
+            "external_sync.write_requested",
+            "external_sync.write_completed",
+            "external_sync.write_failed",
+        ):
+            assert client.portal.call(_events, runtime, event_type) == []

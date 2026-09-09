@@ -712,7 +712,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             proposal_id="proposal-known-human",
             source_event_id=known_source,
-            title="Send the fixture form",
+            title="Could you please send the fixture form?",
             confidence=0.1,
         )
         deadline_source = _write_message(
@@ -749,7 +749,7 @@ def test_cross_source_scenarios_priority_privacy_corrections_and_replay(
             runtime,
             proposal_id="proposal-member-promise",
             source_event_id=promise_source,
-            title="Send the promised fixture form",
+            title="I will send the fixture form tomorrow.",
             target_kind="commitment",
         )
         intent_source = _write_intent(
