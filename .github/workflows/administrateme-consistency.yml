@@ -63,6 +63,8 @@ jobs:
           tests/acceptance/test_triage_rollback_compatibility.py
           tests/acceptance/test_runtime_spine.py
           tests/acceptance/test_cross_source_reconciliation.py
+          tests/acceptance/test_personal_obligation_assessment.py
+          tests/unit/test_human_triage_management.py
           tests/acceptance/test_message_context_replay_throughput.py
           tests/acceptance/test_context_correctness_vertical_slice.py
           tests/unit/test_cross_source_reconciliation.py

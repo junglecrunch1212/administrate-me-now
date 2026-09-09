@@ -27,6 +27,7 @@ from adminme.events.schemas.reconciliation import (
     TriageReconciliationDecidedV1,
 )
 from adminme.events.writer import EventSink
+from adminme.message_context import authored_message_text
 from adminme.obligation_assessment import assessment_for_proposal
 from adminme.settings_control import SettingsControlStore
 from adminme.source_policy import (
@@ -761,6 +762,44 @@ def _message_direction(event: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+def _candidate_action_text(
+    event: Mapping[str, Any], proposal: Mapping[str, Any]
+) -> str:
+    """Ground legacy action evidence in this candidate's primary source quote.
+
+    Current contextual proposals must use their qualified assessment. A missing
+    or invalid assessment cannot be repaired by scanning the message. Older
+    producers retain only their own exact quote, never other context references
+    or a sibling action elsewhere in the source.
+    """
+
+    payload = _payload(proposal)
+    interpretation = payload.get("interpretation")
+    if proposal.get("type") != "triage.item.proposed" or payload.get(
+        "source_event_id"
+    ) != event.get("event_id"):
+        return ""
+    quote = payload.get("title")
+    if isinstance(interpretation, Mapping):
+        if interpretation.get("contract") == "triage-context-interpretation-v3":
+            return ""
+        references = interpretation.get("evidence_refs")
+        if references:
+            if not isinstance(references, list):
+                return ""
+            primary = references[0]
+            if not isinstance(primary, Mapping) or primary.get(
+                "source_event_id"
+            ) != event.get("event_id"):
+                return ""
+            quote = primary.get("quote")
+    if not isinstance(quote, str) or not quote.strip():
+        return ""
+    quote = quote.replace("\r\n", "\n").replace("\r", "\n").strip()
+    authored = authored_message_text(_payload(event))
+    return quote if authored.reliable and quote in authored.text else ""
+
+
 def assessed_signals(
     event: Mapping[str, Any],
     proposal: Mapping[str, Any] | None = None,
@@ -771,15 +810,27 @@ def assessed_signals(
 
     base = assess_source_signals(event)
     assessment = assessment_for_proposal(proposal)
+    interpretation = _payload(proposal or {}).get("interpretation")
+    if (
+        assessment
+        and isinstance(interpretation, Mapping)
+        and interpretation.get("assessment_state") != "verified"
+    ):
+        assessment = None
     payload = _payload(event)
     text = _source_text(event, proposal)
     direction = _message_direction(event)
     sender = str(payload.get("from_identifier") or payload.get("from_number") or "")
     automated = bool(_AUTOMATED_SENDER_PATTERN.search(sender))
     labels = {str(value).upper() for value in payload.get("provider_labels") or []}
-    request = direction == "inbound" and bool(_REQUEST_PATTERN.search(text))
+    action_text = ""
+    if assessment is None:
+        action_text = (
+            _candidate_action_text(event, proposal) if proposal is not None else text
+        )
+    request = direction == "inbound" and bool(_REQUEST_PATTERN.search(action_text))
     known_request = request and prior_member_correspondence and not automated
-    promise = direction == "outbound" and bool(_PROMISE_PATTERN.search(text))
+    promise = direction == "outbound" and bool(_PROMISE_PATTERN.search(action_text))
     security = automated and bool(_SECURITY_PATTERN.search(text))
     spam = "SPAM" in labels
     promotion = "CATEGORY_PROMOTIONS" in labels
@@ -788,12 +839,6 @@ def assessed_signals(
     )
     receipt = bool(_RECEIPT_PATTERN.search(text))
     actionability = list(base.deterministic_actionability_evidence)
-    if known_request:
-        actionability.extend(
-            ("known_correspondent_prior_outbound", "exact_request_phrase")
-        )
-    if promise:
-        actionability.append("exact_outbound_member_promise")
     if (
         assessment
         and assessment.date_role == "deadline"
@@ -814,6 +859,12 @@ def assessed_signals(
             and not automated
         )
         actionability.append("source_grounded_obligation_assessment")
+    if known_request:
+        actionability.extend(
+            ("known_correspondent_prior_outbound", "exact_request_phrase")
+        )
+    if promise:
+        actionability.append("exact_outbound_member_promise")
     return SignalAssessment.model_validate(
         {
             **base.model_dump(mode="json"),
@@ -828,7 +879,7 @@ def assessed_signals(
             "message_purpose": assessment.purpose if assessment else "unknown",
             "purpose_evidence_verified": assessment is not None,
             "known_human_incoming_request": known_request,
-            "member_promise": base.member_promise or promise,
+            "member_promise": promise or (proposal is None and base.member_promise),
             "security_alert": (assessment.purpose == "account_alert")
             if assessment
             else base.security_alert or security,
@@ -996,10 +1047,10 @@ def choose_decision(
 class ReconciliationAdmissionEvaluator:
     """Durable bus consumer that emits decision revisions from authorized state."""
 
-    # The production launcher previously omitted the activation settings and
-    # wrote shadow receipts. Revisit retained inputs under a new immutable
-    # decision namespace so those receipts cannot suppress active revisions.
-    CONSUMER_VERSION = "2.0.1"
+    # Revisit retained decisions that previously inherited promise/request
+    # priority from another action in the same message. The immutable namespace
+    # preserves prior receipts while emitting candidate-grounded revisions.
+    CONSUMER_VERSION = "2.0.2"
 
     def __init__(
         self,

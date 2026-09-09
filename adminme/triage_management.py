@@ -124,7 +124,10 @@ def human_triage_lane(
         return "alerts_safety"
     if "explicit_member_instruction" in basis:
         return "direct_instruction"
-    if "exact_member_commitment" in basis or item.get("target_kind") == "commitment":
+    if (
+        "exact_member_commitment" in basis
+        or item.get("source_kind") == "commitment_proposal"
+    ):
         return "member_promise"
     if "known_human_actionable_request" in basis:
         return "known_human_request"
@@ -141,6 +144,11 @@ def human_triage_lane(
         if interpretation.get("assessment_state") == "verified"
         else None
     )
+    if (
+        interpretation.get("contract") == "triage-context-interpretation-v3"
+        and interpretation.get("assessment_state") == "invalid"
+    ):
+        return "clarification_conflict"
     if interpretation.get("thread_state") in {"waiting_on_member", "waiting_on_other"}:
         return "waiting_follow_up"
     if any(

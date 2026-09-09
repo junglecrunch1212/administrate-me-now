@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -14,6 +15,8 @@ from adminme.events.schemas.reconciliation import (
     ReconciliationPolicySnapshotV1,
     ReconciliationTypedFactSharedV1,
 )
+from adminme.events.schemas.triage import TriageContextInterpretationV3
+from adminme.obligation_assessment import ground_obligation_assessment
 from adminme.reconciliation import (
     ReconciliationAdmissionEvaluator,
     assessed_signals,
@@ -24,6 +27,7 @@ from adminme.reconciliation import (
     priority_for,
     reference_digest,
 )
+from adminme.triage_intent import extract_message_fallback_candidates
 
 
 TENANT = "tenant-reconciliation-unit"
@@ -83,6 +87,7 @@ def _proposal(
         "event_id": f"event-{proposal_id}",
         "tenant_id": TENANT,
         "type": "triage.item.proposed",
+        "source_adapter": "deterministic_candidate_eligibility",
         "owner_scope": f"private:{MEMBER}",
         "visibility_scope": f"private:{MEMBER}",
         "payload": {
@@ -93,6 +98,65 @@ def _proposal(
             "candidate": candidate or {},
             "source_event_id": source_event_id,
             "confidence": confidence,
+        },
+    }
+
+
+def _with_assessment(
+    proposal: dict[str, Any],
+    *,
+    purpose: str,
+    actionability: str = "required",
+    owner: str = "member",
+    state: str = "verified",
+) -> dict[str, Any]:
+    payload = proposal["payload"]
+    quote = payload["title"]
+    source_id = payload["source_event_id"]
+    assessment = ground_obligation_assessment(
+        {
+            "purpose": purpose,
+            "actionability": actionability,
+            "condition_state": "not_applicable",
+            "qualifying_evidence": [],
+        },
+        source_texts={"m01": (source_id, quote)},
+        primary_alias="m01",
+        primary_quote=quote,
+        action_owner=owner,
+        fields={},
+    )
+    assert assessment is not None
+    interpretation = TriageContextInterpretationV3.model_validate(
+        {
+            "contract": "triage-context-interpretation-v3",
+            "context_fingerprint": "a" * 64,
+            "thread_key": "fixture-attention-thread",
+            "anchor_event_id": source_id,
+            "compact_summary": quote,
+            "thread_state": "unclear",
+            "action_owner": owner,
+            "lifecycle_state": "open",
+            "evidence_refs": [{"source_event_id": source_id, "quote": quote}],
+            "context_source_event_ids": [source_id],
+            "context_sources": [
+                {
+                    "source_event_id": source_id,
+                    "relation": "thread",
+                    "reason_codes": ["provider_thread_id"],
+                    "relationship_source_event_ids": [],
+                }
+            ],
+            "assessment_state": state,
+            "obligation_assessment": assessment if state == "verified" else None,
+        }
+    )
+    return {
+        **proposal,
+        "schema_version": 5,
+        "payload": {
+            **payload,
+            "interpretation": interpretation.model_dump(mode="json"),
         },
     }
 
@@ -318,6 +382,263 @@ def test_priority_uses_only_allowed_typed_evidence() -> None:
     # A model/provider field alone does not prove a source deadline.
     assert priority_for(deadline_signals) == (60, ["standard_actionable_candidate"])
     assert known_signals.provider_or_sender_urgency_non_authoritative == "critical"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "purpose", "action", "rank", "basis", "evidence"),
+    [
+        (
+            "messaging.sent",
+            "member_promise",
+            "I will send the figures next week.",
+            10,
+            "exact_member_commitment",
+            "exact_outbound_member_promise",
+        ),
+        (
+            "messaging.received",
+            "personal_request",
+            "Could you send the figures next week?",
+            20,
+            "known_human_actionable_request",
+            "exact_request_phrase",
+        ),
+    ],
+)
+@pytest.mark.parametrize("state", ["invalid", "unavailable", "verified"])
+def test_qualified_candidate_cannot_inherit_sibling_priority_or_source_flags(
+    event_type: str,
+    purpose: str,
+    action: str,
+    rank: int,
+    basis: str,
+    evidence: str,
+    state: str,
+) -> None:
+    forecast = "Several regular payments remain in the forecast."
+    source = _source(
+        "source-sibling-attention",
+        subject="Fixture planning update",
+        body=f"{forecast}\n{action}",
+        event_type=event_type,
+        extra={"member_promise": True, "known_human_incoming_request": True},
+    )
+    uncertain = _with_assessment(
+        _proposal("proposal-uncertain", str(source["event_id"]), forecast),
+        purpose=purpose,
+        owner="unknown",
+        actionability="unknown",
+        state=state,
+    )
+    actual = _with_assessment(
+        _proposal("proposal-action", str(source["event_id"]), action),
+        purpose=purpose,
+    )
+
+    uncertain_signals = assessed_signals(
+        source, uncertain, prior_member_correspondence=True
+    )
+    actual_signals = assessed_signals(source, actual, prior_member_correspondence=True)
+
+    assert priority_for(uncertain_signals) == (60, ["standard_actionable_candidate"])
+    assert not uncertain_signals.member_promise
+    assert not uncertain_signals.known_human_incoming_request
+    assert evidence not in uncertain_signals.deterministic_actionability_evidence
+    assert priority_for(actual_signals) == (rank, [basis])
+    assert evidence in actual_signals.deterministic_actionability_evidence
+
+
+@pytest.mark.parametrize("purpose", ["member_promise", "personal_request"])
+@pytest.mark.parametrize("state", ["invalid", "unavailable", "verified"])
+def test_unverified_or_conditional_v3_action_cannot_use_even_its_own_regex_phrase(
+    purpose: str, state: str
+) -> None:
+    action = (
+        "I will send the figures next week."
+        if purpose == "member_promise"
+        else "Could you send the figures next week?"
+    )
+    source = _source(
+        "source-qualified-action",
+        subject="Fixture qualification",
+        body=action,
+        event_type="messaging.sent"
+        if purpose == "member_promise"
+        else "messaging.received",
+        extra={"member_promise": True},
+    )
+    proposal = _with_assessment(
+        _proposal("proposal-qualified-action", str(source["event_id"]), action),
+        purpose=purpose,
+        actionability="conditional",
+        state=state,
+    )
+    signals = assessed_signals(source, proposal, prior_member_correspondence=True)
+
+    assert priority_for(signals) == (60, ["standard_actionable_candidate"])
+    assert not {
+        "exact_outbound_member_promise",
+        "exact_request_phrase",
+        "known_correspondent_prior_outbound",
+    }.intersection(signals.deterministic_actionability_evidence)
+
+
+@pytest.mark.parametrize("invalidity", ["producer", "assessment", "state"])
+def test_v3_assessment_requires_valid_code_owned_verified_metadata(
+    invalidity: str,
+) -> None:
+    action = "I will send the figures next week."
+    source = _source(
+        "source-verified-metadata",
+        subject="Fixture metadata",
+        body=action,
+        event_type="messaging.sent",
+        extra={"member_promise": True},
+    )
+    proposal = _with_assessment(
+        _proposal("proposal-verified-metadata", str(source["event_id"]), action),
+        purpose="member_promise",
+    )
+    assert priority_for(assessed_signals(source, proposal))[0] == 10
+    if invalidity == "producer":
+        proposal["source_adapter"] = "fixture-untrusted-source"
+    elif invalidity == "assessment":
+        proposal["payload"]["interpretation"]["obligation_assessment"] = {}
+    else:
+        proposal["payload"]["interpretation"]["assessment_state"] = "invalid"
+
+    signals = assessed_signals(source, proposal)
+    assert priority_for(signals) == (60, ["standard_actionable_candidate"])
+    assert not signals.purpose_evidence_verified
+    assert "exact_outbound_member_promise" not in (
+        signals.deterministic_actionability_evidence
+    )
+
+
+@pytest.mark.parametrize("contextual", [False, True])
+@pytest.mark.parametrize("outbound", [False, True])
+def test_legacy_priority_requires_own_primary_authored_quote(
+    contextual: bool, outbound: bool
+) -> None:
+    forecast = "Several regular payments remain in the forecast."
+    action = (
+        "I will send the figures next week."
+        if outbound
+        else "Could you send the figures next week?"
+    )
+    source = _source(
+        "source-legacy-attention",
+        subject=action,
+        body=f"{forecast}\n{action}",
+        event_type="messaging.sent" if outbound else "messaging.received",
+        extra={"member_promise": True},
+    )
+    sibling = _proposal("proposal-legacy-sibling", str(source["event_id"]), forecast)
+    own = _proposal("proposal-legacy-own", str(source["event_id"]), action)
+    if contextual:
+        for proposal in (sibling, own):
+            payload = proposal["payload"]
+            payload["interpretation"] = {
+                "contract": "triage-context-interpretation-v2",
+                "evidence_refs": [
+                    {"source_event_id": source["event_id"], "quote": payload["title"]},
+                    {"source_event_id": source["event_id"], "quote": action},
+                ],
+                "action_owner": "unknown",
+                "next_step": None,
+            }
+
+    def rank(proposal: dict[str, Any]) -> int:
+        return priority_for(
+            assessed_signals(source, proposal, prior_member_correspondence=True)
+        )[0]
+
+    assert rank(sibling) == 60
+    assert rank(own) == (10 if outbound else 20)
+    # Quoted reply history and a primary citation to another message cannot
+    # supply action ownership for this source, even if their words match.
+    source["payload"]["body_text"] = f"{forecast}\nOn fixture date wrote:\n> {action}"
+    assert rank(own) == 60
+    source["payload"]["body_text"] = f"{forecast}\n{action}"
+    own["payload"]["interpretation"] = {
+        "contract": "triage-context-interpretation-v2",
+        "evidence_refs": [{"source_event_id": "source-other", "quote": action}],
+    }
+    assert rank(own) == 60
+
+
+def test_language_disabled_extraction_keeps_each_incoming_action_separate() -> None:
+    body = "The fixture invoice is due next week.\nCould you send the figures?"
+    source = _source("source-fallback-attention", subject="Fixture update", body=body)
+    candidates = extract_message_fallback_candidates(
+        body,
+        submitted_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        direction="inbound",
+    )
+    assert len(candidates) == 2
+    ranks = [
+        priority_for(
+            assessed_signals(
+                source,
+                _proposal(
+                    candidate.candidate_key,
+                    str(source["event_id"]),
+                    candidate.title,
+                    candidate=candidate.fields,
+                ),
+                prior_member_correspondence=True,
+            )
+        )[0]
+        for candidate in candidates
+    ]
+    assert ranks == [60, 20]
+
+
+def test_language_disabled_extraction_retains_exact_outbound_promise() -> None:
+    body = "Several regular payments remain in the forecast.\nI will send the figures."
+    source = _source(
+        "source-outbound-fallback",
+        subject="Fixture update",
+        body=body,
+        event_type="messaging.sent",
+    )
+    [candidate] = extract_message_fallback_candidates(
+        body,
+        submitted_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        direction="outbound",
+    )
+    assert candidate.title == "I will send the figures"
+    signals = assessed_signals(
+        source,
+        _proposal(
+            candidate.candidate_key,
+            str(source["event_id"]),
+            candidate.title,
+            target_kind=candidate.target_kind,
+            candidate=candidate.fields,
+        ),
+    )
+    assert priority_for(signals) == (10, ["exact_member_commitment"])
+
+
+def test_authenticated_capture_priority_survives_invalid_action_assessment() -> None:
+    source = _source(
+        "source-direct-attention",
+        subject="Fixture capture",
+        event_type="triage.intent.submitted",
+    )
+    proposal = _with_assessment(
+        _proposal(
+            "proposal-direct-attention", str(source["event_id"]), "Review figures"
+        ),
+        purpose="member_promise",
+        state="invalid",
+    )
+
+    assert priority_for(assessed_signals(source, proposal)) == (
+        0,
+        ["explicit_member_instruction"],
+    )
 
 
 @pytest.mark.parametrize(

@@ -48,6 +48,18 @@ promotions, receipts, and provider categories alone cannot decide actionability.
 Conversely, an imperative in a footer, quoted history, saved instructions, or
 optional offer is not sufficient personal responsibility.
 
+**MODERNIZE candidate priority; PRESERVE separate obligations:** a promise or
+request elsewhere in a message cannot promote a sibling candidate. Verified
+candidate assessments govern their own actionability. Invalid assessment
+qualifiers remain clarification and cannot recover exact-promise or known-human
+request priority from source text or source-level flags. Legacy and
+language-disabled deterministic proposals require exact candidate-owned evidence
+grounded in authored source text for those priorities. A proposed Commitment
+kind alone does not justify the member-facing **Your promise** label; independently
+typed commitments and authenticated instructions retain their authority.
+The production composition proof uses a mixed iMessage source and verifies both
+the genuine promise and the unsupported sibling through the member API.
+
 Qualifiers are evidence. Unmet or unknown conditions remain conditional;
 unsupported normalized dates do not become verified deadlines; occurrence,
 reporting, expiry, and due dates remain distinct. Recurrence requires evidence
@@ -225,9 +237,11 @@ enrollment, credential, permission, dependency, or model-routing controls.
 The production-launcher regression must exercise `runtime_service.main` through
 the real runtime and member API, replacing only host, secret, and server-listener
 boundaries with synthetic fixtures. An environment-loader test alone does not
-prove launchd activation. The reconciliation consumer advances to **2.0.1** so
-retained shadow decisions receive a new immutable decision identity and replay
-under active admission. Existing member dismissals and edits remain protected.
+prove launchd activation. Consumer **2.0.1** revisited retained shadow decisions
+under active admission. Consumer **2.0.2** revisits candidate priority with exact
+candidate-owned actionability, giving retained decisions new immutable identities
+without rerunning the language classifier or changing its replay generation.
+Existing member dismissals and edits remain protected.
 This is **MODERNIZE** under CO-021 and this change order: it completes the
 documented production default without changing provider-write authority.
 
