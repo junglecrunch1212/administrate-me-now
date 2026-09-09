@@ -756,18 +756,36 @@ def test_newer_restore_controller_proves_selected_predecessor_in_its_real_proces
     pointer.write_text(json.dumps({"commit": predecessor, "path": str(release)}))
     pointer.chmod(0o600)
     pointer_before = pointer.read_bytes()
-    BootstrapWizard(
-        paths,
-        root=release,
-        fixture="two-adult-one-child",
-        test_mode=True,
-        dry_run=True,
-        preflight_overrides={
-            "system": "Darwin",
-            "machine": "arm64",
-            "macos_version": "26.0",
-        },
-    ).run()
+    # The predecessor must initialize its own runtime and packs. Calling the
+    # current Wizard with an older root creates a hybrid composition that no
+    # installed release runs, and cannot prove predecessor compatibility.
+    predecessor_environment = dict(os.environ)
+    predecessor_environment.pop("PYTHONPATH", None)
+    predecessor_environment["ADMINME_REPOSITORY_ROOT"] = str(release)
+    predecessor_bootstrap = subprocess.run(
+        [
+            str(python),
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "bootstrap",
+            "--dry-run",
+            "--fixture",
+            "two-adult-one-child",
+        ],
+        cwd=release,
+        env=predecessor_environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert predecessor_bootstrap.returncode == 0, (
+        predecessor_bootstrap.stdout,
+        predecessor_bootstrap.stderr,
+    )
+    assert json.loads(predecessor_bootstrap.stdout)["status"] == "healthy"
     services = ServiceManager(paths, test_mode=True)
     services.start()
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
