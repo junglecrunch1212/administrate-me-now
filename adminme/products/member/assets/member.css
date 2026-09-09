@@ -596,7 +596,7 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .candidate-policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 0 1rem 1rem; }
 .candidate-policy-card { display: grid; gap: .75rem; box-shadow: none; }
 .candidate-policy-heading { display: flex; justify-content: space-between; align-items: start; gap: .6rem; }
-.candidate-policy-heading > div { min-width: 0; }
+.candidate-policy-heading > div { min-width: 0; overflow-wrap: anywhere; }
 .candidate-policy-heading h3 { overflow-wrap: anywhere; }
 .source-attention-card { align-content: start; min-width: 0; }
 .source-purpose-settings, .source-similar-rule, .triage-similar-rule { border-top: 1px solid var(--line); padding-top: .75rem; min-width: 0; }
