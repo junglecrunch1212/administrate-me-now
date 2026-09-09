@@ -310,7 +310,8 @@ async def test_actual_metadata_query_covers_causation_and_pages_at_fixed_waterma
     assert any(event["causation_id"] is None for event in expected)
     statements: list[str] = []
     await log._run_locked(  # noqa: SLF001 - trace the actual storage boundary
-        log._conn.set_trace_callback, statements.append  # noqa: SLF001
+        log._conn.set_trace_callback,
+        statements.append,  # noqa: SLF001
     )
     try:
         actual = [
