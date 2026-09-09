@@ -816,9 +816,86 @@ class EventLog:
         )
         return cur.fetchone()
 
+    async def get_event_headers(
+        self, tenant_id: str, event_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Read bounded exact identity headers without payload or raw content."""
+        if len(event_ids) > 32:
+            raise ValueError("at most 32 exact event IDs may be read")
+        if any(not isinstance(event_id, str) or not event_id for event_id in event_ids):
+            raise ValueError("event IDs must be nonempty strings")
+        ids = tuple(dict.fromkeys(event_ids))
+        if not ids:
+            return []
+        rows = await self._run_locked(self._get_event_headers, tenant_id, ids)
+        return [dict(row) for row in rows]
+
+    def _get_event_headers(
+        self, tenant_id: str, event_ids: tuple[str, ...]
+    ) -> list[sqlcipher3.Row]:
+        placeholders = ",".join("?" for _ in event_ids)
+        return list(
+            self._conn.execute(
+                "SELECT event_id, tenant_id, type, schema_version, occurred_at, "
+                "recorded_at, source_adapter, source_account_id, owner_scope, "
+                "visibility_scope, sensitivity, causation_id, idempotency_key "
+                # 0001 creates this immutable event_id primary key. Force
+                # exact probes even when a tenant index has misleading stats;
+                # missing schema invariants fail instead of widening the read.
+                "FROM events INDEXED BY sqlite_autoindex_events_1 "
+                f"WHERE tenant_id = ? AND event_id IN ({placeholders}) "
+                "ORDER BY event_id ASC",
+                (tenant_id, *event_ids),
+            )
+        )
+
     async def get_by_correlation(self, correlation_id: str) -> list[dict[str, Any]]:
         rows = await self._run_locked(self._get_correlation, correlation_id)
         return [_row_to_event(r) for r in rows]
+
+    async def get_causal_event_headers(
+        self,
+        tenant_id: str,
+        causation_id: str,
+        *,
+        types: list[str],
+        through: str,
+    ) -> list[dict[str, Any]]:
+        """Read one bounded causal identity family through an immutable cutoff."""
+        if not causation_id or not through:
+            raise ValueError("causal header reads require identity and cutoff")
+        if (
+            not types
+            or len(types) > 32
+            or any(not isinstance(value, str) or not value for value in types)
+        ):
+            raise ValueError("causal header reads require at most 32 explicit types")
+        rows = await self._run_locked(
+            self._get_causal_event_headers,
+            tenant_id,
+            causation_id,
+            tuple(dict.fromkeys(types)),
+            through,
+        )
+        if len(rows) > 256:
+            raise EventLogError("causal event header ceiling exceeded")
+        return [dict(row) for row in rows]
+
+    def _get_causal_event_headers(
+        self, tenant_id: str, causation_id: str, types: tuple[str, ...], through: str
+    ) -> list[sqlcipher3.Row]:
+        placeholders = ",".join("?" for _ in types)
+        return list(
+            self._conn.execute(
+                "SELECT event_id, tenant_id, type, schema_version, occurred_at, "
+                "recorded_at, source_adapter, source_account_id, owner_scope, "
+                "visibility_scope, sensitivity, causation_id, idempotency_key "
+                "FROM events INDEXED BY idx_events_causation "
+                f"WHERE tenant_id = ? AND causation_id = ? AND type IN ({placeholders}) "
+                "AND event_id <= ? ORDER BY event_id ASC LIMIT 257",
+                (tenant_id, causation_id, *types, through),
+            )
+        )
 
     async def get_by_causation(self, causation_id: str) -> list[dict[str, Any]]:
         rows = await self._run_locked(self._get_causation, causation_id)

@@ -115,6 +115,7 @@ class SkillContext:
     visibility_scope: str = "shared:household"
     sensitivity: str = "normal"
     compatible_failure_recovery_authorized: bool = False
+    require_clean_result: bool = False
     compatible_success_identities: tuple[str, ...] = ()
 
 
@@ -173,7 +174,10 @@ _RECORDED_FAILURE_TYPES: dict[str, type[Exception]] = {
 
 
 def _raise_recorded_failure(
-    event: dict[str, Any], *, compatible_receipt: dict[str, Any] | None = None
+    event: dict[str, Any],
+    *,
+    compatible_receipt: dict[str, Any] | None = None,
+    compatible_terminal: bool = False,
 ) -> None:
     payload = event["payload"]
     failure_class = str(payload.get("failure_class") or "")
@@ -183,6 +187,10 @@ def _raise_recorded_failure(
     if compatible_receipt is not None:
         error.compatible_receipt_event_id = compatible_receipt["event_id"]  # type: ignore[attr-defined]
         error.compatible_receipt_key = compatible_receipt["idempotency_key"]  # type: ignore[attr-defined]
+    if compatible_terminal:
+        error.compatible_failure_event_id = event["event_id"]  # type: ignore[attr-defined]
+        error.compatible_failure_key = event["idempotency_key"]  # type: ignore[attr-defined]
+        error.compatible_failure_class = failure_class  # type: ignore[attr-defined]
     raise error
 
 
@@ -791,6 +799,30 @@ async def _run_skill_unlocked(
             ctx.session.tenant_id, idempotency_key
         )
         if prior is not None:
+            if ctx.require_clean_result:
+                failures = await runtime.event_log.get_by_idempotency_keys(
+                    ctx.session.tenant_id,
+                    [
+                        f"skill:failed:{invocation_identity}:{pack_id_str}:{pack_version}:{failure}"
+                        for failure in _RECORDED_FAILURE_TYPES
+                    ],
+                )
+                try:
+                    Draft202012Validator(pack.input_schema).validate(inputs)
+                except JsonSchemaValidationError as exc:
+                    raise SkillInputInvalid(
+                        "recorded receipt inputs are invalid"
+                    ) from exc
+                return _compatible_recorded_result(
+                    runtime=runtime,
+                    pack=pack,
+                    ctx=ctx,
+                    inputs=inputs,
+                    event=prior,
+                    version=pack_version,
+                    identity=invocation_identity,
+                    receipts=failures,
+                )
             return _recorded_skill_result(prior)
         compatible_identities = tuple(
             dict.fromkeys((invocation_identity, *ctx.compatible_success_identities))
@@ -837,7 +869,7 @@ async def _run_skill_unlocked(
                     # A patch is not permission to repeat a spent source call.
                     # The pipeline's validated recovery-request path creates
                     # a separate authorized identity when a retry is required.
-                    _raise_recorded_failure(terminal)
+                    _raise_recorded_failure(terminal, compatible_terminal=True)
         related_terminals = [
             event
             for event in related
@@ -1026,7 +1058,9 @@ async def _run_skill_unlocked(
             provider_attempted=None,
             duration_ms=duration_ms,
         )
-        raise exc_cls(outcome.error_detail)
+        error = exc_cls(outcome.error_detail)
+        error.skill_version = pack_version  # type: ignore[attr-defined]
+        raise error
     raw_response = outcome.raw_result
 
     # Step 7 — optional handler.post_process.
@@ -1046,6 +1080,10 @@ async def _run_skill_unlocked(
                 provider_attempted=chosen_provider,
                 duration_ms=duration_ms,
             )
+            if ctx.require_clean_result:
+                handler_error = SkillHandlerError(str(exc))
+                handler_error.skill_version = pack_version  # type: ignore[attr-defined]
+                raise handler_error from exc
             defensive_default = fm.get("on_failure")
             if isinstance(defensive_default, dict):
                 processed = defensive_default
@@ -1070,6 +1108,10 @@ async def _run_skill_unlocked(
             provider_attempted=chosen_provider,
             duration_ms=duration_ms,
         )
+        if ctx.require_clean_result:
+            output_error = SkillOutputInvalid(str(exc))
+            output_error.skill_version = pack_version  # type: ignore[attr-defined]
+            raise output_error from exc
         defensive_default = fm.get("on_failure")
         if isinstance(defensive_default, dict):
             processed = defensive_default

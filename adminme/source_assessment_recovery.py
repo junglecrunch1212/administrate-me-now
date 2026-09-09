@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -33,6 +34,22 @@ RETRYABLE_FAILURE_REASONS = frozenset(
         "language_seam_OpenClawUnreachable",
     }
 )
+_REQUIRED_LANGUAGE_FAILURE_REASONS = RETRYABLE_FAILURE_REASONS | frozenset(
+    {
+        "language_seam_SkillInputInvalid",
+        "language_seam_SkillOutputInvalid",
+        "language_seam_SkillSensitivityRefused",
+        "language_seam_SkillScopeInsufficient",
+        "language_seam_SkillHandlerError",
+        "language_seam_OpenClawResponseMalformed",
+        "language_seam_RuntimeError",
+    }
+)
+_LEGACY_DEFAULT_REASONS = {
+    "handler_raised": "language_seam_SkillHandlerError",
+    "output_invalid": "language_seam_SkillOutputInvalid",
+}
+_CLASSIFIER_ID = "skill:classify_message_nature"
 RecoveryAuthority = Literal["member_principal", "guarded_release_exception"]
 RecoveryRefusalReason = Literal[
     "observation_inactive",
@@ -94,11 +111,114 @@ class SourceAssessmentRecoveryRefused(RuntimeError):
         super().__init__(code)
 
 
-def assessment_outcome(event: dict[str, Any]) -> str:
+def _legacy_review_complete_candidate(event: dict[str, Any]) -> bool:
+    payload = event.get("payload") or {}
+    if (
+        event.get("type") != "triage.intent.features_extracted"
+        or payload.get("assessment_outcome")
+        not in {"eligible_candidates", "no_candidate"}
+        or payload.get("extraction_state") != "complete"
+        or payload.get("recovery_request_event_id") is not None
+    ):
+        return False
+    reasons = payload.get("reason_codes")
+    if (
+        not isinstance(reasons, list)
+        or not reasons
+        or not all(isinstance(reason, str) for reason in reasons)
+        or {
+            "candidate_policy_manual_only",
+            "candidate_policy_quiet",
+            "candidate_language_disabled",
+        }.intersection(reasons)
+    ):
+        return False
+    policies = [
+        reason.removeprefix("candidate_policy_v1:")
+        for reason in reasons
+        if reason.startswith("candidate_policy_v1:")
+    ]
+    if len(policies) != 1:
+        return False
+    source, separator, mode = policies[0].rpartition(":")
+    return bool(source and separator and mode == "review")
+
+
+def legacy_required_language_failure_candidate(event: dict[str, Any]) -> bool:
+    """Select contradictory metadata; changing disposition needs source proof."""
+    return bool(
+        _legacy_review_complete_candidate(event)
+        and event["payload"]["reason_codes"][0] in _REQUIRED_LANGUAGE_FAILURE_REASONS
+    )
+
+
+def legacy_default_assessment_candidate(event: dict[str, Any]) -> bool:
+    return bool(
+        _legacy_review_complete_candidate(event)
+        and event["payload"]["reason_codes"][0] == "language_assessment_completed"
+    )
+
+
+def legacy_default_failure_candidate(event: dict[str, Any]) -> bool:
+    payload = event.get("payload") or {}
+    return bool(
+        event.get("type") == "skill.call.failed"
+        and payload.get("skill_name") == _CLASSIFIER_ID
+        and payload.get("skill_version") == "8.0.0"
+        and payload.get("failure_class") in _LEGACY_DEFAULT_REASONS
+    )
+
+
+def _legacy_assessment_source_matches(
+    event: dict[str, Any], source_event: dict[str, Any] | None
+) -> bool:
+    if source_event is None:
+        return False
+    source_id = event["payload"].get("source_event_id")
+    owner = event.get("owner_scope")
+    return bool(
+        isinstance(source_id, str)
+        and source_id
+        and event.get("schema_version") == 3
+        and event.get("idempotency_key") == f"triage:message-features:v23:{source_id}"
+        and event.get("causation_id") == source_id
+        and event.get("source_adapter") == "deterministic_candidate_eligibility"
+        and event.get("source_account_id") == "pipeline"
+        and isinstance(owner, str)
+        and owner.startswith("private:")
+        and owner.removeprefix("private:")
+        and event.get("visibility_scope") == owner
+        and event.get("sensitivity") in {"normal", "sensitive"}
+        and isinstance(event.get("tenant_id"), str)
+        and event["tenant_id"]
+        and source_event.get("event_id") == source_id
+        and source_event.get("type") in SUPPORTED_SOURCE_EVENT_TYPES
+        and source_event.get("tenant_id") == event["tenant_id"]
+        and source_event.get("owner_scope") == owner
+        and source_event.get("visibility_scope") == owner
+        and source_event.get("sensitivity") == event["sensitivity"]
+        and (source_event.get("payload") or {}).get(
+            "member_id", owner.removeprefix("private:")
+        )
+        == owner.removeprefix("private:")
+    )
+
+
+def assessment_outcome(
+    event: dict[str, Any], *, source_event: dict[str, Any] | None = None
+) -> str:
     """Normalize legacy and current terminal assessment payloads."""
 
     payload = event.get("payload") or {}
     outcome = str(payload.get("assessment_outcome") or "")
+    # CO-008 §4 requires incomplete interpretation to remain visible even
+    # when deterministic candidates exist. Preserve the legacy v23 bytes;
+    # CO-017 still requires an explicit exact-source recovery command before
+    # any new language attempt or append-only replacement assessment.
+    if legacy_required_language_failure_candidate(
+        event
+    ) and _legacy_assessment_source_matches(event, source_event):
+        return "failed"
     if outcome in {"eligible_candidates", "no_candidate", "quarantined", "failed"}:
         return outcome
     extraction_state = str(payload.get("extraction_state") or "")
@@ -113,6 +233,165 @@ def assessment_reason(event: dict[str, Any]) -> str:
     payload = event.get("payload") or {}
     reasons = payload.get("reason_codes") or ["assessment_failed"]
     return str(reasons[0])
+
+
+async def resolved_assessment_disposition(
+    event_log: EventLog,
+    assessment: dict[str, Any],
+    *,
+    source_event: dict[str, Any],
+) -> tuple[str, str]:
+    """Resolve only exact legacy paired defaults; never create retry authority."""
+    ordinary = (
+        assessment_outcome(assessment, source_event=source_event),
+        assessment_reason(assessment),
+    )
+    if (
+        ordinary[0] == "failed"
+        or not legacy_default_assessment_candidate(assessment)
+        or not _legacy_assessment_source_matches(assessment, source_event)
+    ):
+        return ordinary
+    source_id = str(source_event["event_id"])
+
+    def matches_scope(record: dict[str, Any]) -> bool:
+        return bool(
+            record.get("causation_id") == source_id
+            and record.get("source_adapter") == "skill_runner"
+            and record.get("source_account_id") == "system"
+            and all(
+                record.get(field) == source_event.get(field)
+                for field in (
+                    "tenant_id",
+                    "owner_scope",
+                    "visibility_scope",
+                    "sensitivity",
+                )
+            )
+        )
+
+    headers = await event_log.get_causal_event_headers(
+        str(source_event["tenant_id"]),
+        source_id,
+        types=["skill.call.recorded", "skill.call.failed"],
+        through=str(assessment["event_id"]),
+    )
+    recorded = [
+        header
+        for header in headers
+        if header["type"] == "skill.call.recorded"
+        and header.get("schema_version") == 2
+        and matches_scope(header)
+        and f":{_CLASSIFIER_ID}:" in str(header.get("idempotency_key") or "")
+        and header["event_id"] < assessment["event_id"]
+    ]
+    if not recorded:
+        return ordinary
+    last = recorded[-1]
+    match = re.fullmatch(
+        r"skill:(message-nature:([0-9a-f]{64})(?::recovery-[12])?):skill:classify_message_nature:8\.0\.0",
+        str(last.get("idempotency_key") or ""),
+    )
+    if match is None:
+        return ordinary
+    identity, fingerprint = match.groups()
+
+    failures = [
+        header
+        for header in headers
+        if header["type"] == "skill.call.failed"
+        and header.get("schema_version") == 1
+        and matches_scope(header)
+        and header["event_id"] < last["event_id"]
+        and header.get("idempotency_key")
+        in {
+            f"skill:failed:{identity}:{_CLASSIFIER_ID}:8.0.0:{failure_class}"
+            for failure_class in _LEGACY_DEFAULT_REASONS
+        }
+    ]
+    if not failures:
+        return ordinary
+    failure_reason = None
+    for header in reversed(failures):
+        failure = await event_log.get(str(header["event_id"]))
+        if failure is None:
+            raise RuntimeError("legacy classifier failure proof unavailable")
+        if legacy_default_failure_candidate(failure):
+            failure_class = failure["payload"]["failure_class"]
+            if (
+                failure.get("idempotency_key")
+                == f"skill:failed:{identity}:{_CLASSIFIER_ID}:8.0.0:{failure_class}"
+            ):
+                failure_reason = _LEGACY_DEFAULT_REASONS[failure_class]
+                break
+    if failure_reason is None:
+        return ordinary
+    success = await event_log.get(str(last["event_id"]))
+    if success is None:
+        raise RuntimeError("legacy classifier receipt proof unavailable")
+    payload = success.get("payload") or {}
+    # Freeze the exact 8.0.0 wrapper default. A later clean result, suppressed
+    # call, or merely similar output is not this historical failure proof.
+    default = {
+        "classification": "personal",
+        "confidence": 0.0,
+        "reasons": ["skill_failure_defensive_default"],
+        "reply_signal": "unknown",
+        "automated": False,
+        "transactional_due": False,
+        "security_code": False,
+        "person_to_person": False,
+        "deadline": None,
+        "candidates": [],
+    }
+    if (
+        payload.get("skill_name") != _CLASSIFIER_ID
+        or payload.get("skill_version") != "8.0.0"
+        or payload.get("provider") in {None, "", "suppressed"}
+        or payload.get("outputs") != default
+    ):
+        return ordinary
+    inputs = payload.get("inputs")
+    if isinstance(inputs, dict) and set(inputs) == {"_spilled_to"}:
+        # Health must not claim a known paired default was clean when its
+        # exact input proof is outside the encrypted receipt. Do not follow
+        # historical filesystem paths from a read-model audit.
+        raise RuntimeError("legacy classifier input identity proof unavailable")
+    if (
+        not isinstance(inputs, dict)
+        or inputs.get("candidate_mode") != "review"
+        or inputs.get("candidate_language_enabled") is not True
+        or inputs.get("candidate_scope") != "primary_thread"
+        or inputs.get("assessment_contract") != "personal-obligation-assessment-v1"
+    ):
+        return ordinary
+    source_payload = source_event.get("payload") or {}
+    actual_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "tenant_id": source_event.get("tenant_id"),
+                "owner_scope": source_event.get("owner_scope"),
+                "visibility_scope": source_event.get("visibility_scope"),
+                "sensitivity": source_event.get("sensitivity", "normal"),
+                "source_adapter": source_event.get("source_adapter"),
+                "source_account_id": source_event.get("source_account_id"),
+                "event_type": source_event.get("type"),
+                "source_at": source_payload.get("received_at")
+                or source_payload.get("sent_at"),
+                "native_message_id": source_payload.get("native_message_id")
+                or source_payload.get("carrier_message_id")
+                or source_payload.get("rfc_message_id"),
+                "thread_id": source_payload.get("thread_id"),
+                "inputs": inputs,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if actual_fingerprint != fingerprint:
+        return ordinary
+    return "failed", failure_reason
 
 
 def recovery_assessment_idempotency_key(
@@ -181,9 +460,11 @@ async def validate_recovery_target(
         raise SourceAssessmentRecoveryRefused("failed_assessment_not_current")
     if str(latest.get("tenant_id") or "") != source_tenant_id:
         raise SourceAssessmentRecoveryRefused("tenant_mismatch")
-    if assessment_outcome(latest) != "failed":
+    outcome, reason = await resolved_assessment_disposition(
+        event_log, latest, source_event=source
+    )
+    if outcome != "failed":
         raise SourceAssessmentRecoveryRefused("assessment_not_failed")
-    reason = assessment_reason(latest)
     if reason != target.expected_failure_reason:
         raise SourceAssessmentRecoveryRefused("failure_reason_changed")
     if reason not in RETRYABLE_FAILURE_REASONS:
@@ -295,10 +576,14 @@ __all__ = [
     "assessment_outcome",
     "assessment_reason",
     "build_recovery_request_envelopes",
+    "legacy_required_language_failure_candidate",
+    "legacy_default_assessment_candidate",
+    "legacy_default_failure_candidate",
     "latest_source_assessment",
     "recovery_assessment_idempotency_key",
     "recovery_batch_fingerprint",
     "recovery_refusal_idempotency_key",
+    "resolved_assessment_disposition",
     "target_from_request_event",
     "validate_recovery_target",
 ]

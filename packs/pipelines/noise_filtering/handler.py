@@ -38,6 +38,10 @@ from adminme.candidate_policy import (
 )
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
+from adminme.events.schemas.triage import (
+    TriageSourcePublicationPlannedV1,
+    TriageSourcePublicationCompletedV1,
+)
 from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
     OpenClawTimeout,
@@ -51,13 +55,19 @@ from adminme.lib.skill_runner import (
 )
 from adminme.message_context import MessageContextPack, build_message_context_pack
 from adminme.pipelines.base import PipelineContext, Triggers, skill_output
+from adminme.source_publication import (
+    publication_completion_valid,
+    source_assessment_identity_valid,
+    publication_plan_key,
+    publication_completion_key,
+)
 from adminme.source_assessment_recovery import (
     RECOVERY_ATTEMPT_LIMIT,
     RECOVERY_MAX_CONCURRENCY,
     RECOVERY_POLICY,
     RecoveryRefusalReason,
     SourceAssessmentRecoveryRefused,
-    assessment_outcome,
+    resolved_assessment_disposition,
     latest_source_assessment,
     recovery_assessment_idempotency_key,
     recovery_refusal_idempotency_key,
@@ -292,6 +302,7 @@ class NoiseFilteringPipeline:
             "messaging.sent",
             "telephony.sms_received",
             "source.assessment.recovery_requested",
+            "triage.source_publication.planned",
         ]
     }
 
@@ -439,7 +450,27 @@ class NoiseFilteringPipeline:
             tenant_id,
             self._recovery_refusal_key(request_event_id),
         )
-        if assessment is not None or refusal is not None:
+        if assessment is not None:
+            source = await ctx.event_log.get(source_event_id)
+            if (
+                source is not None
+                and event.get("source_adapter") == "source_assessment_recovery"
+                and tenant_id == ctx.session.tenant_id
+                and payload.get("policy") == RECOVERY_POLICY
+                and payload.get("attempt_limit") == RECOVERY_ATTEMPT_LIMIT
+                and payload.get("max_concurrency") == RECOVERY_MAX_CONCURRENCY
+                and all(
+                    event.get(field) == source.get(field)
+                    for field in ("tenant_id", "owner_scope", "visibility_scope")
+                )
+                and assessment.get("payload", {}).get("recovery_request_event_id")
+                == request_event_id
+            ):
+                latest = await latest_source_assessment(ctx.event_log, source_event_id)
+                if latest is not None and latest["event_id"] == assessment["event_id"]:
+                    await self._resume_source_publication(source, ctx, assessment)
+            return
+        if refusal is not None:
             return
         try:
             if (
@@ -487,7 +518,8 @@ class NoiseFilteringPipeline:
             "failure_reason": selected.failure_reason,
         }
         async with self._recovery_request_semaphore:
-            await self.handle(source, ctx)
+            # The recovery command already owns this source's publication lock.
+            await self._handle_source(source, ctx)
 
     async def _run_skill_with_transient_recovery(
         self,
@@ -540,6 +572,23 @@ class NoiseFilteringPipeline:
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
+        if event_type == "triage.source_publication.planned":
+            payload = TriageSourcePublicationPlannedV1.model_validate(event["payload"])
+            source = await ctx.event_log.get(payload.source_event_id)
+            assessment = await ctx.event_log.get_by_idempotency(
+                event["tenant_id"], payload.assessment_idempotency_key
+            )
+            if source is None or assessment is None:
+                raise RuntimeError("source publication lost its atomic assessment")
+            lock_key = f"{event.get('tenant_id')}:{payload.source_event_id}"
+            source_lock = self._recovery_source_locks.setdefault(
+                lock_key, asyncio.Lock()
+            )
+            async with source_lock:
+                await self._resume_source_publication(
+                    source, ctx, assessment, expected_plan=event
+                )
+            return
         if event_type == "source.assessment.recovery_requested":
             await self._handle_recovery_request(event, ctx)
             return
@@ -549,6 +598,13 @@ class NoiseFilteringPipeline:
             "telephony.sms_received",
         ):
             return
+        lock_key = f"{event.get('tenant_id')}:{event.get('event_id')}"
+        source_lock = self._recovery_source_locks.setdefault(lock_key, asyncio.Lock())
+        async with source_lock:
+            await self._handle_source(event, ctx)
+
+    async def _handle_source(self, event: dict[str, Any], ctx: PipelineContext) -> None:
+        event_type = event.get("type", "")
         source_event_id = str(event.get("event_id") or "")
         recovery = event.get("_assessment_recovery")
         if not isinstance(recovery, dict) and hasattr(
@@ -560,11 +616,14 @@ class NoiseFilteringPipeline:
             # CO-017 failures require the exact, bounded recovery command.
             # A later full consumer replay must not silently consume that
             # authority or make the selected failed assessment stale.
-            if (
-                prior_assessment is not None
-                and assessment_outcome(prior_assessment) == "failed"
-            ):
-                return
+            if prior_assessment is not None:
+                if await self._resume_source_publication(event, ctx, prior_assessment):
+                    return
+                prior_outcome, _ = await resolved_assessment_disposition(
+                    ctx.event_log, prior_assessment, source_event=event
+                )
+                if prior_outcome == "failed":
+                    return
         if event.get("sensitivity") == "privileged":
             await self._emit_triage_assessment(
                 event=event,
@@ -768,6 +827,7 @@ class NoiseFilteringPipeline:
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
             compatible_failure_recovery_authorized=isinstance(recovery, dict),
+            require_clean_result=True,
             compatible_success_identities=(
                 invocation_identity,
                 *(
@@ -787,7 +847,7 @@ class NoiseFilteringPipeline:
             ):
                 _log.warning(
                     "noise_filtering retained immutable assessment after refusing "
-                    "a paired failed/default compatible receipt"
+                    "failed compatible execution history"
                 )
                 return
             _log.warning(
@@ -847,10 +907,26 @@ class NoiseFilteringPipeline:
         """An execution patch cannot rewrite an already completed v23 receipt."""
         receipt_id = getattr(error, "compatible_receipt_event_id", None)
         receipt_key = getattr(error, "compatible_receipt_key", None)
-        if not receipt_id or receipt_key not in {
-            f"skill:{identity}:{SKILL_ID}:8.0.0"
-            for identity in skill_ctx.compatible_success_identities
-        }:
+        paired_default = bool(
+            receipt_id
+            and receipt_key
+            in {
+                f"skill:{identity}:{SKILL_ID}:8.0.0"
+                for identity in skill_ctx.compatible_success_identities
+            }
+        )
+        failure_id = getattr(error, "compatible_failure_event_id", None)
+        failure_key = getattr(error, "compatible_failure_key", None)
+        failure_class = getattr(error, "compatible_failure_class", None)
+        failed_fallback = bool(
+            failure_id
+            and failure_key
+            in {
+                f"skill:failed:{identity}:{SKILL_ID}:8.0.0:{failure_class}"
+                for identity in skill_ctx.compatible_success_identities
+            }
+        )
+        if not paired_default and not failed_fallback:
             return False
         source_id = str(event["event_id"])
         assessment = await ctx.event_log.get_by_idempotency(
@@ -882,14 +958,28 @@ class NoiseFilteringPipeline:
         # v23 predates an explicit assessment -> skill-receipt link. Require
         # the validated exact-fingerprint receipt to be the last classification
         # recorded for this source before its assessment, not an unrelated call.
+        related = await ctx.event_log.get_by_causation(source_id)
         recorded = [
             prior
-            for prior in await ctx.event_log.get_by_causation(source_id)
+            for prior in related
             if prior.get("type") == "skill.call.recorded"
             and prior.get("payload", {}).get("skill_name") == SKILL_ID
             and prior["event_id"] < assessment["event_id"]
         ]
-        return bool(recorded and recorded[-1]["event_id"] == receipt_id)
+        if paired_default:
+            return bool(recorded and recorded[-1]["event_id"] == receipt_id)
+        if f"language_seam_{type(error).__name__}" not in assessment["payload"].get(
+            "reason_codes", []
+        ):
+            return False
+        terminals = [
+            prior
+            for prior in related
+            if prior.get("type") in {"skill.call.recorded", "skill.call.failed"}
+            and prior.get("payload", {}).get("skill_name") == SKILL_ID
+            and prior["event_id"] < assessment["event_id"]
+        ]
+        return bool(terminals and terminals[-1]["event_id"] == failure_id)
 
     async def _emit_results(
         self,
@@ -1212,13 +1302,16 @@ class NoiseFilteringPipeline:
                 proposal_key
             )
         new_candidates = deduplicated_candidates
+        # A useful deterministic proposal is not proof that the required
+        # language assessment completed. Keep its failure visible to source
+        # assurance and the bounded recovery path while retaining the proposal.
         outcome = (
-            "eligible_candidates"
-            if candidates
-            else "failed"
+            "failed"
             if assessment_failure_reason
             and policy.get("mode") == "review"
             and policy.get("language_enabled")
+            else "eligible_candidates"
+            if candidates
             else "no_candidate"
         )
         policy_reason = (
@@ -1245,17 +1338,7 @@ class NoiseFilteringPipeline:
             *([policy_reason] if policy_reason else []),
             policy_rule,
         ]
-        extraction_event_id = await self._emit_triage_assessment(
-            event=event,
-            ctx=ctx,
-            source_event_id=source_event_id,
-            candidates=candidates,
-            outcome=outcome,
-            reason_codes=reason_codes,
-            occurred_at=extracted_at,
-            intent_id=intent_id,
-            recovery=recovery,
-        )
+        proposal_drafts: list[dict[str, Any]] = []
         for candidate in new_candidates:
             target_kind = candidate.target_kind
             candidate_fields = dict(candidate.fields)
@@ -1289,52 +1372,48 @@ class NoiseFilteringPipeline:
                 (f"{proposal_key}:{source_event_id}:{candidate.title}").encode()
             ).hexdigest()[:24]
             proposal_id = f"triage:message:{fingerprint}"
-            envelope = EventEnvelope(
-                event_at_ms=event["event_at_ms"],
-                tenant_id=event["tenant_id"],
-                type="triage.item.proposed",
-                schema_version=5
-                if (candidate.interpretation or {}).get("contract")
-                == "triage-context-interpretation-v3"
-                else 4,
-                occurred_at=extracted_at,
-                source_adapter="deterministic_candidate_eligibility",
-                source_account_id="pipeline",
-                owner_scope=owner_scope,
-                visibility_scope=owner_scope,
-                sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=proposal_key,
-                payload={
-                    "proposal_id": proposal_id,
-                    "target_kind": target_kind,
-                    "owner_member_id": member_id,
-                    "title": candidate.title,
-                    "candidate": candidate_fields,
-                    "route": {"member_id": member_id},
-                    "source_event_id": source_event_id,
-                    "parent_intent_id": None,
-                    "candidate_key": candidate.candidate_key,
-                    "extraction_event_id": extraction_event_id,
-                    "eligibility_rule_ids": candidate.eligibility_rule_ids,
-                    "confidence": candidate.confidence,
-                    "reasons": candidate.reasons,
-                    "interpretation": candidate.interpretation,
-                    "source_occurred_at": (
-                        (event.get("payload") or {}).get("received_at")
-                        or (event.get("payload") or {}).get("sent_at")
-                        or event.get("occurred_at")
-                    ),
-                },
+            proposal_drafts.append(
+                {
+                    "idempotency_key": proposal_key,
+                    "proposal_schema_version": 5
+                    if (candidate.interpretation or {}).get("contract")
+                    == "triage-context-interpretation-v3"
+                    else 4,
+                    "payload": {
+                        "proposal_id": proposal_id,
+                        "target_kind": target_kind,
+                        "owner_member_id": member_id,
+                        "title": candidate.title,
+                        "candidate": candidate_fields,
+                        "route": {"member_id": member_id},
+                        "source_event_id": source_event_id,
+                        "parent_intent_id": None,
+                        "candidate_key": candidate.candidate_key,
+                        "extraction_event_id": None,
+                        "eligibility_rule_ids": candidate.eligibility_rule_ids,
+                        "confidence": candidate.confidence,
+                        "reasons": candidate.reasons,
+                        "interpretation": candidate.interpretation,
+                        "source_occurred_at": (
+                            (event.get("payload") or {}).get("received_at")
+                            or (event.get("payload") or {}).get("sent_at")
+                            or event.get("occurred_at")
+                        ),
+                    },
+                }
             )
-            await _write_first_equivalent_event(
-                ctx=ctx,
-                envelope=envelope,
-                correlation_id=ctx.correlation_id,
-                causation_id=extraction_event_id,
-                ignored_payload_fields=frozenset(
-                    {"proposal_id", "source_event_id", "extraction_event_id"}
-                ),
-            )
+        await self._emit_triage_assessment(
+            event=event,
+            ctx=ctx,
+            source_event_id=source_event_id,
+            candidates=candidates,
+            outcome=outcome,
+            reason_codes=reason_codes,
+            occurred_at=extracted_at,
+            intent_id=intent_id,
+            recovery=recovery,
+            proposal_drafts=proposal_drafts,
+        )
 
     async def _reconcile_thread_candidates(
         self,
@@ -1697,6 +1776,7 @@ class NoiseFilteringPipeline:
         intent_id: str | None = None,
         recovery: dict[str, str] | None = None,
         extractor_id: str | None = None,
+        proposal_drafts: list[dict[str, Any]] | None = None,
     ) -> str:
         """Record one terminal assessment even when zero candidates exist."""
 
@@ -1766,8 +1846,317 @@ class NoiseFilteringPipeline:
             ),
             payload=payload,
         )
-        return await ctx.event_sink.write(
-            envelope,
+        if not proposal_drafts:
+            return await ctx.event_sink.write(
+                envelope,
+                correlation_id=ctx.correlation_id,
+                causation_id=source_event_id,
+            )
+        existing = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"], str(envelope.idempotency_key)
+        )
+        if existing is not None:
+            # Retained v3/v4 assessments predate publication plans. Do not
+            # rewrite or backfill their private receipt. The normal writer
+            # still validates exact historical assessment equivalence.
+            extraction_id = await ctx.event_sink.write(
+                envelope,
+                correlation_id=ctx.correlation_id,
+                causation_id=source_event_id,
+            )
+            await self._publish_source_drafts(event, ctx, existing, proposal_drafts)
+            return extraction_id
+        plan_payload = {
+            "contract": "triage-source-publication-v1",
+            "source_event_id": source_event_id,
+            "assessment_idempotency_key": envelope.idempotency_key,
+            "assessment_schema_version": envelope.schema_version,
+            "proposals": proposal_drafts,
+        }
+        TriageSourcePublicationPlannedV1.model_validate(plan_payload)
+        envelope = envelope.model_copy(
+            update={"event_at_ms": self._derived_event_at_ms(event)}
+        )
+        plan = envelope.model_copy(
+            update={
+                "type": "triage.source_publication.planned",
+                "schema_version": 1,
+                "idempotency_key": self._publication_plan_key(
+                    str(envelope.idempotency_key)
+                ),
+                "payload": plan_payload,
+            }
+        )
+        extraction_id, _ = await ctx.event_sink.write_batch(
+            [envelope, plan],
             correlation_id=ctx.correlation_id,
             causation_id=source_event_id,
         )
+        assessment = {
+            **envelope.model_dump(mode="json"),
+            "event_id": extraction_id,
+            "causation_id": source_event_id,
+        }
+        counts = await self._publish_source_drafts(
+            event, ctx, assessment, proposal_drafts
+        )
+        stored_plan = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"], str(plan.idempotency_key)
+        )
+        if stored_plan is not None:
+            await self._complete_source_publication(
+                event, ctx, assessment, stored_plan, counts
+            )
+        return extraction_id
+
+    @staticmethod
+    def _publication_plan_key(assessment_key: str) -> str:
+        return publication_plan_key(assessment_key)
+
+    async def _resume_source_publication(
+        self,
+        source: dict[str, Any],
+        ctx: PipelineContext,
+        assessment: dict[str, Any],
+        *,
+        expected_plan: dict[str, Any] | None = None,
+    ) -> bool:
+        key = str(assessment.get("idempotency_key") or "")
+        plan = await ctx.event_log.get_by_idempotency(
+            source["tenant_id"], self._publication_plan_key(key)
+        )
+        if plan is None:
+            if expected_plan is not None:
+                raise RuntimeError(
+                    "source publication trigger is not its canonical receipt"
+                )
+            return False
+        if expected_plan is not None and expected_plan != plan:
+            raise RuntimeError(
+                "source publication trigger is not its canonical receipt"
+            )
+        source_id = str(source["event_id"])
+        owner = str(source.get("owner_scope") or "")
+        recovery_id = assessment.get("payload", {}).get("recovery_request_event_id")
+        expected_key = (
+            self._recovery_assessment_key(str(recovery_id), source_id)
+            if recovery_id
+            else f"triage:message-features:v{_REPLAY_GENERATION}:{source_id}"
+        )
+        if (
+            not owner.startswith("private:")
+            or not owner.removeprefix("private:")
+            or source.get("type")
+            not in {"messaging.received", "messaging.sent", "telephony.sms_received"}
+            or source.get("tenant_id") != ctx.session.tenant_id
+            or (
+                source.get("payload", {}).get("member_id") is not None
+                and source["payload"]["member_id"] != owner.removeprefix("private:")
+            )
+            or source.get("visibility_scope") != owner
+            or source.get("sensitivity") == "privileged"
+            or key != expected_key
+            or assessment.get("type") != "triage.intent.features_extracted"
+            or plan.get("type") != "triage.source_publication.planned"
+            or plan.get("schema_version") != 1
+            or any(
+                record.get(field) != source.get(field)
+                for record in (assessment, plan)
+                for field in (
+                    "tenant_id",
+                    "owner_scope",
+                    "visibility_scope",
+                    "sensitivity",
+                )
+            )
+            or any(
+                record.get("causation_id") != source_id
+                or record.get("source_adapter") != "deterministic_candidate_eligibility"
+                or record.get("source_account_id") != "pipeline"
+                for record in (assessment, plan)
+            )
+        ):
+            raise RuntimeError("source publication receipt scope is invalid")
+        payload = TriageSourcePublicationPlannedV1.model_validate(plan["payload"])
+        if (
+            payload.source_event_id != source_id
+            or assessment.get("payload", {}).get("source_event_id") != source_id
+            or payload.assessment_idempotency_key != key
+            or payload.assessment_schema_version != assessment.get("schema_version")
+        ):
+            raise RuntimeError("source publication receipt identity is invalid")
+        completion = await ctx.event_log.get_by_idempotency(
+            source["tenant_id"], self._publication_completion_key(str(plan["event_id"]))
+        )
+        if completion is not None:
+            self._validate_publication_completion(source, assessment, plan, completion)
+            return True
+        counts = await self._publish_source_drafts(
+            source, ctx, assessment, plan["payload"]["proposals"]
+        )
+        await self._complete_source_publication(source, ctx, assessment, plan, counts)
+        return True
+
+    @staticmethod
+    def _publication_completion_key(plan_id: str) -> str:
+        return publication_completion_key(plan_id)
+
+    def _validate_publication_completion(
+        self, source, assessment, plan, completion
+    ) -> None:
+        if not publication_completion_valid(
+            source=source, assessment=assessment, plan=plan, completion=completion
+        ):
+            raise RuntimeError("source publication completion identity is invalid")
+
+    async def _complete_source_publication(
+        self, source, ctx, assessment, plan, counts
+    ) -> None:
+        payload = {
+            "contract": "triage-source-publication-completed-v1",
+            "plan_event_id": plan["event_id"],
+            "source_event_id": source["event_id"],
+            "assessment_event_id": assessment["event_id"],
+            **counts,
+        }
+        TriageSourcePublicationCompletedV1.model_validate(payload)
+        await ctx.event_sink.write(
+            EventEnvelope(
+                event_at_ms=self._derived_event_at_ms(plan),
+                tenant_id=source["tenant_id"],
+                type="triage.source_publication.completed",
+                schema_version=1,
+                occurred_at=assessment["occurred_at"],
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=source["owner_scope"],
+                visibility_scope=source["visibility_scope"],
+                sensitivity=source.get("sensitivity", "normal"),
+                idempotency_key=self._publication_completion_key(str(plan["event_id"])),
+                payload=payload,
+            ),
+            correlation_id=ctx.correlation_id,
+            causation_id=plan["event_id"],
+        )
+
+    async def _publish_source_drafts(
+        self,
+        source: dict[str, Any],
+        ctx: PipelineContext,
+        assessment: dict[str, Any],
+        drafts: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        source_id = str(source["event_id"])
+        owner = str(source["owner_scope"])
+        member = owner.removeprefix("private:")
+        counts = {
+            "planned_count": len(drafts),
+            "published_count": 0,
+            "already_present_count": 0,
+            "member_decided_count": 0,
+            "superseded_count": 0,
+        }
+        for index, draft in enumerate(drafts):
+            latest = await latest_source_assessment(ctx.event_log, source_id)
+            if latest is not None and latest["event_id"] != assessment["event_id"]:
+                if not source_assessment_identity_valid(
+                    source=source, assessment=latest
+                ):
+                    raise RuntimeError("newer source assessment identity is invalid")
+                # A newer terminal assessment owns current work. Missing rows
+                # from the superseded plan must not resurrect its old meaning.
+                counts["superseded_count"] += len(drafts) - index
+                return counts
+            payload = dict(draft["payload"])
+            if (
+                payload.get("source_event_id") != source_id
+                or payload.get("owner_member_id") != member
+                or payload.get("route", {}).get("member_id") != member
+                or not str(draft["idempotency_key"]).startswith(
+                    f"triage:message-candidate:v{_REPLAY_GENERATION}:"
+                )
+            ):
+                raise RuntimeError("source publication proposal scope is invalid")
+            proposal_key = str(draft["idempotency_key"])
+            context_fingerprint = proposal_key.removeprefix(
+                f"triage:message-candidate:v{_REPLAY_GENERATION}:"
+            ).split(":", 1)[0]
+            if (
+                len(context_fingerprint) != 64
+                or any(char not in "0123456789abcdef" for char in context_fingerprint)
+                or proposal_key
+                != (
+                    f"triage:message-candidate:v{_REPLAY_GENERATION}:"
+                    f"{context_fingerprint}:{payload.get('candidate_key')}:{payload['target_kind']}"
+                )
+                or payload.get("proposal_id")
+                != "triage:message:"
+                + hashlib.sha256(
+                    f"{proposal_key}:{source_id}:{payload['title']}".encode()
+                ).hexdigest()[:24]
+            ):
+                raise RuntimeError("source publication proposal identity is invalid")
+            existing = await ctx.event_log.get_by_idempotency(
+                source["tenant_id"], proposal_key
+            )
+            decided = False
+            prior_proposals = (
+                await self._proposals_for_sources(
+                    event_log=ctx.event_log,
+                    owner_scope=owner,
+                    source_event_ids={source_id},
+                )
+                if existing is None
+                else []
+            )
+            for prior in prior_proposals:
+                prior_payload = prior.get("payload") or {}
+                if prior_payload.get("target_kind") != payload["target_kind"] or not (
+                    prior_payload.get("candidate_key") == payload.get("candidate_key")
+                    or prior_payload.get("title") == payload.get("title")
+                ):
+                    continue
+                descendants = await ctx.event_log.get_by_causation(prior["event_id"])
+                if any(
+                    child.get("type")
+                    in {
+                        "triage.item.enriched",
+                        "triage.item.managed",
+                        "triage.item.confirmed",
+                        "triage.item.materialized",
+                        "triage.item.dismissed",
+                    }
+                    for child in descendants
+                ):
+                    decided = True
+                    break
+            if decided:
+                counts["member_decided_count"] += 1
+                continue
+            payload["extraction_event_id"] = assessment["event_id"]
+            await _write_first_equivalent_event(
+                ctx=ctx,
+                envelope=EventEnvelope(
+                    event_at_ms=self._derived_event_at_ms(assessment),
+                    tenant_id=source["tenant_id"],
+                    type="triage.item.proposed",
+                    schema_version=draft["proposal_schema_version"],
+                    occurred_at=assessment["occurred_at"],
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope=owner,
+                    visibility_scope=owner,
+                    sensitivity=source.get("sensitivity", "normal"),
+                    idempotency_key=draft["idempotency_key"],
+                    payload=payload,
+                ),
+                correlation_id=ctx.correlation_id,
+                causation_id=assessment["event_id"],
+                ignored_payload_fields=frozenset(
+                    {"proposal_id", "source_event_id", "extraction_event_id"}
+                ),
+            )
+            counts[
+                "already_present_count" if existing is not None else "published_count"
+            ] += 1
+        return counts

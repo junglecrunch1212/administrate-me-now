@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner import OpenClawUnreachable
+from adminme.openclaw_topology import binding_fingerprints, member_agent_id
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.simulations.source_pipeline_stress import (
@@ -109,6 +110,9 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
         fixture_member_id=MEMBER,
         openclaw_enabled=True,
         openclaw_shared_secret=HEALTH_SECRET,
+        openclaw_actor_identities={
+            "portal|fixture-settlement-account|fixture-settlement-actor": MEMBER,
+        },
     )
     app = create_application(settings)
     with TestClient(app) as client:
@@ -128,8 +132,13 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
                 "openclaw_version": OPENCLAW_VERSION,
                 "openclaw_commit": OPENCLAW_COMMIT,
                 "dm_scope": "per_account_channel_peer",
-                "member_agent_ids": [],
-                "binding_fingerprints": [],
+                "member_agent_ids": [member_agent_id(MEMBER)],
+                "binding_fingerprints": list(
+                    binding_fingerprints(
+                        settings.openclaw_actor_identities,
+                        settings.member_chat_enabled_members,
+                    )
+                ),
                 "unique_agents": True,
                 "unique_accounts": True,
             },

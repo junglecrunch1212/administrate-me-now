@@ -1088,3 +1088,77 @@ async def test_total_http_deadline_covers_injected_streaming_client(
     assert failure["type"] == "skill.call.failed"
     assert failure["payload"]["failure_class"] == "openclaw_timeout"
     assert failure["payload"]["skill_version"] == "8.0.1"
+
+
+@pytest.mark.parametrize("failure_class", ["handler_raised", "output_invalid"])
+async def test_clean_result_option_refuses_fresh_and_same_version_cached_defaults(
+    event_log: EventLog,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_class: str,
+) -> None:
+    pack_path = _versioned_test_pack(tmp_path)
+    actual_load = skill_wrapper.load_pack
+
+    def bad_handler(raw, inputs, context):
+        if failure_class == "handler_raised":
+            raise ValueError("fixture invalid postprocessor")
+        return {"fixture_invalid": True}
+
+    def selected_pack(path):
+        pack = actual_load(path)
+        return replace(
+            pack,
+            handler_post_process=bad_handler,
+            skill_frontmatter={
+                **pack.skill_frontmatter,
+                "on_failure": {"is_thing": False, "confidence": 0.0},
+            },
+        )
+
+    monkeypatch.setattr(skill_wrapper, "load_pack", selected_pack)
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    context = SkillContext(
+        session=_session(),
+        triggering_event_id="fixture-old-default-source",
+        invocation_idempotency_key="fixture-old-default-identity",
+    )
+    # Existing consumers retain their opt-out/default behavior.
+    default = await run_skill(
+        str(pack_path), {"text": "same"}, context, _runtime=runtime
+    )
+    assert default.output == {"is_thing": False, "confidence": 0.0}
+    baseline = await _read_all_events(event_log)
+    assert [event["type"] for event in baseline] == [
+        "skill.call.failed",
+        "skill.call.recorded",
+    ]
+    error_type = (
+        skill_wrapper.SkillHandlerError
+        if failure_class == "handler_raised"
+        else SkillOutputInvalid
+    )
+    strict = replace(context, require_clean_result=True)
+    for _ in range(2):
+        with pytest.raises(error_type):
+            await run_skill(
+                str(pack_path),
+                {"text": "same"},
+                strict,
+                _runtime=_runtime_for(event_log, tmp_path, transport=transport),
+            )
+    assert len(transport.requests) == 1
+    assert await _read_all_events(event_log) == baseline
+    fresh = replace(
+        strict,
+        triggering_event_id="fixture-fresh-clean-source",
+        invocation_idempotency_key="fixture-fresh-clean-identity",
+    )
+    for _ in range(2):
+        with pytest.raises(error_type):
+            await run_skill(str(pack_path), {"text": "same"}, fresh, _runtime=runtime)
+    assert len(transport.requests) == 2
+    added = (await _read_all_events(event_log))[len(baseline) :]
+    assert len(added) == 1 and added[0]["type"] == "skill.call.failed"
+    assert added[0]["payload"]["failure_class"] == failure_class

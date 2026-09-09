@@ -3783,8 +3783,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 132,
-    "technical_event_schemas": 324,
-    "technical_event_types": 259,
+    "technical_event_schemas": 326,
+    "technical_event_types": 261,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -37383,6 +37383,127 @@
         "reason",
         "reviewed_by_member_id",
         "reviewed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.source_publication.completed",
+      "family": "triage",
+      "properties": {
+        "already_present_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Already Present Count",
+          "type": "integer"
+        },
+        "assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Assessment Event Id",
+          "type": "string"
+        },
+        "contract": {
+          "const": "triage-source-publication-completed-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "member_decided_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Member Decided Count",
+          "type": "integer"
+        },
+        "plan_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Plan Event Id",
+          "type": "string"
+        },
+        "planned_count": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Planned Count",
+          "type": "integer"
+        },
+        "published_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Published Count",
+          "type": "integer"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "superseded_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Superseded Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "plan_event_id",
+        "source_event_id",
+        "assessment_event_id",
+        "planned_count",
+        "published_count",
+        "already_present_count",
+        "member_decided_count",
+        "superseded_count"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.source_publication.planned",
+      "family": "triage",
+      "properties": {
+        "assessment_idempotency_key": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Assessment Idempotency Key",
+          "type": "string"
+        },
+        "assessment_schema_version": {
+          "enum": [
+            3,
+            4
+          ],
+          "title": "Assessment Schema Version",
+          "type": "integer"
+        },
+        "contract": {
+          "const": "triage-source-publication-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "proposals": {
+          "items": {
+            "$ref": "#/$defs/TriageSourceProposalDraftV1"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Proposals",
+          "type": "array"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "source_event_id",
+        "assessment_idempotency_key",
+        "assessment_schema_version",
+        "proposals"
       ],
       "schema_version": 1
     },
