@@ -633,17 +633,10 @@ def _related_edge_reasons(
     payload: Mapping[str, Any],
     *,
     primary_events: tuple[Mapping[str, Any], ...],
-    primary_participants: frozenset[str],
-    primary_subject: frozenset[str],
-    primary_attachments: frozenset[str],
-) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
-    """Return every exact admitting edge plus non-admitting corroboration."""
+) -> dict[str, tuple[str, ...]]:
+    """Return exact relationship edges without scanning candidate body text."""
 
     edge_reasons: dict[str, set[str]] = {}
-    participant_overlap = len(_identifiers(payload) & primary_participants)
-    referenced_overlap = len(_referenced_identifiers(payload) & primary_participants)
-    subject_overlap = len(_subject_tokens(payload) & primary_subject)
-    attachment_overlap = len(_attachment_tokens(payload) & primary_attachments)
     candidate_message_id = str(payload.get("rfc_message_id") or "").strip()
     candidate_references = {
         str(reference).strip()
@@ -673,6 +666,25 @@ def _related_edge_reasons(
         if candidate_attachment_ids & _attachment_identities(primary):
             edge_reasons.setdefault(source_event_id, set()).add("attachment_identity")
 
+    return {
+        source_event_id: tuple(sorted(reasons))
+        for source_event_id, reasons in edge_reasons.items()
+    }
+
+
+def _related_corroboration(
+    payload: Mapping[str, Any],
+    *,
+    primary_participants: frozenset[str],
+    primary_subject: frozenset[str],
+    primary_attachments: frozenset[str],
+) -> tuple[str, ...]:
+    """Explain an admitted source; weak text overlap never admits one."""
+
+    participant_overlap = len(_identifiers(payload) & primary_participants)
+    referenced_overlap = len(_referenced_identifiers(payload) & primary_participants)
+    subject_overlap = len(_subject_tokens(payload) & primary_subject)
+    attachment_overlap = len(_attachment_tokens(payload) & primary_attachments)
     corroboration: list[str] = []
     if participant_overlap:
         corroboration.append("participant_overlap")
@@ -683,13 +695,7 @@ def _related_edge_reasons(
     if attachment_overlap:
         corroboration.append("attachment_filename_overlap")
     # Identity/address/name/subject/filename overlap is corroboration only.
-    return (
-        {
-            source_event_id: tuple(sorted(reasons))
-            for source_event_id, reasons in edge_reasons.items()
-        },
-        tuple(corroboration),
-    )
+    return tuple(corroboration)
 
 
 async def _read_context_inputs(
@@ -989,19 +995,21 @@ async def build_message_context_pack(
             <= candidate_time
             <= episode_end + timedelta(days=MAX_EPISODE_DAYS)
         )
-        edge_reasons, corroboration = _related_edge_reasons(
-            payload,
-            primary_events=primary_events,
-            primary_participants=primary_participants,
-            primary_subject=primary_subject,
-            primary_attachments=primary_attachments,
-        )
         confirmed_sources = {
             primary_id
             for primary_id in same_ids
             if relationship_state.get(_relationship_pair(primary_id, candidate_id))
             is True
         }
+        # Old native-thread episodes and malformed source times cannot admit
+        # an automatic edge. Explicit confirmation keeps its existing exception.
+        if not within_episode and not confirmed_sources:
+            continue
+        edge_reasons = (
+            _related_edge_reasons(payload, primary_events=primary_events)
+            if within_episode
+            else {}
+        )
         active_strong_sources = {
             primary_id
             for primary_id in edge_reasons
@@ -1013,6 +1021,12 @@ async def build_message_context_pack(
             sorted(confirmed_sources | active_strong_sources)
         )
         if relationship_source_ids:
+            corroboration = _related_corroboration(
+                payload,
+                primary_participants=primary_participants,
+                primary_subject=primary_subject,
+                primary_attachments=primary_attachments,
+            )
             reasons: list[str] = []
             if confirmed_sources:
                 reasons.append("member_confirmed_context")

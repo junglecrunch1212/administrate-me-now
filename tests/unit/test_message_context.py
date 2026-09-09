@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+import adminme.message_context as message_context
 from adminme.events.schemas.triage import TriageContextSourceV2
 from adminme.message_context import (
     MAX_CONTEXT_CHARS,
@@ -775,6 +777,50 @@ async def test_provider_thread_episode_closes_at_one_hundred_sources() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("old_year, expected_edge_checks", [(2030, 0), (2034, 200)])
+async def test_long_native_thread_skips_nonadmitting_body_scans(
+    monkeypatch: pytest.MonkeyPatch, old_year: int, expected_edge_checks: int
+) -> None:
+    old_start = datetime(old_year, 2, 1, 10, tzinfo=timezone.utc)
+    old = [
+        _message(
+            f"source-history-{index:03d}",
+            "member@example.invalid " * 500,
+            occurred_at=(old_start + timedelta(minutes=index)).isoformat(),
+        )
+        for index in range(200)
+    ]
+    current = _message(
+        "source-current",
+        "Please review the current fixture request.",
+        occurred_at="2034-02-01T13:20:00Z",
+    )
+    baseline = await build_message_context_pack(current, _Log([current]))
+    edge_checks = []
+    body_scans = []
+    original_edges = message_context._related_edge_reasons
+    original_references = message_context._referenced_identifiers
+
+    def counted_edges(payload: Mapping[str, Any], **kwargs: Any):
+        edge_checks.append(payload["rfc_message_id"])
+        return original_edges(payload, **kwargs)
+
+    def counted_references(payload: Mapping[str, Any]):
+        body_scans.append(payload["rfc_message_id"])
+        return original_references(payload)
+
+    monkeypatch.setattr(message_context, "_related_edge_reasons", counted_edges)
+    monkeypatch.setattr(message_context, "_referenced_identifiers", counted_references)
+    expanded = await build_message_context_pack(current, _Log([*old, current]))
+
+    # Entire public pack equality covers aliases, reasons, source text, bounds,
+    # episode identity, current-anchor state, and the interpretation fingerprint.
+    assert expanded == baseline
+    assert len(edge_checks) == expected_edge_checks
+    assert body_scans == []
+
+
+@pytest.mark.asyncio
 async def test_context_budget_reserves_current_anchor_and_tracks_full_episode() -> None:
     start = datetime(2034, 2, 1, 10, tzinfo=timezone.utc)
     messages = [
@@ -918,6 +964,115 @@ def _context_decision(
         "occurred_at": "2034-02-01T16:00:00Z",
         "payload": payload,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed_time", ["not-a-time", "2030-02-01T10:00:00Z"])
+async def test_corroboration_runs_only_for_admitted_edges_and_confirmations(
+    monkeypatch: pytest.MonkeyPatch, confirmed_time: str
+) -> None:
+    start = datetime(2034, 2, 1, 10, tzinfo=timezone.utc)
+    episode = [
+        _message(
+            f"source-episode-{index:02d}",
+            f"Fixture episode update {index}.",
+            occurred_at=(start + timedelta(minutes=index)).isoformat(),
+            attachments=[{"filename": "authorization.pdf", "sha256": "a" * 64}]
+            if index == 0
+            else [{"filename": "authorization.pdf"}]
+            if index == 12
+            else [],
+        )
+        for index in range(13)
+    ]
+    related = _message(
+        "source-related",
+        "Contact member@example.invalid about the authorization.",
+        thread_id="thread-related",
+        references=["<source-episode-00@example.invalid>"],
+        attachments=[{"filename": "authorization.pdf", "sha256": "a" * 64}],
+    )
+    confirmed = _message(
+        "source-confirmed",
+        "Contact member@example.invalid about the older source.",
+        thread_id="thread-confirmed",
+        occurred_at=confirmed_time,
+    )
+    confirmation = _context_decision(
+        "correction-confirmed",
+        "context.relationship.confirmed",
+        "source-episode-00",
+        "source-confirmed",
+    )
+    rejected = _message(
+        "source-rejected",
+        "member@example.invalid " * 500,
+        thread_id="thread-rejected",
+        references=["<source-episode-00@example.invalid>"],
+    )
+    prior_confirmation = _context_decision(
+        "correction-rejected-first",
+        "context.relationship.confirmed",
+        "source-episode-00",
+        "source-rejected",
+    )
+    rejection = _context_decision(
+        "correction-rejected-last",
+        "context.relationship.rejected",
+        "source-episode-00",
+        "source-rejected",
+    )
+    old_unconfirmed = _message(
+        "source-old-unconfirmed",
+        "member@example.invalid " * 500,
+        thread_id="thread-old-unconfirmed",
+        occurred_at="2030-02-01T10:00:00Z",
+        references=["<source-episode-00@example.invalid>"],
+    )
+    baseline_events = [*episode, related, confirmed, confirmation]
+    baseline = await build_message_context_pack(episode[-1], _Log(baseline_events))
+    body_scans = []
+    original_references = message_context._referenced_identifiers
+
+    def counted_references(payload: Mapping[str, Any]):
+        body_scans.append(payload["rfc_message_id"])
+        return original_references(payload)
+
+    monkeypatch.setattr(message_context, "_referenced_identifiers", counted_references)
+    expanded = await build_message_context_pack(
+        episode[-1],
+        _Log(
+            [*baseline_events, rejected, old_unconfirmed, prior_confirmation, rejection]
+        ),
+    )
+
+    assert expanded == baseline
+    assert set(body_scans) == {
+        "<source-related@example.invalid>",
+        "<source-confirmed@example.invalid>",
+    }
+    assert len(body_scans) == 2
+    assert "source-episode-00" not in {
+        message.source_event_id for message in expanded.messages
+    }
+    assert expanded.episode_source_event_ids[0] == "source-episode-00"
+    related_context, confirmed_context = expanded.messages[-2:]
+    assert related_context.relationship_source_event_ids == ("source-episode-00",)
+    assert related_context.relation_reason_codes == (
+        "attachment_identity",
+        "rfc_reference",
+        "participant_overlap",
+        "participant_reference_overlap",
+        "subject_token_overlap",
+        "attachment_filename_overlap",
+    )
+    assert confirmed_context.relationship_source_event_ids == ("source-episode-00",)
+    assert confirmed_context.relation_reason_codes == (
+        "member_confirmed_context",
+        "participant_overlap",
+        "participant_reference_overlap",
+        "subject_token_overlap",
+    )
 
 
 @pytest.mark.asyncio

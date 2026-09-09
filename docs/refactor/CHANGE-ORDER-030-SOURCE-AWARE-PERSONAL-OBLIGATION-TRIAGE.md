@@ -244,6 +244,18 @@ content-revision checks remain authoritative for retirement. This is
 **PRESERVE**: it changes lookup cost without changing candidate eligibility or
 member correction semantics.
 
+Context replay checks episode eligibility and explicit member confirmations
+before parsing corroborating text. A source outside the time window cannot
+contribute context unless a current member confirmation admits it; confirmed
+cross-window sources retain their existing evidence and correction behavior.
+Corroborating identifiers and tokens are computed only for admitted related
+sources. Terminal reconciliation reuses the same immutable source/proposal
+profile cache as proposal admission. These are **PRESERVE** under CO-018 and
+this change order: selected context, evidence relationships, privacy checks,
+member decisions, and immutable consumer identities remain unchanged. Regression
+proofs must measure avoided work as well as equivalent production outcomes;
+increasing a timeout does not establish bounded replay cost.
+
 New supersession V4 writers also retain `expected_last_event_id` for retained
 predecessors that read this field for every schema version at or above V3. The
 original proposal event is a conservative legacy comparison: a predecessor may
