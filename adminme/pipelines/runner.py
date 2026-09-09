@@ -369,11 +369,11 @@ class PipelineRunner:
 
         callback = self._make_callback(pack)
         for plan_id in pending:
-            plan = await self._log.get(plan_id)
-            if plan is None:
+            pending_plan = await self._log.get(plan_id)
+            if pending_plan is None:
                 raise RuntimeError("publication plan disappeared from append-only log")
-            await callback(plan)
-            if not await self._publication_terminal(plan):
+            await callback(pending_plan)
+            if not await self._publication_terminal(pending_plan):
                 raise RuntimeError("source-publication plan remained non-terminal")
         return len(pending)
 

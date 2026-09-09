@@ -813,7 +813,7 @@ async def _run_skill_unlocked(
                     raise SkillInputInvalid(
                         "recorded receipt inputs are invalid"
                     ) from exc
-                return _compatible_recorded_result(
+                return await _compatible_recorded_result(
                     runtime=runtime,
                     pack=pack,
                     ctx=ctx,
