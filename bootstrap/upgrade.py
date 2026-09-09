@@ -33,12 +33,18 @@ from bootstrap.candidate_readiness import (
     load_pending_attestation_for_activation,
 )
 from bootstrap.contracts import (
+    PROJECTION_NAMES,
     DeploymentPaths,
     atomic_write,
     ensure_within,
     load_versions,
 )
-from bootstrap.doctor import Doctor
+from bootstrap.doctor import Doctor, _required_reactive_pipeline_ids
+from bootstrap.deployment_failure import (
+    failure_evidence,
+    failure_summary,
+    persist_failure,
+)
 from bootstrap.deployment_budget import (
     DeploymentBudget,
     DeploymentBudgetError,
@@ -239,6 +245,8 @@ class UpgradeManager:
         self.pending_attestation_id = pending_attestation_id
         self.services = ServiceManager(paths, test_mode=test_mode)
         self.activation_journal = ActivationJournal(paths)
+        self._failure_audit_attempt_id = uuid.uuid4().hex
+        self._failure_audit_available: bool | None = None
         self._deployment_budget: DeploymentBudget | None = None
         self._settlement_deadline: float | None = None
         self._candidate_settlement_deadline: float | None = None
@@ -1124,16 +1132,88 @@ class UpgradeManager:
         *,
         allowed_degraded_adapter_ids: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
-        return wait_for_settled_doctor(
-            run_doctor=lambda **kwargs: self._run_release_doctor(release, **kwargs),
-            services=self.services,
-            test_mode=self.test_mode,
-            timeout_seconds=POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
-            poll_seconds=POST_SWITCH_POLL_SECONDS,
-            live_readiness_retry_limit=POST_SWITCH_LIVE_READINESS_RETRIES,
-            allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
-            absolute_deadline=self._settlement_deadline,
-        )
+        try:
+            result = wait_for_settled_doctor(
+                run_doctor=lambda **kwargs: self._run_release_doctor(release, **kwargs),
+                services=self.services,
+                test_mode=self.test_mode,
+                timeout_seconds=POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
+                poll_seconds=POST_SWITCH_POLL_SECONDS,
+                live_readiness_retry_limit=POST_SWITCH_LIVE_READINESS_RETRIES,
+                allowed_degraded_adapter_ids=allowed_degraded_adapter_ids,
+                absolute_deadline=self._settlement_deadline,
+            )
+        except Exception as exc:
+            safe = self._record_settlement_failure(release, None, exception=exc)
+            stage = (
+                "recovery_doctor"
+                if self._recovery_settlement_deadline is not None
+                else "candidate_doctor"
+            )
+            availability = (
+                "; failure audit unavailable"
+                if self._failure_audit_available is False
+                else ""
+            )
+            raise UpgradeError(
+                f"selected release Doctor failed: stage={stage}; {failure_summary(safe)}{availability}"
+            ) from exc
+        if result.get("status") != "healthy":
+            self._record_settlement_failure(release, result)
+        return result
+
+    def _settlement_failure_summary(self, result: dict[str, Any]) -> str:
+        allowed = self._failure_consumer_allowlist(self.root)
+        summary = failure_summary(failure_evidence(result, allowed_consumers=allowed))
+        if self._failure_audit_available is False:
+            summary += "; failure audit unavailable"
+        return summary
+
+    @staticmethod
+    def _failure_consumer_allowlist(release: Path) -> frozenset[str]:
+        allowed = frozenset(f"projection:{name}" for name in PROJECTION_NAMES)
+        try:
+            return allowed | frozenset(_required_reactive_pipeline_ids(release))
+        except Exception:
+            return allowed
+
+    def _record_settlement_failure(
+        self,
+        release: Path,
+        result: dict[str, Any] | None,
+        *,
+        exception: Exception | None = None,
+    ) -> dict[str, Any]:
+        allowed = self._failure_consumer_allowlist(release)
+        safe = failure_evidence(result, allowed_consumers=allowed, exception=exception)
+        try:
+            journal = self.activation_journal.load()
+            stage = (
+                "recovery_doctor"
+                if self._recovery_settlement_deadline is not None
+                else "candidate_doctor"
+            )
+            document = {
+                "contract": "administrateme-deployment-failure-v1",
+                "transaction_id": journal["transaction_id"]
+                if journal
+                else self._failure_audit_attempt_id,
+                "operation": journal["operation"] if journal else "standalone",
+                "stage": stage,
+                "selected_commit": release.name
+                if _is_lower_hex(release.name, 40)
+                else None,
+                "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "failure": safe,
+                "content_exposed": False,
+            }
+            persist_failure(self.activation_journal, document)
+            self._failure_audit_available = True
+        except Exception:
+            # Failure diagnostics must never prevent the existing recovery path.
+            # Do not log exception text: it can contain paths or diagnostic data.
+            self._failure_audit_available = False
+        return safe
 
     def _service_start_reached_doctor_boundary(self, status: Any) -> bool:
         """Require a live runtime before Doctor adjudicates blocked readiness."""
@@ -1617,10 +1697,15 @@ class UpgradeManager:
                             predecessor
                         )
                     if not recovery_healthy:
+                        detail = (
+                            "; " + self._settlement_failure_summary(recovery_proof)
+                            if recovery_proof is not None
+                            else ""
+                        )
                         raise UpgradeError(
                             "recovered predecessor did not become healthy: "
                             f"status={restored.status}, runtime={restored.runtime}, "
-                            f"openclaw={restored.openclaw}"
+                            f"openclaw={restored.openclaw}{detail}"
                         )
                 except Exception as exc:
                     recovery_errors.append(exc)
@@ -2218,7 +2303,7 @@ class UpgradeManager:
                 allowed_degraded_adapter_ids=repair_adapter_ids,
             )
             if result["status"] != "healthy":
-                failed = ", ".join(sorted(self._failed_check_names(result)))
+                failed = self._settlement_failure_summary(result)
                 raise UpgradeError(
                     f"candidate failed post-switch Doctor: {failed or 'unknown check'}"
                 )
@@ -2414,7 +2499,7 @@ class UpgradeManager:
             self.services.start()
             result = self._post_switch_doctor(release)
             if result["status"] != "healthy":
-                failed = ", ".join(sorted(self._failed_check_names(result)))
+                failed = self._settlement_failure_summary(result)
                 raise UpgradeError(
                     f"candidate failed post-switch Doctor: {failed or 'unknown check'}"
                 )
@@ -2873,7 +2958,7 @@ class UpgradeManager:
             )
             result = self._post_switch_doctor(release)
             if result["status"] != "healthy":
-                failed = ", ".join(sorted(self._failed_check_names(result)))
+                failed = self._settlement_failure_summary(result)
                 raise UpgradeError(
                     f"rolled-back release failed Doctor: {failed or 'unknown check'}"
                 )
@@ -2945,7 +3030,7 @@ class UpgradeManager:
             self.services.start()
             result = self._post_switch_doctor(release)
             if result["status"] != "healthy":
-                failed = ", ".join(sorted(self._failed_check_names(result)))
+                failed = self._settlement_failure_summary(result)
                 raise UpgradeError(
                     f"rolled-back release failed Doctor: {failed or 'unknown check'}"
                 )
