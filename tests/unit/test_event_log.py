@@ -54,6 +54,7 @@ def _event(
     owner_scope: str = "shared:household",
     tenant_id: str = "tenant-a",
     correlation_id: str | None = None,
+    causation_id: str | None = None,
     event_at_ms: int | None = None,
     event_id: str = "",
     idempotency_key: str | None = None,
@@ -70,6 +71,7 @@ def _event(
         owner_scope=owner_scope,
         visibility_scope=owner_scope,
         correlation_id=correlation_id,
+        causation_id=causation_id,
         idempotency_key=idempotency_key,
         payload={"i": i},
     )
@@ -285,21 +287,180 @@ async def test_metadata_read_is_watermarked_and_payload_selective(
     assert [event["event_id"] for event in complete] == [first, second]
     assert complete[1]["payload"] is None
 
-    def query_plan() -> list[str]:
-        return [
-            str(row[3])
-            for row in log._conn.execute(  # noqa: SLF001 - storage-plan contract
-                "EXPLAIN QUERY PLAN "
-                "SELECT event_id, type, occurred_at, recorded_at, NULL AS payload "
-                "FROM events INDEXED BY idx_events_type_id_time "
-                "WHERE type IN (?, ?) AND event_id <= ? "
-                "ORDER BY event_id ASC LIMIT ?",
-                ("foo", "bar", second, 5000),
+
+@pytest.mark.parametrize("payload_types", [[], ["bar"]])
+async def test_actual_metadata_query_covers_causation_and_pages_at_fixed_watermark(
+    log: EventLog, payload_types: list[str]
+) -> None:
+    root = await log.append(_event(-1, type="foo"))
+    ids = await log.append_batch(
+        [
+            _event(
+                index,
+                type="test.event" if index % 5 == 0 else "foo" if index % 2 else "bar",
+                causation_id=root if index % 3 else None,
+            )
+            for index in range(1207)
+        ]
+    )
+    through = ids[1105]
+    expected = await _collect(log, cursor=root, through=through, types=["foo", "bar"])
+    assert len(expected) > 500
+    assert any(event["causation_id"] == root for event in expected)
+    assert any(event["causation_id"] is None for event in expected)
+    statements: list[str] = []
+    await log._run_locked(  # noqa: SLF001 - trace the actual storage boundary
+        log._conn.set_trace_callback, statements.append  # noqa: SLF001
+    )
+    try:
+        actual = [
+            event
+            async for event in log.read_metadata_since(
+                cursor=root,
+                through=through,
+                types=["foo", "bar"],
+                include_payload_for=payload_types,
+                limit=500,
             )
         ]
+    finally:
+        await log._run_locked(log._conn.set_trace_callback, None)  # noqa: SLF001
+    assert actual == [
+        {
+            **{
+                field: event[field]
+                for field in (
+                    "event_id",
+                    "type",
+                    "occurred_at",
+                    "recorded_at",
+                    "causation_id",
+                )
+            },
+            "payload": event["payload"] if event["type"] in payload_types else None,
+        }
+        for event in expected
+    ]
+    queries = [statement for statement in statements if "NULL AS payload" in statement]
+    assert len(queries) == 2
+    assert not any("sqlite_master" in statement for statement in statements)
+    assert all("causation_id" in statement for statement in queries)
+    assert all(
+        statement.endswith("ORDER BY event_id ASC LIMIT 500") for statement in queries
+    )
+    assert all(f"event_id <= '{through}'" in statement for statement in queries)
+    assert f"event_id > '{root}'" in queries[0]
+    assert f"event_id > '{actual[499]['event_id']}'" in queries[1]
 
-    plan = await log._run_locked(query_plan)  # noqa: SLF001 - storage-plan contract
-    assert any("COVERING INDEX idx_events_type_id_time" in row for row in plan)
+    def explain_actual_queries() -> list[list[str]]:
+        return [
+            [
+                str(row[3])
+                for row in log._conn.execute(  # noqa: SLF001
+                    "EXPLAIN QUERY PLAN " + statement
+                )
+            ]
+            for statement in queries
+        ]
+
+    plans = await log._run_locked(explain_actual_queries)  # noqa: SLF001
+    for statement, plan in zip(queries, plans, strict=True):
+        assert any(
+            "COVERING INDEX idx_events_type_id_time_causation" in row for row in plan
+        ), plan
+        event_reads = [
+            row for row in plan if "SEARCH events" in row or "SCAN events" in row
+        ]
+        if payload_types:
+            assert "UNION ALL" in statement
+            # The selected terminal-payload branch still reads its own rows;
+            # only the source metadata branch is required to avoid table fetches.
+            assert any("COVERING INDEX" not in row for row in event_reads), plan
+        else:
+            assert "UNION ALL" not in statement
+            assert event_reads and all(
+                "COVERING INDEX" in row for row in event_reads
+            ), plan
+
+
+@pytest.mark.parametrize("legacy_version", [3, 5])
+async def test_legacy_encrypted_metadata_read_only_then_migration_and_reopen(
+    tmp_path: Path, legacy_version: int
+) -> None:
+    class LegacyEventLog(EventLog):
+        MIGRATIONS = tuple(
+            entry for entry in EventLog.MIGRATIONS if entry[0] <= legacy_version
+        )
+
+    db = tmp_path / f"legacy-v{legacy_version}.db"
+    legacy = LegacyEventLog(db, TEST_KEY)
+    try:
+        source = await legacy.append(_event(1, type="foo"))
+        terminal = await legacy.append(_event(2, type="bar", causation_id=source))
+        before = await _collect(legacy)
+    finally:
+        await legacy.close()
+
+    def inventory(log: EventLog) -> dict:
+        connection = log._conn  # noqa: SLF001 - migration inventory
+        return {
+            "versions": [
+                row[0]
+                for row in connection.execute(
+                    "SELECT version FROM _schema_version ORDER BY version"
+                )
+            ],
+            "indexes": dict(
+                connection.execute(
+                    "SELECT name,sql FROM sqlite_master WHERE type='index'"
+                )
+            ),
+        }
+
+    archived = EventLog(db, TEST_KEY, read_only=True)
+    try:
+        original = await archived._run_locked(inventory, archived)  # noqa: SLF001
+        assert original["versions"] == list(range(1, legacy_version + 1))
+        assert "idx_events_type_id_time_causation" not in original["indexes"]
+        for payload_types in ([], ["bar"]):
+            rows = [
+                event
+                async for event in archived.read_metadata_since(
+                    types=["foo", "bar"], include_payload_for=payload_types
+                )
+            ]
+            assert [event["event_id"] for event in rows] == [source, terminal]
+            assert [event["causation_id"] for event in rows] == [None, source]
+            assert rows[0]["payload"] is None
+            assert rows[1]["payload"] == ({"i": 2} if payload_types else None)
+        after_read = await archived._run_locked(inventory, archived)  # noqa: SLF001
+        assert after_read == original
+        assert await _collect(archived) == before
+    finally:
+        await archived.close()
+
+    migrated = EventLog(db, TEST_KEY)
+    try:
+        upgraded = await migrated._run_locked(inventory, migrated)  # noqa: SLF001
+        assert upgraded["versions"] == [
+            version for version, _filename in EventLog.MIGRATIONS
+        ]
+        assert "idx_events_type_id_time_causation" in upgraded["indexes"]
+        if legacy_version >= 4:
+            assert (
+                upgraded["indexes"]["idx_events_type_id_time"]
+                == original["indexes"]["idx_events_type_id_time"]
+            )
+        assert await _collect(migrated) == before
+    finally:
+        await migrated.close()
+    reopened = EventLog(db, TEST_KEY)
+    try:
+        after_reopen = await reopened._run_locked(inventory, reopened)  # noqa: SLF001
+        assert after_reopen == upgraded
+        assert await _collect(reopened) == before
+    finally:
+        await reopened.close()
 
 
 async def test_sqlcipher_connection_operations_stay_on_one_worker_thread(

@@ -431,6 +431,23 @@ pending clock transition, recomputing the same deterministic audit cannot
 produce new truth. Any relevant change invalidates the revision and reopens
 the bounded refresh path.
 
+The causation-coverage correction is **PRESERVE** under this section and the
+source-disposition contract in section 3. The metadata selection also returns
+`causation_id`, which terminal correlation and legacy-effect fingerprints must
+retain. Migration v6 adds `(type, event_id, occurred_at, recorded_at,
+causation_id)` as `idx_events_type_id_time_causation` so that this complete
+metadata selection remains covered. The v4 index remains available to archived
+readers that force its name. Connection initialization selects the newest
+available metadata index once; read-only historical databases are never migrated
+and use the retained index, or an unhinted query when neither index exists.
+The additive `CREATE INDEX IF NOT EXISTS` migration is safe to retry after an
+interrupted open. It changes no event, query result, payload selection, audit
+watermark, freshness rule, checkpoint, provider-effect verdict, or delivery
+concurrency. Release proof must inspect the exact SQL issued by the production
+metadata reader, including non-null causation and the mixed terminal-payload
+branch, and exercise migration, read-only historical inspection, predecessor
+reopening, and source-assurance readiness through the production composition.
+
 ### 10.7 Exact-pin plugin health reconciliation
 
 PR #307 merged as `cbc6cc9` and deployed after encrypted backup

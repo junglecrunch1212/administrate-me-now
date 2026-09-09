@@ -44,7 +44,7 @@ jobs:
       - name: Validate architecture, style, and types
         run: |
           poetry run ruff check .
-          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run ruff format --check --diff adminme bootstrap bridge packs scripts tests tools
           poetry run python scripts/generate_event_lifecycle_catalog.py --check
           poetry run mypy adminme bridge/adminme_bridge bootstrap
           poetry run pyright adminme bridge/adminme_bridge bootstrap packs
@@ -54,6 +54,9 @@ jobs:
       - name: Validate production triage replay, activation, and rollback
         run: >-
           poetry run pytest -p no:cacheprovider -q
+          tests/unit/test_event_log.py
+          tests/acceptance/test_event_log_metadata_migration.py
+          tests/acceptance/test_source_assurance_metadata_replay.py
           tests/acceptance/test_runtime_triage_activation.py
           tests/acceptance/test_triage_rollback_compatibility.py
           tests/acceptance/test_runtime_spine.py
