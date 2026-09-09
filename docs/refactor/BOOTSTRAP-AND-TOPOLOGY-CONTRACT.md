@@ -350,6 +350,11 @@ interpreters ([Python timing contract](https://docs.python.org/3/library/time.ht
 values from that clock must not be exchanged with the selected runtime. The
 shared clock changes neither the pinned runtimes nor the deadline validation.
 
+Process cleanup still requires the leader to be reaped and its process group
+to be confirmed absent before a private preparation stage can be removed. A
+permission error while signaling may proceed to the existing bounded absence
+proof; it never establishes terminality. An unproven group retains its stage.
+
 Candidate and recovery settlement each have a six-hour hard limit. The recovery
 deadline is also capped by the inherited outer deadline minus the ten-minute
 reserve. Reentering recovery within that attempt cannot restart its elapsed

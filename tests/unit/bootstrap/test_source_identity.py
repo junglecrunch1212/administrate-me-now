@@ -399,6 +399,9 @@ def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
 ) -> None:
     repository, _old_commit = _supervisor_repository(tmp_path)
     bootstrap = repository / "bootstrap"
+    # A real package keeps an installed editable checkout from replacing this
+    # fixture's CLI and deadline module during the production -m handoff.
+    (bootstrap / "__init__.py").write_text("", encoding="utf-8")
     shutil.copy2(REPO_ROOT / "bootstrap" / "common.sh", bootstrap)
     shutil.copy2(REPO_ROOT / "bootstrap" / "deployment_budget.py", bootstrap)
     # Execute the exact production final shell-to-CLI block, after the real
@@ -420,12 +423,14 @@ def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
     )
     (bootstrap / "cli.py").write_text(
         "import json, os, time\nfrom pathlib import Path\n"
+        "import bootstrap.deployment_budget as budget_module\n"
         "from bootstrap.deployment_budget import DeploymentBudget, START_ENV, DEADLINE_ENV\n"
         "now = time.clock_gettime(time.CLOCK_MONOTONIC)\n"
         "budget = DeploymentBudget.from_environment(os.environ, now=now, supervised=True)\n"
         "report = {name: os.environ[name] for name in (START_ENV, DEADLINE_ENV, "
         "'ADMINME_UPGRADE_CONTROLLER_COMMIT', 'ADMINME_UPGRADE_CONTROLLER_ROOT')}\n"
         "report.update(now=now, deadline=budget.deadline, started=budget.started_at)\n"
+        "report.update(cli_file=__file__, budget_file=budget_module.__file__)\n"
         "Path(os.environ['ADMINME_SUPERVISOR_REPORT']).write_text(json.dumps(report))\n",
         encoding="utf-8",
     )
@@ -448,6 +453,11 @@ def test_fixed_supervisor_deadline_survives_production_shell_cli_handoff(
     assert observed["deadline"] - observed["started"] == CONTROLLER_SECONDS
     assert observed["ADMINME_UPGRADE_CONTROLLER_COMMIT"] == commit
     assert Path(observed["ADMINME_UPGRADE_CONTROLLER_ROOT"]).name == "source"
+    controller_root = Path(observed["ADMINME_UPGRADE_CONTROLLER_ROOT"])
+    assert Path(observed["cli_file"]).resolve() == controller_root / "bootstrap/cli.py"
+    assert Path(observed["budget_file"]).resolve() == (
+        controller_root / "bootstrap/deployment_budget.py"
+    )
     assert float(observed[DEADLINE_ENV]) == observed["deadline"]
     assert float(observed[START_ENV]) == observed["started"]
 
@@ -2421,6 +2431,119 @@ def test_upgrade_cleanliness_ignores_fsmonitor_and_git_environment(
     )
     assert manager._candidate_commit(repository) == commit  # noqa: SLF001
     assert not canary.exists()
+
+
+@pytest.mark.parametrize(
+    "denied_signals",
+    [(signal.SIGTERM,), (signal.SIGKILL,), (signal.SIGTERM, signal.SIGKILL)],
+)
+def test_materializer_permission_race_requires_reaped_leader_and_absent_group(
+    monkeypatch: pytest.MonkeyPatch, denied_signals: tuple[int, ...]
+) -> None:
+    waits: list[float] = []
+    signals: list[int] = []
+    clock = [100.0]
+    probes = 0
+    absence_proven = False
+    process = SimpleNamespace(
+        pid=43210, wait=lambda *, timeout: waits.append(timeout) or 0
+    )
+
+    def killpg(group_id: int, signum: int) -> None:
+        nonlocal probes, absence_proven
+        assert group_id == process.pid
+        signals.append(signum)
+        if signum:
+            if signum in denied_signals:
+                raise PermissionError("synthetic group signal permission race")
+            return
+        probes += 1
+        if probes == 3:
+            assert waits == [5, 30]
+            raise PermissionError("synthetic zombie-only group remains")
+        if probes == 4:
+            absence_proven = True
+            raise ProcessLookupError("synthetic group is now absent")
+
+    def pause(seconds: float) -> None:
+        assert seconds == 0.01
+        assert not absence_proven
+        clock[0] += seconds
+
+    monkeypatch.setattr(source_identity.os, "killpg", killpg)
+    monkeypatch.setattr(
+        source_identity,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=pause),
+    )
+
+    source_identity._reap_materializer_group(process)  # noqa: SLF001
+
+    assert waits == [5, 30]
+    assert signals == [0, signal.SIGTERM, 0, signal.SIGKILL, 0, 0]
+    assert absence_proven
+    assert clock[0] == 100.01
+
+
+@pytest.mark.parametrize("probe_permission_denied", [False, True])
+def test_materializer_persistent_permission_or_present_group_stays_unreaped(
+    monkeypatch: pytest.MonkeyPatch, probe_permission_denied: bool
+) -> None:
+    waits: list[float] = []
+    signals: list[int] = []
+    clock = [0.0]
+    process = SimpleNamespace(
+        pid=43210, wait=lambda *, timeout: waits.append(timeout) or 0
+    )
+
+    def killpg(group_id: int, signum: int) -> None:
+        assert group_id == process.pid
+        signals.append(signum)
+        if signum or probe_permission_denied:
+            raise PermissionError("synthetic persistent group permission denial")
+
+    def pause(seconds: float) -> None:
+        assert seconds == 0.01
+        clock[0] += seconds
+
+    monkeypatch.setattr(source_identity.os, "killpg", killpg)
+    monkeypatch.setattr(
+        source_identity,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=pause),
+    )
+
+    with pytest.raises(SourceProcessNotReaped, match="descendants could not be reaped"):
+        source_identity._reap_materializer_group(process)  # noqa: SLF001
+
+    assert waits == [5, 30]
+    assert [signum for signum in signals if signum] == [signal.SIGTERM, signal.SIGKILL]
+    assert 5 <= clock[0] <= 5.02
+
+
+def test_materializer_absent_group_cannot_replace_leader_reap_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+
+    def wait(*, timeout: float) -> int:
+        waits.append(timeout)
+        raise subprocess.TimeoutExpired("synthetic owned materializer", timeout)
+
+    process = SimpleNamespace(pid=43210, wait=wait)
+
+    def killpg(group_id: int, signum: int) -> None:
+        assert group_id == process.pid and signum == 0
+        raise ProcessLookupError("synthetic group is absent")
+
+    monkeypatch.setattr(source_identity.os, "killpg", killpg)
+
+    with pytest.raises(
+        SourceProcessNotReaped, match="materializer could not be reaped"
+    ):
+        source_identity._reap_materializer_group(process)  # noqa: SLF001
+
+    assert waits == [5, 30]
 
 
 def test_materializer_timeout_reaps_child_and_publisher_removes_stage(
