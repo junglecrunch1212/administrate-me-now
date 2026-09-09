@@ -415,11 +415,30 @@ Gateway liveness must be bracketed by the same managed process identity and its
 owned listener process or verified descendant. Anonymous port health alone
 cannot establish managed service health. Shutdown must retain the captured
 process identities through label removal and prove both their exit and listener
-closure within its bounded wait. An unloaded label with an orphan process is
-not proven quiescence. Unavailable or conflicting OS ownership fails closed;
+closure within one immutable 120-second budget per service, beginning before
+the first ownership probe and including bootout. Individual inventory probes
+remain bounded; bootout may use the remaining stop budget. The runtime stops
+workbook and adapter activity before the bus, whose callback drain can itself
+take five seconds. Projection and encrypted-log closure follow; HTTP request
+drain can add time before runtime cleanup.
+The stop ceiling allows ordinary graceful cleanup without claiming that every
+shutdown is guaranteed to finish. Deadline expiry remains a failed proof, even
+if a later independent observation finds the processes absent. An unloaded
+label with an orphan process is not proven quiescence. Unavailable or
+conflicting OS ownership fails closed;
 this controller does not kill unidentified processes. Process arguments and
 environments are excluded from ownership evidence. Runtime pins, service
 configuration, external-effect authority, and full Doctor are **PRESERVE**.
+
+Quiescence is a prerequisite for activation, rollback and interrupted recovery
+to select an OpenClaw executable or alter release pointers, instance control
+files, plugin registration or LaunchAgents. If the stop fails, restoration must
+abort before those mutations; a retained activation journal stays open for a
+supported retry that proves quiescence again. Best-effort cleanup after another
+error must not bypass this boundary. The same prerequisite governs backup state
+replacement and restoration after a failed restore. This ordering correction is
+**MODERNIZE** under the shutdown and automatic recovery requirements above;
+settlement and browser acceptance deadlines remain **PRESERVE**.
 
 The implementation authority is `bootstrap/deployment_budget.py`, the fixed
 supervisor/guardian deadline propagation, `UpgradeManager`, and the shared

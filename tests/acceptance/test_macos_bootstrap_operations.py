@@ -2323,7 +2323,7 @@ def test_declared_source_repair_stops_before_selection_on_stopped_receipt_drift(
     assert ServiceManager(paths, test_mode=True).status().status == "healthy"
 
 
-def test_declared_source_repair_restarts_predecessor_when_both_stop_attempts_fail(
+def test_declared_source_repair_aborts_restoration_when_both_stop_attempts_fail(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2399,15 +2399,14 @@ def test_declared_source_repair_restarts_predecessor_when_both_stop_attempts_fai
     monkeypatch.setattr(manager.services, "stop", fail_stop)
     monkeypatch.setattr(manager.services, "start", restart_predecessor)
 
-    with pytest.raises(UpgradeError, match="cleanup stop also failed") as error:
+    with pytest.raises(UpgradeError, match="service quiescence is unproven") as error:
         manager.activate(REPO_ROOT)
 
     assert "quiescence failed after runtime stopped" in str(error.value)
-    assert "previous release restart did not become healthy" in str(error.value)
-    assert "status=failed, runtime=failed, openclaw=running" in str(error.value)
+    assert str(error.value.__cause__) == "fixture cleanup stop also failed"
     assert stop_attempts == 2
-    assert restart_attempts == 1
-    assert ServiceManager(paths, test_mode=True).status().status == "healthy"
+    assert restart_attempts == 0
+    assert ServiceManager(paths, test_mode=True).status().status == "stopped"
     assert not (paths.app_dir / "current-release.json").exists()
 
 

@@ -1651,7 +1651,12 @@ class UpgradeManager:
             try:
                 self.services.stop()
             except Exception as exc:
-                recovery_errors.append(exc)
+                # Keep this journal retryable, but leave every selector and
+                # control file untouched until process quiescence is proved.
+                raise UpgradeError(
+                    "interrupted activation recovery did not converge: "
+                    "service quiescence is unproven; control files were not restored"
+                ) from exc
             for operation in (
                 lambda: self._install_reviewed_openclaw(predecessor),
                 lambda: self._restore_journal_control_files(recovery_journal),
@@ -2132,6 +2137,20 @@ class UpgradeManager:
                     "preparation_consumed",
                 )
                 self._require_activation_capacity()
+                if repair_policy is None:
+                    journal = self.activation_journal.transition(
+                        journal,
+                        "services_quiescing",
+                    )
+                    self.services.stop()
+                    journal = self.activation_journal.transition(
+                        journal,
+                        "services_quiesced",
+                    )
+                # Graceful stop can consume time; reserve admission must still
+                # hold at the first selector mutation. This does not reset the
+                # already established candidate settlement deadline.
+                self._require_activation_capacity()
                 journal = self.activation_journal.transition(
                     journal,
                     "openclaw_selecting",
@@ -2154,16 +2173,6 @@ class UpgradeManager:
                         "consumed preparation activity cleanup failed"
                     ) from cleanup_error
 
-            if was_running and repair_policy is None:
-                journal = self.activation_journal.transition(
-                    journal,
-                    "services_quiescing",
-                )
-                self.services.stop()
-                journal = self.activation_journal.transition(
-                    journal,
-                    "services_quiesced",
-                )
             if binding_transition is not None:
                 current_adapter_payload, current_adapter_config = (
                     self._read_private_json_payload(
@@ -2464,6 +2473,9 @@ class UpgradeManager:
             )
             try:
                 self._require_activation_capacity()
+                if repair_policy is None:
+                    self.services.stop()
+                self._require_activation_capacity()
                 self._install_reviewed_openclaw(release)
                 openclaw_switched = True
             finally:
@@ -2478,8 +2490,6 @@ class UpgradeManager:
                     raise UpgradeError(
                         "consumed preparation activity cleanup failed"
                     ) from activity_cleanup_error
-            if was_running and repair_policy is None:
-                self.services.stop()
             plugin_registration_attempted = True
             reconcile_administrateme_plugin(
                 self.paths,
@@ -2511,10 +2521,10 @@ class UpgradeManager:
             try:
                 self.services.stop()
             except Exception as exc:
-                # A quiescence failure can leave only one of the two services
-                # stopped.  Cleanup is best-effort; never let its own failure
-                # bypass selector restoration or the previous-release restart.
-                rollback_errors.append(exc)
+                raise UpgradeError(
+                    f"candidate failed ({candidate_error}); previous-release "
+                    "restoration stopped because service quiescence is unproven"
+                ) from exc
             if previous and pointer_switched:
                 assert previous_release is not None
                 try:
@@ -2825,6 +2835,16 @@ class UpgradeManager:
             self._require_activation_capacity()
             journal = self.activation_journal.transition(
                 journal,
+                "services_quiescing",
+            )
+            self.services.stop()
+            journal = self.activation_journal.transition(
+                journal,
+                "services_quiesced",
+            )
+            self._require_activation_capacity()
+            journal = self.activation_journal.transition(
+                journal,
                 "openclaw_selecting",
             )
             self._install_reviewed_openclaw(release)
@@ -2832,16 +2852,6 @@ class UpgradeManager:
                 journal,
                 "openclaw_selected",
             )
-            if was_running:
-                journal = self.activation_journal.transition(
-                    journal,
-                    "services_quiescing",
-                )
-                self.services.stop()
-                journal = self.activation_journal.transition(
-                    journal,
-                    "services_quiesced",
-                )
             if binding_transition is not None:
                 current_adapter_payload, current_adapter_config = (
                     self._read_private_json_payload(
@@ -3017,9 +3027,9 @@ class UpgradeManager:
         stopped = self.services.status().status == "stopped"
         self._require_activation_capacity()
         try:
+            self.services.stop()
+            self._require_activation_capacity()
             self._install_reviewed_openclaw(release)
-            if not stopped:
-                self.services.stop()
             reconcile_administrateme_plugin(
                 self.paths,
                 release,
@@ -3042,7 +3052,10 @@ class UpgradeManager:
             try:
                 self.services.stop()
             except Exception as exc:
-                restoration_errors.append(exc)
+                raise UpgradeError(
+                    f"rollback failed ({rollback_candidate_error}); current-release "
+                    "restoration stopped because service quiescence is unproven"
+                ) from exc
             try:
                 atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
             except Exception as exc:
