@@ -23,6 +23,13 @@ from bootstrap.contracts import OPENCLAW_LABEL, RUNTIME_LABEL, DeploymentPaths
 from bootstrap.cli import _bootstrap_diagnostic_status
 from bootstrap.cli import _interactive_answers
 from bootstrap.doctor import Doctor
+from bootstrap.deployment_budget import (
+    CONTROLLER_SECONDS,
+    DeploymentBudget,
+    FINALIZATION_RESERVE_SECONDS,
+    RECOVERY_SECONDS,
+    SETTLEMENT_SECONDS,
+)
 from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.keychain_runtime_migration import (
     ALIAS_FILENAME,
@@ -2877,3 +2884,117 @@ def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
     assert "status=failed, runtime=failed, openclaw=running" in str(error.value)
     assert start_calls == 2
     assert json.loads(pointer.read_text("utf-8")) == current
+
+
+@pytest.mark.parametrize("stop_failure", ["initial", "restoration", "capacity"])
+def test_legacy_rollback_requires_quiescence_and_current_capacity_before_selection(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+    stop_failure: str,
+) -> None:
+    releases = test_paths.app_dir / "releases"
+    current_release = releases / ("c" * 40)
+    previous_release = releases / ("b" * 40)
+    current_release.mkdir(parents=True)
+    previous_release.mkdir()
+    for path in (
+        test_paths.root,
+        test_paths.app_dir,
+        releases,
+        current_release,
+        previous_release,
+    ):
+        path.chmod(0o700)
+    previous = {
+        "path": str(previous_release),
+        "commit": "b" * 40,
+        "previous": None,
+    }
+    current = {
+        "path": str(current_release),
+        "commit": "c" * 40,
+        "previous": previous,
+    }
+    pointer = test_paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps(current), encoding="utf-8")
+    pointer.chmod(0o600)
+    original_pointer = pointer.read_bytes()
+    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    pins = []
+    plugins = []
+    agents = []
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda _paths, release, **_kwargs: plugins.append(release),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda _paths, release, **_kwargs: agents.append(release),
+    )
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=True)
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", pins.append)
+    healthy = ServiceStatus("healthy", "observation_only", "running", True, "fixture")
+    stopped = ServiceStatus("stopped", "stopped", "stopped", True, "fixture")
+    monkeypatch.setattr(manager.services, "status", lambda: healthy)
+    clock = [10_000.0]
+    monkeypatch.setattr("bootstrap.upgrade.deployment_clock", lambda: clock[0])
+    reserve = SETTLEMENT_SECONDS + RECOVERY_SECONDS + FINALIZATION_RESERVE_SECONDS
+    manager._deployment_budget = DeploymentBudget(
+        started_at=clock[0] + reserve + 1 - CONTROLLER_SECONDS,
+        deadline=clock[0] + reserve + 1,
+    )
+    stops = 0
+    starts = 0
+    admitted_deadline = None
+
+    def stop_services():
+        nonlocal stops, admitted_deadline
+        stops += 1
+        if stops == 1:
+            admitted_deadline = manager._candidate_settlement_deadline
+        if stop_failure == "initial" or (stop_failure == "restoration" and stops == 2):
+            raise RuntimeError("fixture service quiescence is unproven")
+        if stop_failure == "capacity" and stops == 1:
+            clock[0] += 2  # Stop succeeds after the reserve admission expires.
+        return stopped
+
+    def start_services():
+        nonlocal starts
+        starts += 1
+        return healthy
+
+    def doctor(release):
+        return {
+            "status": "healthy" if release == current_release else "failed",
+            "checks": [
+                {"name": "fixture_post_switch", "ok": release == current_release}
+            ],
+        }
+
+    monkeypatch.setattr(manager.services, "stop", stop_services)
+    monkeypatch.setattr(manager.services, "start", start_services)
+    monkeypatch.setattr(manager, "_post_switch_doctor", doctor)
+    expected_error = (
+        "insufficient controller time before switch"
+        if stop_failure == "capacity"
+        else "service quiescence is unproven"
+    )
+    with pytest.raises(UpgradeError, match=expected_error):
+        manager.rollback()
+    assert stops == 2
+    assert admitted_deadline == 10_000 + SETTLEMENT_SECONDS
+    assert manager._candidate_settlement_deadline == admitted_deadline
+    if stop_failure == "initial":
+        assert pointer.read_bytes() == original_pointer
+        assert pins == plugins == agents == []
+        assert starts == 0
+    elif stop_failure == "restoration":
+        assert json.loads(pointer.read_text("utf-8")) == previous
+        assert pins == plugins == agents == [previous_release]
+        assert starts == 1
+    else:
+        # The candidate was never selected. A separately admitted recovery
+        # restores only the current release after its own successful stop.
+        assert json.loads(pointer.read_text("utf-8")) == current
+        assert pins == plugins == agents == [current_release]
+        assert starts == 1

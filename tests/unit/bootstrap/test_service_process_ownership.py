@@ -9,7 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 from bootstrap.contracts import DeploymentPaths, OPENCLAW_LABEL
-from bootstrap.services import ServiceManager, _ProcessIdentity
+from bootstrap.services import (
+    SERVICE_STOP_TIMEOUT_SECONDS,
+    ServiceManager,
+    _ProcessIdentity,
+)
 
 
 def test_gateway_health_requires_stable_managed_listener_ownership(
@@ -158,7 +162,7 @@ def test_quiescence_rejects_unload_proof_returned_after_deadline(tmp_path, monke
         calls += 1
         if calls == 2:
             assert timeout <= 5
-            clock[0] = 5.0
+            clock[0] = float(SERVICE_STOP_TIMEOUT_SECONDS)
         return False
 
     monkeypatch.setattr(manager, "_launchctl_loaded", unloaded)
@@ -203,4 +207,65 @@ def test_quiescence_refuses_a_captured_reparented_process_after_port_closes(
     monkeypatch.setattr(manager, "_process_probe", bootout)
     with pytest.raises(RuntimeError, match="quiescence is unproven"):
         manager._stop_label(OPENCLAW_LABEL)
-    assert clock[0] == pytest.approx(5)
+    assert clock[0] == pytest.approx(SERVICE_STOP_TIMEOUT_SECONDS)
+
+
+@pytest.mark.parametrize("bootout_exhausts_budget", [False, True])
+def test_stop_budget_includes_initial_probes_bootout_and_final_proof(
+    tmp_path, monkeypatch, bootout_exhausts_budget
+):
+    manager = ServiceManager(DeploymentPaths.from_root(tmp_path / "deployment"))
+    clock = [0.0]
+    loaded = [True]
+    calls = []
+    monkeypatch.setattr("bootstrap.services.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "bootstrap.services.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    def probe(command, timeout):
+        calls.append((command, timeout, clock[0]))
+        assert 0 < timeout <= SERVICE_STOP_TIMEOUT_SECONDS - clock[0]
+        if command[:2] == ["launchctl", "bootout"]:
+            assert clock[0] == 4  # All four initial probes consume this budget.
+            assert timeout == SERVICE_STOP_TIMEOUT_SECONDS - 4
+            clock[0] += timeout if bootout_exhausts_budget else 60
+            loaded[0] = False
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert timeout <= 5
+        clock[0] += 1
+        if command[:2] == ["launchctl", "print"]:
+            if loaded[0]:
+                return SimpleNamespace(returncode=0, stdout="pid = 100\n", stderr="")
+            return SimpleNamespace(
+                returncode=113,
+                stdout="",
+                stderr=f'Could not find service "{OPENCLAW_LABEL}"',
+            )
+        if command[0] == "ps":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"100 1 {os.getuid()} fixture-start\n"
+                if loaded[0]
+                else f"999 1 {os.getuid()} unrelated-process\n",
+                stderr="",
+            )
+        assert command[0] == "lsof"
+        return SimpleNamespace(
+            returncode=0 if loaded[0] else 1,
+            stdout="100\n" if loaded[0] else "",
+            stderr="",
+        )
+
+    monkeypatch.setattr(manager, "_process_probe", probe)
+    if bootout_exhausts_budget:
+        with pytest.raises(RuntimeError, match="quiescence is unproven"):
+            manager._stop_label(OPENCLAW_LABEL)
+        assert clock[0] == SERVICE_STOP_TIMEOUT_SECONDS
+        assert len(calls) == 5  # No new budget starts after a late bootout.
+    else:
+        manager._stop_label(OPENCLAW_LABEL)
+        assert 60 < clock[0] < SERVICE_STOP_TIMEOUT_SECONDS
+        assert calls[-1][0][:2] == ["launchctl", "print"]
+    assert all(command[0] in {"launchctl", "ps", "lsof"} for command, _, _ in calls)

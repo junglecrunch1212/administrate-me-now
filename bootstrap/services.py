@@ -30,6 +30,10 @@ SERVICE_READINESS_TIMEOUT_SECONDS = 120
 RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS = 30
 SERVICE_QUIESCENCE_TIMEOUT_SECONDS = 5
 SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS = 5
+# The bus alone may drain callbacks for five seconds; workbook, adapter,
+# request and native connection shutdown also need time. This is a reviewed
+# total stop ceiling, not a guarantee that every service exits within it.
+SERVICE_STOP_TIMEOUT_SECONDS = 120
 SOURCE_ASSURANCE_COUNT_NAMES = (
     "source_facts",
     "obligations",
@@ -403,33 +407,36 @@ class ServiceManager:
         # Prove that every captured process (even if reparented) has exited
         # and no listener remains. This is not a claim that an unobserved child
         # can never escape its parent's ancestry while launchctl is stopping.
-        timeout = SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS
-        managed = self._managed_pid(label, timeout)
-        listeners = self._listener_pids(label, timeout)
-        processes = self._process_table(timeout)
+        deadline = time.monotonic() + SERVICE_STOP_TIMEOUT_SECONDS
+        managed = self._managed_pid(label, self._proof_remaining(deadline))
+        listeners = self._listener_pids(label, self._proof_remaining(deadline))
+        processes = self._process_table(self._proof_remaining(deadline))
         captured = self._managed_tree(managed, processes)
         for pid in listeners:
             if pid not in processes:
                 raise RuntimeError("service listener identity changed before stop")
             captured[pid] = processes[pid]
-        if self._launchctl_loaded(label, timeout):
+        if self._launchctl_loaded(label, self._proof_remaining(deadline)):
+            # bootout may itself wait for graceful process exit. It shares the
+            # whole stop budget rather than a fresh five-second probe window.
             result = self._process_probe(
-                ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], timeout
+                ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"],
+                deadline - time.monotonic(),
             )
-            if result.returncode and self._launchctl_loaded(label, timeout):
+            if result.returncode and self._launchctl_loaded(
+                label, self._proof_remaining(deadline)
+            ):
                 raise RuntimeError(f"launchd could not stop {label}")
-        deadline = time.monotonic() + SERVICE_QUIESCENCE_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            managed_now = self._managed_pid(label, remaining)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            listeners_now = self._listener_pids(label, remaining)
+            managed_now = self._managed_pid(label, self._proof_remaining(deadline))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            current = self._process_table(remaining)
+            listeners_now = self._listener_pids(label, self._proof_remaining(deadline))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            current = self._process_table(self._proof_remaining(deadline))
             survivors = any(
                 pid in current and identity.same_process(current[pid])
                 for pid, identity in captured.items()
@@ -447,7 +454,7 @@ class ServiceManager:
                     return
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
         raise RuntimeError(
-            f"stopped {label} retains a process or listener; quiescence is unproven"
+            f"service {label} stop deadline expired; quiescence is unproven"
         )
 
     def _launchctl_definition_matches(
