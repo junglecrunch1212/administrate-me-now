@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import copy
 import hashlib
 import io
 import json
@@ -575,6 +576,139 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     for reference in references.values():
         secret = store.get(reference)
         assert secret not in backup_bytes
+
+
+@pytest.mark.parametrize("structural_failure", [False, True])
+def test_encrypted_restore_settles_late_sources_and_quiesces_failed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    structural_failure: bool,
+) -> None:
+    """Exercise real archive/rebuild/restore with only late readiness scripted."""
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "restore-settlement-deployment")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    services = ServiceManager(paths, test_mode=True)
+    services.start()
+    manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
+    manager._services = services
+    backup = manager.create()
+    assert backup["encrypted"] is True
+    marker = paths.instance_dir / "post-backup-fixture.txt"
+    marker.write_text("retain this only when the restore is reverted", encoding="utf-8")
+    # Use the production waiting policy with fixture services and credentials.
+    # The supplied Doctor still executes every actual proof in the lab root.
+    manager.test_mode = False
+    doctor_calls: list[bool] = []
+    proof_reports: list[dict] = []
+    readiness_calls = 0
+    sleeps: list[float] = []
+    original_diagnostics = services.runtime_diagnostics
+
+    def readiness():
+        nonlocal readiness_calls
+        readiness_calls += 1
+        value = original_diagnostics()
+        assert value is not None
+        value = copy.deepcopy(value)
+        if readiness_calls <= 2:
+            capability = value["capabilities"]["policy:source-assurance"]
+            capability["state"] = "degraded"
+            capability["details"]["state"] = "degraded"
+            capability["details"]["counts"]["accounted"] = 0
+            capability["details"]["counts"]["pending"] = 1
+        elif structural_failure:
+            value["capabilities"]["pipeline:fixture"] = {
+                "kind": "reactive_pipeline",
+                "state": "degraded",
+            }
+        return value
+
+    class LateSourceDoctor:
+        def __init__(self, actual_paths, *, root, test_mode):
+            assert actual_paths == paths
+            assert root == REPO_ROOT
+            assert test_mode is False
+            self.doctor = Doctor(actual_paths, root=root, test_mode=True)
+
+        def run(self, *, include_synthetic_proof=True):
+            doctor_calls.append(include_synthetic_proof)
+            report = self.doctor.run(include_synthetic_proof=include_synthetic_proof)
+            assert report["status"] == "healthy", report
+            if len(doctor_calls) == 1 or structural_failure:
+                failed_name = (
+                    "source_assurance_terminal_dispositions"
+                    if len(doctor_calls) == 1
+                    else "required_reactive_pipeline_delivery"
+                )
+                report = copy.deepcopy(report)
+                report["status"] = "failed"
+                for check in report["checks"]:
+                    if check["name"] == failed_name:
+                        check["ok"] = False
+                        break
+                else:
+                    raise AssertionError(
+                        f"missing real Doctor predicate: {failed_name}"
+                    )
+            proof_reports.append(report)
+            return report
+
+    monkeypatch.setattr(services, "runtime_diagnostics", readiness)
+    monkeypatch.setattr("bootstrap.backup_restore.Doctor", LateSourceDoctor)
+    monkeypatch.setattr(
+        "bootstrap.service_settlement.time",
+        SimpleNamespace(monotonic=time.monotonic, sleep=sleeps.append),
+    )
+    original_replace = os.replace
+    moved_selected_states = 0
+
+    def replace(source, destination):
+        nonlocal moved_selected_states
+        if Path(source) == paths.instance_dir:
+            assert services.status().status == "stopped"
+            moved_selected_states += 1
+        original_replace(source, destination)
+
+    monkeypatch.setattr("bootstrap.backup_restore.os.replace", replace)
+    if structural_failure:
+        with pytest.raises(BackupError, match="required_reactive_pipeline_delivery"):
+            manager.restore(Path(backup["path"]))
+        assert marker.is_file()
+        assert doctor_calls == [False, False]
+        assert moved_selected_states == 2
+        assert len(sleeps) == 2
+    else:
+        restored = manager.restore(Path(backup["path"]))
+        assert restored["status"] == "restored"
+        assert restored["projections_rebuilt"] == 15
+        assert restored["workbooks_rebuilt"] is True
+        assert not marker.exists()
+        assert (Path(restored["rollback"]) / marker.name).is_file()
+        assert doctor_calls == [False, False, True]
+        assert moved_selected_states == 1
+        assert len(sleeps) == 3
+        proof = next(
+            check["evidence"]
+            for check in proof_reports[-1]["checks"]
+            if check["name"] == "canonical_synthetic_round_trip"
+        )
+        assert proof["external_side_effects"] == 0
+        assert proof["review_suppressed_by_observation"] is True
+    assert readiness_calls == 3
+    assert services.status().status == "healthy"
+    assert services.status().observation_mode is True
 
 
 def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(

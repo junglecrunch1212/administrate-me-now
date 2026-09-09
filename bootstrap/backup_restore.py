@@ -52,6 +52,7 @@ from bootstrap.candidate_readiness import (
 )
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
+from bootstrap.service_settlement import wait_for_settled_doctor
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import (
     SourceIdentityError,
@@ -1900,6 +1901,16 @@ class BackupManager:
             finally:
                 os.close(lock_descriptor)
 
+    def _post_restore_doctor(self, *, services_restarted: bool) -> dict[str, Any]:
+        doctor = Doctor(self.paths, root=self.root, test_mode=self.test_mode)
+        if not services_restarted:
+            return doctor.run(include_synthetic_proof=False)
+        return wait_for_settled_doctor(
+            run_doctor=doctor.run,
+            services=self.services,
+            test_mode=self.test_mode,
+        )
+
     def restore(self, backup: Path) -> dict[str, Any]:
         source = ensure_within(backup, self.paths.backup_dir)
         if not source.is_file():
@@ -1934,11 +1945,9 @@ class BackupManager:
                 os.replace(staged_state, self.paths.instance_dir)
                 if should_restart:
                     self.services.start()
-                diagnostics = Doctor(
-                    self.paths,
-                    root=self.root,
-                    test_mode=self.test_mode,
-                ).run(include_synthetic_proof=False)
+                diagnostics = self._post_restore_doctor(
+                    services_restarted=should_restart
+                )
                 if diagnostics["status"] != "healthy":
                     failed_checks = ", ".join(
                         check["name"]
@@ -1949,6 +1958,10 @@ class BackupManager:
                         f"restored state failed Doctor validation: {failed_checks}"
                     )
             except Exception:
+                if should_restart:
+                    # Close runtime handles before moving its encrypted state.
+                    # A failed stop leaves the selected state intact for recovery.
+                    self.services.stop()
                 if self.paths.instance_dir.exists():
                     failed = self.paths.rollback_dir / f"failed-restore-{_utc_stamp()}"
                     os.replace(self.paths.instance_dir, failed)

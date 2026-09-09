@@ -277,6 +277,16 @@ effects remain prerequisites and post-switch gates. New degradation invokes
 automatic rollback. Installed-release edits or unrelated live repairs are not
 an acceptable way to satisfy these gates.
 
+Backup restoration uses the same bounded settlement policy as activation after
+restarting services. New source observations may arrive while restored adapters
+resume; an initial source-assurance gap is not by itself a failed restoration.
+The shared policy polls content-free readiness within the existing time limit,
+fails closed on structural degradation or unavailable proof, and runs the full
+Doctor proof once ready. A failed restoration quiesces services before replacing
+state directories. These are **PRESERVE** under the bootstrap backup, recovery,
+observation, and source-accounting invariants: neither required proof nor rollback
+is waived, and installed releases and durable checkpoints are never patched.
+
 ## Acceptance and constitutional disposition
 
 AC-60 requires production-composition tests for the source-grounded pipeline,
