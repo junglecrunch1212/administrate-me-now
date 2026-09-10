@@ -15,7 +15,7 @@ jobs:
   # Keep this job name stable because protected main requires it.
   deterministic-consistency:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: "1"
@@ -53,7 +53,8 @@ jobs:
 
       - name: Validate production triage replay, activation, and rollback
         run: >-
-          poetry run pytest -p no:cacheprovider -q --maxfail=1
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
+          --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
           tests/unit/products/bridge/test_ingest_router.py
           tests/unit/bootstrap/test_disposable_test_reset.py
           tests/unit/bootstrap/test_backup_rehearsal.py
@@ -110,9 +111,20 @@ jobs:
           tests/acceptance/test_attention_rule_lifecycle.py
 
       - name: Validate Python behavior
+        # Pytest owns this one disposable tree and clears it before each run.
+        # Retaining the earlier encrypted fixture trees can exhaust the next
+        # suite's real Doctor disk prerequisite on the hosted Linux runner.
         run: |
-          poetry run pytest -p no:cacheprovider -q
-          poetry run pytest -p no:cacheprovider tests/acceptance --runxfail -q
+          df -h "${RUNNER_TEMP}"
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 \
+            --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
+          du -sh "${RUNNER_TEMP}/adminme-consistency-pytest"
+
+      - name: Validate release-strict acceptance
+        run: |
+          df -h "${RUNNER_TEMP}"
+          poetry run pytest -p no:cacheprovider tests/acceptance --runxfail -q -ra --maxfail=1 \
+            --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
 
       - name: Validate bridge package
         run: |
