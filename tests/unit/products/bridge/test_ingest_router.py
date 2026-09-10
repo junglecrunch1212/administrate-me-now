@@ -280,7 +280,9 @@ def _command_client(*, command: dict[str, Any]) -> tuple[TestClient, _FakeEventS
 
     app.state.runtime = SimpleNamespace(
         observation=_Observation(),
-        settings=SimpleNamespace(instance=SimpleNamespace(tenant_id="tenant-a")),
+        settings=SimpleNamespace(
+            instance=SimpleNamespace(tenant_id="tenant-a"), adapter_config={}
+        ),
     )
     return TestClient(app), sink
 

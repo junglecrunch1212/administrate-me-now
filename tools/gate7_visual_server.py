@@ -27,6 +27,7 @@ INSTANCE = Path(os.environ["ADMINME_GATE7_VISUAL_INSTANCE"]).resolve()
 PORT = int(os.environ.get("ADMINME_GATE7_VISUAL_PORT", "3347"))
 MODEL_CONFIGURED = os.environ.get("ADMINME_GATE7_VISUAL_MODEL", "1") == "1"
 ATTENTION_ENABLED = os.environ.get("ADMINME_GATE7_ATTENTION_ENABLED", "0") == "1"
+BOUNDED_SAMPLE = os.environ.get("ADMINME_GATE7_BOUNDED_SAMPLE", "0") == "1"
 FIXED_NOW = datetime.fromisoformat(
     os.environ.get("ADMINME_GATE7_VISUAL_NOW", "2026-08-13T14:00:00Z").replace(
         "Z", "+00:00"
@@ -122,6 +123,42 @@ def build_app():
         ),
         encoding="utf-8",
     )
+    adapter_config = {"adapter_supervisor_port": 0, "adapters": []}
+    if BOUNDED_SAMPLE:
+        # Saved, disconnected fixture connections exercise actual Settings
+        # rendering without contacting a source or creating private mail.
+        adapter_config = {
+            "adapter_supervisor_port": 0,
+            "adapters": [
+                {
+                    "id": "visual-bounded-gmail",
+                    "kind": "messaging-gmail-api",
+                    "enabled": False,
+                    "config": {
+                        "member_id": PRINCIPAL,
+                        "provider_account_id": "visual-bounded@example.invalid",
+                        "user_email": "visual-bounded@example.invalid",
+                    },
+                },
+                {
+                    "id": "visual-paused-gmail",
+                    "kind": "messaging-gmail-api",
+                    "enabled": False,
+                    "config": {
+                        "member_id": PRINCIPAL,
+                        "provider_account_id": "visual-paused@example.invalid",
+                        "user_email": "visual-paused@example.invalid",
+                    },
+                },
+            ],
+            "disposable_test_acquisition": {
+                "contract": "disposable-test-acquisition-v1",
+                "adapter_id": "visual-bounded-gmail",
+                "member_id": PRINCIPAL,
+                "provider_account_id": "visual-bounded@example.invalid",
+                "message_ids": ["visual-selected-one", "visual-selected-sent"],
+            },
+        }
     settings = RuntimeSettings.credential_free(
         INSTANCE,
         encryption_key=b"v" * 32,
@@ -148,6 +185,7 @@ def build_app():
         deterministic_member_chat_fixture=True,
         reconciliation_admission_enabled=ATTENTION_ENABLED,
         human_triage_management_enabled=ATTENTION_ENABLED,
+        adapter_config=adapter_config,
     )
     app = create_application(settings)
 

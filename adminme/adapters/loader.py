@@ -18,6 +18,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from adminme.adapters.base import Adapter
+from adminme.adapters.disposable_test_acquisition import restrict_adapter_config
 from adminme.provider_bindings import (
     MEMBER_BRIDGE_ONLY_ADAPTER_KINDS,
     validate_provider_bindings,
@@ -34,6 +35,7 @@ def load_builtin_adapters(
     service_principal_provider_authorizations: dict[str, frozenset[str]] | None = None,
     validate_bindings: bool = False,
 ) -> list[Adapter]:
+    config = restrict_adapter_config(config)
     if validate_bindings:
         validate_provider_bindings(
             config,

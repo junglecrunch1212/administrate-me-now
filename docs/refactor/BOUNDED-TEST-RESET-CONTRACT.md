@@ -1,0 +1,185 @@
+# Disposable test dataset reset
+
+This contract applies only to an owner-designated disposable local dataset.
+It does not authorize an operation by itself. Production household history and
+production rollback retain the ordinary bootstrap and acceptance contracts.
+
+## Reset boundary
+
+The operator first implements and proves the change in credential-free hosted
+CI or a disposable lab. One protected-main PR carries the change. Local
+execution uses the immutable merged candidate through the guarded updater,
+with an owner-approved private exact manifest. No household identifiers,
+message IDs, credentials, or private source examples enter the repository or
+hosted fixtures. Runtime migration, enrollment, permissions, source mailbox
+mutation, and provider write enablement are outside this operation.
+
+`test-reset-plan` inventories one exact instance, selected commit, candidate
+commit, state directory coordinate, configuration hashes, existing activation
+journal digest/state, and retained encrypted diagnostic archive. An acquisition
+policy names one already configured member-owned Gmail adapter/account and an
+initially empty selection. The plan lists the exact offline destination and
+every keep/reset class. Plan creation changes no instance state. Changed
+identity, configuration, journal, archive, or release metadata invalidates it.
+The preserved configuration hashes include OpenClaw runtime configuration and
+bridge member mapping. The manifest also names a private digest-only lifetime
+admission receipt beside the offline state. That receipt remains active
+metadata; the original state and journal remain unchanged offline.
+
+The owner approves that concrete manifest before `update.sh
+--test-reset-manifest=/absolute/private/manifest.json /absolute/merged/candidate`.
+The usual updater lock, fixed controller source, compatible runtime checks,
+release preparation, exact OpenClaw pin, managed stop/listener proof, and full
+settled Doctor still apply. The reset option cannot be combined with runtime
+migration, provider-binding migration, historical source repair, or ordinary
+candidate-pending activation. It never attempts to rehabilitate the discarded
+history by replaying historical classification.
+
+The transaction publishes complete recovery intent before stopping services.
+It prepares new state with observation active, copies identity, secret
+references, provider enrollment/configuration, secure bridge enrollment files,
+member preferences, and OpenClaw configuration/workspaces/session/cron state.
+Generated plugin-discovery links and provider execution `codex-home/tmp`
+scratch remain only in the original offline copy and are regenerated. It
+resets events, model/domain receipts, durable bus/adapter state, projections,
+candidate and canonical test items, raw test data, workbook artifacts,
+event-backed Settings requests/rules/decisions, temporary surfaces, and spent
+OpenClaw approval records. Reset rules are not silently re-established.
+Secure enrollment files and their event-backed Settings request history are
+distinct; retained enrollments receive no new source/write authority.
+
+An atomic state move retains the complete old state offline, including its
+encrypted history and original settings. The failed activation journal is
+retained byte for byte outside the active journal coordinate. It is never
+marked recovered, healthy, or superseded by an invented recovery result.
+All previous archives and repository work remain untouched. One existing
+diagnostic archive is authenticated; one fresh clean dataset backup is created
+and receives the existing guardian-supervised fixed-watermark restore/rebuild
+rehearsal before the clean state is selected. No plaintext diagnostic payload
+remains after authentication or rehearsal.
+
+Before and during selection, interruptions use recorded directory coordinates
+to restore the original exact state, pointer and journal. A failed stop blocks
+all moves. An interrupted reset blocks ordinary start/update/rollback until
+the exact reset manifest is used for recovery. Failure restores original
+services and reports their actual status, with original health explicitly
+unproven. An interrupted original-service reinstall/start remains pending and
+the exact manifest retries it after state reversal. This is reversible
+test-state replacement, not a fix for historical
+assessment authority or production rollback defects.
+
+## Acquisition and restart boundary
+
+`disposable-test-acquisition-v1` names one exact adapter, member, provider account
+and private explicit list of 0–200 distinct message IDs. All other central
+adapters, bridge single/batch ingest, and automatic workbook reverse imports
+are paused before the first fresh startup. Authenticated member intent remains
+available. The dataset marker requires this policy on subsequent starts;
+Settings resume controls cannot override it.
+
+Initial sync, incremental sync, and expired-cursor rescan fetch only selected
+messages. There is no broad query, related-participant expansion, or independent
+thread-context acquisition. Sent and selected thread-context messages consume
+the same ceiling. A durable content-free digest ledger reserves lifetime
+selection slots before fetch, including missing messages and interrupted
+attempts; removing a selection cannot recycle its slot or switch owners.
+The monotonic lifetime union lives in the manifest-bound archive metadata,
+outside replaceable or restored event state. Selection reserves and flushes
+that union before publishing its policy; a missing receipt blocks admission
+instead of silently recreating an empty one. The adapter separately reports
+the current restored state's admitted count. Restoring an older snapshot
+cannot free previously spent lifetime slots.
+Ordinary restore of an active bounded dataset must retain that exact logical
+dataset, manifest and acquisition owner, and its selected IDs must already be
+in the lifetime union. An unmarked or unrelated archive is refused before state
+replacement or service startup. The approved reset transaction's own exact
+original-state reversal remains a distinct path.
+Provider cursors, source idempotency, and committed source facts survive warm
+restarts. Private selection files remain outside the repository.
+
+The supported read-only discovery command samples `newer_than:7d` from the
+existing account without an Inbox-only or category exclusion. Discovery reads
+IDs, never changes a mailbox or label, and does not ingest. `test-reset-select`
+requires stopped managed services and the selected immutable release, permits
+only monotonic additions within the lifetime cap, and updates only the local
+policy and its matching configuration binding. Interrupted selection
+publication remains fail-closed and can be repeated through that command.
+
+Member source controls explicitly show a bounded test sample, selected count,
+200-message cap, selected-only thread coverage, paused other source ingestion,
+and incomplete mailbox coverage. Neither an empty nor capped selection claims
+complete coverage. Privacy and per-member/account visibility still apply.
+Member Settings and public readiness expose aggregate adapter health without
+private instance identifiers, account details, cursor coordinates or provider
+errors. Owner-scoped source controls retain the member's own account details.
+Internal operator diagnostics remain complete; a legacy repair exception still
+requires its original exact baseline and fails closed without that evidence.
+
+Warm restart acceptance measures three unchanged managed restarts from runtime
+start to authenticated API/member readiness against the proposed 30-second
+target. Initial import processing and model health probes are separate counts.
+Unchanged history must produce no new classification calls, checkpoint resets,
+duplicate source facts, changed candidate identity, or lost member decisions.
+One controlled in-scope update, repeated sync and failed/retried delivery prove
+bounded new work. Consumer version changes and rollback are exercised in the
+disposable lab rather than against the private mailbox.
+Later ordinary upgrades and rollback retain the logical dataset identity and
+require target releases to declare support for its acquisition contract before
+execution. Their own ordinary backup/activation proofs bind the current release
+and dataset; the initial reset proof is never rewritten for a later release.
+Existing refusal to reactivate an already consumed candidate is preserved.
+The lab exercises a forward release, rollback, then a fresh commit with the
+same forward behavior, plus an encrypted restore that replaces the state inode.
+
+## Truthful acceptance
+
+An explicitly marked test dataset has a separate, release/dataset/manifest-bound
+reset proof: original state and failed journal retained, diagnostic archive
+authenticated, fresh clean backup restored/rebuilt, automatic state reversal
+supported, and production rollback explicitly unproven. This proof is required
+for the test dataset's backup dimension; it grants no other health dimension.
+Topology, identity, tenant isolation, provider authorization, current source
+assurance, observation/effect accounting, full Doctor and authenticated
+read-only local browser acceptance remain required. Ordinary production
+backup/rollback predicates remain unchanged. Doctor reports the test-only
+limitation visibly instead of calling the historical predecessor healthy.
+
+The process tests are `test_disposable_test_reset.py`,
+`test_disposable_test_reset_controller.py` and
+`test_disposable_test_acquisition.py`, with later release/restore continuity in
+`test_disposable_dataset_continuity.py` under `tests/acceptance`; interruption,
+controller failure and negative-proof tests are under `tests/unit`. The
+controller test runs real encrypted backup/rehearsal, release publication and
+selection with credential-free service/Doctor fixtures; the composition tests
+exercise actual event processing and private routes. Both hosted
+early suites run these with the existing Gmail, pack, replay and activation
+regressions before the full release gates. Passing synthetic tests alone is
+not local acceptance. The operator records phase, immutable release, run IDs,
+counts, timings, failure/skip text, and next action in a short private file.
+
+The final triage gate freezes unequivocal synthetic expectations before
+classification, retains ambiguity, and reviews the bounded real sample
+against source text including messages with no candidate. Source/candidate
+tests that inject fixed language responses prove downstream handling only;
+classifier quality requires the actual pinned OpenClaw language seam in an
+authorized disposable lab. Source/candidate
+counts, false positives, missed likely obligations, duplicates, past items
+and disagreements use explicit denominators. Agent source review is not human
+validation and sample quality is not whole-mailbox accuracy.
+
+## Classification
+
+- **PRESERVE:** dependency direction, encrypted append-only truth, privacy,
+  domain authorization, independent external-write approval, observation,
+  model seam, provider accounts, exact runtime/OpenClaw pins, all six product
+  functions, thirteen projection capabilities, five adapter categories, six
+  pack kinds, five profiles and four personas. See the bootstrap/topology,
+  acceptance, UX and runtime-baseline contracts.
+- **MODERNIZE:** an explicit reversible disposable-state reset and durable
+  local acquisition cap, with source coverage and reset limitations visible.
+- **SUPERSEDE:** only for an explicitly approved disposable test reset, the
+  requirement to first settle the abandoned historical assessment backlog.
+  Fresh active state must still pass every current health/privacy/effect gate.
+- **DEFER:** no required product or safety capability. Production historical
+  rollback correctness is outside the reset's claims and remains governed by
+  the ordinary release and recovery contracts.

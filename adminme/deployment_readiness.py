@@ -46,6 +46,44 @@ def _recent_iso(value: Any, *, max_age_days: int = 31) -> bool:
     return 0 <= age.total_seconds() <= max_age_days * 86400
 
 
+def backup_rollback_ready(backup: dict[str, Any]) -> bool:
+    """The existing ordinary activation proof; shared without weakening it."""
+    return all(
+        (
+            backup.get("encrypted_backup_authenticated") is True,
+            backup.get("restore_rehearsed") is True,
+            backup.get("prior_release_retained") is True,
+            backup.get("automatic_rollback_eligible") is True,
+            _recent_iso(backup.get("tested_at")),
+        )
+    )
+
+
+def ordinary_activation_backup_ready(evidence: dict[str, Any]) -> bool:
+    """Recognize proof emitted by a fresh ordinary journaled activation."""
+    activation = evidence.get("activation_evidence") or {}
+    return (
+        backup_rollback_ready(evidence.get("backup_rollback") or {})
+        and activation.get("contract") == "deployment-activation-evidence-v1"
+        and activation.get("crash_recoverable_replacement") is True
+        and (
+            activation.get("candidate_live_doctor") is True
+            or activation.get("candidate_live_doctor") == "pending_post_switch"
+        )
+        and all(
+            isinstance(activation.get(field), str)
+            and len(activation[field]) == 64
+            and all(character in "0123456789abcdef" for character in activation[field])
+            for field in (
+                "candidate_pending_attestation_sha256",
+                "fresh_backup_artifact_sha256",
+                "fresh_rehearsal_receipt_sha256",
+                "predecessor_rollback_eligibility_sha256",
+            )
+        )
+    )
+
+
 def evaluate_deployment_readiness(
     *,
     required: bool,
@@ -62,6 +100,7 @@ def evaluate_deployment_readiness(
     openclaw_topology: dict[str, Any],
     observation_active: bool,
     source_assurance: dict[str, Any] | None = None,
+    disposable_test_dataset: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate independent activation axes without exposing identities."""
 
@@ -392,15 +431,7 @@ def evaluate_deployment_readiness(
         )
 
     backup = deployment_evidence.get("backup_rollback") or {}
-    backup_ok = all(
-        (
-            backup.get("encrypted_backup_authenticated") is True,
-            backup.get("restore_rehearsed") is True,
-            backup.get("prior_release_retained") is True,
-            backup.get("automatic_rollback_eligible") is True,
-            _recent_iso(backup.get("tested_at")),
-        )
-    )
+    backup_ok = backup_rollback_ready(backup)
     dimensions["backup_rollback"] = _dimension(
         "healthy" if backup_ok else "blocked",
         "authenticated backup, disposable restore, and rollback predecessor are ready"
@@ -418,6 +449,59 @@ def evaluate_deployment_readiness(
             "recent_test": _recent_iso(backup.get("tested_at")),
         },
     )
+
+    if disposable_test_dataset:
+        # An explicitly reset test dataset has a different predecessor: its
+        # abandoned test history is diagnostic evidence, never a healthy
+        # production rollback claim. Require every new reversible-reset proof.
+        reset = deployment_evidence.get("disposable_test_reset") or {}
+        reset_ok = all(
+            (
+                observation_active,
+                disposable_test_dataset.get("contract") == "disposable-test-dataset-v1",
+                reset.get("contract") == "disposable-test-reset-v1",
+                reset.get("dataset_id") == disposable_test_dataset.get("dataset_id"),
+                reset.get("manifest_sha256")
+                == disposable_test_dataset.get("reset_manifest_sha256"),
+                reset.get("release_commit") == current_binding.get("release_commit"),
+                reset.get("original_state_retained") is True,
+                reset.get("original_journal_retained_unchanged") is True,
+                reset.get("diagnostic_archive_authenticated") is True,
+                reset.get("fresh_dataset_restore_rehearsed") is True,
+                reset.get("automatic_state_reversal") is True,
+                reset.get("production_rollback_proven") is False,
+                isinstance(reset.get("fresh_rehearsal_sha256"), str)
+                and len(reset["fresh_rehearsal_sha256"]) == 64,
+                _recent_iso(reset.get("tested_at")),
+            )
+        )
+        # A subsequent ordinary activation proves rollback to the accepted
+        # bounded dataset using its own fresh artifact and existing predicates.
+        # Its configuration binding includes the unchanged dataset marker; the
+        # original reset proof is never reattributed to that later release.
+        if (
+            ordinary_activation_backup_ready(deployment_evidence)
+            and binding_ok
+            and observation_active
+            and disposable_test_dataset.get("contract") == "disposable-test-dataset-v1"
+        ):
+            dimensions["backup_rollback"]["evidence"].update(
+                mode="disposable_test_dataset",
+                predecessor_scope="accepted_bounded_dataset",
+                abandoned_original_health_proven=False,
+            )
+        else:
+            dimensions["backup_rollback"] = _dimension(
+                "healthy" if reset_ok else "blocked",
+                "disposable test reset is reversible; production rollback remains unproven"
+                if reset_ok
+                else "disposable test reset preservation or restore proof is missing",
+                evidence={
+                    "mode": "disposable_test_dataset",
+                    "reset_proofs_valid": reset_ok,
+                    "production_rollback_proven": False,
+                },
+            )
 
     effects = (source_assurance or {}).get("provider_effects") or {}
     effect_counts = effects.get("counts") or {}
@@ -510,6 +594,7 @@ def evaluate_deployment_readiness(
         "contract": "deployment-readiness-v1",
         "state": "healthy" if not blocking else "blocked",
         "ready": not blocking,
+        "production_rollback_proven": not bool(disposable_test_dataset) and backup_ok,
         "blocking_dimensions": blocking,
         "dimensions": dimensions,
         "content_exposed": False,

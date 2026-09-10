@@ -1,5 +1,12 @@
 # Release acceptance contract
 
+The [bounded test reset contract](BOUNDED-TEST-RESET-CONTRACT.md) adds exact
+manifest, offline-state reversal, bounded acquisition, unchanged restart, and
+source-grounded triage gates for explicitly disposable test datasets. Both
+credential-free hosted early suites run its production-composition and
+negative-proof tests. A test reset does not establish production rollback
+correctness or waive current Doctor, privacy, isolation, or effect checks.
+
 CO-030 source-aware personal-obligation amendment (2026-09-08): AC-60 governs
 source-grounded action assessments, independent attention/purpose controls,
 retained and future-source inventory, exact member rules, future trials, and

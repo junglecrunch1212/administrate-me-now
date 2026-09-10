@@ -54,6 +54,10 @@ from adminme.adapters.base import (
     SensitivityFloor,
 )
 from adminme.adapters.gmail_backfill import GmailInitialBackfillPolicy
+from adminme.adapters.disposable_test_acquisition import (
+    MAX_MESSAGES,
+    policy_from_adapter_config,
+)
 from adminme.adapters.emission import write_adapter_event
 from adminme.adapters.credentials import (
     assert_installed_user_binding,
@@ -219,6 +223,18 @@ class GmailAdapter(CommunicationAdapter):
         observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
+        self._test_policy = policy_from_adapter_config(self._config)
+        if self._test_policy is not None:
+            if (
+                self._config.get("member_id") != self._test_policy.member_id
+                or self._config.get("provider_account_id")
+                != self._test_policy.provider_account_id
+                or self._config.get("user_email")
+                != self._test_policy.provider_account_id
+                or self._config.get("service_principal_id")
+            ):
+                raise ValueError("disposable test Gmail ownership mismatch")
+            self._config["enable_writes"] = False
         self._scopes = (
             [GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE]
             if bool(self._config.get("enable_writes"))
@@ -236,6 +252,8 @@ class GmailAdapter(CommunicationAdapter):
             self._resolve_sensitivity_floor()
         )
         self._status = AdapterStatus()
+        if self._test_policy is not None:
+            self._status.extra["test_acquisition"] = self._test_policy.coverage()
         self._service: Any = None
         self._cursor: str | None = None
         self._cursor_id: str | None = None
@@ -289,6 +307,26 @@ class GmailAdapter(CommunicationAdapter):
         reference, emit ``adapter.authenticated``, then enter the
         polling loop until ``stop()`` is invoked (or ``max_poll_cycles``
         is exhausted, in tests)."""
+        op_ref = self._connect_service()
+        self._ctx = ctx
+        self._cursor_id = adapter_owner_coordinate_id(self.name, self._config)
+        if ctx.cursor_store is not None and self._config.get("member_id"):
+            ctx.cursor_store.adopt_legacy_coordinate(
+                self._legacy_cursor_id(), self._cursor_id
+            )
+            self._cursor = ctx.cursor_store.get(self._cursor_id).provider_watermark
+        self._status.started_at = ctx.now_factory()
+        self._status.state = "running"
+        self._last_advance_at = ctx.now_factory()
+        # [D7] adapter.authenticated registered at v1 in events/schemas/adapters.py.
+        # [D8] correlation_id minted by the supervisor-provided factory.
+        await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
+
+        await self._poll_loop(ctx=ctx)
+
+    def _connect_service(self, *, read_only: bool = False) -> str:
+        """Use the same existing credential/binding seam for sync and discovery."""
+
         op_ref = self._config.get("oauth_credentials_ref") or self._config.get(
             "service_account_key_ref"
         )
@@ -317,22 +355,93 @@ class GmailAdapter(CommunicationAdapter):
                 member_id=member_id,
                 provider_account_id=provider_account_id,
             )
-        self._service = self._service_factory(creds_json, self._scopes, user_email)
-        self._ctx = ctx
-        self._cursor_id = adapter_owner_coordinate_id(self.name, self._config)
-        if ctx.cursor_store is not None and self._config.get("member_id"):
-            ctx.cursor_store.adopt_legacy_coordinate(
-                self._legacy_cursor_id(), self._cursor_id
-            )
-            self._cursor = ctx.cursor_store.get(self._cursor_id).provider_watermark
-        self._status.started_at = ctx.now_factory()
-        self._status.state = "running"
-        self._last_advance_at = ctx.now_factory()
-        # [D7] adapter.authenticated registered at v1 in events/schemas/adapters.py.
-        # [D8] correlation_id minted by the supervisor-provided factory.
-        await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
+        self._service = self._service_factory(
+            creds_json,
+            [GMAIL_READONLY_SCOPE] if read_only else self._scopes,
+            user_email,
+        )
+        return op_ref
 
-        await self._poll_loop(ctx=ctx)
+    def discover_test_message_ids(self) -> tuple[list[str], dict[str, Any]]:
+        """Read only recent ID metadata for the exact reviewed test account.
+
+        This standalone preparation operation never starts polling, fetches a
+        body/thread, changes labels, advances a cursor, or modifies the policy.
+        """
+
+        if self._test_policy is None or self._ctx is not None:
+            raise ValueError(
+                "test discovery requires an inactive bounded Gmail adapter"
+            )
+        query = "newer_than:7d -label:drafts"
+        message_ids: list[str] = []
+        seen_pages: set[str] = set()
+        next_page: str | None = None
+        pages = 0
+        limit_reason = "recent_window_exhausted"
+        try:
+            self._connect_service(read_only=True)
+            profile = self._service.users().getProfile(userId="me").execute()
+            actual_account = profile.get("emailAddress")
+            if (
+                not isinstance(actual_account, str)
+                or actual_account.strip().casefold()
+                != self._test_policy.provider_account_id.casefold()
+            ):
+                raise ValueError(
+                    "Gmail profile does not match the selected test account"
+                )
+            while len(message_ids) < MAX_MESSAGES and pages < 20:
+                params: dict[str, Any] = {
+                    "userId": "me",
+                    "q": query,
+                    "includeSpamTrash": False,
+                    "maxResults": MAX_MESSAGES - len(message_ids),
+                    "fields": "messages(id),nextPageToken",
+                }
+                if next_page is not None:
+                    params["pageToken"] = next_page
+                response = self._service.users().messages().list(**params).execute()
+                pages += 1
+                for row in response.get("messages") or []:
+                    message_id = row.get("id") if isinstance(row, dict) else None
+                    if not isinstance(message_id, str) or not message_id:
+                        raise ValueError(
+                            "Gmail discovery returned an invalid message identity"
+                        )
+                    if message_id not in message_ids:
+                        message_ids.append(message_id)
+                    if len(message_ids) == MAX_MESSAGES:
+                        limit_reason = "message_cap"
+                        break
+                next_page = response.get("nextPageToken")
+                if next_page is None:
+                    break
+                if not isinstance(next_page, str) or not next_page:
+                    raise ValueError("Gmail discovery returned an invalid page cursor")
+                if next_page in seen_pages:
+                    limit_reason = "repeated_page_cursor"
+                    break
+                seen_pages.add(next_page)
+            if (
+                pages == 20
+                and next_page is not None
+                and len(message_ids) < MAX_MESSAGES
+            ):
+                limit_reason = "page_cap"
+        finally:
+            self._service = None
+        return message_ids, {
+            "query": query,
+            "recent_days": 7,
+            "pages_read": pages,
+            "selection_limit_reason": limit_reason,
+            "includes_incoming_and_sent": True,
+            "mailbox_coverage_complete": False,
+            "message_bodies_fetched": 0,
+            "thread_context_fetched": 0,
+            "provider_mutations": False,
+        }
 
     async def _poll_loop(self, *, ctx: AdapterContext) -> None:
         """Drive the polling loop. Each cycle:
@@ -402,6 +511,8 @@ class GmailAdapter(CommunicationAdapter):
         if self._service is None:
             raise RuntimeError("Gmail service not initialized; call start() first")
         store = ctx.cursor_store
+        if self._test_policy is not None and store is None:
+            raise ValueError("disposable test acquisition requires durable cursors")
         cursor_id = self._cursor_id or self.name
         before_claim = store.get(cursor_id) if store is not None else None
         claimed = store is None or store.claim(
@@ -431,6 +542,17 @@ class GmailAdapter(CommunicationAdapter):
         )
         failed = False
         try:
+            if self._test_policy is not None:
+                # The explicit check before acquiring the lease rejects a
+                # missing store even when Python assertions are disabled.
+                assert store is not None
+                current_state_count = store.reserve_test_selection(
+                    cursor_id, self._test_policy.message_ids, limit=MAX_MESSAGES
+                )
+                self._status.extra["test_acquisition"] = {
+                    **self._test_policy.coverage(),
+                    "current_state_admitted_message_count": current_state_count,
+                }
             if store is not None:
                 self._cursor = store.get(cursor_id).provider_watermark
             bootstrapped = False
@@ -472,8 +594,21 @@ class GmailAdapter(CommunicationAdapter):
                 )
                 return backfill_emitted
 
-            new_history_id, history_records = self._fetch_history(self._cursor)
-            message_ids = self._extract_added_message_ids(history_records)
+            try:
+                new_history_id, history_records = self._fetch_history(self._cursor)
+                message_ids = self._extract_added_message_ids(history_records)
+            except Exception as exc:
+                if (
+                    self._test_policy is None
+                    or getattr(getattr(exc, "resp", None), "status", None) != 404
+                ):
+                    raise
+                # Snapshot before rescanning only the private selection. Commit
+                # the new floor after ingestion, so an interruption retries the
+                # same bounded scan using durable source idempotency.
+                new_history_id = self._bootstrap_cursor()
+                message_ids = list(self._test_policy.message_ids)
+                self._status.extra["cursor_recovery"] = "bounded_test_selection_rescan"
             emitted, quarantined = await self._ingest_message_ids(
                 ctx=ctx,
                 store=store,
@@ -611,6 +746,10 @@ class GmailAdapter(CommunicationAdapter):
         store: Any,
         cursor_id: str,
     ) -> tuple[int, int]:
+        if self._test_policy is not None:
+            return await self._run_test_selection(
+                ctx=ctx, store=store, cursor_id=cursor_id
+            )
         policy = self._initial_backfill_settings()
         if policy.max_messages == 0 or (
             policy.recent_days == 0 and not policy.seed_queries
@@ -710,6 +849,54 @@ class GmailAdapter(CommunicationAdapter):
             **acquisition,
         }
         return emitted, quarantined
+
+    async def _run_test_selection(
+        self, *, ctx: AdapterContext, store: Any, cursor_id: str
+    ) -> tuple[int, int]:
+        policy = self._test_policy
+        assert policy is not None and store is not None
+        receipt_id = f"{cursor_id}:test-selection:{policy.receipt_digest()}"
+        if store.get(receipt_id).provider_watermark == "complete":
+            self._status.extra["initial_backfill"] = {
+                **policy.coverage(),
+                "state": "complete",
+                "durable_receipt_reused": True,
+            }
+            return 0, 0
+        prefetched = await asyncio.to_thread(self._fetch_test_selection_messages)
+        emitted, quarantined = await self._ingest_message_ids(
+            ctx=ctx,
+            store=store,
+            cursor_id=cursor_id,
+            message_ids=self._chronological_message_ids(policy.message_ids, prefetched),
+            provider_watermark=self._cursor,
+            prefetched_messages=prefetched,
+        )
+        if str(self._status.extra.get("cursor_lease", "")).startswith("lost_"):
+            raise RuntimeError("disposable test seed lost its cursor lease")
+        # The parent cursor lease fences both seed receipt and watermark writes.
+        if not store.claim(cursor_id, self._lease_owner, ttl_ms=30_000):
+            raise RuntimeError("disposable test seed lost its cursor lease")
+        store.record_success(receipt_id, provider_watermark="complete")
+        self._status.extra["initial_backfill"] = {
+            **policy.coverage(),
+            "state": "complete",
+            "emitted": emitted,
+            "quarantined": quarantined,
+            "durable_receipt_reused": False,
+        }
+        return emitted, quarantined
+
+    def _fetch_test_selection_messages(self) -> dict[str, dict[str, Any]]:
+        assert self._test_policy is not None
+        result: dict[str, dict[str, Any]] = {}
+        for message_id in self._test_policy.message_ids:
+            try:
+                result[message_id] = self._fetch_message(message_id)
+            except Exception as exc:
+                if getattr(getattr(exc, "resp", None), "status", None) != 404:
+                    raise
+        return result
 
     def _fetch_initial_backfill_ids(
         self, policy: GmailInitialBackfillPolicy
@@ -833,6 +1020,8 @@ class GmailAdapter(CommunicationAdapter):
         )
 
     def _list_message_ids(self, *, query: str, limit: int) -> tuple[list[str], bool]:
+        if self._test_policy is not None:
+            raise ValueError("broad Gmail acquisition is disabled for disposable tests")
         if self._service is None:
             raise RuntimeError("Gmail service not initialized; call start() first")
         if limit <= 0:
@@ -986,6 +1175,15 @@ class GmailAdapter(CommunicationAdapter):
         quarantined = 0
         prefetched = prefetched_messages or {}
         for msg_id in message_ids:
+            if (
+                self._test_policy is not None
+                and msg_id not in self._test_policy.message_ids
+            ):
+                coverage = self._status.extra["test_acquisition"]
+                coverage["excluded_history_observations"] = (
+                    int(coverage.get("excluded_history_observations", 0)) + 1
+                )
+                continue
             if store is not None and not store.claim(
                 cursor_id,
                 self._lease_owner,
@@ -1381,12 +1579,20 @@ class GmailAdapter(CommunicationAdapter):
         return seen
 
     def _fetch_message(self, msg_id: str) -> dict[str, Any]:
-        return (
+        if (
+            self._test_policy is not None
+            and msg_id not in self._test_policy.message_ids
+        ):
+            raise ValueError("message is outside the disposable test selection")
+        message = (
             self._service.users()
             .messages()
             .get(userId="me", id=msg_id, format="full")
             .execute()
         )
+        if self._test_policy is not None and message.get("id") != msg_id:
+            raise ValueError("Gmail response is outside the disposable test selection")
+        return message
 
     # ------------------------------------------------------------------
     # Body / header decoding

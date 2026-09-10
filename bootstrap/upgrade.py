@@ -235,6 +235,7 @@ class UpgradeManager:
         approve_source_assessment_repair: bool = False,
         approve_provider_binding_migration: bool = False,
         pending_attestation_id: str | None = None,
+        test_reset_manifest: Path | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
@@ -243,6 +244,7 @@ class UpgradeManager:
         self.approve_source_assessment_repair = approve_source_assessment_repair
         self.approve_provider_binding_migration = approve_provider_binding_migration
         self.pending_attestation_id = pending_attestation_id
+        self.test_reset_manifest = test_reset_manifest
         self.services = ServiceManager(paths, test_mode=test_mode)
         self.activation_journal = ActivationJournal(paths)
         self._failure_audit_attempt_id = uuid.uuid4().hex
@@ -1593,6 +1595,7 @@ class UpgradeManager:
         if predecessor != expected:
             raise UpgradeError("activation journal predecessor coordinate is invalid")
         ensure_within(predecessor, self.paths.app_dir / "releases")
+        self._require_bounded_target(predecessor)
         try:
             metadata = predecessor.lstat()
         except OSError as exc:
@@ -1793,9 +1796,36 @@ class UpgradeManager:
             "content_exposed": False,
         }
 
+    def _require_bounded_target(self, target: Path) -> None:
+        """Never start a target that ignores an active bounded dataset."""
+        if os.path.lexists(
+            self.paths.instance_dir / "config" / "disposable-test-dataset.json"
+        ):
+            supported = (
+                load_versions(target)
+                .get("administrateme", {})
+                .get("supported_acquisition_contracts", [])
+            )
+            if (
+                not isinstance(supported, list)
+                or "disposable-test-acquisition-v1" not in supported
+            ):
+                raise UpgradeError(
+                    "target release does not support the bounded dataset acquisition contract"
+                )
+
     def activate(self, candidate: Path) -> dict[str, Any]:
         with self._operation_lock():
             self._begin_deployment_budget()
+            if self.test_reset_manifest is not None:
+                from bootstrap.disposable_test_reset import execute_reset
+
+                return execute_reset(self, candidate, self.test_reset_manifest)
+            if (self.paths.app_dir / "disposable-test-reset-active.json").exists():
+                raise UpgradeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
+            self._require_bounded_target(candidate)
             recovered = self._recover_interrupted_transaction(candidate)
             if recovered is not None:
                 return recovered
@@ -2606,6 +2636,10 @@ class UpgradeManager:
         recovery_repository: Path | None = None,
     ) -> dict[str, Any]:
         with self._operation_lock():
+            if (self.paths.app_dir / "disposable-test-reset-active.json").exists():
+                raise UpgradeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
             self._begin_deployment_budget()
             if not self.test_mode:
                 if recovery_repository is None:
@@ -2658,6 +2692,7 @@ class UpgradeManager:
         if release != self.paths.app_dir / "releases" / target_commit:
             raise UpgradeError("rollback release coordinate is invalid")
         ensure_within(release, self.paths.app_dir / "releases")
+        self._require_bounded_target(release)
         validate_candidate(
             release,
             active_root=current_release,
@@ -3018,6 +3053,7 @@ class UpgradeManager:
             raise UpgradeError("no prior release is recorded")
         release = Path(previous["path"])
         ensure_within(release, self.paths.app_dir / "releases")
+        self._require_bounded_target(release)
         validate_candidate(
             release,
             active_root=current_release,

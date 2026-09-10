@@ -356,11 +356,11 @@ def _decode_legacy_backup(
 def _authenticate_backup_to_path(
     source: Path,
     backup_key: bytes,
-    plaintext_target: Path,
+    plaintext_target: Path | None,
     *,
     expected_artifact_sha256: str | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """Authenticate one backup before publishing its plaintext archive."""
+    """Authenticate a backup; None verifies streaming v2 without plaintext files."""
 
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(source, flags)
@@ -395,6 +395,10 @@ def _authenticate_backup_to_path(
             handle.seek(0)
             magic = handle.read(len(_BACKUP_V2_MAGIC))
             if magic != _BACKUP_V2_MAGIC:
+                if plaintext_target is None:
+                    raise BackupError(
+                        "authentication-only requires a streaming v2 archive"
+                    )
                 handle.seek(0)
                 encoded = handle.read(_MAX_BACKUP_BYTES + 1)
                 if len(encoded) != metadata.st_size:
@@ -466,13 +470,18 @@ def _authenticate_backup_to_path(
                 raise BackupError("backup envelope is truncated")
             handle.seek(ciphertext_start)
 
-            plaintext_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            target_descriptor = os.open(
-                plaintext_target,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-            )
-            target_created = True
+            if plaintext_target is None:
+                # Plaintext flows only to the operating system discard device.
+                # A controller crash cannot strand a decrypted household archive.
+                target_descriptor = os.open(os.devnull, os.O_WRONLY)
+            else:
+                plaintext_target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                target_descriptor = os.open(
+                    plaintext_target,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                target_created = True
             try:
                 decryptor = Cipher(
                     algorithms.AES(backup_key),
@@ -498,8 +507,10 @@ def _authenticate_backup_to_path(
                         output.write(plaintext)
                     output.write(decryptor.finalize())
                     output.flush()
-                    os.fsync(output.fileno())
-                os.fchmod(target_descriptor, 0o600)
+                    if plaintext_target is not None:
+                        os.fsync(output.fileno())
+                if plaintext_target is not None:
+                    os.fchmod(target_descriptor, 0o600)
             except BackupError:
                 raise
             except Exception as exc:
@@ -510,7 +521,7 @@ def _authenticate_backup_to_path(
                 raise BackupError("backup source changed during authentication")
             return envelope, artifact_sha256
     except BaseException:
-        if target_created:
+        if target_created and plaintext_target is not None:
             try:
                 plaintext_target.unlink()
             except FileNotFoundError:
@@ -1970,6 +1981,22 @@ class BackupManager:
         )
 
     def restore(self, backup: Path) -> dict[str, Any]:
+        from bootstrap.disposable_test_reset import (
+            TestResetError,
+            bounded_restore_guard,
+        )
+
+        try:
+            validate_bounded_restore = bounded_restore_guard(self.paths)
+        except TestResetError as exc:
+            raise BackupError(str(exc)) from exc
+
+        def validate_dataset(staged_state: Path) -> None:
+            try:
+                validate_bounded_restore(staged_state)
+            except TestResetError as exc:
+                raise BackupError(str(exc)) from exc
+
         source = ensure_within(backup, self.paths.backup_dir)
         if not source.is_file():
             raise BackupError("backup file is missing")
@@ -1992,10 +2019,12 @@ class BackupManager:
             if manifest["manifest_sha256"] != envelope["manifest_sha256"]:
                 raise BackupError("backup manifest identity does not match envelope")
             staged_state = staging_root / "state"
+            validate_dataset(staged_state)
             replay = asyncio.run(self._prove_rebuild(staged_state, event_key))
             selected_release[1]()
             previous = self.services.status()
             should_restart = previous.status in {"healthy", "degraded", "failed"}
+            validate_dataset(staged_state)
             if should_restart:
                 self.services.stop()
             rollback = self.paths.rollback_dir / f"state-before-{_utc_stamp()}"

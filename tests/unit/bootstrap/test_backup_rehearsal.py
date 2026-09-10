@@ -386,6 +386,17 @@ def test_streaming_backup_round_trip_and_wrong_key_cleanup(
         _authenticate_backup_to_path(destination, b"w" * 32, plaintext)
     assert not plaintext.exists()
 
+    # Authentication-only never publishes plaintext, including on a bad key.
+    inventory_before = set(tmp_path.rglob("*"))
+    device_mode = os.stat(os.devnull).st_mode
+    verified, digest = _authenticate_backup_to_path(destination, key, None)
+    assert verified == envelope
+    assert digest == _artifact_sha256
+    with pytest.raises(BackupError, match="decryption or authentication failed"):
+        _authenticate_backup_to_path(destination, b"w" * 32, None)
+    assert set(tmp_path.rglob("*")) == inventory_before
+    assert os.stat(os.devnull).st_mode == device_mode
+
 
 def test_streaming_backup_refuses_source_drift_without_artifact(
     tmp_path: Path,

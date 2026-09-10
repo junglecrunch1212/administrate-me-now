@@ -62,7 +62,7 @@ jobs:
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.14"
+          python-version: "3.14.6"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -79,7 +79,21 @@ jobs:
 
       - name: Validate encrypted metadata migration and production replay
         run: >-
-          poetry run pytest -p no:cacheprovider -q
+          poetry run pytest -p no:cacheprovider -q --maxfail=1
+          tests/unit/products/bridge/test_ingest_router.py
+          tests/unit/bootstrap/test_disposable_test_reset.py
+          tests/unit/bootstrap/test_backup_rehearsal.py
+          tests/unit/test_disposable_reset_readiness.py
+          tests/acceptance/test_disposable_test_reset.py
+          tests/acceptance/test_disposable_test_reset_controller.py
+          tests/acceptance/test_disposable_test_acquisition.py
+          tests/acceptance/test_disposable_dataset_continuity.py
+          tests/unit/test_disposable_dataset_continuity.py
+          tests/integration/test_adapter_supervisor_gmail.py
+          tests/unit/adapters/messaging/test_gmail_retrofit.py
+          tests/unit/test_pipeline_pack_loader.py
+          tests/unit/test_pack_loader.py
+          tests/unit/test_extensions_gate6.py
           tests/unit/test_event_log.py
           tests/unit/test_event_bus.py
           tests/acceptance/test_event_log_metadata_migration.py

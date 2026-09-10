@@ -114,6 +114,7 @@ from adminme.settings_control import (
     compose_connections,
     compose_settings_control,
     member_label,
+    public_capability_summary,
 )
 
 
@@ -1834,9 +1835,14 @@ def build_surface(
             base["state"] = "limited"
         base["control"] = compose_settings_control(runtime, session)
         base["system"] = {
-            "capabilities": [
-                record.public() for _, record in sorted(runtime.capabilities.items())
-            ],
+            "capabilities": list(
+                public_capability_summary(
+                    {
+                        key: record.public()
+                        for key, record in sorted(runtime.capabilities.items())
+                    }
+                ).values()
+            ),
             "workbooks": _workbook_health(runtime),
             "observation": base["observation"],
             "chat": {

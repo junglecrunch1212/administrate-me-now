@@ -153,6 +153,15 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor")
     doctor.add_argument("--export", type=Path)
     doctor.add_argument("--no-synthetic-proof", action="store_true")
+    reset_plan = subparsers.add_parser("test-reset-plan")
+    reset_plan.add_argument("--candidate-commit", required=True)
+    reset_plan.add_argument("--acquisition", type=Path, required=True)
+    reset_plan.add_argument("--diagnostic-backup", type=Path, required=True)
+    reset_plan.add_argument("--output", type=Path, required=True)
+    reset_selection = subparsers.add_parser("test-reset-select")
+    reset_selection.add_argument("--selection", type=Path, required=True)
+    reset_discovery = subparsers.add_parser("test-reset-discover")
+    reset_discovery.add_argument("--output", type=Path, required=True)
     for name in (
         "start",
         "stop",
@@ -188,6 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("backup", type=Path)
         elif name == "upgrade":
             child.add_argument("candidate", type=Path)
+            child.add_argument("--test-reset-manifest", type=Path)
             child.add_argument(
                 "--pending-attestation-id",
                 help=(
@@ -263,6 +273,28 @@ def main(argv: list[str] | None = None) -> int:
     test_mode = os.environ.get("ADMINME_TEST_MODE") == "1"
     root = Path(os.environ.get("ADMINME_REPOSITORY_ROOT", repository_root())).resolve()
     try:
+        if args.command == "test-reset-plan":
+            from bootstrap.contracts import atomic_write
+            from bootstrap.disposable_test_reset import build_manifest, manifest_digest
+
+            result = build_manifest(
+                paths,
+                candidate_commit=args.candidate_commit,
+                acquisition=_private_bridge_configuration(args.acquisition),
+                diagnostic_backup=args.diagnostic_backup,
+            )
+            if args.output.exists():
+                raise RuntimeError("reset plan output already exists")
+            atomic_write(args.output, json.dumps(result, indent=2).encode())
+            _print(
+                {
+                    "status": "planned",
+                    "manifest_sha256": manifest_digest(result),
+                    "output": str(args.output),
+                    "operational_changes": False,
+                }
+            )
+            return 0
         if args.command == "bootstrap":
             fixture = args.fixture
             answers = None
@@ -350,6 +382,13 @@ def main(argv: list[str] | None = None) -> int:
             _print(result)
             return 0 if result["status"] == "healthy" else 1
         if args.command in {"start", "stop", "status"}:
+            if (
+                args.command == "start"
+                and (paths.app_dir / "disposable-test-reset-active.json").exists()
+            ):
+                raise RuntimeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
             manager = ServiceManager(paths, test_mode=test_mode)
             result = getattr(manager, args.command)()
             output: dict[str, Any] = result.public()
@@ -533,6 +572,10 @@ def main(argv: list[str] | None = None) -> int:
                 _print(installer.status())
             return 0
         if args.command == "restore":
+            if (paths.app_dir / "disposable-test-reset-active.json").exists():
+                raise RuntimeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
             _print(
                 BackupManager(paths, root=root, test_mode=test_mode).restore(
                     args.backup
@@ -561,8 +604,19 @@ def main(argv: list[str] | None = None) -> int:
             pending_attestation_id=(
                 args.pending_attestation_id if args.command == "upgrade" else None
             ),
+            test_reset_manifest=(
+                args.test_reset_manifest if args.command == "upgrade" else None
+            ),
         )
-        if args.command == "upgrade":
+        if args.command == "test-reset-select":
+            from bootstrap.disposable_test_reset import select_messages
+
+            _print(select_messages(upgrades, args.selection))
+        elif args.command == "test-reset-discover":
+            from bootstrap.disposable_test_reset import discover_messages
+
+            _print(discover_messages(upgrades, args.output))
+        elif args.command == "upgrade":
             _print(upgrades.activate(args.candidate))
         else:
             _print(upgrades.rollback(args.recovery_repository))

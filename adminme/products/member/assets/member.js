@@ -4279,6 +4279,11 @@ function sourcePolicyV2Card(source, matrix) {
   const lifecycle = source.connection_state || (source.coordinate_state === "exact" ? "attributed" : "missing_attribution");
   const status = { connected: "Connected", disconnected: "Disconnected · history retained", not_connected: "Not connected", missing_attribution: "Needs source attribution", attributed: "Exact source" }[lifecycle] || titleCase(lifecycle);
   head.append(copy, text("span", status, `pill state-label state-${lifecycle === "connected" ? "healthy" : "unknown"}`)); form.append(head);
+  if (source.acquisition?.coverage === "bounded_test_sample") {
+    form.append(text("p", `Bounded test sample: ${source.acquisition.selected_message_count} selected messages, with a lifetime limit of ${source.acquisition.distinct_message_cap}, including Sent and thread context. Only explicitly selected messages can be imported. This sample does not cover the whole mailbox.`, "review-state"));
+  } else if (source.acquisition?.coverage === "excluded_from_test_sample") {
+    form.append(text("p", "Local import is paused while the bounded test sample is active. Your provider connection is retained.", "state-note"));
+  }
   if (source.retained_candidate_count) {
     form.append(text("p", `${source.retained_candidate_count} retained candidate${source.retained_candidate_count === 1 ? "" : "s"}. Source disconnection does not erase evidence or decisions.`, "state-note"));
     const history = text("a", "Review retained candidates", "link-button"); history.href = "/member/triage?view=all_candidates"; form.append(history);

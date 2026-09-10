@@ -158,7 +158,7 @@ async function waitForServer(baseUrl) {
   throw new Error(`Gate 7 fixture server did not become ready at ${baseUrl}`);
 }
 
-async function startServer(port, modelConfigured, attentionEnabled = false) {
+async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
@@ -174,6 +174,7 @@ async function startServer(port, modelConfigured, attentionEnabled = false) {
         ADMINME_GATE7_VISUAL_MODEL: modelConfigured ? "1" : "0",
         ADMINME_GATE7_VISUAL_NOW: fixedNow,
         ADMINME_GATE7_ATTENTION_ENABLED: attentionEnabled ? "1" : "0",
+        ADMINME_GATE7_BOUNDED_SAMPLE: boundedSample ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -567,10 +568,13 @@ async function visit(page, baseUrl, path, expectedTitle) {
 async function auditAccessibility(page, label) {
   const audit = await page.evaluate(() => {
     const rendered = (node) => {
-      const closedDetails = node.closest("details:not([open])");
-      const belongsToClosedSummary = closedDetails
-        && (node === closedDetails.querySelector(":scope > summary") || Boolean(node.closest("summary")));
-      return (!closedDetails || belongsToClosedSummary) && node.getClientRects().length > 0;
+      // A nested summary can belong to its own closed details while still
+      // being hidden by an outer closed group. Honor every ancestor.
+      for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.matches("details:not([open])")
+          && !ancestor.querySelector(":scope > summary")?.contains(node)) return false;
+      }
+      return node.getClientRects().length > 0;
     };
     const controls = [...new Set(document.querySelectorAll("button, a[href], input:not([type='hidden']), select, textarea, summary, [tabindex]:not([tabindex='-1'])"))]
       .filter(rendered);
@@ -708,13 +712,13 @@ async function auditAccessibility(page, label) {
     const selector = "a[href], button, input:not([type='hidden']), select, textarea, summary, [contenteditable='true'], [tabindex]:not([tabindex='-1'])";
     const candidates = [...new Set(document.querySelectorAll(selector))].filter((node) => {
       const style = getComputedStyle(node);
-      const closedDetails = node.closest("details:not([open])");
-      const belongsToClosedSummary = closedDetails
-        && (node === closedDetails.querySelector(":scope > summary") || Boolean(node.closest("summary")));
-      if (closedDetails && !belongsToClosedSummary) return false;
-      if (node.disabled || style.visibility === "hidden" || style.display === "none" || node.getClientRects().length === 0 || node.tabIndex < 0) return false;
+      for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.matches("details:not([open])")
+          && !ancestor.querySelector(":scope > summary")?.contains(node)) return false;
+      }
+      if (node.matches(":disabled") || node.closest("[inert]") || style.visibility === "hidden" || style.display === "none" || node.getClientRects().length === 0 || node.tabIndex < 0) return false;
       if (node.matches("input[type='radio']") && node.name) {
-        const group = [...document.querySelectorAll(`input[type='radio'][name='${CSS.escape(node.name)}']`)].filter((radio) => !radio.disabled && radio.getClientRects().length > 0);
+        const group = [...document.querySelectorAll(`input[type='radio'][name='${CSS.escape(node.name)}']`)].filter((radio) => !radio.matches(":disabled") && radio.getClientRects().length > 0);
         return node === (group.find((radio) => radio.checked) || group[0]);
       }
       return true;
@@ -774,7 +778,7 @@ async function auditAccessibility(page, label) {
   record(`${label} computed text contrast`, audit.contrastFailures.length === 0, JSON.stringify({ minContrast: audit.minContrast, failures: audit.contrastFailures }));
   record(`${label} 24px pointer targets`, audit.smallTargets.length === 0, audit.smallTargets);
   record(`${label} live regions and error associations`, audit.liveRegionContract && audit.liveRegions >= 3 && audit.invalidErrorAssociations === 0, audit);
-  record(`${label} bounded full visible tab order`, focusOrderPass, JSON.stringify({ expected: focusOrder.length, observed: observedFocusOrder, traversalStates }));
+  record(`${label} bounded full visible tab order`, focusOrderPass, JSON.stringify({ expected: focusOrder.length, observed: observedFocusOrder, traversalStates, missing: focusOrder.map((node, index) => ({ index, ...node })).filter(({ index }) => !observedFocusOrder.includes(index)) }));
   record(`${label} keyboard focus indicator`, keyboard.visible && keyboard.outline >= 3, keyboard);
   return { ...audit, keyboard, focusOrder: { expected: focusOrder.length, observed: observedFocusOrder.length, pass: focusOrderPass } };
 }
@@ -812,6 +816,7 @@ async function run() {
   const server = await startServer(basePort, true);
   let degraded;
   let attentionServer;
+  let boundedServer;
   const browser = await launchEdge();
   browserDescription = `${browserDescription}; engine ${browser.version()}`;
   console.log(`[Gate 7] Browser ready: ${browserDescription}`);
@@ -1855,6 +1860,27 @@ async function run() {
     await auditTriageSourceControls({ page: attentionBrowser.page, baseUrl: attentionServer.baseUrl, record, screenshot, auditAccessibility });
     await closePageContext(attentionBrowser);
 
+    boundedServer = await startServer(basePort + 3, true, true, true);
+    for (const width of [1440, 390]) {
+      const boundedBrowser = await newContext(browser, identities.principal, { width, height: 1000 });
+      await boundedBrowser.page.goto(`${boundedServer.baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
+      await boundedBrowser.page.getByRole("heading", { name: "Choose what needs you." }).waitFor();
+      const sampleNotice = boundedBrowser.page.getByText(/^Bounded test sample: 2 selected messages/);
+      await sampleNotice.waitFor();
+      const copy = await sampleNotice.textContent();
+      record(`Bounded sample scope is visible at ${width}`, await sampleNotice.isVisible() && copy.includes("lifetime limit of 200") && copy.includes("including Sent and thread context") && copy.includes("does not cover the whole mailbox"), copy);
+      record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).isVisible());
+      await auditAccessibility(boundedBrowser.page, `bounded sample ${width}`);
+      await screenshot(boundedBrowser.page, `bounded-sample-${width}.png`);
+      await closePageContext(boundedBrowser);
+    }
+    const otherBounded = await newContext(browser, identities.adult, { width: 390, height: 844 });
+    await otherBounded.page.goto(`${boundedServer.baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
+    await otherBounded.page.getByRole("heading", { name: "Choose what needs you." }).waitFor();
+    const otherBoundedText = await otherBounded.page.locator("#surface").textContent();
+    record("Other member cannot see the private bounded sample", !otherBoundedText.includes("visual-bounded@example.invalid") && !otherBoundedText.includes("Bounded test sample:"), otherBoundedText);
+    await closePageContext(otherBounded);
+
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
@@ -1887,6 +1913,7 @@ async function run() {
     await stopServer(server);
     if (degraded) await stopServer(degraded);
     if (attentionServer) await stopServer(attentionServer);
+    if (boundedServer) await stopServer(boundedServer);
   }
 
   const report = {

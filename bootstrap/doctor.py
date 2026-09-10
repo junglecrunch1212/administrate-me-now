@@ -788,7 +788,12 @@ class Doctor:
                 "deployment_topology_and_recovery_readiness",
                 readiness_ok,
                 (
-                    "topology, identity, provider, OpenClaw, bridge, backup, and effect gates are ready"
+                    (
+                        "disposable test gates are ready; production rollback remains unproven"
+                        if deployment_readiness.get("production_rollback_proven")
+                        is False
+                        else "topology, identity, provider, OpenClaw, bridge, backup, and effect gates are ready"
+                    )
                     if readiness_ok
                     else "one or more deployment readiness dimensions are blocked"
                 ),

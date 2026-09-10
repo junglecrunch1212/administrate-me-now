@@ -145,6 +145,7 @@ from adminme.settings_control import (
     compose_connections,
     compose_source_policy_v2_sources,
     member_label,
+    public_capability_summary,
 )
 from adminme.source_policy import (
     SourceCoordinate,
@@ -5405,6 +5406,12 @@ async def surface(
     if surface == "settings":
         # This request already refreshed before composing its Settings views.
         diagnostics = await runtime.diagnostics(refresh_capabilities=False)
+        diagnostics = {
+            **diagnostics,
+            "capabilities": public_capability_summary(
+                diagnostics.get("capabilities") or {}
+            ),
+        }
         result["system"]["runtime"] = {
             **result["system"]["runtime"],
             **diagnostics,
