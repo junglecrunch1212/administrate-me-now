@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import select
 import signal
@@ -239,6 +240,31 @@ def _execute_supervisor(
 ) -> NoReturn:
     candidate, commit = _reviewed_commit(candidate)
     _validate_expected_commit(mode, controller_arguments, commit)
+    if os.path.lexists(instance / "state/config/disposable-test-dataset.json"):
+        # Check before executing candidate policy: an older controller cannot
+        # protect a dataset contract that it does not understand.
+        try:
+            versions = json.loads(
+                _run_git(
+                    candidate,
+                    ["show", f"{commit}:bootstrap/versions.json"],
+                    max_output_bytes=64 * 1024,
+                )
+            )
+            supported = versions["administrateme"].get(
+                "supported_acquisition_contracts", []
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ReviewedLauncherError(
+                "candidate has no supported bounded acquisition declaration"
+            ) from exc
+        if (
+            not isinstance(supported, list)
+            or "disposable-test-acquisition-v1" not in supported
+        ):
+            raise ReviewedLauncherError(
+                "candidate does not support the bounded dataset acquisition contract"
+            )
     source = _run_git(
         candidate,
         ["show", f"{commit}:bootstrap/update_supervisor.py"],

@@ -232,7 +232,7 @@ def test_reset_first_start_preserves_identity_and_restores_original_encrypted_st
         assert adapter.status().extra["test_acquisition"]["selected_message_count"] == 0
         assert (
             adapter.status().extra["test_acquisition"][
-                "lifetime_selected_message_count"
+                "current_state_admitted_message_count"
             ]
             == 0
         )

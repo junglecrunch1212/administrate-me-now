@@ -546,12 +546,12 @@ class GmailAdapter(CommunicationAdapter):
                 # The explicit check before acquiring the lease rejects a
                 # missing store even when Python assertions are disabled.
                 assert store is not None
-                lifetime_count = store.reserve_test_selection(
+                current_state_count = store.reserve_test_selection(
                     cursor_id, self._test_policy.message_ids, limit=MAX_MESSAGES
                 )
                 self._status.extra["test_acquisition"] = {
                     **self._test_policy.coverage(),
-                    "lifetime_selected_message_count": lifetime_count,
+                    "current_state_admitted_message_count": current_state_count,
                 }
             if store is not None:
                 self._cursor = store.get(cursor_id).provider_watermark

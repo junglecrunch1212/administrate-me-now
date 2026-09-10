@@ -123,11 +123,12 @@ def build_app():
         ),
         encoding="utf-8",
     )
-    adapter_config = {"adapters": []}
+    adapter_config = {"adapter_supervisor_port": 0, "adapters": []}
     if BOUNDED_SAMPLE:
         # Saved, disconnected fixture connections exercise actual Settings
         # rendering without contacting a source or creating private mail.
         adapter_config = {
+            "adapter_supervisor_port": 0,
             "adapters": [
                 {
                     "id": "visual-bounded-gmail",

@@ -21,6 +21,10 @@ policy names one already configured member-owned Gmail adapter/account and an
 initially empty selection. The plan lists the exact offline destination and
 every keep/reset class. Plan creation changes no instance state. Changed
 identity, configuration, journal, archive, or release metadata invalidates it.
+The preserved configuration hashes include OpenClaw runtime configuration and
+bridge member mapping. The manifest also names a private digest-only lifetime
+admission receipt beside the offline state. That receipt remains active
+metadata; the original state and journal remain unchanged offline.
 
 The owner approves that concrete manifest before `update.sh
 --test-reset-manifest=/absolute/private/manifest.json /absolute/merged/candidate`.
@@ -59,7 +63,9 @@ to restore the original exact state, pointer and journal. A failed stop blocks
 all moves. An interrupted reset blocks ordinary start/update/rollback until
 the exact reset manifest is used for recovery. Failure restores original
 services and reports their actual status, with original health explicitly
-unproven. This is reversible test-state replacement, not a fix for historical
+unproven. An interrupted original-service reinstall/start remains pending and
+the exact manifest retries it after state reversal. This is reversible
+test-state replacement, not a fix for historical
 assessment authority or production rollback defects.
 
 ## Acquisition and restart boundary
@@ -77,6 +83,12 @@ thread-context acquisition. Sent and selected thread-context messages consume
 the same ceiling. A durable content-free digest ledger reserves lifetime
 selection slots before fetch, including missing messages and interrupted
 attempts; removing a selection cannot recycle its slot or switch owners.
+The monotonic lifetime union lives in the manifest-bound archive metadata,
+outside replaceable or restored event state. Selection reserves and flushes
+that union before publishing its policy; a missing receipt blocks admission
+instead of silently recreating an empty one. The adapter separately reports
+the current restored state's admitted count. Restoring an older snapshot
+cannot free previously spent lifetime slots.
 Provider cursors, source idempotency, and committed source facts survive warm
 restarts. Private selection files remain outside the repository.
 
@@ -106,6 +118,13 @@ duplicate source facts, changed candidate identity, or lost member decisions.
 One controlled in-scope update, repeated sync and failed/retried delivery prove
 bounded new work. Consumer version changes and rollback are exercised in the
 disposable lab rather than against the private mailbox.
+Later ordinary upgrades and rollback retain the logical dataset identity and
+require target releases to declare support for its acquisition contract before
+execution. Their own ordinary backup/activation proofs bind the current release
+and dataset; the initial reset proof is never rewritten for a later release.
+Existing refusal to reactivate an already consumed candidate is preserved.
+The lab exercises a forward release, rollback, then a fresh commit with the
+same forward behavior, plus an encrypted restore that replaces the state inode.
 
 ## Truthful acceptance
 
@@ -122,7 +141,8 @@ limitation visibly instead of calling the historical predecessor healthy.
 
 The process tests are `test_disposable_test_reset.py`,
 `test_disposable_test_reset_controller.py` and
-`test_disposable_test_acquisition.py` under `tests/acceptance`; interruption,
+`test_disposable_test_acquisition.py`, with later release/restore continuity in
+`test_disposable_dataset_continuity.py` under `tests/acceptance`; interruption,
 controller failure and negative-proof tests are under `tests/unit`. The
 controller test runs real encrypted backup/rehearsal, release publication and
 selection with credential-free service/Doctor fixtures; the composition tests

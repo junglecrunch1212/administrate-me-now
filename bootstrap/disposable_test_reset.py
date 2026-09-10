@@ -23,6 +23,8 @@ from bootstrap.contracts import DeploymentPaths, atomic_write, sha256_file
 
 CONTRACT = "disposable-test-reset-v1"
 DATASET_CONTRACT = "disposable-test-dataset-v1"
+ADMISSION_CONTRACT = "disposable-test-admissions-v1"
+ADMISSION_FILENAME = "lifetime-admissions.json"
 KEEP_DIRECTORIES = ("config", "openclaw", "bridges")
 REPLACE_DIRECTORIES = ("events", "projections", "data")
 RESET_CONFIG_FILES = frozenset(
@@ -155,6 +157,7 @@ def build_manifest(
         else None
     )
     reset_id = uuid.uuid4().hex
+    archive = paths.rollback_dir / f"test-reset-{reset_id}"
     return {
         "contract": CONTRACT,
         "reset_id": reset_id,
@@ -172,7 +175,13 @@ def build_manifest(
         "reset_config_files": sorted(RESET_CONFIG_FILES),
         "generated_openclaw_scratch": "retain offline only; regenerate plugin discovery links and codex-home/tmp",
         "settings": "retain secure enrollment files and member preferences; reset event-backed requests, rules and decisions",
-        "archive": str(paths.rollback_dir / f"test-reset-{reset_id}"),
+        "archive": str(archive),
+        "lifetime_admissions": {
+            "path": str(archive / ADMISSION_FILENAME),
+            "contract": ADMISSION_CONTRACT,
+            "distinct_message_cap": 200,
+            "disposition": "retain monotonic digest-only admission union outside restored state; never reset or recreate if missing",
+        },
         "activation_journal": {
             "sha256": hashlib.sha256(journal_payload).hexdigest()
             if journal_payload
@@ -210,10 +219,78 @@ def validate_manifest(paths: DeploymentPaths, manifest: dict[str, Any]) -> None:
     )
     expected["reset_id"] = manifest["reset_id"]
     expected["archive"] = str(paths.rollback_dir / f"test-reset-{manifest['reset_id']}")
+    expected["lifetime_admissions"]["path"] = str(
+        Path(expected["archive"]) / ADMISSION_FILENAME
+    )
     if expected != manifest:
         raise TestResetError(
             "reset manifest is stale or changed; prepare an exact new manifest"
         )
+
+
+def _empty_admissions(manifest: dict[str, Any]) -> dict[str, Any]:
+    owner = {
+        key: manifest["acquisition"][key]
+        for key in ("contract", "adapter_id", "member_id", "provider_account_id")
+    }
+    return {
+        "contract": ADMISSION_CONTRACT,
+        "dataset_id": manifest["reset_id"],
+        "manifest_sha256": manifest_digest(manifest),
+        "owner_sha256": hashlib.sha256(
+            json.dumps(owner, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "message_sha256": [],
+    }
+
+
+def _read_admissions(archive: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    from adminme.adapters.disposable_test_acquisition import MAX_MESSAGES
+    from bootstrap.candidate_readiness import CandidateReadinessError
+
+    expected = _empty_admissions(manifest)
+    try:
+        value = _json(archive / ADMISSION_FILENAME)
+    except (OSError, CandidateReadinessError) as exc:
+        raise TestResetError(
+            "bounded lifetime admission receipt is unavailable"
+        ) from exc
+    digests = value.get("message_sha256")
+    if (
+        set(value) != set(expected)
+        or any(
+            value[key] != expected[key] for key in expected if key != "message_sha256"
+        )
+        or not isinstance(digests, list)
+        or len(digests) > MAX_MESSAGES
+        or any(
+            not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+            for item in digests
+        )
+        or len(set(digests)) != len(digests)
+    ):
+        raise TestResetError("bounded lifetime admission receipt is invalid")
+    return value
+
+
+def _reserve_admissions(paths: DeploymentPaths, message_ids: tuple[str, ...]) -> int:
+    from adminme.adapters.disposable_test_acquisition import MAX_MESSAGES
+
+    marker = _json(paths.instance_dir / "config/disposable-test-dataset.json")
+    archive = paths.rollback_dir / f"test-reset-{marker['dataset_id']}"
+    manifest = _json(archive / "manifest.json")
+    value = _read_admissions(archive, manifest)
+    admitted = set(value["message_sha256"])
+    admitted.update(
+        hashlib.sha256(message.encode()).hexdigest() for message in message_ids
+    )
+    if len(admitted) > MAX_MESSAGES:
+        raise TestResetError("bounded dataset lifetime admission cap would be exceeded")
+    if admitted != set(value["message_sha256"]):
+        value["message_sha256"] = sorted(admitted)
+        atomic_write(archive / ADMISSION_FILENAME, json.dumps(value, indent=2).encode())
+        _sync(archive)
+    return len(admitted)
 
 
 def _copy_private_tree(source: Path, target: Path) -> None:
@@ -283,6 +360,8 @@ class OfflineTestReset:
         import tempfile
 
         validate_manifest(self.paths, self.manifest)
+        if self.manifest["acquisition"]["message_ids"]:
+            raise TestResetError("reset initialization requires an empty selection")
         with tempfile.TemporaryDirectory(
             prefix=".test-reset-intent-", dir=self.paths.rollback_dir
         ) as temporary:
@@ -299,6 +378,10 @@ class OfflineTestReset:
             atomic_write(staging / "reset.json", json.dumps(record, indent=2).encode())
             atomic_write(
                 staging / "manifest.json", json.dumps(self.manifest, indent=2).encode()
+            )
+            atomic_write(
+                staging / ADMISSION_FILENAME,
+                json.dumps(_empty_admissions(self.manifest), indent=2).encode(),
             )
             for source, destination in (
                 (self.paths.app_dir / "current-release.json", "original-release.json"),
@@ -716,8 +799,17 @@ def execute_reset(
                 os.close(activity_descriptor)
 
 
-def _accepted_dataset(paths: DeploymentPaths, commit: str) -> dict[str, Any]:
+def _accepted_dataset(
+    paths: DeploymentPaths,
+    commit: str,
+    *,
+    selected_adapters_payload: bytes | None = None,
+) -> dict[str, Any]:
     """Prove a real accepted dataset before any discovery or selection effect."""
+    from adminme.deployment_readiness import ordinary_activation_backup_ready
+    from bootstrap.activation_transaction import ActivationJournal
+    from bootstrap.candidate_readiness import capture_deployment_snapshot
+
     marker = _json(paths.instance_dir / "config" / "disposable-test-dataset.json")
     if (
         marker.get("contract") != DATASET_CONTRACT
@@ -734,22 +826,67 @@ def _accepted_dataset(paths: DeploymentPaths, commit: str) -> dict[str, Any]:
     if (
         record.get("contract") != CONTRACT
         or record.get("phase") != "accepted"
-        or record.get("commit") != commit
+        or record.get("commit") != manifest.get("candidate_commit")
         or record.get("doctor_status") != "healthy"
         or record.get("manifest_sha256") != marker["reset_manifest_sha256"]
         or manifest_digest(manifest) != marker["reset_manifest_sha256"]
-        or list(_directory(paths.instance_dir)) != record.get("fresh_coordinate")
     ):
         raise TestResetError("dataset has no matching completed reset acceptance")
+    _read_admissions(archive, manifest)
+    # Restore can legitimately replace the state directory. Acceptance belongs
+    # to the logical marker and authenticated activation binding, not an inode.
+    _directory(paths.instance_dir)
     evidence = _json(paths.instance_dir / "config" / "deployment-readiness.json")
-    reset = evidence.get("disposable_test_reset") or {}
-    if (
-        reset.get("contract") != CONTRACT
-        or reset.get("dataset_id") != marker["dataset_id"]
-        or reset.get("manifest_sha256") != marker["reset_manifest_sha256"]
-        or reset.get("release_commit") != commit
+    binding = evidence.get("deployment_binding") or {}
+    snapshot = capture_deployment_snapshot(paths)
+    expected = {
+        "release_commit": commit,
+        "instance_fingerprint": snapshot.instance_fingerprint,
+        "host_fingerprint": snapshot.host_fingerprint,
+        "configuration_fingerprint": snapshot.configuration_fingerprint,
+    }
+    if selected_adapters_payload is not None:
+        # Selection publishes the new readiness first while services are stopped.
+        # Only the exact requested adapter payload may complete that interrupted
+        # publication; unrelated configuration drift cannot match either proof.
+        selected_snapshot = capture_deployment_snapshot(
+            paths, adapters_payload_override=selected_adapters_payload
+        )
+        if binding.get("configuration_fingerprint") == (
+            selected_snapshot.configuration_fingerprint
+        ):
+            expected["configuration_fingerprint"] = (
+                selected_snapshot.configuration_fingerprint
+            )
+    if snapshot.predecessor_commit != commit or any(
+        binding.get(key) != value for key, value in expected.items()
     ):
-        raise TestResetError("dataset has no matching reset readiness evidence")
+        raise TestResetError("dataset activation binding is stale or belongs elsewhere")
+    reset = evidence.get("disposable_test_reset") or {}
+    initial_reset = (
+        commit == record["commit"]
+        and reset.get("contract") == CONTRACT
+        and reset.get("dataset_id") == marker["dataset_id"]
+        and reset.get("manifest_sha256") == marker["reset_manifest_sha256"]
+        and reset.get("release_commit") == commit
+    )
+    if not initial_reset:
+        pointer = _json(paths.app_dir / "current-release.json")
+        previous = pointer.get("previous") or {}
+        history = ActivationJournal(paths).committed_activation(
+            target_commit=commit, predecessor_commit=previous.get("commit", "")
+        )
+        activation = evidence.get("activation_evidence") or {}
+        if (
+            not ordinary_activation_backup_ready(evidence)
+            or activation.get("contract") != "deployment-activation-evidence-v1"
+            or activation.get("candidate_live_doctor") is not True
+            or activation
+            != (history.get("active_readiness") or {}).get("activation_evidence")
+        ):
+            raise TestResetError(
+                "dataset has no matching completed activation evidence"
+            )
     policy = (
         _json(paths.instance_dir / "config" / "adapters.json").get(
             "disposable_test_acquisition"
@@ -804,7 +941,6 @@ def select_messages(upgrades: Any, selection_path: Path) -> dict[str, Any]:
             adapters.get("disposable_test_acquisition")
         )
         evidence_path = paths.instance_dir / "config" / "deployment-readiness.json"
-        evidence = _accepted_dataset(paths, commit)
         selected = _json(selection_path)
         if set(selected) != {"message_ids"}:
             raise TestResetError("selection file must contain only message_ids")
@@ -816,24 +952,33 @@ def select_messages(upgrades: Any, selection_path: Path) -> dict[str, Any]:
                 "bounded selection may add IDs but cannot recycle sample slots"
             )
         adapters["disposable_test_acquisition"] = updated.private_config()
+        adapter_payload = json.dumps(adapters, indent=2).encode()
+        evidence = _accepted_dataset(
+            paths, commit, selected_adapters_payload=adapter_payload
+        )
         effective = restrict_adapter_config(adapters)
         entry = next(
             item for item in effective["adapters"] if item["id"] == updated.adapter_id
         )
         coordinate = adapter_owner_coordinate_id("messaging-gmail-api", entry["config"])
+        # Reserve outside replaceable event state before either local cursor or
+        # policy publication. Restoring an older snapshot cannot recycle slots.
+        lifetime_count = _reserve_admissions(paths, updated.message_ids)
         store = AdapterCursorStore(paths.instance_dir / "events" / "adapter_cursors.db")
         try:
-            lifetime_count = store.reserve_test_selection(
+            store.reserve_test_selection(
                 coordinate, updated.message_ids, limit=MAX_MESSAGES
             )
         finally:
             store.close()
-        atomic_write(config_path, json.dumps(adapters, indent=2).encode())
-        snapshot = capture_deployment_snapshot(paths)
+        snapshot = capture_deployment_snapshot(
+            paths, adapters_payload_override=adapter_payload
+        )
         evidence["deployment_binding"]["configuration_fingerprint"] = (
             snapshot.configuration_fingerprint
         )
         atomic_write(evidence_path, json.dumps(evidence, indent=2).encode())
+        atomic_write(config_path, adapter_payload)
         return {
             "status": "selected",
             "selected_message_count": len(updated.message_ids),

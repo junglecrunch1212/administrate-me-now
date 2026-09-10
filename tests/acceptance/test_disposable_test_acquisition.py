@@ -263,7 +263,7 @@ def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
         assert runtime.fixture_adapter is None
         assert (
             adapter.status().extra["test_acquisition"][
-                "lifetime_selected_message_count"
+                "current_state_admitted_message_count"
             ]
             == 2
         )
