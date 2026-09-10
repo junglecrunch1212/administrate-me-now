@@ -226,7 +226,8 @@ def _runtime_snapshot(paths: DeploymentPaths, service: _Gmail, monkeypatch):
                 "/api/member/v1/surfaces/settings",
                 headers={"Tailscale-User-Login": row["tailscale_identity"]},
             )
-            assert response.status_code == 200
+            expected_status = 200 if row["role"] == "principal" else 404
+            assert response.status_code == expected_status, response.text
             if row["member_id"] != selected["member_id"]:
                 assert selected["provider_account_id"] not in response.text
     return state
