@@ -28,6 +28,11 @@ from adminme.source_assessment_recovery import (
     legacy_required_language_failure_candidate,
     resolved_assessment_disposition,
 )
+from adminme.source_contract_recovery import (
+    CONTRACT_REQUEST_TYPE,
+    CONTRACT_REFUSAL_TYPE,
+    contract_recovery_requirement,
+)
 
 
 @dataclass(frozen=True)
@@ -405,6 +410,8 @@ async def audit_source_assurance(
         {
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
+            CONTRACT_REQUEST_TYPE,
+            CONTRACT_REFUSAL_TYPE,
             "external_sync.legacy_effect_reconciled",
             "skill.call.failed",
         }
@@ -422,6 +429,8 @@ async def audit_source_assurance(
         {
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
+            CONTRACT_REQUEST_TYPE,
+            CONTRACT_REFUSAL_TYPE,
             "external_sync.legacy_effect_reconciled",
             "messaging.source_observed",
             "skill.call.failed",
@@ -461,9 +470,15 @@ async def audit_source_assurance(
                 recovery_assessments[recovery_request_event_id] = event
         elif legacy_default_failure_candidate(event):
             legacy_default_sources.add(str(event.get("causation_id") or ""))
-        elif event.get("type") == "source.assessment.recovery_requested":
+        elif event.get("type") in {
+            "source.assessment.recovery_requested",
+            CONTRACT_REQUEST_TYPE,
+        }:
             recovery_requests[str(event.get("event_id") or "")] = event
-        elif event.get("type") == "source.assessment.recovery_refused":
+        elif event.get("type") in {
+            "source.assessment.recovery_refused",
+            CONTRACT_REFUSAL_TYPE,
+        }:
             recovery_refusals.add(str(payload.get("request_event_id") or ""))
         elif event.get("type") in {
             "external_sync.write_completed",
@@ -555,6 +570,57 @@ async def audit_source_assurance(
                             source_event=assessment_sources.get(assessment_id),
                         )
                         reason = assessment_reason(assessment)
+                    potential_legacy_contract = False
+                    if assessment.get("schema_version") == 4 and outcome != "failed":
+                        request_id = str(
+                            assessment.get("payload", {}).get(
+                                "recovery_request_event_id"
+                            )
+                            or ""
+                        )
+                        headers = await event_log.get_causal_event_headers(
+                            str(event_log.tenant_id),
+                            event_id,
+                            types=["skill.call.recorded"],
+                            through=assessment_id,
+                        )
+                        potential_legacy_contract = any(
+                            header.get("schema_version") == 2
+                            and header.get("source_adapter") == "skill_runner"
+                            and header.get("source_account_id") == "system"
+                            and request_id < header["event_id"] < assessment_id
+                            and str(header.get("idempotency_key") or "").startswith(
+                                f"skill:message-nature:recovery:{request_id}:"
+                            )
+                            and str(header.get("idempotency_key") or "").endswith(
+                                ":skill:classify_message_nature:7.0.0"
+                            )
+                            for header in headers
+                        )
+                    if potential_legacy_contract:
+                        # Only request-linked recoveries can have this exact
+                        # occupied-current / later-legacy boundary. Ordinary
+                        # clean historical assessments and deferrals stay valid.
+                        source = assessment_sources.get(assessment_id)
+                        if source is None:
+                            source = await event_log.get(event_id)
+                            envelope = await event_log.get(assessment_id)
+                            if source is None or envelope is None:
+                                raise RuntimeError(
+                                    "contract recovery lineage unavailable"
+                                )
+                            assessment_sources[assessment_id] = source
+                            assessments[event_id] = assessment = envelope
+                        if (
+                            await contract_recovery_requirement(
+                                event_log, source, assessment
+                            )
+                            is not None
+                        ):
+                            outcome, reason = (
+                                "failed",
+                                "current_assessment_contract_required",
+                            )
                     counts[str(outcome)] += 1
                     detail = str(outcome)
                     if outcome == "failed" and len(failures) < 20:

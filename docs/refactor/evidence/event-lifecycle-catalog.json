@@ -3783,8 +3783,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 132,
-    "technical_event_schemas": 326,
-    "technical_event_types": 261,
+    "technical_event_schemas": 330,
+    "technical_event_types": 265,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -31955,6 +31955,299 @@
         "skill_version",
         "reason",
         "would_have_sent"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "source.assessment.contract_recovery_attempt_started",
+      "family": "source_assurance",
+      "properties": {
+        "classifier_version": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Classifier Version",
+          "type": "string"
+        },
+        "invocation_identity": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Invocation Identity",
+          "type": "string"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "required_assessment_contract": {
+          "const": "personal-obligation-assessment-v1",
+          "title": "Required Assessment Contract",
+          "type": "string"
+        },
+        "slot": {
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Slot",
+          "type": "integer"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_event_id",
+        "source_event_id",
+        "required_assessment_contract",
+        "invocation_identity",
+        "classifier_version",
+        "slot"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "source.assessment.contract_recovery_refused",
+      "family": "source_assurance",
+      "properties": {
+        "policy": {
+          "const": "source-assessment-recovery-v2",
+          "title": "Policy",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "source_scope_mismatch",
+            "assessment_not_current",
+            "contract_boundary_not_proven",
+            "failure_identity_changed",
+            "observation_inactive",
+            "request_scope_mismatch"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_event_id",
+        "source_event_id",
+        "reason",
+        "policy"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "source.assessment.contract_recovery_requested",
+      "family": "source_assurance",
+      "properties": {
+        "attempt_limit": {
+          "const": 3,
+          "title": "Attempt Limit",
+          "type": "integer"
+        },
+        "authority": {
+          "enum": [
+            "member_principal",
+            "guarded_release_exception"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "batch_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Batch Fingerprint",
+          "type": "string"
+        },
+        "expected_failure_reason": {
+          "enum": [
+            "language_seam_OpenClawTimeout",
+            "language_seam_OpenClawUnreachable"
+          ],
+          "title": "Expected Failure Reason",
+          "type": "string"
+        },
+        "expected_latest_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Expected Latest Assessment Event Id",
+          "type": "string"
+        },
+        "failed_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Failed Assessment Event Id",
+          "type": "string"
+        },
+        "max_concurrency": {
+          "const": 2,
+          "title": "Max Concurrency",
+          "type": "integer"
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "policy": {
+          "const": "source-assessment-recovery-v2",
+          "title": "Policy",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_by_actor": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Requested By Actor",
+          "type": "string"
+        },
+        "required_assessment_contract": {
+          "const": "personal-obligation-assessment-v1",
+          "title": "Required Assessment Contract",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "batch_fingerprint",
+        "source_event_id",
+        "expected_latest_assessment_event_id",
+        "failed_assessment_event_id",
+        "expected_failure_reason",
+        "required_assessment_contract",
+        "owner_member_id",
+        "requested_by_actor",
+        "authority",
+        "policy",
+        "attempt_limit",
+        "max_concurrency"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "source.assessment.contract_recovery_result",
+      "family": "source_assurance",
+      "properties": {
+        "assessment_idempotency_key": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Assessment Idempotency Key",
+          "type": "string"
+        },
+        "classifier_version": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Classifier Version"
+        },
+        "completed_assessment_contract": {
+          "anyOf": [
+            {
+              "const": "personal-obligation-assessment-v1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Completed Assessment Contract"
+        },
+        "completion_kind": {
+          "enum": [
+            "language",
+            "deterministic_terminal",
+            "failed"
+          ],
+          "title": "Completion Kind",
+          "type": "string"
+        },
+        "publication_plan_idempotency_key": {
+          "anyOf": [
+            {
+              "maxLength": 1200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Plan Idempotency Key"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "required_assessment_contract": {
+          "const": "personal-obligation-assessment-v1",
+          "title": "Required Assessment Contract",
+          "type": "string"
+        },
+        "skill_call_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Call Event Id"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_event_id",
+        "source_event_id",
+        "assessment_idempotency_key",
+        "required_assessment_contract",
+        "completed_assessment_contract",
+        "completion_kind"
       ],
       "schema_version": 1
     },

@@ -2601,6 +2601,13 @@ class UpgradeManager:
             "source_assessment_repair": source_repair_evidence,
         }
 
+    def recover_source_contract(
+        self, recovery_repository: Path, plan_path: Path
+    ) -> dict[str, Any]:
+        from bootstrap.source_contract_recovery import recover_source_contract
+
+        return recover_source_contract(self, recovery_repository, plan_path)
+
     def rollback(
         self,
         recovery_repository: Path | None = None,

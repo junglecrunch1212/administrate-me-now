@@ -162,6 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
         "restore",
         "upgrade",
         "rollback",
+        "recover-source-contract",
         "activate-openclaw",
         "bridge-export",
         "bridge-configure",
@@ -213,6 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "candidate-pending evidence"
                 ),
             )
+        elif name == "recover-source-contract":
+            child.add_argument("--recovery-repository", type=Path, required=True)
+            child.add_argument("--plan", type=Path, required=True)
         elif name == "rollback":
             child.add_argument(
                 "--recovery-repository",
@@ -564,6 +568,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.command == "upgrade":
             _print(upgrades.activate(args.candidate))
+        elif args.command == "recover-source-contract":
+            _print(
+                upgrades.recover_source_contract(args.recovery_repository, args.plan)
+            )
         else:
             _print(upgrades.rollback(args.recovery_repository))
         return 0

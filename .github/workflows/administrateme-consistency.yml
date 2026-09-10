@@ -83,6 +83,12 @@ jobs:
           tests/acceptance/test_cos_delegated_execution_reconciliation.py
           tests/unit/bootstrap/test_service_process_ownership.py
           tests/unit/test_source_assessment_recovery.py
+          tests/unit/test_source_contract_recovery.py
+          tests/unit/test_source_contract_recovery_controller.py
+          tests/acceptance/test_guarded_source_contract_recovery.py
+          tests/acceptance/test_source_contract_recovery.py
+          tests/acceptance/test_source_contract_recovery_api.py
+          tests/acceptance/test_source_contract_recovery_predecessor.py
           tests/unit/test_pipeline_runner.py
           tests/unit/test_pipeline_noise_filtering.py
           tests/unit/test_skill_wrapper.py

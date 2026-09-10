@@ -267,6 +267,54 @@ class PipelineRunner:
                 raise RuntimeError("source-recovery command remained non-terminal")
         return len(pending)
 
+    async def dispatch_source_contract_recovery(
+        self, request_event_id: str
+    ) -> dict[str, Any]:
+        """Dispatch only one canonical v2 command through the production context.
+
+        This does not start the bus, scan pending work, or start an adapter. It
+        is shared by the runtime startup lane and bounded maintenance control.
+        """
+        from adminme.source_contract_recovery import (
+            CONTRACT_REQUEST_TYPE,
+            contract_recovery_terminal,
+        )
+
+        pack = self._packs.get(_SOURCE_RECOVERY_PACK_ID)
+        if pack is None or CONTRACT_REQUEST_TYPE not in (
+            (pack.triggers or {}).get("events") or []
+        ):
+            raise RuntimeError("contract recovery pipeline is not registered")
+        request = await self._log.get(request_event_id)
+        if request is None or request.get("type") != CONTRACT_REQUEST_TYPE:
+            raise RuntimeError("contract recovery command is unavailable")
+        await self._make_callback(pack)(request)
+        return await contract_recovery_terminal(self._log, request_event_id)
+
+    async def reconcile_pending_source_contract_recoveries(self) -> int:
+        from adminme.source_contract_recovery import (
+            CONTRACT_REQUEST_TYPE,
+            contract_recovery_terminal,
+        )
+
+        watermark = await self._log.latest_event_id()
+        pending: list[str] = []
+        async for metadata in self._log.read_metadata_since(
+            through=watermark or "", types=[CONTRACT_REQUEST_TYPE]
+        ):
+            request_id = str(metadata["event_id"])
+            if (await contract_recovery_terminal(self._log, request_id))[
+                "status"
+            ] == "pending":
+                pending.append(request_id)
+                if len(pending) > _SOURCE_RECOVERY_MAX_PENDING:
+                    raise RuntimeError("pending contract-recovery ceiling exceeded")
+        for request_id in pending:
+            terminal = await self.dispatch_source_contract_recovery(request_id)
+            if terminal["status"] == "pending":
+                raise RuntimeError("contract recovery remained non-terminal")
+        return len(pending)
+
     async def _recovery_terminal(self, request: dict[str, Any]) -> bool:
         request_event_id = str(request.get("event_id") or "")
         payload = request.get("payload") or {}

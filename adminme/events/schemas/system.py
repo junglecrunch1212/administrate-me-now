@@ -147,6 +147,85 @@ class SourceAssessmentRecoveryRefusedV1(BaseModel):
     policy: Literal["source-assessment-recovery-v1"]
 
 
+class SourceAssessmentContractRecoveryRequestedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    batch_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_event_id: str = Field(min_length=1, max_length=240)
+    expected_latest_assessment_event_id: str = Field(min_length=1, max_length=240)
+    failed_assessment_event_id: str = Field(min_length=1, max_length=240)
+    expected_failure_reason: Literal[
+        "language_seam_OpenClawTimeout", "language_seam_OpenClawUnreachable"
+    ]
+    required_assessment_contract: Literal["personal-obligation-assessment-v1"]
+    owner_member_id: str = Field(min_length=1, max_length=240)
+    requested_by_actor: str = Field(min_length=1, max_length=240)
+    authority: Literal["member_principal", "guarded_release_exception"]
+    policy: Literal["source-assessment-recovery-v2"]
+    attempt_limit: Literal[3]
+    max_concurrency: Literal[2]
+
+
+class SourceAssessmentContractRecoveryRefusedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    reason: Literal[
+        "source_scope_mismatch",
+        "assessment_not_current",
+        "contract_boundary_not_proven",
+        "failure_identity_changed",
+        "observation_inactive",
+        "request_scope_mismatch",
+    ]
+    policy: Literal["source-assessment-recovery-v2"]
+
+
+class SourceAssessmentContractRecoveryResultV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    assessment_idempotency_key: str = Field(min_length=1, max_length=1000)
+    required_assessment_contract: Literal["personal-obligation-assessment-v1"]
+    completed_assessment_contract: Literal["personal-obligation-assessment-v1"] | None
+    completion_kind: Literal["language", "deterministic_terminal", "failed"]
+    classifier_version: str | None = Field(default=None, max_length=40)
+    skill_call_event_id: str | None = Field(default=None, max_length=240)
+    publication_plan_idempotency_key: str | None = Field(default=None, max_length=1200)
+
+
+class SourceAssessmentContractRecoveryAttemptStartedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    required_assessment_contract: Literal["personal-obligation-assessment-v1"]
+    invocation_identity: str = Field(min_length=1, max_length=1000)
+    classifier_version: str = Field(min_length=1, max_length=40)
+    slot: int = Field(ge=0, le=2)
+
+
+registry.register(
+    "source.assessment.contract_recovery_requested",
+    1,
+    SourceAssessmentContractRecoveryRequestedV1,
+)
+registry.register(
+    "source.assessment.contract_recovery_refused",
+    1,
+    SourceAssessmentContractRecoveryRefusedV1,
+)
+registry.register(
+    "source.assessment.contract_recovery_result",
+    1,
+    SourceAssessmentContractRecoveryResultV1,
+)
+registry.register(
+    "source.assessment.contract_recovery_attempt_started",
+    1,
+    SourceAssessmentContractRecoveryAttemptStartedV1,
+)
+
+
 registry.register("xlsx.regenerated", 1, XlsxRegeneratedV1)
 registry.register("xlsx.reverse_projected", 1, XlsxReverseProjectedV1)
 registry.register(

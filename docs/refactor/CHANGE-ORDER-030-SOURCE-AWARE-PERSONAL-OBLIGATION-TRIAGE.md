@@ -60,6 +60,81 @@ typed commitments and authenticated instructions retain their authority.
 The production composition proof uses a mixed iMessage source and verifies both
 the genuine promise and the unsupported sibling through the member API.
 
+### Assessment recovery across a rollback
+
+**MODERNIZE recovery provenance; PRESERVE bounded attempts and immutable truth:**
+[CO-017](CHANGE-ORDER-017-SOURCE-ASSESSMENT-RECOVERY.md) requires an explicit,
+exact-source command before a terminal language failure can be reassessed.
+Rolling back to an older classifier does not make its linked recovery result
+proof of this change order's personal-obligation contract. A failed current
+assessment followed by an incompatible predecessor recovery must remain visible
+as incomplete current assessment, even when the predecessor recovery succeeded.
+Ordinary replay cannot overwrite the occupied assessment identity or obtain a
+fresh language budget merely by changing invocation inputs.
+
+A distinct contract-recovery command binds the exact current assessment, retained
+current-generation failure, owner, tenant, and requested assessment contract.
+Eligibility requires the proved cross-version recovery lineage; another timeout
+under an unchanged current contract is not a new version boundary. Existing
+recovery commands and receipts retain their original meaning and idempotency.
+The new result records its requested and completed contract and classifier
+provenance, retains its immutable predecessor links, and governs assurance only
+when its evidence establishes the required contract. Duplicate delivery, cold
+restart, or controller retry reuses the same durable command and at most three
+language attempts. Failure remains failure. This protocol correction does not
+claim to eliminate model latency or provider outages.
+
+An interrupted activation may use the reviewed guarded recovery controller to
+execute this exact repair before the captured predecessor can pass Doctor.
+This is an explicit operation on an immutable protected-main release, not a
+general degraded-health activation exception. Its private plan identifies the
+open journal, captured predecessor, reviewed code, and one exact recovery target;
+household identities and source coordinates never become platform defaults.
+
+The controller requires live preflight evidence limited to the selected source
+failure and its direct readiness consequences, settled healthy consumers, zero
+missing or pending sources, observation mode, and zero provider effects. It
+proves service quiescence, preserves a verified encrypted backup, and binds
+unchanged release selectors, configuration, Gateway pin, and active checkpoint
+bytes. Only the unchanged managed Gateway and one bounded maintenance process
+may run during the repair. The process uses the production event writer,
+noise-filtering callback, scope validation, policy, and pinned skill seam; it
+does not start adapters, the general bus replay, projections, workbook reverse
+processing, member HTTP routes, or another long-lived application runtime.
+
+The maintenance process dispatches only the exact durable command. It cannot
+create canonical household objects, external-write requests, or provider
+effects. Crash recovery reuses the operation identity and deadline and rejects
+unexpected state drift; it cannot silently create a new request. Every child
+must be reaped before the predecessor starts. A maintenance success alone never
+closes the activation journal: the existing recovery path still has to settle
+the captured predecessor and pass its full healthy Doctor. A failed prerequisite,
+uncertain process ownership, persistent language failure, or unrelated
+degradation leaves recovery incomplete and explicitly retryable within its
+recorded bounds. No installed release, active environment, permissions,
+provider enrollment, or retained source history is patched to pass activation.
+
+The supported entry is:
+
+```bash
+bootstrap/update.sh \
+  --recover-source-contract=/absolute/private/recovery-plan.json \
+  /absolute/path/to/protected-merge
+```
+
+The plan is an owner-only JSON file with
+contract `guarded-source-contract-recovery-v1`, `transaction_id`,
+`predecessor_commit`, `required_assessment_contract`, and one `target`. The target
+names `source_event_id`, `expected_latest_assessment_event_id`,
+`failed_assessment_event_id`, and `expected_failure_reason`. For a failed legacy
+recovery, both assessment fields identify that latest failure. For a successful
+legacy recovery, the latest field identifies that success and the failed field
+identifies its retained current-generation failure. Fixed code verifies the
+entire lineage in either case. The private plan grants no provider authority.
+The guarded flag cannot be combined with activation attestations or migration
+approvals; normal candidate activation still follows journal closure and its
+own current prerequisites.
+
 Qualifiers are evidence. Unmet or unknown conditions remain conditional;
 unsupported normalized dates do not become verified deadlines; occurrence,
 reporting, expiry, and due dates remain distinct. Recurrence requires evidence
