@@ -155,6 +155,9 @@ counts, timings, failure/skip text, and next action in a short private file.
 The final triage gate freezes unequivocal synthetic expectations before
 classification, retains ambiguity, and reviews the bounded real sample
 against source text including messages with no candidate. Source/candidate
+tests that inject fixed language responses prove downstream handling only;
+classifier quality requires the actual pinned OpenClaw language seam in an
+authorized disposable lab. Source/candidate
 counts, false positives, missed likely obligations, duplicates, past items
 and disagreements use explicit denominators. Agent source review is not human
 validation and sample quality is not whole-mailbox accuracy.

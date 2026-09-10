@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -153,9 +154,30 @@ def _runtime_snapshot(paths: DeploymentPaths, service: _Gmail, monkeypatch):
         "enabled"
     ] = True
     adapter_type = type(load_builtin_adapters(adapters, repository_root=ROOT)[0])
-    monkeypatch.setattr(
-        adapter_type, "_connect_service", lambda *args, **kwargs: service
+    module = sys.modules[adapter_type.__module__]
+    selected_config = next(
+        row["config"]
+        for row in adapters["adapters"]
+        if row["id"] == selected["adapter_id"]
     )
+
+    def credentials(reference: str) -> dict[str, Any]:
+        assert reference == selected_config["service_account_key_ref"]
+        return {"fixture": "bounded-provider-credentials"}
+
+    def service_factory(
+        value: dict[str, Any], scopes: list[str], subject: str
+    ) -> _Gmail:
+        assert value == {"fixture": "bounded-provider-credentials"}
+        assert scopes == ["https://www.googleapis.com/auth/gmail.readonly"]
+        assert subject == selected["provider_account_id"]
+        return service
+
+    # Keep production connection initialization and authenticated event emission.
+    # Only resolving the fixture credential and constructing the provider client
+    # are replaced, so no credential or provider can be contacted by this test.
+    monkeypatch.setattr(module, "_default_credentials_resolver", credentials)
+    monkeypatch.setattr(module, "_default_service_factory", service_factory)
     monkeypatch.setattr(adapter_type, "POLL_INTERVAL_S", 3600)
     mapping = _read(paths.instance_dir / "config/member-mapping.json")
     references = _read(paths.instance_dir / "config/secret-references.json")[
@@ -187,6 +209,9 @@ def _runtime_snapshot(paths: DeploymentPaths, service: _Gmail, monkeypatch):
                 != "complete"
             ):
                 assert asyncio.get_running_loop().time() < deadline, adapter.status()
+                assert adapter.status().state not in {"crashed", "backoff"}, (
+                    adapter.status()
+                )
                 await asyncio.sleep(0.01)
             receipts = await _settled_skill_receipts(runtime)
             events = await _source_events(runtime)
@@ -207,6 +232,16 @@ def _runtime_snapshot(paths: DeploymentPaths, service: _Gmail, monkeypatch):
     return state
 
 
+def _account_message(
+    message_id: str, account: str, *, sent: bool = False
+) -> dict[str, Any]:
+    message = _message(message_id, sent=sent)
+    for header in message["payload"]["headers"]:
+        if (sent and header["name"] == "From") or (not sent and header["name"] == "To"):
+            header["value"] = account
+    return message
+
+
 def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactivation(
     tmp_path, monkeypatch
 ):
@@ -222,9 +257,12 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     ids = policy["message_ids"]
     provider = _Gmail()
     provider.messages_by_id = {
-        value: _message(value, sent=index == 1) for index, value in enumerate(ids)
+        value: _account_message(value, policy["provider_account_id"], sent=index == 1)
+        for index, value in enumerate(ids)
     }
-    provider.messages_by_id["outside-selection"] = _message("outside-selection")
+    provider.messages_by_id["outside-selection"] = _account_message(
+        "outside-selection", policy["provider_account_id"]
+    )
     provider.next_history = {
         "historyId": "100",
         "history": [{"messagesAdded": [{"message": {"id": "outside-selection"}}]}],
