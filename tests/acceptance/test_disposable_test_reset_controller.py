@@ -86,6 +86,16 @@ def accepted_reset_fixture(tmp_path, monkeypatch):
         text=True,
     ).stdout.strip()
     config = paths.instance_dir / "config"
+    # Retain the same configured, credential-free Gateway boundary that the
+    # ordinary candidate-pending composition requires after HTR-07.
+    _json(
+        config / "openclaw-activation.json",
+        {"configured": True, "fixture_only": True},
+    )
+    _json(
+        paths.instance_dir / "openclaw/runtime/openclaw.json",
+        {"agents": {}, "bindings": []},
+    )
     mapping_bytes = (config / "member-mapping.json").read_bytes()
     mapping = json.loads(mapping_bytes)
     member = next(
