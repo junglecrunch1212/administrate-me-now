@@ -568,10 +568,13 @@ async function visit(page, baseUrl, path, expectedTitle) {
 async function auditAccessibility(page, label) {
   const audit = await page.evaluate(() => {
     const rendered = (node) => {
-      const closedDetails = node.closest("details:not([open])");
-      const belongsToClosedSummary = closedDetails
-        && (node === closedDetails.querySelector(":scope > summary") || Boolean(node.closest("summary")));
-      return (!closedDetails || belongsToClosedSummary) && node.getClientRects().length > 0;
+      // A nested summary can belong to its own closed details while still
+      // being hidden by an outer closed group. Honor every ancestor.
+      for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.matches("details:not([open])")
+          && !ancestor.querySelector(":scope > summary")?.contains(node)) return false;
+      }
+      return node.getClientRects().length > 0;
     };
     const controls = [...new Set(document.querySelectorAll("button, a[href], input:not([type='hidden']), select, textarea, summary, [tabindex]:not([tabindex='-1'])"))]
       .filter(rendered);
@@ -709,13 +712,13 @@ async function auditAccessibility(page, label) {
     const selector = "a[href], button, input:not([type='hidden']), select, textarea, summary, [contenteditable='true'], [tabindex]:not([tabindex='-1'])";
     const candidates = [...new Set(document.querySelectorAll(selector))].filter((node) => {
       const style = getComputedStyle(node);
-      const closedDetails = node.closest("details:not([open])");
-      const belongsToClosedSummary = closedDetails
-        && (node === closedDetails.querySelector(":scope > summary") || Boolean(node.closest("summary")));
-      if (closedDetails && !belongsToClosedSummary) return false;
-      if (node.disabled || style.visibility === "hidden" || style.display === "none" || node.getClientRects().length === 0 || node.tabIndex < 0) return false;
+      for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.matches("details:not([open])")
+          && !ancestor.querySelector(":scope > summary")?.contains(node)) return false;
+      }
+      if (node.matches(":disabled") || node.closest("[inert]") || style.visibility === "hidden" || style.display === "none" || node.getClientRects().length === 0 || node.tabIndex < 0) return false;
       if (node.matches("input[type='radio']") && node.name) {
-        const group = [...document.querySelectorAll(`input[type='radio'][name='${CSS.escape(node.name)}']`)].filter((radio) => !radio.disabled && radio.getClientRects().length > 0);
+        const group = [...document.querySelectorAll(`input[type='radio'][name='${CSS.escape(node.name)}']`)].filter((radio) => !radio.matches(":disabled") && radio.getClientRects().length > 0);
         return node === (group.find((radio) => radio.checked) || group[0]);
       }
       return true;
@@ -775,7 +778,7 @@ async function auditAccessibility(page, label) {
   record(`${label} computed text contrast`, audit.contrastFailures.length === 0, JSON.stringify({ minContrast: audit.minContrast, failures: audit.contrastFailures }));
   record(`${label} 24px pointer targets`, audit.smallTargets.length === 0, audit.smallTargets);
   record(`${label} live regions and error associations`, audit.liveRegionContract && audit.liveRegions >= 3 && audit.invalidErrorAssociations === 0, audit);
-  record(`${label} bounded full visible tab order`, focusOrderPass, JSON.stringify({ expected: focusOrder.length, observed: observedFocusOrder, traversalStates }));
+  record(`${label} bounded full visible tab order`, focusOrderPass, JSON.stringify({ expected: focusOrder.length, observed: observedFocusOrder, traversalStates, missing: focusOrder.map((node, index) => ({ index, ...node })).filter(({ index }) => !observedFocusOrder.includes(index)) }));
   record(`${label} keyboard focus indicator`, keyboard.visible && keyboard.outline >= 3, keyboard);
   return { ...audit, keyboard, focusOrder: { expected: focusOrder.length, observed: observedFocusOrder.length, pass: focusOrderPass } };
 }
