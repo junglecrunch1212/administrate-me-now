@@ -743,8 +743,32 @@ def test_unterminated_html_quote_markup_remains_unreliable(
     result = authored_message_text(
         {field: "<p>New update.</p>" + fragment + "Please pay the old invoice."}
     )
-    assert result.text == "" and not result.reliable
+    assert result.text == "" and not result.reliable, result
     assert result.authored_span is None
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "<style>.fixture {content: '<div class=\"gmail_quote\"';}",
+        "<script>const hidden = '<div class=\"gmail_quote\"';",
+        '<!-- hidden <div class="gmail_quote" ',
+    ],
+)
+def test_pending_hidden_html_quote_markers_do_not_poison_authored_prefix(
+    tail: str,
+) -> None:
+    result = authored_message_text({"body_html": "<p>New update.</p>" + tail})
+    assert result.text == "New update." and result.reliable, result
+    assert not result.quoted_history_removed
+
+
+def test_escaped_unfinished_quote_markup_is_literal_authored_text() -> None:
+    result = authored_message_text(
+        {"body_html": '<p>Literal &lt;div class="gmail_quote" </p>'}
+    )
+    assert result.text == 'Literal <div class="gmail_quote"' and result.reliable, result
+    assert not result.quoted_history_removed
 
 
 @pytest.mark.parametrize(

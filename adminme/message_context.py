@@ -276,6 +276,19 @@ class _AuthoredHTMLParser(HTMLParser):
         if not self.suppressed and not self.quoted:
             self.parts.append(html.unescape(f"&#{name};"))
 
+    def close(self) -> None:
+        # Python 3.14 drops an unfinished start tag at EOF without calling
+        # either handle_data or handle_starttag. Inspect that pending token
+        # before close consumes it. Leading comments/escaped literals and
+        # anything inside head/style/script/template cannot supply a boundary.
+        if (
+            not self.suppressed
+            and not self.quoted
+            and _HTML_UNFINISHED_QUOTE.match(self.rawdata)
+        ):
+            self.uncertain_quote = True
+        super().close()
+
 
 def _contains_html_body(value: str) -> bool:
     if _HTML_BODY_MARKUP.search(value) or _HTML_UNFINISHED_QUOTE.search(value):

@@ -53,7 +53,7 @@ jobs:
 
       - name: Validate bounded Gmail receipts and authored HTML
         run: >-
-          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
+          poetry run pytest -p no:cacheprovider -q -ra
           tests/unit/test_pipeline_pack_loader.py
           tests/unit/test_pack_loader.py
           tests/unit/test_message_context.py
