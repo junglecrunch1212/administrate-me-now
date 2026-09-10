@@ -110,9 +110,7 @@ def accepted_reset_fixture(tmp_path, monkeypatch):
                 "provider_account_id": policy["provider_account_id"],
                 "user_email": policy["provider_account_id"],
                 "workspace": "personal",
-                "permission_scope": [
-                    "https://www.googleapis.com/auth/gmail.readonly"
-                ],
+                "permission_scope": ["https://www.googleapis.com/auth/gmail.readonly"],
                 "binding_provenance": "service-account-delegation",
                 "ownership_attested": True,
             },
