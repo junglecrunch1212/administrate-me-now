@@ -45,6 +45,20 @@ AdapterState = Literal["starting", "running", "backoff", "stopped", "crashed"]
 ``/status`` endpoint. Mirrors the supervisor's per-adapter task state."""
 
 
+class AdapterSourceEvents(Protocol):
+    """Read immutable receipts only; adapters still emit through EventSink."""
+
+    async def get(self, event_id: str) -> dict[str, Any] | None: ...
+
+    async def get_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None: ...
+
+    async def get_by_idempotency_prefix(
+        self, tenant_id: str, prefix: str
+    ) -> list[dict[str, Any]]: ...
+
+
 @dataclass(frozen=True)
 class AdapterContext:
     """Per-adapter dependency bag handed to ``Adapter.start()``.
@@ -63,6 +77,7 @@ class AdapterContext:
     observation_manager: "ObservationManager | None" = None
     observation_event_sink: "EventSink | None" = None
     cursor_store: "AdapterCursorStore | None" = None
+    source_events: AdapterSourceEvents | None = None
 
 
 @dataclass

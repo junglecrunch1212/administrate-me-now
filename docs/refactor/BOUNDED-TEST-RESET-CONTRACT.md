@@ -97,6 +97,22 @@ original-state reversal remains a distinct path.
 Provider cursors, source idempotency, and committed source facts survive warm
 restarts. Private selection files remain outside the repository.
 
+Gmail source identity compares the typed observation and its exact provenance,
+not the complete transport response. A changed attachment download handle or
+label ordering alone must not append another source, spend another language
+attempt, or replace a candidate. This is typed-observation equivalence, not a
+claim that attachment bytes have been downloaded or compared. Meaningful
+changes to the emitted body, headers, dates, direction, or attachment metadata
+remain new observations. The adapter verifies committed encrypted source
+receipts before adopting a stable fingerprint for an older raw-response hash
+or recovering an append that committed before its cursor receipt. Reads are
+bounded and exact; tenant, member/service ownership, account, source, type and
+native identity must agree. Ambiguous, excessive or mismatched evidence cannot
+authorize reuse. Cursor aliases retain lease fencing, and the event log's
+strict append equivalence remains unchanged. Existing duplicate immutable
+observations are retained and reported; this fix does not erase their outcomes
+or authorize a dataset reset or global reassessment.
+
 The supported read-only discovery command samples `newer_than:7d` from the
 existing account without an Inbox-only or category exclusion. Discovery reads
 IDs, never changes a mailbox or label, and does not ingest. `test-reset-select`
@@ -177,6 +193,9 @@ validation and sample quality is not whole-mailbox accuracy.
   acceptance, UX and runtime-baseline contracts.
 - **MODERNIZE:** an explicit reversible disposable-state reset and durable
   local acquisition cap, with source coverage and reset limitations visible.
+  Gmail typed-observation fingerprints and verified legacy receipt aliases
+  preserve source idempotency across changing transport metadata, under the
+  same append-only, privacy and restart requirements above.
 - **SUPERSEDE:** only for an explicitly approved disposable test reset, the
   requirement to first settle the abandoned historical assessment backlog.
   Fresh active state must still pass every current health/privacy/effect gate.

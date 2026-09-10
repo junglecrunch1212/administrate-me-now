@@ -10,7 +10,7 @@ from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.service_identities import service_private_scope
 
 
-async def write_adapter_event(
+def build_adapter_event(
     ctx: AdapterContext,
     *,
     adapter_name: str,
@@ -25,8 +25,8 @@ async def write_adapter_event(
     raw_ref: str | None = None,
     occurred_at_override: str | None = None,
     sensitivity_override: Sensitivity | None = None,
-) -> str:
-    """Construct the canonical envelope and await the one EventSink.
+) -> EventEnvelope:
+    """Construct the canonical envelope without publishing it.
 
     Adapter configuration contributes only stable provenance identifiers;
     credentials and secret values are never copied into the envelope.
@@ -74,7 +74,7 @@ async def write_adapter_event(
     else:  # defensive for test clocks that satisfy the old loose contract
         occurred_at_text = EventEnvelope.now_utc_iso()
         event_at_ms = 0
-    envelope = EventEnvelope(
+    return EventEnvelope(
         event_at_ms=event_at_ms,
         tenant_id=tenant_id,
         type=event_type,
@@ -94,11 +94,45 @@ async def write_adapter_event(
         raw_ref=raw_ref,
         payload=payload,
     )
+
+
+async def write_adapter_event(
+    ctx: AdapterContext,
+    *,
+    adapter_name: str,
+    sensitivity_floor: SensitivityFloor,
+    config: dict[str, Any],
+    event_type: str,
+    payload: dict[str, Any],
+    causation_id: str | None = None,
+    correlation_id: str | None = None,
+    schema_version: int = 1,
+    idempotency_key: str | None = None,
+    raw_ref: str | None = None,
+    occurred_at_override: str | None = None,
+    sensitivity_override: Sensitivity | None = None,
+) -> str:
+    """Publish the canonical envelope through the one EventSink."""
+    envelope = build_adapter_event(
+        ctx,
+        adapter_name=adapter_name,
+        sensitivity_floor=sensitivity_floor,
+        config=config,
+        event_type=event_type,
+        payload=payload,
+        causation_id=causation_id,
+        correlation_id=correlation_id,
+        schema_version=schema_version,
+        idempotency_key=idempotency_key,
+        raw_ref=raw_ref,
+        occurred_at_override=occurred_at_override,
+        sensitivity_override=sensitivity_override,
+    )
     return await ctx.event_sink.write(
         envelope,
-        correlation_id=correlation,
-        causation_id=causation_id,
+        correlation_id=envelope.correlation_id,
+        causation_id=envelope.causation_id,
     )
 
 
-__all__ = ["write_adapter_event"]
+__all__ = ["build_adapter_event", "write_adapter_event"]

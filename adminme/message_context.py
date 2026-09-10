@@ -25,6 +25,7 @@ import weakref
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Any
 
 
@@ -49,17 +50,21 @@ _QUOTE_BOUNDARY = re.compile(
     r"on\s+.+?\s+wrote:\s*$|el\s+.+?\s+escribi[oó]:\s*$|"
     r"(?:from|de):\s+.+$)"
 )
-_HTML_QUOTE_BOUNDARY = re.compile(
-    r"(?is)(?:<blockquote\b[^>]*>|<div\b[^>]*(?:class|id)\s*=\s*['\"][^'\"]*"
-    r"(?:gmail_quote|gmail_attr|divRplyFwdMsg)[^'\"]*['\"][^>]*>)"
-)
 _PLAIN_QUOTE_HEADER_HINT = re.compile(r"(?im)^(?:sent|date|to|cc|bcc|subject):\s+\S.+$")
-_HTML_QUOTE_HINT = re.compile(
-    r"(?is)(?:moz-cite-prefix|data-(?:quoted|quote)|(?:class|id)\s*=\s*['\"]"
-    r"[^'\"]*(?:quote|reply|forward)[^'\"]*['\"])"
+_HTML_BODY_MARKUP = re.compile(
+    r"(?is)<!--|<!doctype\s+html\b|<(?:html|head|body|style|script|template|noscript|"
+    r"div|p|blockquote|table|ul|ol|section|article|h[1-6])(?:\s[^<>]*|/?)>|"
+    r"<br\s*/?>"
 )
-_HTML_BREAK = re.compile(r"(?is)<(?:br|/p|/div|/li|/tr)\b[^>]*>")
-_HTML_TAG = re.compile(r"(?is)<[^>]+>")
+_HTML_INLINE_OPEN = re.compile(r"(?is)<(a|b|strong|em|i|span|font)(?=[\s/>])[^>]*>")
+_HTML_UNFINISHED_QUOTE = re.compile(
+    r"(?is)<(?:blockquote\b|[a-z][^>]*(?:moz-cite-prefix|data-quote|"
+    r"(?:class|id)\s*=\s*['\"][^'\"]*(?:quote|reply|forward)))"
+)
+_HTML_NON_CONTENT = frozenset({"head", "title", "style", "script", "template"})
+_HTML_BREAK_AFTER = frozenset(
+    {"p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}
+)
 _STOPWORDS = {
     "about",
     "and",
@@ -196,30 +201,148 @@ class MessageContextPack:
         return {message.alias: message for message in self.messages}
 
 
+class _AuthoredHTMLParser(HTMLParser):
+    """Extract text only; never render HTML, resolve URLs or evaluate CSS.
+
+    Ignored blocks cannot consume the authored-text budget or masquerade as
+    quote containers. An actual quote boundary still cuts the entire suffix,
+    even after its closing tag, exactly as the plain-text boundary does.
+    """
+
+    def __init__(self) -> None:
+        # Decode references explicitly so literal &lt;quote markup&gt; is
+        # never mistaken for an unterminated provider quote container.
+        super().__init__(convert_charrefs=False)
+        self.parts: list[str] = []
+        self.suppressed: list[str] = []
+        self.quoted = False
+        self.uncertain_quote = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.quoted:
+            return
+        if tag in _HTML_NON_CONTENT:
+            self.suppressed.append(tag)
+            return
+        if self.suppressed:
+            return
+        markers = " ".join(
+            (value or "").casefold() for key, value in attrs if key in {"class", "id"}
+        )
+        if tag == "blockquote" or (
+            tag == "div"
+            and any(
+                marker in markers
+                for marker in ("gmail_quote", "gmail_attr", "divrplyfwdmsg")
+            )
+        ):
+            self.quoted = True
+            return
+        if any(key.startswith("data-quote") for key, _value in attrs) or any(
+            marker in markers
+            for marker in ("quote", "reply", "forward", "moz-cite-prefix")
+        ):
+            self.uncertain_quote = True
+        if tag == "br":
+            self.parts.append("\n")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag not in _HTML_NON_CONTENT:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.quoted:
+            return
+        if self.suppressed:
+            if tag == self.suppressed[-1]:
+                # A malformed nested block must never release text early.
+                self.suppressed.pop()
+            return
+        if tag in _HTML_BREAK_AFTER:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.suppressed and not self.quoted:
+            if _HTML_UNFINISHED_QUOTE.search(data):
+                self.uncertain_quote = True
+            self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if not self.suppressed and not self.quoted:
+            self.parts.append(html.unescape(f"&{name};"))
+
+    def handle_charref(self, name: str) -> None:
+        if not self.suppressed and not self.quoted:
+            self.parts.append(html.unescape(f"&#{name};"))
+
+    def close(self) -> None:
+        # Python 3.14 drops an unfinished start tag at EOF without calling
+        # either handle_data or handle_starttag. Inspect that pending token
+        # before close consumes it. Leading comments/escaped literals and
+        # anything inside head/style/script/template cannot supply a boundary.
+        if (
+            not self.suppressed
+            and not self.quoted
+            and _HTML_UNFINISHED_QUOTE.match(self.rawdata)
+        ):
+            self.uncertain_quote = True
+        super().close()
+
+
+def _contains_html_body(value: str) -> bool:
+    if _HTML_BODY_MARKUP.search(value) or _HTML_UNFINISHED_QUOTE.search(value):
+        return True
+    # A bare comparison such as a<b>c is ordinary text. Inline formatting
+    # requires a paired known element; each tag is scanned at most once.
+    tags = {match.group(1).lower() for match in _HTML_INLINE_OPEN.finditer(value)}
+    return any(re.search(rf"(?is)</{tag}\s*>", value) for tag in tags)
+
+
+def _canonical_lines(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _html_authored_source(value: str) -> tuple[str, bool, bool]:
+    parser = _AuthoredHTMLParser()
+    try:
+        parser.feed(value)
+        parser.close()
+    except (AssertionError, ValueError):
+        # Unsupported/malformed declaration syntax supplies no reliable text.
+        return "", False, True
+    return (
+        _canonical_lines("".join(parser.parts)),
+        parser.quoted,
+        parser.uncertain_quote,
+    )
+
+
 def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
     """Return only the provider message's confidently authored portion.
 
     Provider bodies are untrusted evidence. Recognized reply/forward boundaries
     are removed even at offset zero; an all-forward body therefore yields no
     authored content instead of promoting quoted history into a candidate.
-    HTML-only Gmail/Apple/Outlook bodies are reduced deterministically after
-    cutting their explicit quote container.
+    HTML Gmail/Apple/Outlook bodies discard non-content blocks before the
+    authored-character cap. The same normalization applies when a provider
+    places recognized HTML markup in body_text instead of body_html.
     """
 
     raw_text = payload.get("body_text") or payload.get("body")
     raw_html = payload.get("body_html")
     quoted_history_removed = False
     if isinstance(raw_text, str):
-        text = raw_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        text = _canonical_lines(raw_text)
+        if _contains_html_body(text):
+            text, quoted_history_removed, uncertain_quote = _html_authored_source(text)
+            if uncertain_quote:
+                return AuthoredMessageText("", False, False, canonical_source_text=text)
         if isinstance(raw_html, str):
-            html_value = raw_html
-            html_boundary = _HTML_QUOTE_BOUNDARY.search(html_value)
-            if html_boundary is not None:
-                html_value = html_value[: html_boundary.start()]
-                html_text = html.unescape(
-                    _HTML_TAG.sub("", _HTML_BREAK.sub("\n", html_value))
-                )
-                html_text = html_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+            html_text, html_boundary, html_uncertain = _html_authored_source(raw_html)
+            if html_uncertain:
+                return AuthoredMessageText("", False, False, canonical_source_text=text)
+            if html_boundary:
                 html_plain_boundary = _QUOTE_BOUNDARY.search(html_text)
                 if html_plain_boundary is not None:
                     html_text = html_text[: html_plain_boundary.start()].rstrip()
@@ -242,17 +365,9 @@ def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
                         text_truncated=len(html_text) > MAX_MESSAGE_CHARS,
                     )
                 return AuthoredMessageText("", False, False, canonical_source_text=text)
-            if _HTML_QUOTE_HINT.search(raw_html):
-                return AuthoredMessageText("", False, False, canonical_source_text=text)
     elif isinstance(raw_html, str):
-        html_value = raw_html
-        html_boundary = _HTML_QUOTE_BOUNDARY.search(html_value)
-        if html_boundary is not None:
-            html_value = html_value[: html_boundary.start()]
-            quoted_history_removed = True
-        text = html.unescape(_HTML_TAG.sub("", _HTML_BREAK.sub("\n", html_value)))
-        text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-        if html_boundary is None and _HTML_QUOTE_HINT.search(raw_html):
+        text, quoted_history_removed, uncertain_quote = _html_authored_source(raw_html)
+        if uncertain_quote:
             return AuthoredMessageText("", False, False, canonical_source_text=text)
     else:
         return AuthoredMessageText("", False, False)

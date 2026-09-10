@@ -51,6 +51,16 @@ jobs:
           bash scripts/verify_invariants.sh
           poetry check --lock
 
+      - name: Validate bounded Gmail receipts and authored HTML
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra
+          tests/unit/test_pipeline_pack_loader.py
+          tests/unit/test_pack_loader.py
+          tests/unit/test_message_context.py
+          tests/integration/test_gmail_observation_receipts.py
+          tests/acceptance/test_authored_html_normalization.py
+          tests/acceptance/test_disposable_test_acquisition.py
+
       - name: Validate production triage replay, activation, and rollback
         run: >-
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=1

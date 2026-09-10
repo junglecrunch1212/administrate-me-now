@@ -684,6 +684,212 @@ def test_authored_text_normalizes_crlf_once_for_grounding_and_display() -> None:
     assert result.authored_span == (0, len(result.text))
 
 
+@pytest.mark.parametrize("field", ["body_html", "body_text", "body"])
+def test_html_noncontent_cannot_consume_the_authored_character_budget(
+    field: str,
+) -> None:
+    visible = (
+        "Please pay the fixture fee of $40 & retain the receipt.\n"
+        "Please complete the preparation form before arrival."
+    )
+    markup = (
+        "<!doctype html><html><head><title>Not body evidence</title><style>"
+        + (".fixture { color: red; content: '<div class=\"gmail_quote\">'; }" * 1000)
+        + "</style><script>const instruction = 'Please pay the hidden charge.';</script>"
+        "</head><body><!-- Please pay another hidden charge. -->"
+        "<template>Please pay the hidden template charge.</template>"
+        "<p>Please pay the fixture fee of <b>$40</b> &amp; retain the receipt.</p>"
+        "<p>Please complete the preparation form before arrival.</p></body></html>"
+    )
+    assert len(markup) > MAX_MESSAGE_CHARS * 2
+    result = authored_message_text({field: markup})
+    assert result.text == visible
+    assert result.canonical_source_text == visible
+    assert result.authored_span == (0, len(visible))
+    assert result.reliable and not result.quoted_history_removed
+    assert not result.text_truncated
+    assert result.contract == "authored-message-text-v2"
+
+
+@pytest.mark.parametrize("field", ["body_html", "body_text"])
+def test_body_noscript_fallback_is_authored_exact_evidence(field: str) -> None:
+    visible = "Please complete the fallback preparation form."
+    result = authored_message_text(
+        {
+            field: "<head><noscript>Metadata only.</noscript></head>"
+            + "<noscript><p>"
+            + visible
+            + "</p></noscript>"
+        }
+    )
+    assert result.text == result.canonical_source_text == visible
+    assert result.authored_span == (0, len(visible))
+    assert result.reliable and not result.quoted_history_removed
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        '<div class="gmail_quote" ',
+        '<span class="vendor-reply" ',
+        '<div data-quoted="true" ',
+        '<blockquote type="cite" ',
+    ],
+)
+@pytest.mark.parametrize("field", ["body_html", "body_text"])
+def test_unterminated_html_quote_markup_remains_unreliable(
+    fragment: str, field: str
+) -> None:
+    result = authored_message_text(
+        {field: "<p>New update.</p>" + fragment + "Please pay the old invoice."}
+    )
+    assert result.text == "" and not result.reliable, result
+    assert result.authored_span is None
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "<style>.fixture {content: '<div class=\"gmail_quote\"';}",
+        "<script>const hidden = '<div class=\"gmail_quote\"';",
+        '<!-- hidden <div class="gmail_quote" ',
+    ],
+)
+def test_pending_hidden_html_quote_markers_do_not_poison_authored_prefix(
+    tail: str,
+) -> None:
+    result = authored_message_text({"body_html": "<p>New update.</p>" + tail})
+    assert result.text == "New update." and result.reliable, result
+    assert not result.quoted_history_removed
+
+
+def test_escaped_unfinished_quote_markup_is_literal_authored_text() -> None:
+    result = authored_message_text(
+        {"body_html": '<p>Literal &lt;div class="gmail_quote" </p>'}
+    )
+    assert result.text == 'Literal <div class="gmail_quote"' and result.reliable, result
+    assert not result.quoted_history_removed
+
+
+@pytest.mark.parametrize(
+    "plain",
+    [
+        "Please keep the amount < 500 and > 100.",
+        "Please send <fixture@example.invalid> the form.",
+        "Please replace <amount> and <reference> in the form.",
+        "Literal comparison a<b>c remains ordinary text.",
+    ],
+)
+def test_plain_literal_angle_brackets_are_not_html(plain: str) -> None:
+    result = authored_message_text({"body_text": plain})
+    assert result.text == plain
+    assert result.canonical_source_text == plain
+    assert result.reliable and not result.quoted_history_removed
+
+
+def test_html_entities_decode_once_without_reparsing_literal_markup() -> None:
+    result = authored_message_text(
+        {
+            "body_html": '<p title="1 > 0">Please compare 2 &lt; 3 &amp; 4 &gt; 1.</p>'
+            "<p>Literal &lt;blockquote&gt; and &amp;lt;amount&amp;gt;.</p>",
+        }
+    )
+    assert (
+        result.text
+        == "Please compare 2 < 3 & 4 > 1.\nLiteral <blockquote> and &lt;amount&gt;."
+    )
+    assert result.reliable and not result.quoted_history_removed
+
+
+@pytest.mark.parametrize("field", ["body_html", "body_text"])
+@pytest.mark.parametrize(
+    "container",
+    [
+        '<blockquote type="cite">',
+        '<div class="gmail_quote">',
+        '<DIV id=divRplyFwdMsg title="1 > 0">',
+    ],
+)
+def test_html_quote_only_content_after_large_head_remains_non_authored(
+    field: str, container: str
+) -> None:
+    result = authored_message_text(
+        {
+            field: "<head><style>"
+            + "x{}" * MAX_MESSAGE_CHARS
+            + "</style></head>"
+            + container
+            + "Please pay an old invoice.</div>"
+            + "<p>Please complete an old form after the quote container.</p>"
+        }
+    )
+    assert result.text == ""
+    assert result.reliable and result.quoted_history_removed
+    assert result.authored_span is None
+    assert not result.text_truncated
+
+
+@pytest.mark.parametrize("field", ["body_html", "body_text"])
+def test_unknown_html_quote_container_remains_unreliable(field: str) -> None:
+    result = authored_message_text(
+        {
+            field: '<p>New update.</p><div class="vendor-reply-container">'
+            "Please pay an old invoice.</div>"
+        }
+    )
+    assert result.text == "" and not result.reliable
+    assert result.authored_span is None
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "<style>hidden{color:red}",
+        "<script>const hidden = 'Please pay.';",
+        "<head><template></head>Please pay hidden text.</template>",
+        "<script/>Please pay hidden text.",
+    ],
+)
+def test_unclosed_or_malformed_noncontent_block_never_releases_its_text(
+    suffix: str,
+) -> None:
+    result = authored_message_text({"body_html": "<p>Authored update.</p>" + suffix})
+    assert result.text == "Authored update."
+    assert result.reliable
+
+
+def test_html_normalization_preserves_visible_text_cap_and_exact_span() -> None:
+    visible = "x" * (MAX_MESSAGE_CHARS + 100)
+    result = authored_message_text(
+        {
+            "body_html": "<style>"
+            + "y" * MAX_MESSAGE_CHARS
+            + "</style><p>"
+            + visible
+            + "</p>"
+        }
+    )
+    assert result.text == visible[:MAX_MESSAGE_CHARS]
+    assert result.canonical_source_text == visible
+    assert result.authored_span == (0, MAX_MESSAGE_CHARS)
+    assert result.text_truncated
+
+
+def test_large_html_head_does_not_weaken_multipart_quote_agreement() -> None:
+    plain = "Please complete the new form.\nPlease pay the old invoice."
+    html_body = "<head><style>" + "x{}" * MAX_MESSAGE_CHARS + "</style></head>"
+    html_body += '<p>Please complete the new form.</p><div class="gmail_quote">Please pay the old invoice.</div>'
+    result = authored_message_text({"body_text": plain, "body_html": html_body})
+    assert result.text == "Please complete the new form."
+    assert result.canonical_source_text == plain
+    assert result.reliable and result.quoted_history_removed
+    assert result.authored_span == (0, len(result.text))
+    disagreement = authored_message_text(
+        {"body_text": "Please pay a different invoice.", "body_html": html_body}
+    )
+    assert disagreement.text == "" and not disagreement.reliable
+
+
 def test_explicit_html_quote_boundary_constrains_multipart_plain_text() -> None:
     quoted_only = authored_message_text(
         {

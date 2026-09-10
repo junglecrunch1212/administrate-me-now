@@ -196,6 +196,40 @@ async def test_idempotency_key_rejects_different_event_family(log: EventLog) -> 
         await log.append(_event(1, type="bar", idempotency_key="request:conflict"))
 
 
+async def test_legacy_receipt_prefix_is_indexed_exact_bounded_and_tenant_scoped(
+    log: EventLog,
+) -> None:
+    prefix = "gmail-message:fixture_%:"
+    expected = await log.append(_event(1, idempotency_key=prefix + "a" * 64))
+    await log.append(_event(2, tenant_id="tenant-b", idempotency_key=prefix + "b" * 64))
+    await log.append(_event(3, idempotency_key="gmail-message:fixture_%0:" + "c" * 64))
+    await log.append(_event(4, idempotency_key="gmail-message:fixture_XX:" + "d" * 64))
+    statements = []
+    await log._run_locked(log._conn.set_trace_callback, statements.append)  # noqa: SLF001
+    try:
+        found = await log.get_by_idempotency_prefix("tenant-a", prefix)
+    finally:
+        await log._run_locked(log._conn.set_trace_callback, None)  # noqa: SLF001
+    assert [event["event_id"] for event in found] == [expected]
+    [query] = [
+        statement for statement in statements if "idempotency_key >=" in statement
+    ]
+    assert "LIMIT 33" in query and "LIKE" not in query
+
+    def explain():
+        return [row[3] for row in log._conn.execute("EXPLAIN QUERY PLAN " + query)]  # noqa: SLF001
+
+    plan = await log._run_locked(explain)  # noqa: SLF001
+    assert any("idx_events_tenant_idempotency" in row for row in plan), plan
+    for number in range(32):
+        await log.append(_event(number, idempotency_key=prefix + f"{number:064x}"))
+    with pytest.raises(EventLogError, match="exceeds 32"):
+        await log.get_by_idempotency_prefix("tenant-a", prefix)
+    for invalid in ("", "undelimited", "nonascii-é:", "line\nbreak:", "x" * 601 + ":"):
+        with pytest.raises(ValueError, match="bounded ASCII"):
+            await log.get_by_idempotency_prefix("tenant-a", invalid)
+
+
 async def test_exact_event_headers_are_bounded_indexed_and_exclude_content(
     log: EventLog,
 ) -> None:

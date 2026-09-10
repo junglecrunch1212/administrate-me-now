@@ -941,6 +941,42 @@ class EventLog:
         rows = await self._run_locked(self._get_idempotency_keys, tenant_id, keys)
         return [_row_to_event(row) for row in rows]
 
+    async def get_by_idempotency_prefix(
+        self, tenant_id: str, prefix: str
+    ) -> list[dict[str, Any]]:
+        """Read at most 32 legacy receipts for one delimited native ID.
+
+        A binary range uses the existing tenant/idempotency index, never a
+        payload scan or LIKE (native IDs may contain wildcard characters).
+        Refuse overflow rather than silently overlooking a committed receipt.
+        Callers must still verify the complete source identity and key suffix.
+        """
+        if (
+            not tenant_id
+            or not prefix
+            or not prefix.isascii()
+            or not prefix.endswith(":")
+            or len(prefix) > 600
+            or any(ord(char) < 32 for char in prefix)
+        ):
+            raise ValueError("receipt prefix must be a bounded ASCII delimiter prefix")
+        rows = await self._run_locked(self._get_idempotency_prefix, tenant_id, prefix)
+        if len(rows) > 32:
+            raise EventLogError("legacy source receipt lookup exceeds 32 candidates")
+        return [_row_to_event(row) for row in rows]
+
+    def _get_idempotency_prefix(
+        self, tenant_id: str, prefix: str
+    ) -> list[sqlcipher3.Row]:
+        return list(
+            self._conn.execute(
+                _SELECT_COLUMNS
+                + " FROM events WHERE tenant_id = ? AND idempotency_key >= ?"
+                + " AND idempotency_key < ? ORDER BY idempotency_key LIMIT 33",
+                (tenant_id, prefix, prefix[:-1] + ";"),
+            )
+        )
+
     def _get_idempotency_keys(
         self, tenant_id: str, keys: tuple[str, ...]
     ) -> list[sqlcipher3.Row]:
