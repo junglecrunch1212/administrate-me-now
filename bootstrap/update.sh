@@ -45,6 +45,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   [[ "$instance_root" == /* ]] || die "instance root must be absolute"
   candidate=""
   pending_attestation=""
+  test_reset_manifest=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
       --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
@@ -55,6 +56,12 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         [[ "$pending_attestation" =~ ^[0-9a-f]{32}$ ]] \
           || die "pending-attestation identifier must be 32 lowercase hex"
         ;;
+      --test-reset-manifest=*)
+        [[ -z "$test_reset_manifest" ]] || die "test-reset manifest was repeated"
+        test_reset_manifest="${argument#*=}"
+        [[ "$test_reset_manifest" == /* && -f "$test_reset_manifest" ]] \
+          || die "test-reset manifest must name an absolute private file"
+        ;;
       --*) die "unknown update option: $argument" ;;
       *)
         [[ -z "$candidate" ]] || die "upgrade accepts exactly one candidate path"
@@ -62,7 +69,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         ;;
     esac
   done
-  [[ -n "$pending_attestation" ]] \
+  [[ -n "$pending_attestation" || -n "$test_reset_manifest" ]] \
     || die "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
   [[ -n "$candidate" && "$candidate" == /* && -d "$candidate" ]] \
     || die "usage: update.sh --pending-attestation-id=<id> [options] /absolute/path/to/reviewed-candidate"
@@ -119,6 +126,7 @@ approve_flag=""
 source_repair_flag=""
 provider_binding_flag=""
 pending_flag=""
+test_reset_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -141,6 +149,10 @@ while [[ "${1:-}" == --* ]]; do
         || fail "pending-attestation identifier must be 32 lowercase hex"
       pending_flag="$1"
       ;;
+    --test-reset-manifest=*)
+      [[ -z "$test_reset_flag" ]] || fail "test-reset manifest was repeated"
+      test_reset_flag="$1"
+      ;;
     *)
       fail "unknown update option: $1"
       ;;
@@ -148,7 +160,7 @@ while [[ "${1:-}" == --* ]]; do
   shift
 done
 
-if [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" ]]; then
+if [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" && -z "$test_reset_flag" ]]; then
   fail "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
 fi
 
@@ -329,6 +341,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$test_reset_flag" ]]; then
+  upgrade_args+=("$test_reset_flag")
+fi
 if [[ -n "$pending_flag" ]]; then
   upgrade_args+=("$pending_flag")
 fi

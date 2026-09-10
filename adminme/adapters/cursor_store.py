@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -76,6 +77,13 @@ class AdapterCursorStore:
                 legacy_id TEXT PRIMARY KEY,
                 coordinate_id TEXT NOT NULL UNIQUE,
                 adopted_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS adapter_test_acquisition_scope (
+                singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+                owner_coordinate TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS adapter_test_acquisition_selection (
+                message_digest TEXT PRIMARY KEY
             );
             """
         )
@@ -408,6 +416,61 @@ class AdapterCursorStore:
                 (adapter_id, external_id, fingerprint),
             ).fetchone()
         return str(row[0]) if row else None
+
+    def reserve_test_selection(
+        self, adapter_id: str, message_ids: tuple[str, ...], *, limit: int
+    ) -> int:
+        """Reserve a cumulative, content-free lifetime test selection atomically.
+
+        Removed, missing, quarantined and interrupted selections still consume
+        the ceiling. A later config edit cannot swap accounts or recycle slots.
+        Existing dedupe identities are included to refuse bounding a larger
+        already-imported dataset without the supported coherent reset.
+        """
+
+        def digest(value: str) -> str:
+            return hashlib.sha256(value.encode()).hexdigest()
+
+        with self._lock:
+            adapter_id = self._resolve_coordinate(adapter_id)
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                owner = self._conn.execute(
+                    "SELECT owner_coordinate FROM adapter_test_acquisition_scope"
+                ).fetchone()
+                if owner is not None and owner[0] != adapter_id:
+                    raise ValueError("disposable test acquisition owner cannot change")
+                admitted = {
+                    str(row[0])
+                    for row in self._conn.execute(
+                        "SELECT message_digest FROM adapter_test_acquisition_selection"
+                    )
+                }
+                admitted.update(digest(value) for value in message_ids)
+                admitted.update(
+                    digest(str(row[0]))
+                    for row in self._conn.execute(
+                        "SELECT DISTINCT external_id FROM adapter_dedupe WHERE adapter_id=?",
+                        (adapter_id,),
+                    )
+                )
+                if len(admitted) > limit:
+                    raise ValueError(
+                        "disposable test lifetime distinct-message cap exceeded"
+                    )
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO adapter_test_acquisition_scope VALUES (1, ?)",
+                    (adapter_id,),
+                )
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO adapter_test_acquisition_selection VALUES (?)",
+                    [(value,) for value in admitted],
+                )
+                self._conn.execute("COMMIT")
+                return len(admitted)
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def latest_event(self, adapter_id: str, external_id: str) -> tuple[str, str] | None:
         """Return the latest ``(fingerprint, event_id)`` for one provider id."""

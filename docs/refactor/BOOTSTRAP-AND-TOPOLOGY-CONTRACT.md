@@ -1,5 +1,11 @@
 # Bootstrap and topology contract
 
+Explicit owner-designated disposable datasets may use the narrowly scoped
+[bounded test reset contract](BOUNDED-TEST-RESET-CONTRACT.md). That operation
+retains failed history offline, proves a fresh bounded dataset, and reports
+production rollback as unproven. It grants no provider, runtime-migration, or
+ordinary production-recovery exemption.
+
 Gate 5 realization: `bootstrap/` now implements the ten-section encrypted journal, fixed operator scripts, Keychain reference boundary, user LaunchAgents, credential-free Doctor round trip, encrypted backup/restore, member-bound bridge packages, and pre-replacement upgrade validation. Windows process evidence and the macOS CI contract do not replace the guarded disposable-Apple-silicon live gate or authorize family-Mac activation.
 
 ## Deployment boundary

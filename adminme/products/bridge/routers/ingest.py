@@ -24,6 +24,7 @@ import time
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
+from adminme.adapters.disposable_test_acquisition import policy_from_adapter_config
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     BridgeAuthorization,
@@ -94,6 +95,13 @@ def _get_event_sink(request: Request) -> EventSink:
     if events is None:
         raise HTTPException(503, detail="event_sink_unavailable")
     return events
+
+
+def _require_local_ingestion_enabled(request: Request) -> None:
+    runtime = getattr(request.app.state, "runtime", None)
+    settings = getattr(runtime, "settings", None)
+    if settings is not None and policy_from_adapter_config(settings.adapter_config):
+        raise HTTPException(403, detail="bridge_ingestion_paused_for_disposable_test")
 
 
 def _get_resolver(request: Request) -> MemberIdResolver:
@@ -756,6 +764,7 @@ async def _settle_bridge_capability_from_observation(
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, str]:
     tailscale_identity = resolve_tailscale_identity(request)
+    _require_local_ingestion_enabled(request)
     member_id, provisional = _resolve_single_ingest_member(
         request, tailscale_identity, payload
     )
@@ -789,6 +798,7 @@ async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, 
 @router.post("/ingest/batch", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, Any]:
     tailscale_identity = resolve_tailscale_identity(request)
+    _require_local_ingestion_enabled(request)
     member_id = resolve_member_id(tailscale_identity, _get_resolver(request))
     record = _bridge_record(request, tailscale_identity)
     if record.get("status") != "active" or record.get("member_id") != member_id:

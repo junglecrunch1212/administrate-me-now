@@ -62,6 +62,7 @@ def evaluate_deployment_readiness(
     openclaw_topology: dict[str, Any],
     observation_active: bool,
     source_assurance: dict[str, Any] | None = None,
+    disposable_test_dataset: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate independent activation axes without exposing identities."""
 
@@ -419,6 +420,43 @@ def evaluate_deployment_readiness(
         },
     )
 
+    if disposable_test_dataset:
+        # An explicitly reset test dataset has a different predecessor: its
+        # abandoned test history is diagnostic evidence, never a healthy
+        # production rollback claim. Require every new reversible-reset proof.
+        reset = deployment_evidence.get("disposable_test_reset") or {}
+        reset_ok = all(
+            (
+                observation_active,
+                disposable_test_dataset.get("contract") == "disposable-test-dataset-v1",
+                reset.get("contract") == "disposable-test-reset-v1",
+                reset.get("dataset_id") == disposable_test_dataset.get("dataset_id"),
+                reset.get("manifest_sha256")
+                == disposable_test_dataset.get("reset_manifest_sha256"),
+                reset.get("release_commit") == current_binding.get("release_commit"),
+                reset.get("original_state_retained") is True,
+                reset.get("original_journal_retained_unchanged") is True,
+                reset.get("diagnostic_archive_authenticated") is True,
+                reset.get("fresh_dataset_restore_rehearsed") is True,
+                reset.get("automatic_state_reversal") is True,
+                reset.get("production_rollback_proven") is False,
+                isinstance(reset.get("fresh_rehearsal_sha256"), str)
+                and len(reset["fresh_rehearsal_sha256"]) == 64,
+                _recent_iso(reset.get("tested_at")),
+            )
+        )
+        dimensions["backup_rollback"] = _dimension(
+            "healthy" if reset_ok else "blocked",
+            "disposable test reset is reversible; production rollback remains unproven"
+            if reset_ok
+            else "disposable test reset preservation or restore proof is missing",
+            evidence={
+                "mode": "disposable_test_dataset",
+                "reset_proofs_valid": reset_ok,
+                "production_rollback_proven": False,
+            },
+        )
+
     effects = (source_assurance or {}).get("provider_effects") or {}
     effect_counts = effects.get("counts") or {}
     window = effects.get("observation_window") or {}
@@ -510,6 +548,7 @@ def evaluate_deployment_readiness(
         "contract": "deployment-readiness-v1",
         "state": "healthy" if not blocking else "blocked",
         "ready": not blocking,
+        "production_rollback_proven": not bool(disposable_test_dataset) and backup_ok,
         "blocking_dimensions": blocking,
         "dimensions": dimensions,
         "content_exposed": False,

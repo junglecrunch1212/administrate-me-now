@@ -235,6 +235,7 @@ class UpgradeManager:
         approve_source_assessment_repair: bool = False,
         approve_provider_binding_migration: bool = False,
         pending_attestation_id: str | None = None,
+        test_reset_manifest: Path | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
@@ -243,6 +244,7 @@ class UpgradeManager:
         self.approve_source_assessment_repair = approve_source_assessment_repair
         self.approve_provider_binding_migration = approve_provider_binding_migration
         self.pending_attestation_id = pending_attestation_id
+        self.test_reset_manifest = test_reset_manifest
         self.services = ServiceManager(paths, test_mode=test_mode)
         self.activation_journal = ActivationJournal(paths)
         self._failure_audit_attempt_id = uuid.uuid4().hex
@@ -1796,6 +1798,14 @@ class UpgradeManager:
     def activate(self, candidate: Path) -> dict[str, Any]:
         with self._operation_lock():
             self._begin_deployment_budget()
+            if self.test_reset_manifest is not None:
+                from bootstrap.disposable_test_reset import execute_reset
+
+                return execute_reset(self, candidate, self.test_reset_manifest)
+            if (self.paths.app_dir / "disposable-test-reset-active.json").exists():
+                raise UpgradeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
             recovered = self._recover_interrupted_transaction(candidate)
             if recovered is not None:
                 return recovered
@@ -2606,6 +2616,10 @@ class UpgradeManager:
         recovery_repository: Path | None = None,
     ) -> dict[str, Any]:
         with self._operation_lock():
+            if (self.paths.app_dir / "disposable-test-reset-active.json").exists():
+                raise UpgradeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
             self._begin_deployment_budget()
             if not self.test_mode:
                 if recovery_repository is None:

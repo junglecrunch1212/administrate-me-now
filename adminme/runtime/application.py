@@ -23,6 +23,10 @@ from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
 from adminme.adapters.cursor_store import AdapterCursorStore
+from adminme.adapters.disposable_test_acquisition import (
+    policy_from_adapter_config,
+    restrict_adapter_config,
+)
 from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
 from adminme.adapters.fixture_delegated_actions import FixtureDelegatedActionAdapter
 from adminme.adapters.loader import load_builtin_adapters
@@ -166,6 +170,7 @@ class RuntimeSettings:
     host_topology: dict[str, Any] = field(default_factory=dict)
     deployment_evidence: dict[str, Any] = field(default_factory=dict)
     deployment_evidence_required: bool = False
+    test_dataset_marker: dict[str, Any] = field(default_factory=dict, init=False)
     reconciliation_admission_enabled: bool = False
     human_triage_management_enabled: bool = False
     provider_bindings: tuple[ProviderBinding, ...] = field(
@@ -187,6 +192,27 @@ class RuntimeSettings:
         adapters = self.adapter_config.get("adapters", [])
         if not isinstance(adapters, list):
             raise ValueError("adapter_config.adapters must be a list")
+        test_policy = policy_from_adapter_config(self.adapter_config)
+        if (
+            self.instance.config_dir / "disposable-test-dataset.json"
+        ).exists() and test_policy is None:
+            raise ValueError("disposable test dataset requires its acquisition policy")
+        restrict_adapter_config(self.adapter_config)
+        marker_path = self.instance.config_dir / "disposable-test-dataset.json"
+        if marker_path.exists():
+            marker = json.loads(marker_path.read_text("utf-8"))
+            if (
+                not isinstance(marker, dict)
+                or marker.get("contract") != "disposable-test-dataset-v1"
+                or marker.get("acquisition_contract")
+                != "disposable-test-acquisition-v1"
+                or not isinstance(marker.get("dataset_id"), str)
+                or len(marker["dataset_id"]) != 32
+                or not isinstance(marker.get("reset_manifest_sha256"), str)
+                or len(marker["reset_manifest_sha256"]) != 64
+            ):
+                raise ValueError("disposable test dataset marker is invalid")
+            object.__setattr__(self, "test_dataset_marker", marker)
         self._validate_household_mapping()
         self._validate_identity_bindings()
         known_members = set(self.member_roles) | set(self.member_identities.values())
@@ -822,7 +848,10 @@ class AdministrateMeRuntime:
                     url=self.settings.openclaw_gateway_url,
                     token=self.settings.openclaw_gateway_token,
                 )
-            if self.settings.deterministic_openclaw_fixture:
+            if (
+                self.settings.deterministic_openclaw_fixture
+                and policy_from_adapter_config(self.settings.adapter_config) is None
+            ):
                 fixture_member = self.settings.fixture_member_id or next(
                     (
                         member_id
@@ -1027,7 +1056,8 @@ class AdministrateMeRuntime:
                 event_sink=self.events,
                 guarded_write=self.guarded_write,
             )
-            await self.xlsx_reverse.start()
+            if policy_from_adapter_config(self.settings.adapter_config) is None:
+                await self.xlsx_reverse.start()
             await self._reconcile_household_enrollment()
             await self._reconcile_constitutional_operating_agreement()
             await self._refresh_capability_registry()
@@ -2289,9 +2319,11 @@ class AdministrateMeRuntime:
 
     def _inventory_optional_adapters(self) -> None:
         root = self.settings.repository_root / "packs" / "adapters"
+        effective_config = restrict_adapter_config(self.settings.adapter_config)
+        test_policy = policy_from_adapter_config(self.settings.adapter_config)
         configured = {
             str(item.get("kind"))
-            for item in self.settings.adapter_config.get("adapters", [])
+            for item in effective_config.get("adapters", [])
             if isinstance(item, dict) and item.get("enabled") is not False
         }
         for manifest_path in sorted(root.rglob("pack.yaml")):
@@ -2327,6 +2359,8 @@ class AdministrateMeRuntime:
                     "configured for the production adapter supervisor; inbound sync "
                     "is active while outbound writes remain governed by observation mode"
                     if enabled
+                    else "local acquisition excluded by the bounded test sample"
+                    if test_policy is not None
                     else "optional provider not configured; no credential loaded"
                 ),
                 details={
@@ -2897,6 +2931,7 @@ class AdministrateMeRuntime:
             openclaw_topology=reported_topology,
             observation_active=observation_active,
             source_assurance=current_source_assurance,
+            disposable_test_dataset=self.settings.test_dataset_marker,
         )
 
     async def diagnostics(self, *, refresh_capabilities: bool = True) -> dict[str, Any]:

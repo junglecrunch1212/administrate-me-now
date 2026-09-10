@@ -171,6 +171,49 @@
       "default": 730,
       "description": "Days before and after the seed matter searched for exact participant references. Zero removes the date window while retaining the other caps."
     },
+    "disposable_test_acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "adapter_id",
+        "member_id",
+        "provider_account_id",
+        "message_ids"
+      ],
+      "properties": {
+        "contract": {
+          "const": "disposable-test-acquisition-v1"
+        },
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "member_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "provider_account_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "message_ids": {
+          "type": "array",
+          "maxItems": 200,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      },
+      "description": "Private test-only explicit acquisition selection injected from the instance policy. Includes every fetched context message and restricts all later incremental/fallback reads; never emitted in status."
+    },
     "sensitivity_floor": {
       "type": "string",
       "enum": ["normal", "privileged"],

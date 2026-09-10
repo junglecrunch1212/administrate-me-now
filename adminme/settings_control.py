@@ -18,6 +18,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from adminme.adapters.disposable_test_acquisition import (
+    policy_from_adapter_config,
+    restrict_adapter_config,
+)
 from adminme.bridge_enrollment import (
     CAPABILITY_STATES,
     ENROLLMENT_STATES,
@@ -1357,7 +1361,7 @@ class SettingsControlStore:
             record = lifecycle.get(connection_id)
             if isinstance(record, dict) and record.get("state") == "paused":
                 entry["enabled"] = False
-        return effective
+        return restrict_adapter_config(effective)
 
     @staticmethod
     def _expect_revision(state: dict[str, Any], expected: int) -> None:
@@ -1433,7 +1437,9 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
     control_store = getattr(runtime, "settings_control", None)
     lifecycle = control_store.read()["connections"] if control_store is not None else {}
     rows: list[dict[str, Any]] = []
-    for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
+    effective_config = restrict_adapter_config(runtime.settings.adapter_config)
+    test_policy = policy_from_adapter_config(effective_config)
+    for index, entry in enumerate(effective_config.get("adapters", [])):
         if not isinstance(entry, dict):
             continue
         config = entry.get("config") or {}
@@ -1562,6 +1568,9 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         authorized = "messaging-bluebubbles" in record.get("authorized_packs", [])
         enabled = "messaging-bluebubbles" in record.get("enabled_packs", [])
         active = "messaging-bluebubbles" in record.get("adapters_active", [])
+        if test_policy is not None:
+            enabled = False
+            active = False
         rows.append(
             {
                 "id": connection_id,
@@ -1632,6 +1641,7 @@ def compose_source_policy_v2_sources(
     """Union configured, retained and catalog sources without inventing access."""
 
     connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
+    test_policy = policy_from_adapter_config(runtime.settings.adapter_config)
     sources: list[dict[str, Any]] = []
     for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
         if not isinstance(entry, dict):
@@ -1740,6 +1750,18 @@ def compose_source_policy_v2_sources(
                     else "unknown",
                     "scope_widening": False,
                     "credential_creation": False,
+                    **(
+                        test_policy.coverage()
+                        if test_policy is not None
+                        and connection_id == test_policy.adapter_id
+                        else {
+                            "state": "paused",
+                            "coverage": "excluded_from_test_sample",
+                            "mailbox_coverage_complete": False,
+                        }
+                        if test_policy is not None
+                        else {}
+                    ),
                 },
                 **effective,
             }
@@ -1874,6 +1896,19 @@ def compose_source_policy_v2_sources(
             }
         )
     sources = _merge_retained_source_inventory(runtime, member_id, state, sources)
+    if test_policy is not None:
+        for source in sources:
+            if source.get("direct_authenticated_intent"):
+                continue
+            source.setdefault("acquisition", {}).update(
+                test_policy.coverage()
+                if source.get("adapter_instance_id") == test_policy.adapter_id
+                else {
+                    "state": "paused",
+                    "coverage": "excluded_from_test_sample",
+                    "mailbox_coverage_complete": False,
+                }
+            )
     represented = {str(row["source_kind"]) for row in sources}
     for catalog_source in SOURCE_CATALOG:
         source_id = str(catalog_source["id"])
