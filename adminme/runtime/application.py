@@ -979,6 +979,7 @@ class AdministrateMeRuntime:
                     observation_manager=self.observation,
                     observation_event_sink=self._require_events(),
                     cursor_store=self.adapter_cursor_store,
+                    source_events=self.event_log,
                 ),
             )
             self.adapters.prepare()

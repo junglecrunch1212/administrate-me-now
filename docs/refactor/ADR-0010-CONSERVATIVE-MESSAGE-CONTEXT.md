@@ -42,6 +42,19 @@ recognized plain-text or HTML reply/forward containers including a boundary at
 offset zero, and supplies fallback extraction, pinned-skill input, exact-quote
 validation, and displayed evidence.
 An HTML-only body is canonicalized before the pipeline checks for empty text.
+**MODERNIZE HTML canonicalization; PRESERVE exact evidence and authored scope:**
+HTML content in either MIME body field is reduced before applying the message
+character limit. Non-content head, title, style, script and template blocks, and comments,
+cannot consume the source-text budget or supply candidate quotes. Body-level
+noscript fallback remains source text.
+Plain text with literal angle brackets remains plain text. The normalized text
+is shared by model input, candidate grounding and displayed evidence; a raw
+provider payload is never rewritten. Existing quote-container restrictions
+still apply before extraction. This correction does not change a consumer
+version, clear checkpoints, renew model attempts or request historical replay.
+Previously committed assessments remain evidence of the input actually used;
+synthetic fixed-response process proofs establish input and evidence mechanics,
+not actual-model accuracy or repair of earlier missed obligations.
 When a provider supplies both plain and HTML MIME alternatives, an explicit
 HTML reply/forward boundary constrains the plain alternative; only an agreeing
 authored prefix is usable, and disagreement is unreliable rather than evidence.

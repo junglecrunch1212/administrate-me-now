@@ -112,6 +112,26 @@ def _message(message_id: str, *, sent: bool = False) -> dict[str, Any]:
     }
 
 
+def _rotate_transport(service: _Gmail, generation: int) -> None:
+    """Rotate retrieval metadata while retaining the exact typed content."""
+    for message in service.messages_by_id.values():
+        payload = message["payload"]
+        if payload["mimeType"] != "multipart/mixed":
+            payload["parts"] = [
+                {"mimeType": "text/plain", "body": payload.pop("body")},
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "fixture.pdf",
+                    "body": {"size": 32, "attachmentId": "initial-handle"},
+                },
+            ]
+            payload["mimeType"] = "multipart/mixed"
+        payload["parts"][1]["body"]["attachmentId"] = f"fixture-handle-{generation}"
+        message["historyId"] = str(100 + generation)
+        message["sizeEstimate"] = 1000 + generation
+        message["labelIds"].reverse()
+
+
 class _ExpiredHistory(RuntimeError):
     resp = type("FixtureResponse", (), {"status": 404})()
 
@@ -246,6 +266,17 @@ async def _settled_skill_receipts(runtime: Any) -> set[str]:
     raise AssertionError("bounded source processing did not settle")
 
 
+async def _source_decisions(runtime: Any, source_ids: set[str]) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {
+        "triage.intent.features_extracted": set(),
+        "triage.item.proposed": set(),
+    }
+    async for event in runtime.event_log.read_since(types=list(result)):
+        if event["payload"].get("source_event_id") in source_ids:
+            result[event["type"]].add(event["event_id"])
+    return result
+
+
 def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -253,6 +284,7 @@ def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
     config = _config(["selected-incoming", "selected-sent"])
     original_config = copy.deepcopy(config)
     service = _fake_provider(monkeypatch, config)
+    _rotate_transport(service, 0)
     settings = _settings(tmp_path, config)
     app = create_application(settings)
     with TestClient(app) as client:
@@ -274,6 +306,11 @@ def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
         }
         assert len(sources) == 2
         original_source_ids = {event["event_id"] for event in sources}
+        initial_receipts = client.portal.call(_settled_skill_receipts, runtime)
+        initial_decisions = client.portal.call(
+            _source_decisions, runtime, original_source_ids
+        )
+        _rotate_transport(service, 1)
         assert all(event["owner_scope"] == f"private:{MEMBER}" for event in sources)
         service.next_history = {
             "historyId": "101",
@@ -295,6 +332,7 @@ def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
         assert "outside-thread-context" not in service.get_ids
         assert adapter._cursor == "101"
         service.next_history = _ExpiredHistory("synthetic expired cursor")
+        _rotate_transport(service, 2)
         service.profile_id = "200"
         assert client.portal.call(poll) == 0
         assert adapter._cursor == "200"
@@ -323,6 +361,11 @@ def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
                 == "bridge_ingestion_paused_for_disposable_test"
             )
         skill_receipts = client.portal.call(_settled_skill_receipts, runtime)
+        assert skill_receipts == initial_receipts
+        assert (
+            client.portal.call(_source_decisions, runtime, original_source_ids)
+            == initial_decisions
+        )
     assert config == original_config
     service.next_history = {"historyId": "200"}
     for _ in range(3):
@@ -450,6 +493,7 @@ def test_selected_update_and_interrupted_append_retry_are_idempotent(
 ) -> None:
     config = _config(["selected-incoming"])
     service = _fake_provider(monkeypatch, config)
+    _rotate_transport(service, 0)
     app = create_application(_settings(tmp_path, config))
     with TestClient(app) as client:
         runtime = app.state.runtime
@@ -468,9 +512,9 @@ def test_selected_update_and_interrupted_append_retry_are_idempotent(
 
         monkeypatch.setattr(runtime.events, "write", write_then_interrupt)
         service.messages_by_id["selected-incoming"]["historyId"] = "201"
-        service.messages_by_id["selected-incoming"]["payload"]["body"]["data"] = (
-            base64.urlsafe_b64encode(b"Updated informational fixture only.").decode()
-        )
+        service.messages_by_id["selected-incoming"]["payload"]["parts"][0]["body"][
+            "data"
+        ] = base64.urlsafe_b64encode(b"Updated informational fixture only.").decode()
         service.next_history = {
             "historyId": "201",
             "history": [
@@ -490,6 +534,7 @@ def test_selected_update_and_interrupted_append_retry_are_idempotent(
             client.portal.call(poll)
         receipts_after_commit = client.portal.call(_settled_skill_receipts, runtime)
         assert len(client.portal.call(_source_events, runtime)) == 2
+        _rotate_transport(service, 3)
         client.portal.call(poll)
         assert len(client.portal.call(_source_events, runtime)) == 2
         assert (
@@ -506,11 +551,21 @@ def test_empty_selection_can_admit_new_ids_without_reimporting_old_sources(
 ) -> None:
     config = _config([])
     service = _fake_provider(monkeypatch, config)
-    for expected_ids in [
-        [],
-        ["selected-incoming"],
-        ["selected-incoming", "selected-new"],
-    ]:
+    known_ids: set[str] = set()
+    known_decisions: dict[str, set[str]] | None = None
+    # The existing fixture language transport returns a literal action through
+    # the production classifier seam; this tests continuity, not model quality.
+    service.messages_by_id["selected-incoming"]["payload"]["body"]["data"] = (
+        base64.urlsafe_b64encode(b"Please complete the fixture authorization.").decode()
+    )
+    for generation, expected_ids in enumerate(
+        [
+            [],
+            ["selected-incoming", "selected-sent"],
+            ["selected-incoming", "selected-sent", "selected-new"],
+        ]
+    ):
+        _rotate_transport(service, generation)
         config[CONFIG_KEY]["message_ids"] = expected_ids
         app = create_application(_settings(tmp_path, config))
         with TestClient(app) as client:
@@ -521,7 +576,105 @@ def test_empty_selection_can_admit_new_ids_without_reimporting_old_sources(
                 expected_ids
             )
             assert len(sources) == len(expected_ids)
-    assert set(service.get_ids) == {"selected-incoming", "selected-new"}
+            client.portal.call(_settled_skill_receipts, runtime)
+            if known_decisions is not None:
+                assert (
+                    client.portal.call(_source_decisions, runtime, known_ids)
+                    == known_decisions
+                )
+            known_ids = {event["event_id"] for event in sources}
+            known_decisions = client.portal.call(_source_decisions, runtime, known_ids)
+            if expected_ids:
+                assert known_decisions["triage.intent.features_extracted"]
+                assert known_decisions["triage.item.proposed"]
+    assert set(service.get_ids) == {
+        "selected-incoming",
+        "selected-sent",
+        "selected-new",
+    }
+
+
+def test_legacy_source_aliases_preserve_classifier_and_candidate_continuity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(["selected-incoming", "selected-sent"])
+    service = _fake_provider(monkeypatch, config)
+    service.messages_by_id["selected-incoming"]["payload"]["body"]["data"] = (
+        base64.urlsafe_b64encode(b"Please complete the fixture authorization.").decode()
+    )
+    _rotate_transport(service, 0)
+    adapter_type = type(load_builtin_adapters(config, repository_root=ROOT)[0])
+    # Produce the historical whole-response keys through the actual adapter,
+    # writer, encrypted log, bus, classifier seam and projections.
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            adapter_type,
+            "_observation_fingerprint",
+            lambda self, _ctx, message: self._message_fingerprint(message),
+        )
+        app = create_application(_settings(tmp_path, config))
+        with TestClient(app) as client:
+            runtime = app.state.runtime
+            adapter = client.portal.call(_adapter, runtime)
+            original_receipts = client.portal.call(_settled_skill_receipts, runtime)
+            original_sources = client.portal.call(_source_events, runtime)
+            assert len(original_sources) == 2
+            assert all(
+                event["idempotency_key"].startswith(
+                    ("gmail-message:", "gmail-sent-message:")
+                )
+                for event in original_sources
+            )
+            original_ids = {event["event_id"] for event in original_sources}
+            original_decisions = client.portal.call(
+                _source_decisions, runtime, original_ids
+            )
+            assert original_decisions["triage.intent.features_extracted"]
+            assert original_decisions["triage.item.proposed"]
+    config[CONFIG_KEY]["message_ids"].append("selected-new")
+    _rotate_transport(service, 1)
+    app = create_application(_settings(tmp_path, config))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        adapter = client.portal.call(_adapter, runtime)
+        receipts = client.portal.call(_settled_skill_receipts, runtime)
+        sources = client.portal.call(_source_events, runtime)
+        assert len(sources) == 3
+        assert [
+            event for event in sources if event["event_id"] in original_ids
+        ] == original_sources
+        assert original_receipts <= receipts
+        assert (
+            client.portal.call(_source_decisions, runtime, original_ids)
+            == original_decisions
+        )
+        for source in original_sources:
+            message_id = source["payload"]["native_message_id"]
+            fingerprint = adapter._observation_fingerprint(
+                adapter._ctx, service.messages_by_id[message_id]
+            )
+            assert (
+                runtime.adapter_cursor_store.dedupe_event(
+                    adapter._cursor_id, message_id, fingerprint
+                )
+                == source["event_id"]
+            )
+        _rotate_transport(service, 2)
+        service.next_history = _ExpiredHistory("synthetic expired history")
+        service.profile_id = "300"
+
+        async def poll() -> int:
+            return await adapter._run_poll_cycle(ctx=adapter._ctx)
+
+        assert client.portal.call(poll) == 0
+        assert client.portal.call(_settled_skill_receipts, runtime) == receipts
+        assert client.portal.call(_source_events, runtime) == sources
+        assert (
+            client.portal.call(_source_decisions, runtime, original_ids)
+            == original_decisions
+        )
+    assert "outside-thread-context" not in service.get_ids
 
 
 def test_lifetime_selection_cannot_recycle_slots_or_change_owner(

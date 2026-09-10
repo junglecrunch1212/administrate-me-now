@@ -77,6 +77,16 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      - name: Validate bounded Gmail receipts and authored HTML
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
+          tests/unit/test_pipeline_pack_loader.py
+          tests/unit/test_pack_loader.py
+          tests/unit/test_message_context.py
+          tests/integration/test_gmail_observation_receipts.py
+          tests/acceptance/test_authored_html_normalization.py
+          tests/acceptance/test_disposable_test_acquisition.py
+
       - name: Validate encrypted metadata migration and production replay
         run: >-
           poetry run pytest -p no:cacheprovider -q --maxfail=1

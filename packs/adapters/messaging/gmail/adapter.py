@@ -58,12 +58,14 @@ from adminme.adapters.disposable_test_acquisition import (
     MAX_MESSAGES,
     policy_from_adapter_config,
 )
-from adminme.adapters.emission import write_adapter_event
+from adminme.adapters.emission import build_adapter_event, write_adapter_event
 from adminme.adapters.credentials import (
     assert_installed_user_binding,
     resolve_json_credentials,
 )
-from adminme.events.registry import EventValidationError
+from adminme.events.envelope import EventEnvelope
+from adminme.events.log import IdempotencyConflict
+from adminme.events.registry import EventValidationError, ensure_autoloaded, registry
 from adminme.lib.adapters import (
     CommunicationAdapter,
     InboundEnvelope,
@@ -84,6 +86,7 @@ GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 _MAX_RFC_REFERENCES = 100
+_OBSERVATION_FINGERPRINT_PREFIX = "gmail-observation-v1:"
 
 
 # Ordering used by the sensitivity-floor downgrade check.
@@ -1223,12 +1226,44 @@ class GmailAdapter(CommunicationAdapter):
                         return emitted, quarantined
                 continue
             fingerprint = self._message_fingerprint(full_msg)
-            if store is not None and store.dedupe_event(cursor_id, msg_id, fingerprint):
-                continue
             try:
-                event_id = await self._emit_message_observation(
-                    ctx=ctx, message=full_msg, fingerprint=fingerprint
+                if full_msg.get("id") != msg_id:
+                    raise RuntimeError(
+                        "Gmail response native ID does not match requested ID"
+                    )
+                fingerprint = self._observation_fingerprint(ctx, full_msg)
+                event_id = await self._committed_observation(
+                    ctx=ctx,
+                    store=store,
+                    cursor_id=cursor_id,
+                    message=full_msg,
+                    fingerprint=fingerprint,
                 )
+                reused = event_id is not None
+                if event_id is None:
+                    try:
+                        event_id = await self._emit_message_observation(
+                            ctx=ctx, message=full_msg, fingerprint=fingerprint
+                        )
+                    except IdempotencyConflict:
+                        # A concurrent commit may retain a different transport
+                        # handle. Keep EventLog's strict equality rule and read
+                        # only the exact new receipt before resolving the race.
+                        reader = ctx.source_events
+                        expected = self._observation_envelope(ctx, full_msg)
+                        committed = (
+                            await reader.get_by_idempotency(
+                                expected.tenant_id, fingerprint
+                            )
+                            if reader is not None
+                            else None
+                        )
+                        if committed is None or not self._equivalent_observation(
+                            committed, expected
+                        ):
+                            raise
+                        event_id = str(committed["event_id"])
+                        reused = True
                 if store is not None:
                     if not store.record_success(
                         cursor_id,
@@ -1241,9 +1276,14 @@ class GmailAdapter(CommunicationAdapter):
                         self._status.state = "backoff"
                         self._status.extra["cursor_lease"] = "lost_before_commit"
                         return emitted, quarantined
-                emitted += 1
-                self._events_since_advance += 1
+                if not reused:
+                    emitted += 1
+                    self._events_since_advance += 1
             except (EventValidationError, _GmailSourceTimestampError) as exc:
+                if store is not None and store.dedupe_event(
+                    cursor_id, msg_id, fingerprint
+                ):
+                    continue
                 quarantined += 1
                 quarantine_event_id = await self._emit_quarantine(
                     ctx=ctx,
@@ -1716,6 +1756,26 @@ class GmailAdapter(CommunicationAdapter):
         ``messaging.received`` v4 event. The pack's ``user_email`` is the
         ``to_identifier``; ``from_identifier`` comes from the From header.
         """
+        event_payload, schema_version, received_iso = self._received_observation(
+            message
+        )
+        stable_fingerprint = fingerprint or self._observation_fingerprint(ctx, message)
+        native_message_id = str(message.get("id") or "unknown")
+        return await self._append(
+            ctx=ctx,
+            event_type="messaging.received",
+            payload=event_payload,
+            schema_version=schema_version,
+            idempotency_key=self._observation_key(
+                "messaging.received", native_message_id, stable_fingerprint
+            ),
+            raw_ref=self._observation_raw_ref(native_message_id, stable_fingerprint),
+            occurred_at_override=received_iso,
+        )
+
+    def _received_observation(
+        self, message: dict[str, Any]
+    ) -> tuple[dict[str, Any], int, str]:
         payload_dict = message.get("payload") or {}
         headers = self._headers_to_map(payload_dict.get("headers"))
         body_text, body_html = self._extract_bodies(payload_dict)
@@ -1779,19 +1839,7 @@ class GmailAdapter(CommunicationAdapter):
                     "route_source": "exact_authenticated_metadata",
                 }
             )
-        native_message_id = str(message.get("id") or "unknown")
-        stable_fingerprint = fingerprint or self._message_fingerprint(message)
-        return await self._append(
-            ctx=ctx,
-            event_type="messaging.received",
-            payload=event_payload,
-            schema_version=6 if service_owned else 4,
-            idempotency_key=(f"gmail-message:{native_message_id}:{stable_fingerprint}"),
-            raw_ref=(
-                f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
-            ),
-            occurred_at_override=received_iso,
-        )
+        return event_payload, 6 if service_owned else 4, received_iso
 
     def _trusted_route_key(self, from_header: Any) -> str | None:
         """Match only the exact normalized RFC sender address from Gmail metadata."""
@@ -1821,11 +1869,29 @@ class GmailAdapter(CommunicationAdapter):
     ) -> str:
         """Preserve Gmail direction instead of treating SENT as inbound."""
 
+        event_type, payload, schema_version, occurred_at = self._message_observation(
+            message
+        )
+        native_message_id = str(message.get("id") or "unknown")
+        return await self._append(
+            ctx=ctx,
+            event_type=event_type,
+            payload=payload,
+            schema_version=schema_version,
+            idempotency_key=self._observation_key(
+                event_type, native_message_id, fingerprint
+            ),
+            raw_ref=self._observation_raw_ref(native_message_id, fingerprint),
+            occurred_at_override=occurred_at,
+        )
+
+    def _message_observation(
+        self, message: dict[str, Any]
+    ) -> tuple[str, dict[str, Any], int, str]:
         labels = {str(value).upper() for value in message.get("labelIds") or []}
         if "SENT" not in labels:
-            return await self._emit_messaging_received(
-                ctx=ctx, message=message, fingerprint=fingerprint
-            )
+            payload, version, occurred_at = self._received_observation(message)
+            return "messaging.received", payload, version, occurred_at
         payload_dict = message.get("payload") or {}
         headers = self._headers_to_map(payload_dict.get("headers"))
         body_text, body_html = self._extract_bodies(payload_dict)
@@ -1868,18 +1934,195 @@ class GmailAdapter(CommunicationAdapter):
                     "route_source": "exact_authenticated_metadata",
                 }
             )
-        return await self._append(
-            ctx=ctx,
-            event_type="messaging.sent",
-            schema_version=6 if service_owned else 4,
-            idempotency_key=(f"gmail-sent-message:{native_message_id}:{fingerprint}"),
-            raw_ref=(f"gmail://messages/{native_message_id}#sha256={fingerprint}"),
-            payload=sent_payload,
-            occurred_at_override=sent_iso,
+        return "messaging.sent", sent_payload, 6 if service_owned else 4, sent_iso
+
+    @staticmethod
+    def _observation_key(event_type: str, native_id: str, fingerprint: str) -> str:
+        if fingerprint.startswith(_OBSERVATION_FINGERPRINT_PREFIX):
+            return fingerprint
+        # Retain the old explicit-fingerprint emission seam for historical
+        # producers/fixtures; normal ingestion always uses the typed key.
+        prefix = (
+            "gmail-message"
+            if event_type == "messaging.received"
+            else "gmail-sent-message"
+        )
+        return f"{prefix}:{native_id}:{fingerprint}"
+
+    @staticmethod
+    def _observation_raw_ref(native_id: str, fingerprint: str) -> str:
+        digest = fingerprint.removeprefix(_OBSERVATION_FINGERPRINT_PREFIX)
+        return f"gmail://messages/{native_id}#sha256={digest}"
+
+    def _observation_envelope(
+        self, ctx: AdapterContext, message: dict[str, Any]
+    ) -> EventEnvelope:
+        event_type, payload, version, occurred_at = self._message_observation(message)
+        return build_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            schema_version=version,
+            occurred_at_override=occurred_at,
         )
 
     @staticmethod
+    def _comparable_payload(
+        event_type: str, version: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        ensure_autoloaded()
+        normalized = registry.validate(event_type, version, payload).model_dump(
+            mode="json"
+        )
+        if event_type == "messaging.received":
+            # Gmail attachmentId is an opaque retrieval handle, not content
+            # identity. Preserve every other attachment field and array order.
+            normalized["attachments"] = [
+                {
+                    key: value
+                    for key, value in attachment.items()
+                    if key != "provider_attachment_id"
+                }
+                for attachment in normalized["attachments"]
+            ]
+            normalized["provider_labels"] = sorted(set(normalized["provider_labels"]))
+        return normalized
+
+    def _observation_fingerprint(
+        self, ctx: AdapterContext, message: dict[str, Any]
+    ) -> str:
+        envelope = self._observation_envelope(ctx, message)
+        identity = self._observation_identity(envelope)
+        identity["payload"] = self._comparable_payload(
+            envelope.type, envelope.schema_version, envelope.payload
+        )
+        return (
+            _OBSERVATION_FINGERPRINT_PREFIX
+            + hashlib.sha256(
+                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        )
+
+    @staticmethod
+    def _observation_identity(envelope: EventEnvelope) -> dict[str, Any]:
+        return {
+            key: getattr(envelope, key)
+            for key in (
+                "tenant_id",
+                "type",
+                "owner_scope",
+                "visibility_scope",
+                "source_adapter",
+                "source_account_id",
+                "sensitivity",
+                "occurred_at",
+            )
+        }
+
+    def _equivalent_observation(
+        self, event: dict[str, Any], expected: EventEnvelope
+    ) -> bool:
+        if any(
+            event.get(key) != value
+            for key, value in self._observation_identity(expected).items()
+        ):
+            return False
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        # Only account-bound historical schemas can prove the same owner,
+        # provider and native ID. Never infer those coordinates from defaults.
+        versions = (
+            {6}
+            if expected.schema_version == 6
+            else ({3, 4} if expected.type == "messaging.received" else {2, 3, 4})
+        )
+        if event.get("schema_version") not in versions:
+            return False
+        for key in (
+            "native_message_id",
+            "source_channel",
+            "member_id",
+            "provider",
+            "provider_account_id",
+            "workspace",
+            "service_principal_id",
+        ):
+            if payload.get(key) != expected.payload.get(key):
+                return False
+        try:
+            ensure_autoloaded()
+            registry.validate(expected.type, event["schema_version"], payload)
+            # Add only documented optional defaults. Missing account identity
+            # above and meaningful new RFC/body fields cannot become aliases.
+            return self._comparable_payload(
+                expected.type, expected.schema_version, payload
+            ) == self._comparable_payload(
+                expected.type, expected.schema_version, expected.payload
+            )
+        except EventValidationError:
+            return False
+
+    async def _committed_observation(
+        self,
+        *,
+        ctx: AdapterContext,
+        store: Any,
+        cursor_id: str,
+        message: dict[str, Any],
+        fingerprint: str,
+    ) -> str | None:
+        reader = ctx.source_events
+        native_id = str(message["id"])
+        if reader is None:
+            # Minimal protocol fixtures may supply only a sink; production
+            # always injects the explicit immutable receipt reader.
+            return (
+                store.dedupe_event(cursor_id, native_id, fingerprint)
+                if store is not None
+                else None
+            )
+        expected = self._observation_envelope(ctx, message)
+        committed = await reader.get_by_idempotency(expected.tenant_id, fingerprint)
+        if committed is not None:
+            if not self._equivalent_observation(committed, expected):
+                raise IdempotencyConflict("Gmail source receipt identity mismatch")
+            return str(committed["event_id"])
+        if store is not None:
+            event_id = store.dedupe_event(cursor_id, native_id, fingerprint)
+            typed_alias = event_id is not None
+            latest = store.latest_event(cursor_id, native_id)
+            if event_id is None and latest is not None:
+                event_id = latest[1]
+            if event_id:
+                candidate = await reader.get(event_id)
+                if candidate is not None and self._equivalent_observation(
+                    candidate, expected
+                ):
+                    return str(candidate["event_id"])
+                if typed_alias:
+                    raise IdempotencyConflict("Gmail source alias identity mismatch")
+        # Legacy append-before-cursor-commit has no dedupe row. Search only
+        # this native ID's indexed old keys, never message bodies or history.
+        prefix = self._observation_key(expected.type, native_id, "")
+        for candidate in await reader.get_by_idempotency_prefix(
+            expected.tenant_id, prefix
+        ):
+            suffix = str(candidate.get("idempotency_key", "")).removeprefix(prefix)
+            if len(suffix) != 64 or any(
+                char not in "0123456789abcdef" for char in suffix
+            ):
+                continue
+            if self._equivalent_observation(candidate, expected):
+                return str(candidate["event_id"])
+        return None
+
+    @staticmethod
     def _message_fingerprint(message: dict[str, Any]) -> str:
+        """Legacy transport hash, retained for invalid-source quarantine only."""
         return hashlib.sha256(
             json.dumps(
                 message, sort_keys=True, separators=(",", ":"), default=str
