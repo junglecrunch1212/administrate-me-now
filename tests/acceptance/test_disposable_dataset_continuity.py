@@ -312,10 +312,13 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     admission_bytes = admission_path.read_bytes()
     marker_path = paths.instance_dir / "config/disposable-test-dataset.json"
     marker_bytes = marker_path.read_bytes()
+    # Exercise the ordinary managed restore, including its required live Doctor.
+    services.start()
     previous_inode = paths.instance_dir.stat().st_ino
     restored = restore_manager.restore(Path(snapshot_backup["path"]))
     assert restored["status"] == "restored"
-    assert restored["services_restarted"] is False
+    assert restored["services_restarted"] is True
+    services.stop()
     assert paths.instance_dir.stat().st_ino != previous_inode
     assert admission_path.read_bytes() == admission_bytes
     assert marker_path.read_bytes() == marker_bytes
