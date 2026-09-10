@@ -631,6 +631,48 @@ class ServiceManager:
             self._stop_label(label)
         return self.status()
 
+    def assert_maintenance_boundary(self) -> None:
+        """Require the old runtime absent and the unchanged Gateway owned/live."""
+        if self.test_mode:
+            state = self._read_test_state()
+            if (
+                state.get(RUNTIME_LABEL) != "stopped"
+                or state.get(OPENCLAW_LABEL) != "running"
+            ):
+                raise RuntimeError("source maintenance service boundary is invalid")
+            return
+        deadline = time.monotonic() + SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS
+        if (
+            self._launchctl_loaded(RUNTIME_LABEL, self._proof_remaining(deadline))
+            or self._listener_pids(RUNTIME_LABEL, self._proof_remaining(deadline))
+            or not self._managed_openclaw_liveness()
+        ):
+            raise RuntimeError("source maintenance service boundary is invalid")
+
+    def start_maintenance_gateway(self) -> None:
+        """Start only the already installed Gateway; never install a selector."""
+        path = self._validate_plist(OPENCLAW_LABEL)
+        if self.test_mode:
+            state = self._read_test_state()
+            if state.get(RUNTIME_LABEL) != "stopped":
+                raise RuntimeError("source maintenance requires stopped runtime")
+            self._write_test_state({**state, OPENCLAW_LABEL: "running"})
+            self.assert_maintenance_boundary()
+            return
+        self._stop_label(RUNTIME_LABEL)
+        if not self._launchctl_loaded(OPENCLAW_LABEL):
+            result = self._process_probe(
+                ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)],
+                SERVICE_PROCESS_PROBE_TIMEOUT_SECONDS,
+            )
+            if result.returncode:
+                raise RuntimeError("maintenance Gateway could not start")
+        if not self._launchctl_definition_matches(OPENCLAW_LABEL, path):
+            raise RuntimeError("maintenance Gateway definition changed")
+        if not self._wait_for_openclaw_liveness():
+            raise RuntimeError("maintenance Gateway is not owned and live")
+        self.assert_maintenance_boundary()
+
     def mark_failed_for_test(self, label: str = RUNTIME_LABEL) -> None:
         if not self.test_mode:
             raise RuntimeError("failure injection is test-only")

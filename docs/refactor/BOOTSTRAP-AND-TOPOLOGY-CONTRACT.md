@@ -322,6 +322,37 @@ owner-created pending artifact validates. It does not execute human HTR rows,
 authorize deployment, promote fixture evidence, or complete post-switch
 privacy/browser/effect acceptance.
 
+### Captured consumer progress and exact assessment repair
+
+Authenticated predecessor checkpoint restoration is **MODERNIZE** under the
+activation-transaction boundary. A replaying candidate can replace a subscriber's
+single stored consumer version; blindly downgrading that row can then reinterpret
+already processed sources against later conversation history. Recovery may
+restore only the exact healthy predecessor row from the transaction's verified
+encrypted backup. It must verify backup/rehearsal identity and the captured
+consumer version, prove identical retained event history through that checkpoint,
+and reject inserted earlier events or a checkpoint beyond the proven prefix.
+A fresh encrypted backup and durable operation receipt precede atomic replacement
+under proven quiescence. Other subscriber rows, projection offsets, the complete
+live event log, and all later source facts remain untouched. No invented offset
+or new model budget is allowed. The original predecessor still processes unseen
+work and must pass settlement and full Doctor. AC-62 governs production proof.
+
+Exact source-contract maintenance is a separate **MODERNIZE** path governed by
+[CO-030](CHANGE-ORDER-030-SOURCE-AWARE-PERSONAL-OBLIGATION-TRIAGE.md#assessment-recovery-across-a-rollback)
+and AC-61. An immutable reviewed controller may dispatch one explicitly selected
+source through the current production pipeline while its captured predecessor
+remains selected. All consumers must first be healthy and settled, with only the
+proved source-contract failure outstanding. The existing exclusive updater lease,
+verified encrypted backup, observation mode, fixed attempt reservations, child
+termination, unchanged controls, and unchanged active checkpoints are required.
+Failure cleanup restores the captured runtime within the original deadline and
+keeps the journal open while contract publication is incomplete. Only completed
+maintenance followed by the original fully healthy recovery may close it. This
+path does not authorize general replay, provider writes, source enrollment,
+runtime migration, or a different predecessor. Source truth, privacy, approvals,
+member decisions, and full post-deployment acceptance remain **PRESERVE**.
+
 ### Deployment and recovery deadlines
 
 The deadline policy is **MODERNIZE** under this contract's activation-transaction

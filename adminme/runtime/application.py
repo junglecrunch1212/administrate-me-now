@@ -128,6 +128,15 @@ from adminme.source_assessment_recovery import (
     build_recovery_request_envelopes,
     recovery_batch_fingerprint,
 )
+from adminme.source_contract_recovery import (
+    CONTRACT_RECOVERY_POLICY,
+    CONTRACT_REQUEST_TYPE,
+    ContractRecoveryRefused,
+    SourceAssessmentContractRecoveryBatch,
+    build_contract_recovery_request_envelopes,
+    contract_batch_fingerprint,
+    contract_request_key,
+)
 from adminme.temporary_surfaces import TemporarySurfaceStore
 
 _log = logging.getLogger(__name__)
@@ -717,6 +726,7 @@ class AdministrateMeRuntime:
         self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.communication_command_locks: dict[str, asyncio.Lock] = {}
         self.settings_command_locks: dict[str, asyncio.Lock] = {}
+        self.source_contract_recovery_request_lock = asyncio.Lock()
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
@@ -1013,6 +1023,7 @@ class AdministrateMeRuntime:
             await self.projections.start(start_bus=False)
             await self.pipelines.start(start_bus=False)
             await self.pipelines.reconcile_pending_source_assessment_recoveries()
+            await self.pipelines.reconcile_pending_source_contract_recoveries()
             await self.pipelines.reconcile_pending_source_publications()
             await self.adapters.start()
             await asyncio.sleep(0)
@@ -3291,6 +3302,87 @@ async def request_source_assessment_recoveries(
         "accepted": len(event_ids),
         "request_event_ids": event_ids,
         "duplicate": False,
+        "content_exposed": False,
+        "canonical_objects_created": 0,
+        "external_write_requests": 0,
+    }
+
+
+@system_router.post("/source-assessment-contract-recoveries", status_code=202)
+async def request_source_assessment_contract_recoveries(
+    body: SourceAssessmentContractRecoveryBatch,
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Authorize an exact missing assessment contract for the adult's own source."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "contract recovery requires the source owner")
+    runtime: AdministrateMeRuntime = request.app.state.runtime
+    if runtime.event_log is None or runtime.events is None:
+        raise HTTPException(503, "source contract recovery is unavailable")
+    if runtime.observation is None or not await runtime.observation.is_active():
+        raise HTTPException(409, "source contract recovery requires observation mode")
+    owner_scope = f"private:{session.auth_member_id}"
+    fingerprint = contract_batch_fingerprint(body)
+    # A duplicate concurrent request must reuse the first durable command,
+    # including its original timestamps, rather than collide during append.
+    async with runtime.source_contract_recovery_request_lock:
+        prior = [
+            await runtime.event_log.get_by_idempotency(
+                session.tenant_id,
+                contract_request_key(body.request_id, target.source_event_id),
+            )
+            for target in body.targets
+        ]
+        duplicate = any(event is not None for event in prior)
+        if duplicate:
+            if not all(
+                event is not None
+                and event.get("type") == CONTRACT_REQUEST_TYPE
+                and event.get("schema_version") == 1
+                and event.get("source_adapter") == "source_assessment_contract_recovery"
+                and event.get("source_account_id") == "operator"
+                and event.get("tenant_id") == session.tenant_id
+                and event.get("owner_scope") == owner_scope
+                and event.get("visibility_scope") == owner_scope
+                and event.get("sensitivity") in {"normal", "sensitive"}
+                and event.get("actor_identity") == session.auth_member_id
+                and (event.get("payload") or {}).get("authority") == "member_principal"
+                and (event.get("payload") or {}).get("requested_by_actor")
+                == session.auth_member_id
+                and (event.get("payload") or {}).get("batch_fingerprint") == fingerprint
+                for event in prior
+            ):
+                raise HTTPException(409, "contract recovery request_id conflicts")
+            event_ids = [str(event["event_id"]) for event in prior if event]
+        else:
+            try:
+                envelopes = await build_contract_recovery_request_envelopes(
+                    runtime.event_log,
+                    body,
+                    tenant_id=session.tenant_id,
+                    requested_by_actor=session.auth_member_id,
+                    authority="member_principal",
+                    required_owner_scope=owner_scope,
+                )
+            except ContractRecoveryRefused as exc:
+                raise HTTPException(409, exc.code) from exc
+            if not await runtime.observation.is_active():
+                raise HTTPException(
+                    409, "source contract recovery requires observation mode"
+                )
+            event_ids = await runtime.events.write_batch(
+                envelopes, correlation_id=session.correlation_id
+            )
+    return {
+        "contract": CONTRACT_RECOVERY_POLICY,
+        "required_assessment_contract": body.required_assessment_contract,
+        "request_id": body.request_id,
+        "accepted": len(event_ids),
+        "request_event_ids": event_ids,
+        "duplicate": duplicate,
         "content_exposed": False,
         "canonical_objects_created": 0,
         "external_write_requests": 0,

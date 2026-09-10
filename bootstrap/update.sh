@@ -45,9 +45,15 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   [[ "$instance_root" == /* ]] || die "instance root must be absolute"
   candidate=""
   pending_attestation=""
+  contract_recovery_plan=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
       --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
+      --recover-source-contract=*)
+        [[ -z "$contract_recovery_plan" ]] || die "contract recovery plan was repeated"
+        contract_recovery_plan="${argument#*=}"
+        [[ "$contract_recovery_plan" == /* ]] || die "contract recovery plan must be absolute"
+        ;;
       --pending-attestation-id=*)
         [[ -z "$pending_attestation" ]] \
           || die "pending-attestation identifier was repeated"
@@ -62,7 +68,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         ;;
     esac
   done
-  [[ -n "$pending_attestation" ]] \
+  [[ -n "$pending_attestation" || -n "$contract_recovery_plan" ]] \
     || die "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
   [[ -n "$candidate" && "$candidate" == /* && -d "$candidate" ]] \
     || die "usage: update.sh --pending-attestation-id=<id> [options] /absolute/path/to/reviewed-candidate"
@@ -119,6 +125,7 @@ approve_flag=""
 source_repair_flag=""
 provider_binding_flag=""
 pending_flag=""
+contract_recovery_plan=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -134,6 +141,11 @@ while [[ "${1:-}" == --* ]]; do
         || fail "provider-binding migration approval was repeated"
       provider_binding_flag="$1"
       ;;
+    --recover-source-contract=*)
+      [[ -z "$contract_recovery_plan" ]] || fail "contract recovery plan was repeated"
+      contract_recovery_plan="${1#*=}"
+      [[ "$contract_recovery_plan" == /* ]] || fail "contract recovery plan must be absolute"
+      ;;
     --pending-attestation-id=*)
       [[ -z "$pending_flag" ]] || fail "pending-attestation identifier was repeated"
       pending_value="${1#*=}"
@@ -148,7 +160,11 @@ while [[ "${1:-}" == --* ]]; do
   shift
 done
 
-if [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" ]]; then
+if [[ -n "$contract_recovery_plan" ]]; then
+  [[ -z "$pending_flag$approve_flag$source_repair_flag$provider_binding_flag" ]] \
+    || fail "contract recovery cannot authorize activation or migration"
+fi
+if [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" && -z "$contract_recovery_plan" ]]; then
   fail "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
 fi
 
@@ -329,6 +345,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$contract_recovery_plan" ]]; then
+  upgrade_args=(recover-source-contract --recovery-repository "$candidate" --plan "$contract_recovery_plan")
+fi
 if [[ -n "$pending_flag" ]]; then
   upgrade_args+=("$pending_flag")
 fi

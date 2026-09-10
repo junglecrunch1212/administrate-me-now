@@ -39,6 +39,7 @@ from adminme.candidate_policy import (
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import (
+    TriageIntentFeaturesExtractedV3,
     TriageSourcePublicationPlannedV1,
     TriageSourcePublicationCompletedV1,
 )
@@ -73,6 +74,25 @@ from adminme.source_assessment_recovery import (
     recovery_refusal_idempotency_key,
     target_from_request_event,
     validate_recovery_target,
+)
+from adminme.source_contract_recovery import (
+    ASSESSMENT_CONTRACT,
+    CONTRACT_ATTEMPT_TYPE,
+    CONTRACT_RECOVERY_POLICY,
+    CONTRACT_REQUEST_TYPE,
+    CONTRACT_REFUSAL_TYPE,
+    CONTRACT_RESULT_TYPE,
+    AmbiguousContractAttempt,
+    ContractRecoveryRefused,
+    ContractRecoveryTarget,
+    contract_recovery_requirement,
+    contract_recovery_terminal,
+    contract_refusal_key,
+    contract_result_key,
+    current_contract_result,
+    deterministic_contract_terminal,
+    validate_contract_language_receipt,
+    validate_contract_recovery_target,
 )
 from adminme.triage_intent import (
     CONTEXTUAL_NLP_EXTRACTOR_ID,
@@ -302,6 +322,7 @@ class NoiseFilteringPipeline:
             "messaging.sent",
             "telephony.sms_received",
             "source.assessment.recovery_requested",
+            CONTRACT_REQUEST_TYPE,
             "triage.source_publication.planned",
         ]
     }
@@ -526,9 +547,12 @@ class NoiseFilteringPipeline:
         ctx: PipelineContext,
         inputs: dict[str, Any],
         skill_ctx: SkillContext,
+        contract_request: dict[str, Any] | None = None,
     ) -> Any:
         try:
-            return await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+            return await self._run_reserved_contract_attempt(
+                ctx, inputs, skill_ctx, contract_request, 0
+            )
         except _TRANSIENT_SKILL_FAILURE_TYPES as exc:
             _log.warning(
                 "noise_filtering transient skill failure (%s); "
@@ -557,7 +581,9 @@ class NoiseFilteringPipeline:
                 )
                 await asyncio.sleep(delay_seconds)
                 try:
-                    return await ctx.run_skill_fn(SKILL_ID, inputs, recovery_ctx)
+                    return await self._run_reserved_contract_attempt(
+                        ctx, inputs, recovery_ctx, contract_request, attempt
+                    )
                 except _TRANSIENT_SKILL_FAILURE_TYPES as recovery_exc:
                     if attempt == len(_TRANSIENT_RECOVERY_DELAYS_SECONDS):
                         raise
@@ -570,8 +596,211 @@ class NoiseFilteringPipeline:
 
             raise AssertionError("unreachable transient recovery state")
 
+    async def _run_reserved_contract_attempt(
+        self,
+        ctx: PipelineContext,
+        inputs: dict[str, Any],
+        skill_ctx: SkillContext,
+        request: dict[str, Any] | None,
+        slot: int,
+    ) -> Any:
+        if request is None:
+            return await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+        source_id = request["payload"]["source_event_id"]
+        request_id = str(request["event_id"])
+        identity = str(skill_ctx.invocation_idempotency_key)
+        reservation_key = f"source-assessment-contract-attempt:{request_id}:{slot}"
+        reservation = await ctx.event_log.get_by_idempotency(
+            request["tenant_id"], reservation_key
+        )
+        if reservation is not None:
+            if (
+                reservation.get("type") != CONTRACT_ATTEMPT_TYPE
+                or reservation.get("schema_version") != 1
+                or reservation.get("source_adapter")
+                != "deterministic_candidate_eligibility"
+                or reservation.get("source_account_id") != "pipeline"
+                or reservation.get("causation_id") != source_id
+                or reservation["event_id"] <= request_id
+                or any(
+                    reservation.get(field) != request.get(field)
+                    for field in (
+                        "tenant_id",
+                        "owner_scope",
+                        "visibility_scope",
+                        "sensitivity",
+                    )
+                )
+                or reservation.get("payload")
+                != {
+                    "request_event_id": request_id,
+                    "source_event_id": source_id,
+                    "required_assessment_contract": ASSESSMENT_CONTRACT,
+                    "invocation_identity": identity,
+                    "classifier_version": SKILL_VERSION,
+                    "slot": slot,
+                }
+            ):
+                raise AmbiguousContractAttempt(
+                    "contract recovery inputs changed after reservation"
+                )
+            terminals = await ctx.event_log.get_by_causation(source_id)
+            if not any(
+                event.get("source_adapter") == "skill_runner"
+                and event.get("source_account_id") == "system"
+                and event["event_id"] > reservation["event_id"]
+                and event.get("payload", {}).get("skill_name") == SKILL_ID
+                and event.get("payload", {}).get("skill_version") == SKILL_VERSION
+                and all(
+                    event.get(field) == request.get(field)
+                    for field in (
+                        "tenant_id",
+                        "owner_scope",
+                        "visibility_scope",
+                        "sensitivity",
+                    )
+                )
+                and (
+                    event.get("type") == "skill.call.recorded"
+                    and event.get("schema_version") == 2
+                    and event.get("idempotency_key")
+                    == f"skill:{identity}:{SKILL_ID}:{SKILL_VERSION}"
+                    or event.get("type") == "skill.call.failed"
+                    and event.get("schema_version") == 1
+                    and str(event.get("idempotency_key") or "").startswith(
+                        f"skill:failed:{identity}:{SKILL_ID}:{SKILL_VERSION}:"
+                    )
+                )
+                for event in terminals
+            ):
+                raise AmbiguousContractAttempt(
+                    "reserved contract attempt has no terminal receipt"
+                )
+        else:
+            await ctx.event_sink.write(
+                EventEnvelope(
+                    event_at_ms=self._derived_event_at_ms(request),
+                    tenant_id=request["tenant_id"],
+                    type=CONTRACT_ATTEMPT_TYPE,
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope=request["owner_scope"],
+                    visibility_scope=request["visibility_scope"],
+                    sensitivity=request["sensitivity"],
+                    idempotency_key=reservation_key,
+                    payload={
+                        "request_event_id": request_id,
+                        "source_event_id": source_id,
+                        "required_assessment_contract": ASSESSMENT_CONTRACT,
+                        "invocation_identity": identity,
+                        "classifier_version": SKILL_VERSION,
+                        "slot": slot,
+                    },
+                ),
+                causation_id=source_id,
+                correlation_id=ctx.correlation_id,
+            )
+        return await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+
+    async def _handle_contract_recovery_request(
+        self, event: dict[str, Any], ctx: PipelineContext
+    ) -> None:
+        payload = event.get("payload") or {}
+        source_id = str(payload.get("source_event_id") or "")
+        lock = self._recovery_source_locks.setdefault(
+            f"{event.get('tenant_id')}:{source_id}", asyncio.Lock()
+        )
+        async with lock:
+            canonical = await ctx.event_log.get(str(event.get("event_id") or ""))
+            if canonical != event:
+                raise RuntimeError(
+                    "contract recovery command is not its canonical envelope"
+                )
+            terminal = await contract_recovery_terminal(
+                ctx.event_log, str(event["event_id"])
+            )
+            if terminal["status"] != "pending":
+                if terminal.get("assessment_event_id"):
+                    source = await ctx.event_log.get(source_id)
+                    assessment = await ctx.event_log.get(
+                        terminal["assessment_event_id"]
+                    )
+                    if source is None or assessment is None:
+                        raise RuntimeError(
+                            "contract recovery terminal source or assessment is unavailable"
+                        )
+                    await self._resume_source_publication(source, ctx, assessment)
+                return
+            try:
+                if (
+                    event.get("source_adapter") != "source_assessment_contract_recovery"
+                    or event.get("tenant_id") != ctx.session.tenant_id
+                    or payload.get("policy") != CONTRACT_RECOVERY_POLICY
+                    or payload.get("required_assessment_contract")
+                    != ASSESSMENT_CONTRACT
+                    or payload.get("attempt_limit") != RECOVERY_ATTEMPT_LIMIT
+                    or payload.get("max_concurrency") != RECOVERY_MAX_CONCURRENCY
+                ):
+                    raise ContractRecoveryRefused("request_scope_mismatch")
+                if (
+                    ctx.observation_manager is None
+                    or not await ctx.observation_manager.is_active()
+                ):
+                    raise ContractRecoveryRefused("observation_inactive")
+                target = ContractRecoveryTarget.model_validate(
+                    {key: payload[key] for key in ContractRecoveryTarget.model_fields}
+                )
+                selected = await validate_contract_recovery_target(
+                    ctx.event_log,
+                    target,
+                    required_tenant_id=ctx.session.tenant_id,
+                    required_owner_scope=str(event.get("owner_scope") or ""),
+                )
+            except ContractRecoveryRefused as exc:
+                await ctx.event_sink.write(
+                    EventEnvelope(
+                        event_at_ms=self._derived_event_at_ms(event),
+                        tenant_id=event["tenant_id"],
+                        type=CONTRACT_REFUSAL_TYPE,
+                        schema_version=1,
+                        occurred_at=EventEnvelope.now_utc_iso(),
+                        source_adapter="noise_filtering",
+                        source_account_id="pipeline",
+                        owner_scope=event["owner_scope"],
+                        visibility_scope=event["visibility_scope"],
+                        sensitivity=event["sensitivity"],
+                        idempotency_key=contract_refusal_key(str(event["event_id"])),
+                        payload={
+                            "request_event_id": event["event_id"],
+                            "source_event_id": source_id,
+                            "reason": exc.code,
+                            "policy": CONTRACT_RECOVERY_POLICY,
+                        },
+                    ),
+                    correlation_id=ctx.correlation_id,
+                    causation_id=event["event_id"],
+                )
+                return
+            source = dict(selected.source)
+            source["event_at_ms"] = self._derived_event_at_ms(event)
+            source["_assessment_recovery"] = {
+                "request_event_id": event["event_id"],
+                # The compatible v4 receipt supersedes the selected current
+                # assessment; the v2 command separately retains the exact failure.
+                "failed_assessment_event_id": selected.latest_assessment["event_id"],
+                "failure_reason": selected.failure_reason,
+                "contract_request": event,
+            }
+            async with self._recovery_request_semaphore:
+                await self._handle_source(source, ctx)
+
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
+        if event_type == CONTRACT_REQUEST_TYPE:
+            await self._handle_contract_recovery_request(event, ctx)
+            return
         if event_type == "triage.source_publication.planned":
             payload = TriageSourcePublicationPlannedV1.model_validate(event["payload"])
             source = await ctx.event_log.get(payload.source_event_id)
@@ -603,6 +832,61 @@ class NoiseFilteringPipeline:
         async with source_lock:
             await self._handle_source(event, ctx)
 
+    async def _reuse_current_negative_assessment(
+        self, event: dict[str, Any], ctx: PipelineContext
+    ) -> bool:
+        """An occupied current negative is immutable when thread context grows."""
+        if not hasattr(ctx.event_log, "get_by_idempotency"):
+            return False
+        source_id = str(event.get("event_id") or "")
+        assessment = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"],
+            f"triage:message-features:v{_REPLAY_GENERATION}:{source_id}",
+        )
+        if (
+            assessment is None
+            or (assessment.get("payload") or {}).get("assessment_outcome")
+            != "no_candidate"
+        ):
+            return False
+        owner = str(event.get("owner_scope") or "")
+        if (
+            assessment.get("schema_version") != 3
+            or not source_assessment_identity_valid(source=event, assessment=assessment)
+            or not owner.startswith("private:")
+            or not owner.removeprefix("private:")
+            or event.get("sensitivity") not in {"normal", "sensitive"}
+            or (event.get("payload") or {}).get(
+                "member_id", owner.removeprefix("private:")
+            )
+            != owner.removeprefix("private:")
+        ):
+            raise RuntimeError(
+                "retained current negative assessment identity is invalid"
+            )
+        try:
+            payload = TriageIntentFeaturesExtractedV3.model_validate(
+                assessment.get("payload")
+            )
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError(
+                "retained current negative assessment payload is invalid"
+            ) from exc
+        outcome, _reason = await resolved_assessment_disposition(
+            ctx.event_log, assessment, source_event=event
+        )
+        if outcome == "failed":
+            # A recorded defensive default cannot become a clean result merely
+            # because its legacy receipt used a successful-looking outcome.
+            return True
+        if (
+            payload.extraction_state != "complete"
+            or payload.candidates
+            or outcome != "no_candidate"
+        ):
+            raise RuntimeError("retained current negative assessment is not complete")
+        return True
+
     async def _handle_source(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         source_event_id = str(event.get("event_id") or "")
@@ -617,6 +901,23 @@ class NoiseFilteringPipeline:
             # A later full consumer replay must not silently consume that
             # authority or make the selected failed assessment stale.
             if prior_assessment is not None:
+                if (
+                    await current_contract_result(
+                        ctx.event_log, event, prior_assessment
+                    )
+                    is not None
+                ):
+                    await self._resume_source_publication(event, ctx, prior_assessment)
+                    return
+                if (
+                    await contract_recovery_requirement(
+                        ctx.event_log, event, prior_assessment
+                    )
+                    is not None
+                ):
+                    # A legacy recovery cannot fulfill this attempted current
+                    # contract. Neither replay nor a generation bump renews it.
+                    return
                 if await self._resume_source_publication(event, ctx, prior_assessment):
                     return
                 prior_outcome, _ = await resolved_assessment_disposition(
@@ -624,6 +925,8 @@ class NoiseFilteringPipeline:
                 )
                 if prior_outcome == "failed":
                     return
+            if await self._reuse_current_negative_assessment(event, ctx):
+                return
         if event.get("sensitivity") == "privileged":
             await self._emit_triage_assessment(
                 event=event,
@@ -838,10 +1141,38 @@ class NoiseFilteringPipeline:
         )
 
         try:
-            result = await self._run_skill_with_transient_recovery(
-                ctx, inputs, skill_ctx
-            )
+            if isinstance(recovery, dict) and recovery.get("contract_request"):
+                result = await self._run_skill_with_transient_recovery(
+                    ctx,
+                    inputs,
+                    skill_ctx,
+                    contract_request=recovery["contract_request"],
+                )
+                await validate_contract_language_receipt(
+                    ctx.event_log,
+                    event,
+                    str(recovery["request_event_id"]),
+                    str(getattr(result, "recorded_event_id", None) or ""),
+                    str(getattr(result, "skill_version", None) or ""),
+                )
+                recovery["contract_result"] = {
+                    "completion_kind": "language",
+                    "classifier_version": getattr(result, "skill_version", None),
+                    "skill_call_event_id": getattr(result, "recorded_event_id", None),
+                }
+            else:
+                result = await self._run_skill_with_transient_recovery(
+                    ctx, inputs, skill_ctx
+                )
         except _SKILL_FAILURE_TYPES as exc:
+            if isinstance(recovery, dict) and recovery.get("contract_request"):
+                recovery["contract_result"] = {
+                    "completion_kind": "failed",
+                    "classifier_version": str(
+                        getattr(exc, "skill_version", SKILL_VERSION)
+                    ),
+                    "skill_call_event_id": None,
+                }
             if not isinstance(recovery, dict) and await self._retain_assessed_default(
                 event, ctx, skill_ctx, exc
             ):
@@ -1774,7 +2105,7 @@ class NoiseFilteringPipeline:
         reason_codes: list[str],
         occurred_at: str | None = None,
         intent_id: str | None = None,
-        recovery: dict[str, str] | None = None,
+        recovery: dict[str, Any] | None = None,
         extractor_id: str | None = None,
         proposal_drafts: list[dict[str, Any]] | None = None,
     ) -> str:
@@ -1824,8 +2155,25 @@ class NoiseFilteringPipeline:
                     "recovery_attempt_limit": RECOVERY_ATTEMPT_LIMIT,
                 }
             )
+        if recovery is not None and recovery.get("contract_request"):
+            result = recovery.get("contract_result")
+            if result is None and not deterministic_contract_terminal(payload):
+                # Unexplained context loss is not a completed current contract.
+                outcome = "failed"
+                payload.update(
+                    assessment_outcome="failed",
+                    extraction_state="unavailable",
+                    reason_codes=["current_contract_terminal_not_proven"],
+                )
+                recovery["contract_result"] = {
+                    "completion_kind": "failed",
+                    "classifier_version": None,
+                    "skill_call_event_id": None,
+                }
         envelope = EventEnvelope(
-            event_at_ms=event["event_at_ms"],
+            event_at_ms=self._derived_event_at_ms(event)
+            if recovery is not None and recovery.get("contract_request")
+            else event["event_at_ms"],
             tenant_id=event["tenant_id"],
             type="triage.intent.features_extracted",
             schema_version=4 if recovery is not None else 3,
@@ -1846,7 +2194,45 @@ class NoiseFilteringPipeline:
             ),
             payload=payload,
         )
+        contract_receipt = None
+        if recovery is not None and recovery.get("contract_request"):
+            result = recovery.get("contract_result") or {
+                "completion_kind": "deterministic_terminal",
+                "classifier_version": None,
+                "skill_call_event_id": None,
+            }
+            contract_receipt = envelope.model_copy(
+                update={
+                    "type": CONTRACT_RESULT_TYPE,
+                    "schema_version": 1,
+                    "idempotency_key": contract_result_key(
+                        str(recovery_request_event_id), source_event_id
+                    ),
+                    "payload": {
+                        **result,
+                        "request_event_id": recovery_request_event_id,
+                        "source_event_id": source_event_id,
+                        "assessment_idempotency_key": envelope.idempotency_key,
+                        "publication_plan_idempotency_key": self._publication_plan_key(
+                            str(envelope.idempotency_key)
+                        )
+                        if proposal_drafts
+                        else None,
+                        "required_assessment_contract": ASSESSMENT_CONTRACT,
+                        "completed_assessment_contract": ASSESSMENT_CONTRACT
+                        if outcome in {"eligible_candidates", "no_candidate"}
+                        else None,
+                    },
+                }
+            )
         if not proposal_drafts:
+            if contract_receipt is not None:
+                ids = await ctx.event_sink.write_batch(
+                    [envelope, contract_receipt],
+                    correlation_id=ctx.correlation_id,
+                    causation_id=source_event_id,
+                )
+                return ids[0]
             return await ctx.event_sink.write(
                 envelope,
                 correlation_id=ctx.correlation_id,
@@ -1877,6 +2263,10 @@ class NoiseFilteringPipeline:
         envelope = envelope.model_copy(
             update={"event_at_ms": self._derived_event_at_ms(event)}
         )
+        if contract_receipt is not None:
+            contract_receipt = contract_receipt.model_copy(
+                update={"event_at_ms": envelope.event_at_ms}
+            )
         plan = envelope.model_copy(
             update={
                 "type": "triage.source_publication.planned",
@@ -1887,11 +2277,16 @@ class NoiseFilteringPipeline:
                 "payload": plan_payload,
             }
         )
-        extraction_id, _ = await ctx.event_sink.write_batch(
-            [envelope, plan],
+        ids = await ctx.event_sink.write_batch(
+            [
+                envelope,
+                plan,
+                *([contract_receipt] if contract_receipt is not None else []),
+            ],
             correlation_id=ctx.correlation_id,
             causation_id=source_event_id,
         )
+        extraction_id = ids[0]
         assessment = {
             **envelope.model_dump(mode="json"),
             "event_id": extraction_id,

@@ -34,6 +34,15 @@ def test_every_registered_technical_event_has_family_and_property_contract() -> 
     assert all(isinstance(row["required"], list) for row in rows)
 
 
+def test_contract_recovery_commands_and_receipts_are_source_assurance_events() -> None:
+    rows = {row["event_type"]: row for row in catalog_document()["technical_events"]}
+    for suffix in ("requested", "refused", "result", "attempt_started"):
+        row = rows[f"source.assessment.contract_recovery_{suffix}"]
+        assert row["family"] == "source_assurance"
+        assert "source_event_id" in row["properties"]
+        assert "body_text" not in row["properties"]
+
+
 def test_every_candidate_channel_input_is_registered_and_targets_are_closed() -> None:
     ensure_autoloaded()
     registered = set(registry.known_types())
