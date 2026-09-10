@@ -119,7 +119,7 @@ from adminme.projections.runner import ProjectionRunner, register_default_projec
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.reconciliation import ReconciliationAdmissionEvaluator
-from adminme.settings_control import SettingsControlStore
+from adminme.settings_control import SettingsControlStore, public_capability_summary
 from adminme.messages_reply_reconciliation import MessagesReplyReconciler
 from adminme.google_tasks_execution_reconciliation import GoogleTasksExecutionReconciler
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
@@ -3237,6 +3237,10 @@ async def live(request: Request) -> dict[str, Any]:
 async def ready(request: Request) -> JSONResponse:
     runtime: AdministrateMeRuntime = request.app.state.runtime
     payload = await runtime.diagnostics()
+    payload = {
+        **payload,
+        "capabilities": public_capability_summary(payload.get("capabilities") or {}),
+    }
     return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
 
 

@@ -543,6 +543,9 @@ class GmailAdapter(CommunicationAdapter):
         failed = False
         try:
             if self._test_policy is not None:
+                # The explicit check before acquiring the lease rejects a
+                # missing store even when Python assertions are disabled.
+                assert store is not None
                 lifetime_count = store.reserve_test_selection(
                     cursor_id, self._test_policy.message_ids, limit=MAX_MESSAGES
                 )

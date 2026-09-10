@@ -206,10 +206,10 @@ async def _adapter(runtime: Any) -> Any:
     deadline = asyncio.get_running_loop().time() + 30
     adapter = runtime.adapters._managed["fixture-bounded-gmail"].adapter
     while asyncio.get_running_loop().time() < deadline:
-        if (
-            adapter.status().extra.get("initial_backfill", {}).get("state")
-            == "complete"
-        ):
+        if adapter.status().extra.get("initial_backfill", {}).get("state") in {
+            "complete",
+            "disabled",
+        }:
             return adapter
         assert adapter.status().state not in {"crashed", "backoff"}, adapter.status()
         await asyncio.sleep(0.01)
@@ -341,6 +341,107 @@ def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
             assert (
                 client.portal.call(_settled_skill_receipts, runtime) == skill_receipts
             )
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_member_settings_do_not_publish_private_operator_adapter_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bounded: bool,
+) -> None:
+    config = _config([])
+    if not bounded:
+        config.pop(CONFIG_KEY)
+        config["adapters"][1]["enabled"] = False
+        config["adapters"][0]["config"].update(
+            {
+                "enable_writes": False,
+                "initial_backfill_days": 0,
+                "initial_backfill_max_messages": 0,
+                "historical_seed_queries": [],
+            }
+        )
+    _fake_provider(monkeypatch, config)
+    app = create_application(_settings(tmp_path, config))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        client.portal.call(_adapter, runtime)
+        client.portal.call(_settled_skill_receipts, runtime)
+        capability_id = "adapter:messaging-gmail-api"
+        operator = client.portal.call(runtime.diagnostics)
+        operator_adapter = operator["capabilities"][capability_id]
+        assert ACCOUNT in json.dumps(operator_adapter)
+        assert operator_adapter["details"]["instances"]
+        for headers, owner_visible in (
+            (HEADERS, True),
+            (OTHER_HEADERS, False),
+            ({**OTHER_HEADERS, "X-AdminMe-View-Member": MEMBER}, False),
+            ({**HEADERS, "X-AdminMe-View-Member": OTHER}, False),
+        ):
+            response = client.get("/api/member/v1/surfaces/settings", headers=headers)
+            assert response.status_code == 200
+            payload = response.json()
+            if owner_visible:
+                assert ACCOUNT in json.dumps(payload["control"]["connections"])
+            else:
+                assert ACCOUNT not in response.text
+                assert "bounded_test_sample" not in response.text
+            # All three compatibility paths expose only aggregate adapter
+            # health; owner-only account controls retain the useful detail.
+            for inventory in (
+                payload["capabilities"],
+                payload["system"]["capabilities"],
+                list(payload["system"]["runtime"]["capabilities"].values()),
+            ):
+                assert ACCOUNT not in json.dumps(inventory)
+                adapter_summary = next(
+                    record
+                    for record in inventory
+                    if record["name"] == "messaging-gmail-api"
+                )
+                assert adapter_summary["state"] == operator_adapter["state"]
+                assert "instances" not in adapter_summary["details"]
+                assert "durable_watermarks" not in adapter_summary["details"]
+        # Rendering one member never redacts the shared operator evidence.
+        assert ACCOUNT in json.dumps(runtime.capabilities[capability_id].public())
+        client.portal.call(_settled_skill_receipts, runtime)
+        for headers in ({}, HEADERS, OTHER_HEADERS):
+            operator = client.portal.call(runtime.diagnostics)
+            response = client.get("/api/system/ready", headers=headers)
+            assert response.status_code == (200 if operator["ready"] else 503)
+            assert ACCOUNT not in response.text
+            assert "bounded_test_sample" not in response.text
+            readiness = response.json()
+            # Public health retains all admission/settlement states and counts.
+            # The historical repair exception cannot infer its exact private
+            # predecessor baseline from this aggregate response.
+            for field in (
+                "status",
+                "ready",
+                "service_ready",
+                "release_ready",
+                "activation_eligible",
+                "safe_reads",
+                "write_admission",
+                "accepting_writes",
+                "event_ingest_ready",
+                "observation_active",
+                "deployment_readiness",
+                "member_bridge_count",
+            ):
+                assert readiness[field] == operator[field]
+            assert set(readiness["capabilities"]) == set(operator["capabilities"])
+            for key, record in operator["capabilities"].items():
+                assert readiness["capabilities"][key]["state"] == record["state"]
+            source_key = "policy:source-assurance"
+            assert (
+                readiness["capabilities"][source_key]["details"]["counts"]
+                == (operator["capabilities"][source_key]["details"]["counts"])
+            )
+            public_adapter = readiness["capabilities"][capability_id]
+            assert "instances" not in public_adapter["details"]
+            assert "durable_watermarks" not in public_adapter["details"]
+            assert ACCOUNT in json.dumps(runtime.capabilities[capability_id].public())
 
 
 def test_selected_update_and_interrupted_append_retry_are_idempotent(

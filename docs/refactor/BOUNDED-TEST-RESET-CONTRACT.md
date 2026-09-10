@@ -92,6 +92,11 @@ Member source controls explicitly show a bounded test sample, selected count,
 200-message cap, selected-only thread coverage, paused other source ingestion,
 and incomplete mailbox coverage. Neither an empty nor capped selection claims
 complete coverage. Privacy and per-member/account visibility still apply.
+Member Settings and public readiness expose aggregate adapter health without
+private instance identifiers, account details, cursor coordinates or provider
+errors. Owner-scoped source controls retain the member's own account details.
+Internal operator diagnostics remain complete; a legacy repair exception still
+requires its original exact baseline and fails closed without that evidence.
 
 Warm restart acceptance measures three unchanged managed restarts from runtime
 start to authenticated API/member readiness against the proposed 30-second
@@ -115,9 +120,13 @@ read-only local browser acceptance remain required. Ordinary production
 backup/rollback predicates remain unchanged. Doctor reports the test-only
 limitation visibly instead of calling the historical predecessor healthy.
 
-The process tests are `test_disposable_test_reset.py` and
-`test_disposable_test_acquisition.py` under `tests/acceptance`; controller,
-interruption and negative-proof tests are under `tests/unit`. Both hosted
+The process tests are `test_disposable_test_reset.py`,
+`test_disposable_test_reset_controller.py` and
+`test_disposable_test_acquisition.py` under `tests/acceptance`; interruption,
+controller failure and negative-proof tests are under `tests/unit`. The
+controller test runs real encrypted backup/rehearsal, release publication and
+selection with credential-free service/Doctor fixtures; the composition tests
+exercise actual event processing and private routes. Both hosted
 early suites run these with the existing Gmail, pack, replay and activation
 regressions before the full release gates. Passing synthetic tests alone is
 not local acceptance. The operator records phase, immutable release, run IDs,

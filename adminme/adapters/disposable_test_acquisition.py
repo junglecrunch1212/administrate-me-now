@@ -204,7 +204,14 @@ def discover_test_message_selection(
     if not callable(discover):
         raise ValueError("selected Gmail adapter does not support bounded discovery")
     try:
-        message_ids, metadata = discover()
+        discovered = discover()
+        if (
+            not isinstance(discovered, tuple)
+            or len(discovered) != 2
+            or not isinstance(discovered[1], dict)
+        ):
+            raise ValueError("Gmail discovery returned an invalid selection result")
+        message_ids, metadata = discovered
     except Exception as exc:
         raise RuntimeError("read-only Gmail test discovery failed") from exc
     selected = {**policy.private_config(), "message_ids": message_ids}

@@ -170,6 +170,46 @@ def test_interruptions_restore_original_coordinate_and_journal(
 
 
 @pytest.mark.parametrize(
+    "boundary", ["after_failed_state_move", "after_original_state_move"]
+)
+def test_interrupted_reversal_resumes_exact_original_control(
+    reset_fixture, monkeypatch, boundary
+):
+    from bootstrap import disposable_test_reset as module
+
+    paths, manifest = reset_fixture
+    operation = OfflineTestReset(paths, manifest)
+    pointer = paths.app_dir / "current-release.json"
+    journal = paths.app_dir / "activation" / "active.json"
+    original_pointer, original_journal = pointer.read_bytes(), journal.read_bytes()
+    operation.prepare()
+    operation.switch()
+    _json(pointer, {"commit": "c" * 40, "path": "reviewed-candidate"})
+    real_move = module._move
+    count = 0
+
+    def interrupted_move(source, target):
+        nonlocal count
+        count += 1
+        real_move(source, target)
+        if count == (1 if boundary == "after_failed_state_move" else 2):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(module, "_move", interrupted_move)
+    with pytest.raises(KeyboardInterrupt):
+        operation.restore()
+    monkeypatch.setattr(module, "_move", real_move)
+    result = operation.restore()
+    assert result["phase"] == "original_restored_health_unproven"
+    assert result["production_rollback_proven"] is False
+    assert pointer.read_bytes() == original_pointer
+    assert journal.read_bytes() == original_journal
+    assert (
+        paths.instance_dir / "events" / "events.db"
+    ).read_bytes() == b"old-encrypted-history"
+
+
+@pytest.mark.parametrize(
     "relative", ["config/member-mapping.json", "config/adapters.json"]
 )
 def test_stale_identity_or_source_configuration_refuses_before_archive(
@@ -295,7 +335,7 @@ def test_controller_failure_reverses_real_state_moves_and_retains_failure(
     monkeypatch.setattr(
         backup_restore,
         "_authenticate_backup_to_path",
-        lambda *args: ({}, manifest["diagnostic_backup"]["sha256"]),
+        lambda *args, **kwargs: ({}, manifest["diagnostic_backup"]["sha256"]),
     )
     monkeypatch.setattr(upgrade, "validate_candidate", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -380,3 +420,86 @@ def test_controller_failure_reverses_real_state_moves_and_retains_failure(
             os.close(descriptor)
         except OSError:
             pass
+
+
+def test_unmarked_intent_cannot_restore_stale_release_or_configuration(reset_fixture):
+    paths, manifest = reset_fixture
+    operation = OfflineTestReset(paths, manifest)
+    operation.begin()
+    pointer = paths.app_dir / "current-release.json"
+    _json(pointer, {"commit": "f" * 40, "path": "intervening-reviewed-release"})
+    changed_pointer = pointer.read_bytes()
+    with pytest.raises(ResetError, match="stale or changed"):
+        operation.restore()
+    assert pointer.read_bytes() == changed_pointer
+    assert (
+        paths.instance_dir / "events" / "events.db"
+    ).read_bytes() == b"old-encrypted-history"
+
+
+@pytest.mark.parametrize("command", ["start", "restore"])
+def test_ordinary_cli_cannot_bypass_pending_reset(
+    reset_fixture, monkeypatch, capsys, command
+):
+    from bootstrap import cli
+
+    paths, manifest = reset_fixture
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    _json(
+        paths.app_dir / "disposable-test-reset-active.json",
+        {"reset_id": manifest["reset_id"]},
+    )
+    arguments = ["--instance-root", str(paths.root), command]
+    if command == "restore":
+        arguments.append(manifest["diagnostic_backup"]["path"])
+    assert cli.main(arguments) == 1
+    assert "exact manifest" in capsys.readouterr().out
+    assert (
+        paths.instance_dir / "events" / "events.db"
+    ).read_bytes() == b"old-encrypted-history"
+
+
+@pytest.mark.parametrize("operation_name", ["discover_messages", "select_messages"])
+def test_unaccepted_or_empty_dataset_marker_cannot_discover_or_select(
+    reset_fixture, monkeypatch, operation_name
+):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from adminme.adapters import disposable_test_acquisition
+    from bootstrap import disposable_test_reset as module
+
+    paths, manifest = reset_fixture
+    operation = OfflineTestReset(paths, manifest)
+    operation.prepare()
+    operation.switch()
+    _json(paths.instance_dir / "config" / "disposable-test-dataset.json", {})
+    _json(
+        paths.instance_dir / "config" / "deployment-readiness.json",
+        {"disposable_test_reset": {"release_commit": "c" * 40}},
+    )
+
+    def forbidden_discovery(*args, **kwargs):
+        raise AssertionError("unaccepted reset contacted a provider")
+
+    monkeypatch.setattr(
+        disposable_test_acquisition,
+        "discover_test_message_selection",
+        forbidden_discovery,
+    )
+    manager = SimpleNamespace(
+        paths=paths,
+        test_mode=True,
+        _operation_lock=nullcontext,
+        services=SimpleNamespace(status=lambda: SimpleNamespace(status="stopped")),
+        _active_release_root=lambda: paths.root / "candidate",
+        _active_release_commit=lambda: "c" * 40,
+    )
+    argument = paths.root / "selection.json"
+    _json(argument, {"message_ids": ["selected-synthetic"]})
+    original_config = (paths.instance_dir / "config" / "adapters.json").read_bytes()
+    with pytest.raises(ResetError, match="marker is invalid"):
+        getattr(module, operation_name)(manager, argument)
+    assert (
+        paths.instance_dir / "config" / "adapters.json"
+    ).read_bytes() == original_config
+    assert not (paths.instance_dir / "events" / "adapter_cursors.db").exists()

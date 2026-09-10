@@ -572,6 +572,10 @@ def main(argv: list[str] | None = None) -> int:
                 _print(installer.status())
             return 0
         if args.command == "restore":
+            if (paths.app_dir / "disposable-test-reset-active.json").exists():
+                raise RuntimeError(
+                    "interrupted disposable test reset requires its exact manifest"
+                )
             _print(
                 BackupManager(paths, root=root, test_mode=test_mode).restore(
                     args.backup

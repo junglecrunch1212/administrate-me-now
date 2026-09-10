@@ -395,6 +395,8 @@ class OfflineTestReset:
         if self.original.exists():
             if list(_directory(self.original)) != record["original_coordinate"]:
                 raise TestResetError("original dataset coordinate changed")
+            record["phase"] = "restoring_original"
+            self._record(record)
             if self.paths.instance_dir.exists():
                 if (
                     list(_directory(self.paths.instance_dir))
@@ -407,6 +409,10 @@ class OfflineTestReset:
             _move(self.original, self.paths.instance_dir)
         elif list(_directory(self.paths.instance_dir)) != record["original_coordinate"]:
             raise TestResetError("original dataset is unavailable")
+        elif record.get("phase") != "restoring_original":
+            # Intent can precede its active marker. Never restore stale control
+            # bytes after another operation changed the still-original dataset.
+            validate_manifest(self.paths, self.manifest)
         original_journal = self.archive / "original-activation.json"
         if original_journal.exists():
             atomic_write(
@@ -436,7 +442,6 @@ def execute_reset(
     import asyncio
     import dataclasses
     import fcntl
-    import tempfile
     from datetime import datetime, timezone
 
     from adminme.events.log import EventLog
@@ -484,6 +489,10 @@ def execute_reset(
     def restore_original() -> dict[str, Any]:
         # No control or state move follows an unproven service stop.
         services.stop()
+        if services.status().status != "stopped":
+            raise TestResetError(
+                "reset reversal requires absent managed services and listeners"
+            )
         result = operation.restore()
         original = _json(operation.archive / "original-release.json")
         old_release = Path(original["path"])
@@ -506,16 +515,11 @@ def execute_reset(
         if record["phase"] == "accepted":
             if upgrades._active_release_commit() != commit:
                 raise TestResetError("accepted reset is no longer the selected release")
-            marker = _json(
-                upgrades.paths.instance_dir / "config" / "disposable-test-dataset.json"
-            )
-            if (
-                list(_directory(upgrades.paths.instance_dir))
-                != record.get("fresh_coordinate")
-                or marker.get("dataset_id") != manifest["reset_id"]
-                or marker.get("reset_manifest_sha256") != manifest_digest(manifest)
-            ):
-                raise TestResetError("accepted reset dataset identity has changed")
+            _accepted_dataset(upgrades.paths, commit)
+            clear_active_reset()
+            return record
+        if record["phase"] == "original_restored_health_unproven":
+            validate_manifest(upgrades.paths, manifest)
             clear_active_reset()
             return record
         return restore_original()
@@ -532,12 +536,12 @@ def execute_reset(
     )
     references = manager._references()
     backup_key = manager.store.get(references["backup"])
-    with tempfile.TemporaryDirectory(prefix="adminme-reset-auth-") as temporary:
-        _envelope, archive_digest = _authenticate_backup_to_path(
-            Path(manifest["diagnostic_backup"]["path"]),
-            backup_key,
-            Path(temporary) / "authenticated.tar",
-        )
+    _envelope, archive_digest = _authenticate_backup_to_path(
+        Path(manifest["diagnostic_backup"]["path"]),
+        backup_key,
+        None,
+        expected_artifact_sha256=manifest["diagnostic_backup"]["sha256"],
+    )
     if archive_digest != manifest["diagnostic_backup"]["sha256"]:
         raise TestResetError("diagnostic archive changed during authentication")
     activity_descriptor: int | None = None
@@ -557,6 +561,8 @@ def execute_reset(
         )
         _sync(active_reset.parent)
         services.stop()
+        if services.status().status != "stopped":
+            raise TestResetError("reset requires absent managed services and listeners")
         operation.prepare()
         event_key = manager.store.get(references["event_log"])
         # Opening a fresh SQLCipher log creates schemas but no household facts.
@@ -665,6 +671,54 @@ def execute_reset(
                 os.close(activity_descriptor)
 
 
+def _accepted_dataset(paths: DeploymentPaths, commit: str) -> dict[str, Any]:
+    """Prove a real accepted dataset before any discovery or selection effect."""
+    marker = _json(paths.instance_dir / "config" / "disposable-test-dataset.json")
+    if (
+        marker.get("contract") != DATASET_CONTRACT
+        or marker.get("acquisition_contract") != "disposable-test-acquisition-v1"
+        or re.fullmatch(r"[0-9a-f]{32}", str(marker.get("dataset_id"))) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(marker.get("reset_manifest_sha256")))
+        is None
+    ):
+        raise TestResetError("accepted reset dataset marker is invalid")
+    archive = paths.rollback_dir / f"test-reset-{marker['dataset_id']}"
+    _directory(archive)
+    record = _json(archive / "reset.json")
+    manifest = _json(archive / "manifest.json")
+    if (
+        record.get("contract") != CONTRACT
+        or record.get("phase") != "accepted"
+        or record.get("commit") != commit
+        or record.get("doctor_status") != "healthy"
+        or record.get("manifest_sha256") != marker["reset_manifest_sha256"]
+        or manifest_digest(manifest) != marker["reset_manifest_sha256"]
+        or list(_directory(paths.instance_dir)) != record.get("fresh_coordinate")
+    ):
+        raise TestResetError("dataset has no matching completed reset acceptance")
+    evidence = _json(paths.instance_dir / "config" / "deployment-readiness.json")
+    reset = evidence.get("disposable_test_reset") or {}
+    if (
+        reset.get("contract") != CONTRACT
+        or reset.get("dataset_id") != marker["dataset_id"]
+        or reset.get("manifest_sha256") != marker["reset_manifest_sha256"]
+        or reset.get("release_commit") != commit
+    ):
+        raise TestResetError("dataset has no matching reset readiness evidence")
+    policy = (
+        _json(paths.instance_dir / "config" / "adapters.json").get(
+            "disposable_test_acquisition"
+        )
+        or {}
+    )
+    if any(
+        policy.get(key) != manifest["acquisition"].get(key)
+        for key in ("contract", "adapter_id", "member_id", "provider_account_id")
+    ):
+        raise TestResetError("test dataset acquisition owner changed")
+    return evidence
+
+
 def select_messages(upgrades: Any, selection_path: Path) -> dict[str, Any]:
     """Admit private message IDs while stopped; never acquire or modify Gmail."""
 
@@ -704,18 +758,8 @@ def select_messages(upgrades: Any, selection_path: Path) -> dict[str, Any]:
         original = DisposableTestAcquisition.parse(
             adapters.get("disposable_test_acquisition")
         )
-        marker = _json(paths.instance_dir / "config" / "disposable-test-dataset.json")
         evidence_path = paths.instance_dir / "config" / "deployment-readiness.json"
-        evidence = _json(evidence_path)
-        reset = evidence.get("disposable_test_reset") or {}
-        if (
-            reset.get("dataset_id") != marker.get("dataset_id")
-            or reset.get("manifest_sha256") != marker.get("reset_manifest_sha256")
-            or reset.get("release_commit") != commit
-        ):
-            raise TestResetError(
-                "bounded sample lacks matching accepted reset evidence"
-            )
+        evidence = _accepted_dataset(paths, commit)
         selected = _json(selection_path)
         if set(selected) != {"message_ids"}:
             raise TestResetError("selection file must contain only message_ids")
@@ -783,17 +827,7 @@ def discover_messages(upgrades: Any, output: Path) -> dict[str, Any]:
                 repository=upgrades.root,
                 allow_legacy_tree=False,
             )
-        marker = _json(paths.instance_dir / "config" / "disposable-test-dataset.json")
-        evidence = _json(paths.instance_dir / "config" / "deployment-readiness.json")
-        reset = evidence.get("disposable_test_reset") or {}
-        if (
-            reset.get("dataset_id") != marker.get("dataset_id")
-            or reset.get("manifest_sha256") != marker.get("reset_manifest_sha256")
-            or reset.get("release_commit") != commit
-        ):
-            raise TestResetError(
-                "sample discovery lacks matching accepted reset evidence"
-            )
+        _accepted_dataset(paths, commit)
         return discover_test_message_selection(
             _json(paths.instance_dir / "config" / "adapters.json"),
             repository_root=release,

@@ -11,6 +11,7 @@ import pytest
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.settings_control import public_capability_summary
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.secrets import secret_store
 from bootstrap.source_assessment_repair import (
@@ -509,6 +510,7 @@ def test_declared_baseline_accepts_only_exact_rollback_schema_degradation() -> N
     )
     diagnostics = _diagnostics(source_id)
     diagnostics["capabilities"]["adapter:messaging-gmail-api"] = {
+        "kind": "adapter",
         "state": "degraded",
         "reason": "one or more configured adapter instances are not running",
         "details": {
@@ -536,6 +538,20 @@ def test_declared_baseline_accepts_only_exact_rollback_schema_degradation() -> N
         doctor=_doctor(source_derived_launch_status=True),
         diagnostics=diagnostics,
     )
+
+    # The public summary cannot stand in for the original exact predecessor
+    # evidence. Redaction must preserve the validator's fail-closed behavior.
+    public = {
+        **diagnostics,
+        "capabilities": public_capability_summary(diagnostics["capabilities"]),
+    }
+    with pytest.raises(SourceAssessmentRepairError, match="exact baseline"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(source_derived_launch_status=True),
+            diagnostics=public,
+        )
 
     changed = json.loads(json.dumps(diagnostics))
     changed["capabilities"]["adapter:messaging-gmail-api"]["details"]["instances"][0][

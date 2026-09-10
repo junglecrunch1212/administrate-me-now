@@ -1431,6 +1431,36 @@ def _account_hint(config: dict[str, Any]) -> str | None:
     return None
 
 
+def public_capability_summary(
+    capabilities: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Render aggregate health without copying private adapter diagnostics.
+
+    Per-account state belongs in the owner-scoped Connections/source controls.
+    Internal runtime diagnostics retain their complete instance evidence.
+    Public health checks retain states while excluding account/cursor details.
+    """
+
+    result = copy.deepcopy(capabilities)
+    for record in result.values():
+        if record.get("kind") != "adapter":
+            continue
+        details = record.get("details") or {}
+        record["details"] = {
+            key: details[key]
+            for key in (
+                "manifest",
+                "categories",
+                "runtimes",
+                "provider_health",
+                "production_loader",
+                "deterministic_fixture_coverage",
+            )
+            if key in details
+        }
+    return result
+
+
 def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
     adapter_supervisor = getattr(runtime, "adapters", None)
     inventory = adapter_supervisor.inventory() if adapter_supervisor is not None else {}
@@ -2672,6 +2702,7 @@ __all__ = [
     "compose_connections",
     "compose_settings_control",
     "member_label",
+    "public_capability_summary",
     "tailscale_login_for",
     "validate_preferences",
 ]
