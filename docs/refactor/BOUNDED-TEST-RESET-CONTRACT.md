@@ -89,6 +89,11 @@ that union before publishing its policy; a missing receipt blocks admission
 instead of silently recreating an empty one. The adapter separately reports
 the current restored state's admitted count. Restoring an older snapshot
 cannot free previously spent lifetime slots.
+Ordinary restore of an active bounded dataset must retain that exact logical
+dataset, manifest and acquisition owner, and its selected IDs must already be
+in the lifetime union. An unmarked or unrelated archive is refused before state
+replacement or service startup. The approved reset transaction's own exact
+original-state reversal remains a distinct path.
 Provider cursors, source idempotency, and committed source facts survive warm
 restarts. Private selection files remain outside the repository.
 

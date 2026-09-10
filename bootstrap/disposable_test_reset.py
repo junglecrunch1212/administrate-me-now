@@ -15,6 +15,7 @@ import re
 import shutil
 import stat
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -799,18 +800,9 @@ def execute_reset(
                 os.close(activity_descriptor)
 
 
-def _accepted_dataset(
-    paths: DeploymentPaths,
-    commit: str,
-    *,
-    selected_adapters_payload: bytes | None = None,
-) -> dict[str, Any]:
-    """Prove a real accepted dataset before any discovery or selection effect."""
-    from adminme.deployment_readiness import ordinary_activation_backup_ready
-    from bootstrap.activation_transaction import ActivationJournal
-    from bootstrap.candidate_readiness import capture_deployment_snapshot
-
-    marker = _json(paths.instance_dir / "config" / "disposable-test-dataset.json")
+def _accepted_reset_archive(
+    paths: DeploymentPaths, marker: dict[str, Any]
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     if (
         marker.get("contract") != DATASET_CONTRACT
         or marker.get("acquisition_contract") != "disposable-test-acquisition-v1"
@@ -828,10 +820,97 @@ def _accepted_dataset(
         or record.get("phase") != "accepted"
         or record.get("commit") != manifest.get("candidate_commit")
         or record.get("doctor_status") != "healthy"
+        or manifest.get("reset_id") != marker["dataset_id"]
         or record.get("manifest_sha256") != marker["reset_manifest_sha256"]
         or manifest_digest(manifest) != marker["reset_manifest_sha256"]
     ):
         raise TestResetError("dataset has no matching completed reset acceptance")
+    return archive, manifest, record
+
+
+def bounded_restore_guard(paths: DeploymentPaths) -> Callable[[Path], None]:
+    """Keep ordinary restores inside the already selected bounded dataset.
+
+    The original reset's explicit reversal uses a separate path. Ordinary
+    unmarked production restores retain their existing behavior.
+    """
+    from adminme.adapters.disposable_test_acquisition import (
+        policy_from_adapter_config,
+        restrict_adapter_config,
+    )
+    from bootstrap.candidate_readiness import CandidateReadinessError
+
+    marker_path = paths.instance_dir / "config/disposable-test-dataset.json"
+    if not os.path.lexists(marker_path):
+        return lambda _staged_state: None
+    try:
+        marker = _json(marker_path)
+        _accepted_reset_archive(paths, marker)
+    except (CandidateReadinessError, OSError, ValueError) as exc:
+        raise TestResetError(
+            "bounded restore evidence is invalid or unavailable"
+        ) from exc
+
+    def validate(staged_state: Path) -> None:
+        try:
+            archive, manifest, _record = _accepted_reset_archive(paths, marker)
+            admissions = set(_read_admissions(archive, manifest)["message_sha256"])
+            if (
+                _json(marker_path) != marker
+                or _json(staged_state / "config/disposable-test-dataset.json") != marker
+            ):
+                raise TestResetError(
+                    "bounded restore requires the same accepted dataset"
+                )
+            for state in (paths.instance_dir, staged_state):
+                adapters = _json(state / "config/adapters.json")
+                restrict_adapter_config(adapters)
+                policy = policy_from_adapter_config(adapters)
+                if policy is None or any(
+                    policy.private_config()[key] != manifest["acquisition"][key]
+                    for key in (
+                        "contract",
+                        "adapter_id",
+                        "member_id",
+                        "provider_account_id",
+                    )
+                ):
+                    raise TestResetError("bounded restore acquisition owner differs")
+                selected_digests = {
+                    hashlib.sha256(message.encode()).hexdigest()
+                    for message in policy.message_ids
+                }
+                if not selected_digests <= admissions:
+                    raise TestResetError(
+                        "bounded restore selection contains unadmitted message IDs"
+                    )
+        except (
+            CandidateReadinessError,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
+            raise TestResetError(
+                "bounded restore evidence is invalid or unavailable"
+            ) from exc
+
+    return validate
+
+
+def _accepted_dataset(
+    paths: DeploymentPaths,
+    commit: str,
+    *,
+    selected_adapters_payload: bytes | None = None,
+) -> dict[str, Any]:
+    """Prove a real accepted dataset before any discovery or selection effect."""
+    from adminme.deployment_readiness import ordinary_activation_backup_ready
+    from bootstrap.activation_transaction import ActivationJournal
+    from bootstrap.candidate_readiness import capture_deployment_snapshot
+
+    marker = _json(paths.instance_dir / "config" / "disposable-test-dataset.json")
+    archive, manifest, record = _accepted_reset_archive(paths, marker)
     _read_admissions(archive, manifest)
     # Restore can legitimately replace the state directory. Acceptance belongs
     # to the logical marker and authenticated activation binding, not an inode.

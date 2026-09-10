@@ -8,7 +8,9 @@ proofs, publication, activation journals and reversal execute production code.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -27,7 +29,7 @@ from bootstrap import (
     disposable_test_reset,
     reviewed_launcher,
 )
-from bootstrap.backup_restore import BackupManager
+from bootstrap.backup_restore import BackupError, BackupManager
 from bootstrap.candidate_readiness import (
     capture_deployment_snapshot,
     record_pending_attestation,
@@ -308,12 +310,21 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     assert select_messages(manager, selection)["lifetime_admitted_count"] == 3
     admission_path = Path(manifest["lifetime_admissions"]["path"])
     admission_bytes = admission_path.read_bytes()
+    marker_path = paths.instance_dir / "config/disposable-test-dataset.json"
+    marker_bytes = marker_path.read_bytes()
     previous_inode = paths.instance_dir.stat().st_ino
-    assert (
-        restore_manager.restore(Path(snapshot_backup["path"]))["status"] == "restored"
-    )
+    restored = restore_manager.restore(Path(snapshot_backup["path"]))
+    assert restored["status"] == "restored"
+    assert restored["services_restarted"] is False
     assert paths.instance_dir.stat().st_ino != previous_inode
     assert admission_path.read_bytes() == admission_bytes
+    assert marker_path.read_bytes() == marker_bytes
+    assert (
+        _read(paths.instance_dir / "config/adapters.json")[
+            "disposable_test_acquisition"
+        ]
+        == policy
+    )
     # Current state has only two IDs again. The third slot remains spent in
     # the logical dataset, so a different 200-ID selection must be refused.
     _write(
@@ -386,6 +397,103 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
         select_messages(manager, selection)
     assert not admission_path.exists(), "missing lifetime evidence was recreated"
     retained_admissions.rename(admission_path)
+
+
+def _tree_fingerprints(root: Path) -> dict[str, str]:
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_bounded_restore_rejects_other_datasets_and_unadmitted_ids_before_mutation(
+    tmp_path, monkeypatch
+):
+    paths, candidate, manifest, abandoned_journal = accepted_reset_fixture(
+        tmp_path, monkeypatch
+    )
+    manager = BackupManager(paths, root=candidate, test_mode=True)
+    # The actual encrypted diagnostic archive predates the reset and has no
+    # bounded marker. Further archives vary only isolated synthetic state copies.
+    archives = [Path(manifest["diagnostic_backup"]["path"])]
+    for variant in ("different-dataset", "unadmitted-id", "different-owner"):
+        fixture_paths = DeploymentPaths.from_root(tmp_path / variant)
+        fixture_paths.create()
+        shutil.copytree(
+            paths.instance_dir, fixture_paths.instance_dir, dirs_exist_ok=True
+        )
+        config = fixture_paths.instance_dir / "config"
+        if variant == "different-dataset":
+            marker = _read(config / "disposable-test-dataset.json")
+            marker["dataset_id"] = "f" * 32
+            _write(config / "disposable-test-dataset.json", marker)
+        else:
+            adapters = _read(config / "adapters.json")
+            policy = adapters["disposable_test_acquisition"]
+            if variant == "unadmitted-id":
+                policy["message_ids"].append("never-admitted-to-this-dataset")
+            else:
+                account = "other-restore-fixture@example.invalid"
+                policy["provider_account_id"] = account
+                selected = next(
+                    row
+                    for row in adapters["adapters"]
+                    if row["id"] == policy["adapter_id"]
+                )["config"]
+                selected["provider_account_id"] = account
+                selected["user_email"] = account
+            _write(config / "adapters.json", adapters)
+        fixture_manager = BackupManager(fixture_paths, root=candidate, test_mode=True)
+        # Reuse this synthetic instance's key so authentication genuinely succeeds;
+        # source validation must reject the contents, not an unrelated key error.
+        fixture_manager.store = manager.store
+        created = fixture_manager.create()
+        target = paths.backup_dir / f"{variant}.ambackup"
+        shutil.copy2(Path(created["path"]), target)
+        archives.append(target)
+
+    services = manager.services
+    services.start()
+    assert services.status().status == "healthy"
+    before_state = _tree_fingerprints(paths.instance_dir)
+    before_inode = paths.instance_dir.stat().st_ino
+    before_pointer = (paths.app_dir / "current-release.json").read_bytes()
+    before_services = paths.service_state_path.read_bytes()
+    before_rollback = _tree_fingerprints(paths.rollback_dir)
+    authenticated: list[Path] = []
+    real_authenticate = backup_restore._authenticate_backup_to_path
+
+    def authenticate(source, *args, **kwargs):
+        result = real_authenticate(source, *args, **kwargs)
+        authenticated.append(source)
+        return result
+
+    monkeypatch.setattr(backup_restore, "_authenticate_backup_to_path", authenticate)
+    monkeypatch.setattr(
+        services,
+        "stop",
+        lambda: pytest.fail("rejected restore stopped active services"),
+    )
+    monkeypatch.setattr(
+        services,
+        "start",
+        lambda: pytest.fail("rejected restore started a provider runtime"),
+    )
+    for archive in archives:
+        with pytest.raises(BackupError, match="bounded restore"):
+            manager.restore(archive)
+        assert paths.instance_dir.stat().st_ino == before_inode
+        assert _tree_fingerprints(paths.instance_dir) == before_state
+        assert (paths.app_dir / "current-release.json").read_bytes() == before_pointer
+        assert paths.service_state_path.read_bytes() == before_services
+        assert services.status().status == "healthy"
+        assert _tree_fingerprints(paths.rollback_dir) == before_rollback
+        assert not list(paths.root.glob("restore-staging-*"))
+    assert authenticated == archives
+    assert (
+        Path(manifest["archive"]) / "original-activation.json"
+    ).read_bytes() == abandoned_journal
 
 
 def test_older_target_is_refused_before_controller_or_services_start(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 from datetime import datetime, timezone
 
 import pytest
@@ -13,6 +14,7 @@ from bootstrap.disposable_test_reset import (
     OfflineTestReset,
     TestResetError as ResetError,
     _read_admissions,
+    bounded_restore_guard,
 )
 from tests.unit.bootstrap.test_disposable_test_reset import (
     reset_fixture as reset_fixture,
@@ -135,3 +137,42 @@ def test_reset_intent_initializes_required_private_lifetime_receipt(reset_fixtur
     with pytest.raises(ResetError, match="admission receipt is unavailable"):
         _read_admissions(operation.archive, manifest)
     assert not admission_path.exists()
+
+
+@pytest.mark.parametrize(
+    "missing", ["active-marker", "staged-policy", "admissions", "reset-acceptance"]
+)
+def test_bounded_restore_fails_closed_when_required_evidence_disappears(
+    reset_fixture, tmp_path, missing
+):
+    paths, manifest = reset_fixture
+    operation = OfflineTestReset(paths, manifest)
+    operation.prepare()
+    record = operation.switch()
+    operation._record(
+        {
+            **record,
+            "phase": "accepted",
+            "commit": manifest["candidate_commit"],
+            "doctor_status": "healthy",
+        }
+    )
+    staged = tmp_path / "staged"
+    shutil.copytree(paths.instance_dir, staged)
+    validate = bounded_restore_guard(paths)
+    validate(staged)
+    removed = {
+        "active-marker": paths.instance_dir / "config/disposable-test-dataset.json",
+        "staged-policy": staged / "config/adapters.json",
+        "admissions": operation.archive / "lifetime-admissions.json",
+        "reset-acceptance": operation.archive / "reset.json",
+    }[missing]
+    removed.unlink()
+    with pytest.raises(ResetError):
+        validate(staged)
+    assert not removed.exists(), "restore silently reconstructed missing evidence"
+
+
+def test_ordinary_unmarked_restore_keeps_its_existing_validation_path(reset_fixture):
+    paths, _manifest = reset_fixture
+    bounded_restore_guard(paths)(paths.root / "not-yet-extracted")

@@ -1981,6 +1981,22 @@ class BackupManager:
         )
 
     def restore(self, backup: Path) -> dict[str, Any]:
+        from bootstrap.disposable_test_reset import (
+            TestResetError,
+            bounded_restore_guard,
+        )
+
+        try:
+            validate_bounded_restore = bounded_restore_guard(self.paths)
+        except TestResetError as exc:
+            raise BackupError(str(exc)) from exc
+
+        def validate_dataset(staged_state: Path) -> None:
+            try:
+                validate_bounded_restore(staged_state)
+            except TestResetError as exc:
+                raise BackupError(str(exc)) from exc
+
         source = ensure_within(backup, self.paths.backup_dir)
         if not source.is_file():
             raise BackupError("backup file is missing")
@@ -2003,10 +2019,12 @@ class BackupManager:
             if manifest["manifest_sha256"] != envelope["manifest_sha256"]:
                 raise BackupError("backup manifest identity does not match envelope")
             staged_state = staging_root / "state"
+            validate_dataset(staged_state)
             replay = asyncio.run(self._prove_rebuild(staged_state, event_key))
             selected_release[1]()
             previous = self.services.status()
             should_restart = previous.status in {"healthy", "degraded", "failed"}
+            validate_dataset(staged_state)
             if should_restart:
                 self.services.stop()
             rollback = self.paths.rollback_dir / f"state-before-{_utc_stamp()}"
