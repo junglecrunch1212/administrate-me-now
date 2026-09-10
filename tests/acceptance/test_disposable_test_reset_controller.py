@@ -11,10 +11,14 @@ import json
 import subprocess
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap.backup_restore import BackupManager
 from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.disposable_test_reset import build_manifest, select_messages
 from bootstrap.services import ServiceManager
+from bootstrap.secrets import secret_store
 from bootstrap.upgrade import UpgradeManager
 from bootstrap.wizard import BootstrapWizard, install_launch_agents
 from tests.acceptance.test_macos_bootstrap_operations import (
@@ -28,9 +32,7 @@ def _json(path: Path, value: object) -> None:
     atomic_write(path, json.dumps(value, indent=2).encode())
 
 
-def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
-    tmp_path, monkeypatch
-):
+def accepted_reset_fixture(tmp_path, monkeypatch):
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     candidate = tmp_path / "candidate"
     predecessor_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
@@ -96,23 +98,20 @@ def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
         "provider_account_id": "reset-fixture@example.invalid",
         "message_ids": [],
     }
-    _json(
-        config / "adapters.json",
+    adapters = json.loads((config / "adapters.json").read_text())
+    adapters["adapters"] = [
         {
-            "adapters": [
-                {
-                    "id": policy["adapter_id"],
-                    "kind": "messaging-gmail-api",
-                    "enabled": True,
-                    "config": {
-                        "member_id": member,
-                        "provider_account_id": policy["provider_account_id"],
-                        "user_email": policy["provider_account_id"],
-                    },
-                }
-            ]
-        },
-    )
+            "id": policy["adapter_id"],
+            "kind": "messaging-gmail-api",
+            "enabled": False,
+            "config": {
+                "member_id": member,
+                "provider_account_id": policy["provider_account_id"],
+                "user_email": policy["provider_account_id"],
+            },
+        }
+    ]
+    _json(config / "adapters.json", adapters)
     _json(
         paths.app_dir / "activation" / "active.json",
         {"transaction_id": "fixture-abandoned-transaction", "phase": "recovering"},
@@ -132,6 +131,53 @@ def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
     monkeypatch.setattr(
         UpgradeManager, "_attest_controller_provenance", lambda *args: None
     )
+    real_start = ServiceManager.start
+
+    def start_fixture_runtime(self):
+        # The host fixture supplies launchd ownership, while real composition
+        # creates the new stores/checkpoints that full Doctor requires.
+        if (
+            self.paths.instance_dir / "config" / "disposable-test-dataset.json"
+        ).exists():
+            fixture_config = self.paths.instance_dir / "config"
+            references = json.loads(
+                (fixture_config / "secret-references.json").read_text()
+            )["references"]
+            key = secret_store(self.paths, test_mode=True).get(references["event_log"])
+            members = json.loads((fixture_config / "member-mapping.json").read_text())
+            active = json.loads(
+                (self.paths.app_dir / "current-release.json").read_text()
+            )
+            settings = RuntimeSettings.credential_free(
+                self.paths.instance_dir,
+                encryption_key=key,
+                repository_root=Path(active["path"]),
+                adapter_config=json.loads(
+                    (fixture_config / "adapters.json").read_text()
+                ),
+                household_mapping=members,
+                member_identities={
+                    row["tailscale_identity"]: row["member_id"]
+                    for row in members["members"]
+                },
+                member_roles={
+                    row["member_id"]: row["role"] for row in members["members"]
+                },
+                deterministic_openclaw_fixture=True,
+            )
+            with TestClient(create_application(settings)) as client:
+                assert client.get("/api/system/live").json()["runtime_started"] is True
+        return real_start(self)
+
+    monkeypatch.setattr(ServiceManager, "start", start_fixture_runtime)
+    real_doctor = UpgradeManager._post_switch_doctor
+
+    def checked_doctor(self, release, **kwargs):
+        result = real_doctor(self, release, **kwargs)
+        assert result["status"] == "healthy", json.dumps(result, sort_keys=True)
+        return result
+
+    monkeypatch.setattr(UpgradeManager, "_post_switch_doctor", checked_doctor)
     upgrades = UpgradeManager(
         paths, root=candidate, test_mode=True, test_reset_manifest=manifest_path
     )
@@ -160,3 +206,10 @@ def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
     assert first["lifetime_admitted_count"] == 2
     assert first["provider_calls"] == 0
     assert first["mailbox_coverage_complete"] is False
+    return paths, candidate, manifest, original_journal
+
+
+def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
+    tmp_path, monkeypatch
+):
+    accepted_reset_fixture(tmp_path, monkeypatch)
