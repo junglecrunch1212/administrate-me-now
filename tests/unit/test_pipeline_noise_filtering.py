@@ -1531,36 +1531,58 @@ async def test_terminal_failure_requires_explicit_recovery_before_later_replay()
 ):
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
-
-    async def first(*args: Any, **kwargs: Any) -> SkillResult:
-        return _make_skill_result(classification="transactional", confidence=0.8)
+    event["sensitivity"] = "normal"
+    attempts: list[str] = []
 
     async def unavailable(*args: Any, **kwargs: Any) -> SkillResult:
+        attempts.append("unavailable")
         raise OpenClawTimeout("reviewed replay failure")
 
     async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        attempts.append("recovered")
         return _make_skill_result(classification="noise", confidence=0.9)
 
-    async def startup_order_recovered(*args: Any, **kwargs: Any) -> SkillResult:
-        return _make_skill_result(classification="personal", confidence=0.7)
-
-    async def explicit_replay_recovered(*args: Any, **kwargs: Any) -> SkillResult:
-        return _make_skill_result(classification="transactional", confidence=0.6)
-
-    async def source_assurance_recovered(*args: Any, **kwargs: Any) -> SkillResult:
-        return _make_skill_result(classification="personal", confidence=0.5)
-
-    async def throughput_recovered(*args: Any, **kwargs: Any) -> SkillResult:
-        return _make_skill_result(classification="professional", confidence=0.55)
-
     pipeline = NoiseFilteringPipeline()
-    await pipeline.handle(event, _make_ctx(log, first))
     await pipeline.handle(event, _make_ctx(log, unavailable))
-    await pipeline.handle(event, _make_ctx(log, recovered))
-    await pipeline.handle(event, _make_ctx(log, startup_order_recovered))
-    await pipeline.handle(event, _make_ctx(log, explicit_replay_recovered))
-    await pipeline.handle(event, _make_ctx(log, source_assurance_recovered))
-    await pipeline.handle(event, _make_ctx(log, throughput_recovered))
+    assert attempts == ["unavailable"] * 3
+    failed = next(
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert failed.envelope.payload["assessment_outcome"] == "failed"
+    retained = list(log.calls)
+    for _ in range(6):
+        # Reopening the pipeline or redelivering its source grants no new
+        # attempt, even if the external seam could now return success.
+        await NoiseFilteringPipeline().handle(event, _make_ctx(log, recovered))
+    assert log.calls == retained
+    assert attempts == ["unavailable"] * 3
+
+    # Command authorization is covered by the production-composition tests.
+    # Enter its already-validated internal seam with the exact failed receipt.
+    recovery_source = {
+        **event,
+        "_assessment_recovery": {
+            "request_event_id": "fixture-authorized-terminal-recovery",
+            "failed_assessment_event_id": failed.event_id,
+            "failure_reason": "language_seam_OpenClawTimeout",
+        },
+    }
+    await pipeline._handle_source(recovery_source, _make_ctx(log, recovered))
+    assert attempts == ["unavailable"] * 3 + ["recovered"]
+    assert log.calls[: len(retained)] == retained
+    assessments = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    ]
+    assert [assessment.payload["assessment_outcome"] for assessment in assessments] == [
+        "failed",
+        "no_candidate",
+    ]
+    assert assessments[-1].schema_version == 4
+    assert assessments[-1].payload["supersedes_assessment_event_id"] == failed.event_id
 
     classified_keys = [
         call.envelope.idempotency_key
@@ -1571,6 +1593,42 @@ async def test_terminal_failure_requires_explicit_recovery_before_later_replay()
         "messaging:classified:trigger-eid-001",
         "messaging:classified:v4:trigger-eid-001",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visibility", ["private:member-fixture", "shared:household"])
+async def test_current_negative_replay_preserves_assessment_without_language_call(
+    visibility: str,
+) -> None:
+    log = _FakeEventLog()
+    event = _messaging_received_event(body_text="A message without a fixed rule.")
+    event["sensitivity"] = "normal"
+    event["visibility_scope"] = visibility
+    attempts: list[str] = []
+
+    async def first(*args: Any, **kwargs: Any) -> SkillResult:
+        attempts.append("first")
+        return _make_skill_result(classification="transactional", confidence=0.8)
+
+    async def unexpected_replay(*args: Any, **kwargs: Any) -> SkillResult:
+        attempts.append("unexpected_replay")
+        raise OpenClawTimeout("a retained clean negative must not be retried")
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, first))
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.schema_version == 3
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+    assert assessment.payload["extraction_state"] == "complete"
+    assert assessment.payload["candidates"] == []
+    assert assessment.visibility_scope == visibility
+    retained = list(log.calls)
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, unexpected_replay))
+    assert attempts == ["first"]
+    assert log.calls == retained
 
 
 @pytest.mark.asyncio

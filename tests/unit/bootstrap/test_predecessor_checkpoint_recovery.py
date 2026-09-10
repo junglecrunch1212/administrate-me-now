@@ -306,17 +306,21 @@ def test_row_restore_rejects_changed_displaced_row_and_expired_deadline(case):
 
 
 def test_busy_rehearsal_parent_never_cleans_another_controllers_pending_stage(
-    case, monkeypatch, tmp_path
+    monkeypatch, tmp_path
 ):
+    # The broader recovery fixture replaces _supervised_proof. Exercise the real
+    # lock boundary here, before any extraction or source-history access.
+    paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    paths.create()
     monkeypatch.setattr(recovery.tempfile, "gettempdir", lambda: str(tmp_path))
-    fingerprint = hashlib.sha256(str(case.paths.root).encode()).hexdigest()
+    fingerprint = hashlib.sha256(str(paths.root).encode()).hexdigest()
     parent = tmp_path / f"administrateme-backup-rehearsal-{fingerprint[:16]}"
     parent.mkdir(mode=0o700)
     pending = parent / (".pending-" + "a" * 32)
     pending.mkdir(mode=0o700)
     calls = []
     backup = SimpleNamespace(
-        paths=case.paths,
+        paths=paths,
         _remove_validated_stale_stages=lambda *_args: calls.append("cleanup"),
     )
     with (parent / ".lock").open("wb") as lease:
@@ -325,7 +329,7 @@ def test_busy_rehearsal_parent_never_cleans_another_controllers_pending_stage(
         with pytest.raises(BlockingIOError):
             recovery._supervised_proof(
                 backup,
-                case.paths.backup_dir / "captured.ambackup",
+                paths.backup_dir / "captured.ambackup",
                 "a" * 64,
                 deadline=600,
             )

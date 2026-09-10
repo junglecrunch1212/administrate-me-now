@@ -116,6 +116,66 @@ def test_current_negative_survives_later_thread_anchor_and_full_redelivery(
         )
 
 
+def test_household_visible_negative_replay_preserves_exact_recorded_scope(
+    tmp_path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    calls = []
+
+    async def respond(request, args):
+        calls.append(args["input"]["body_text"])
+        return skill_fixture._response(request)
+
+    _fixture_runtime(monkeypatch, respond)
+    source_ids = []
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        for index in range(2):
+            source = _message(settings, index, MEMBER, receipt=True)
+            source.visibility_scope = "shared:household"
+            source.payload["body_text"] = (
+                f"[fixture:attention-controls:receipt:informational:{index + 1}]\n"
+                f"Your payment for activity {index + 1} was received. "
+                "No action is required."
+            )
+            source_ids.append(client.portal.call(runtime.events.write, source))
+            client.portal.call(_wait_for_composition_quiescence, runtime, 60)
+        assert len(calls) == 2
+        retained = client.portal.call(
+            _events, runtime, "triage.intent.features_extracted"
+        )
+        assert {event["payload"]["source_event_id"] for event in retained} == set(
+            source_ids
+        )
+        assert all(
+            event["owner_scope"] == f"private:{MEMBER}"
+            and event["visibility_scope"] == "shared:household"
+            and event["payload"]["assessment_outcome"] == "no_candidate"
+            for event in retained
+        )
+        assert _assurance(client, 0)["state"] == "healthy"
+
+    asyncio.run(_rewind_retained_pipeline(settings))
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        client.portal.call(_wait_for_composition_quiescence, runtime, 60)
+        assert len(calls) == 2
+        assert (
+            client.portal.call(_events, runtime, "triage.intent.features_extracted")
+            == retained
+        )
+        assert _assurance(client, 0)["state"] == "healthy"
+        assert (
+            client.portal.call(
+                _events,
+                runtime,
+                "triage.item.proposed",
+                "external_sync.write_requested",
+            )
+            == []
+        )
+
+
 async def _seed_invalid(settings, invalid):
     log = EventLog(settings.instance, settings.encryption_key)
     try:
@@ -148,6 +208,8 @@ async def _seed_invalid(settings, invalid):
             values.update(
                 owner_scope=f"private:{OTHER}", visibility_scope=f"private:{OTHER}"
             )
+        elif invalid == "visibility":
+            values["visibility_scope"] = "shared:household"
         elif invalid == "producer":
             values["source_adapter"] = "fixture-unrecognized-assessor"
         elif invalid == "schema":
@@ -160,7 +222,9 @@ async def _seed_invalid(settings, invalid):
         await log.close()
 
 
-@pytest.mark.parametrize("invalid", ["owner", "producer", "schema", "incomplete"])
+@pytest.mark.parametrize(
+    "invalid", ["owner", "visibility", "producer", "schema", "incomplete"]
+)
 def test_invalid_occupied_negative_refuses_before_any_language_attempt(
     tmp_path, monkeypatch, invalid
 ):

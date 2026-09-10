@@ -855,7 +855,6 @@ class NoiseFilteringPipeline:
             or not source_assessment_identity_valid(source=event, assessment=assessment)
             or not owner.startswith("private:")
             or not owner.removeprefix("private:")
-            or event.get("visibility_scope") != owner
             or event.get("sensitivity") not in {"normal", "sensitive"}
             or (event.get("payload") or {}).get(
                 "member_id", owner.removeprefix("private:")
