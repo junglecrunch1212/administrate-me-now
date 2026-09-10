@@ -1563,6 +1563,8 @@ class UpgradeManager:
     def _recover_interrupted_transaction(
         self,
         candidate_repository: Path | None = None,
+        *,
+        finish_journal: bool = True,
     ) -> dict[str, Any] | None:
         """Converge an interrupted transaction to its exact captured predecessor."""
 
@@ -1573,6 +1575,11 @@ class UpgradeManager:
         if journal is None:
             return None
         if journal["phase"] in {"committed", "recovered"}:
+            from bootstrap.source_contract_recovery import (
+                require_contract_publication_complete,
+            )
+
+            require_contract_publication_complete(self, journal)
             try:
                 history = self.activation_journal.finish(journal)
             except ActivationJournalError as exc:
@@ -1657,6 +1664,16 @@ class UpgradeManager:
                     "interrupted activation recovery did not converge: "
                     "service quiescence is unproven; control files were not restored"
                 ) from exc
+            from bootstrap.predecessor_checkpoint_recovery import (
+                recover_predecessor_checkpoint,
+            )
+            from bootstrap.source_contract_recovery import (
+                record_contract_cleanup_intent,
+                record_contract_predecessor_controls,
+            )
+
+            record_contract_cleanup_intent(self, recovery_journal)
+            recover_predecessor_checkpoint(self, recovery_journal)
             for operation in (
                 lambda: self._install_reviewed_openclaw(predecessor),
                 lambda: self._restore_journal_control_files(recovery_journal),
@@ -1685,6 +1702,7 @@ class UpgradeManager:
                     recovery_errors.append(exc)
             if journal["was_running"] and not recovery_errors:
                 try:
+                    record_contract_predecessor_controls(self, recovery_journal)
                     restored = self.services.start()
                     recovery_healthy = False
                     recovery_proof: dict[str, Any] | None = None
@@ -1726,6 +1744,25 @@ class UpgradeManager:
                 raise UpgradeError(
                     "interrupted activation recovery did not converge: " + detail
                 )
+            from bootstrap.source_contract_recovery import (
+                record_contract_predecessor_restoration,
+                require_contract_publication_complete,
+            )
+
+            if journal["was_running"]:
+                record_contract_predecessor_restoration(self, journal)
+            if finish_journal:
+                require_contract_publication_complete(self, journal)
+            if not finish_journal:
+                # Failed exact maintenance still restores the captured runtime,
+                # but a healthy predecessor cannot complete an unfinished
+                # current-contract publication operation on its own.
+                return {
+                    "status": "predecessor_restored",
+                    "transaction_id": journal["transaction_id"],
+                    "journal_open": True,
+                    "content_exposed": False,
+                }
             journal = self.activation_journal.transition(journal, "recovered")
             history = self.activation_journal.finish(journal)
         except ActivationJournalError as exc:

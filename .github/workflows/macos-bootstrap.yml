@@ -109,6 +109,9 @@ jobs:
           tests/acceptance/test_source_contract_recovery.py
           tests/acceptance/test_source_contract_recovery_api.py
           tests/acceptance/test_source_contract_recovery_predecessor.py
+          tests/unit/bootstrap/test_predecessor_checkpoint_recovery.py
+          tests/acceptance/test_predecessor_checkpoint_recovery.py
+          tests/acceptance/test_current_assessment_replay.py
           tests/unit/test_pipeline_runner.py
           tests/unit/test_pipeline_noise_filtering.py
           tests/unit/test_skill_wrapper.py

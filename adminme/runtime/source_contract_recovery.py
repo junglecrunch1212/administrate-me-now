@@ -32,6 +32,7 @@ from adminme.source_contract_recovery import (
     build_contract_recovery_request_envelopes,
     contract_batch_fingerprint,
     contract_request_key,
+    contract_recovery_terminal,
 )
 
 
@@ -155,6 +156,7 @@ async def run_source_contract_recovery(
     batch: SourceAssessmentContractRecoveryBatch,
     requested_by_actor: str,
     run_skill_fn: Any = None,
+    publication_only: bool = False,
 ) -> dict[str, Any]:
     """Execute or resume one canonical authorized request, never a replay scan.
 
@@ -212,6 +214,8 @@ async def run_source_contract_recovery(
             config.tenant_id, contract_request_key(batch.request_id, source["event_id"])
         )
         if request is None:
+            if publication_only:
+                raise MaintenanceRecoveryError("maintenance_publication_request_absent")
             envelopes = await build_contract_recovery_request_envelopes(
                 log,
                 batch,
@@ -242,19 +246,34 @@ async def run_source_contract_recovery(
             ):
                 raise MaintenanceRecoveryError("maintenance_request_identity_conflict")
             request_id = request["event_id"]
-        skill_runtime = build_skill_runtime(
-            event_sink=events,
-            event_log=log,
-            raw_events_dir=config.raw_events_dir,
-            gateway_token=gateway_token,
-        )
+        if publication_only:
+            terminal = await contract_recovery_terminal(log, request_id)
+            if terminal.get("status") != "completed":
+                raise MaintenanceRecoveryError(
+                    "maintenance_publication_terminal_invalid"
+                )
+            if terminal.get("publication_complete") is True:
+                return terminal
+
+            async def selected_skill(*_args: Any, **_kwargs: Any) -> Any:
+                raise MaintenanceRecoveryError(
+                    "maintenance_publication_model_forbidden"
+                )
+        else:
+            skill_runtime = build_skill_runtime(
+                event_sink=events,
+                event_log=log,
+                raw_events_dir=config.raw_events_dir,
+                gateway_token=gateway_token,
+            )
+            selected_skill = run_skill_fn or partial(run_skill, _runtime=skill_runtime)
         runner = PipelineRunner(
             bus,
             log,
             events,
             config,
             observation_manager=observation,
-            run_skill_fn=run_skill_fn or partial(run_skill, _runtime=skill_runtime),
+            run_skill_fn=selected_skill,
             candidate_policy_fn=partial(
                 policy.effective_candidate_policy, state=policy_snapshot
             ),

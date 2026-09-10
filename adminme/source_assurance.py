@@ -571,7 +571,10 @@ async def audit_source_assurance(
                         )
                         reason = assessment_reason(assessment)
                     potential_legacy_contract = False
-                    if assessment.get("schema_version") == 4 and outcome != "failed":
+                    if (
+                        assessment.get("payload", {}).get("recovery_request_event_id")
+                        and outcome != "failed"
+                    ):
                         request_id = str(
                             assessment.get("payload", {}).get(
                                 "recovery_request_event_id"

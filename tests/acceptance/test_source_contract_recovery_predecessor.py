@@ -8,12 +8,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
+import time
 from typing import Any
 
 import pytest
 
+from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
@@ -35,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MEMBER = "fixture-contract-owner"  # fixture:tenant_data:ok
 OTHER = "fixture-contract-other"  # fixture:tenant_data:ok
 KEY = b"c" * 32
+PRESERVED_PROPOSAL = "fixture-preserved-member-decision"
 
 
 # Executed from the exact Git archive, never imported against current packs.
@@ -108,6 +112,22 @@ with TestClient(application.create_application(settings)) as client:
     noise = statuses["pipeline:pipeline:noise_filtering"]
     assert noise["consumer_version"] == "22.0.0", noise
     assert noise["checkpoint_event_id"] >= expected["source_event_id"]
+    conn = runtime.projections.connection("triage")
+    preserved = conn.execute("SELECT * FROM triage_items WHERE proposal_id=?",
+        ("fixture-preserved-member-decision",)).fetchone()
+    assert preserved is not None
+    if preserved["state"] != "dismissed":
+        decision = client.post(
+            "/api/member/v1/triage/fixture-preserved-member-decision/dismiss",
+            headers={"Tailscale-User-Login": "contract-owner.ts.net"},
+            json={"request_id": "fixture-preserved-member-dismissal",
+                "expected_last_event_id": preserved["last_event_id"],
+                "reason": "Member already handled this separate fixture item"})
+        assert decision.status_code == 200, decision.text
+        client.portal.call(settle, runtime)
+    preserved = conn.execute("SELECT * FROM triage_items WHERE proposal_id=?",
+        ("fixture-preserved-member-decision",)).fetchone()
+    assert preserved["state"] == "dismissed" and preserved["resolved_by"] == member
     retained = client.portal.call(events, runtime)
     by_id = {event["event_id"]: event for event in retained}
     for event_id, value in expected["manifest"].items():
@@ -192,6 +212,71 @@ async def _terminal(settings: RuntimeSettings, request_id: str) -> dict[str, Any
         await log.close()
 
 
+async def _seed_preserved_history(settings: RuntimeSettings, source_id: str) -> None:
+    """Retain another private source and a separately adjudicated queue item."""
+    log = EventLog(settings.instance, settings.encryption_key)
+    try:
+        latest = await log.get(await log.latest_event_id())
+        event_at = max(time.time_ns() // 1_000_000, latest["event_at_ms"] + 1)
+        await log.append(
+            EventEnvelope(
+                event_at_ms=event_at,
+                tenant_id=settings.instance.tenant_id,
+                occurred_at=EventEnvelope.now_utc_iso(),
+                type="messaging.received",
+                schema_version=3,
+                source_adapter="fixture-preserved-private-source",
+                source_account_id="fixture-preserved-private-account",
+                owner_scope=f"private:{OTHER}",
+                visibility_scope=f"private:{OTHER}",
+                sensitivity="privileged",
+                actor_identity=OTHER,
+                idempotency_key="fixture-preserved-other-source",
+                payload={
+                    "member_id": OTHER,
+                    "provider": "fixture",
+                    "workspace": "personal",
+                    "provider_account_id": "fixture-preserved-private-account",
+                    "source_channel": "sms",
+                    "native_message_id": "fixture-preserved-source",
+                    "thread_id": "fixture-unrelated-private-thread",
+                    "from_identifier": "sender@example.invalid",
+                    "to_identifier": "recipient@example.invalid",
+                    "subject": "Unrelated private fixture",
+                    "body_text": "Preserve this unrelated private fixture fact.",
+                    "received_at": EventEnvelope.now_utc_iso(),
+                    "attachments": [],
+                },
+            )
+        )
+        await log.append(
+            EventEnvelope(
+                event_at_ms=event_at,
+                tenant_id=settings.instance.tenant_id,
+                occurred_at=EventEnvelope.now_utc_iso(),
+                type="triage.item.proposed",
+                schema_version=1,
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                idempotency_key=PRESERVED_PROPOSAL,
+                payload={
+                    "proposal_id": PRESERVED_PROPOSAL,
+                    "target_kind": "task",
+                    "owner_member_id": MEMBER,
+                    "title": "Separate fixture decision already handled",
+                    "candidate": {},
+                    "route": {"member_id": MEMBER},
+                    "source_event_id": source_id,
+                },
+            ),
+            causation_id=source_id,
+        )
+    finally:
+        await log.close()
+
+
 def _checkpoint_bytes(settings: RuntimeSettings) -> dict[str, bytes | None]:
     """No maintenance path may open or replace any active checkpoint sidecar."""
     return {
@@ -204,6 +289,20 @@ def _checkpoint_bytes(settings: RuntimeSettings) -> dict[str, bytes | None]:
         for suffix in ("", "-wal", "-shm")
         for path in (Path(str(base) + suffix),)
     }
+
+
+def _checkpoint_positions(settings: RuntimeSettings) -> dict[str, str | None]:
+    connection = sqlite3.connect(
+        f"file:{settings.instance.bus_checkpoint_path}?mode=ro", uri=True
+    )
+    try:
+        return dict(
+            connection.execute(
+                "SELECT subscriber_id, checkpoint_event_id FROM bus_consumer_offsets"
+            )
+        )
+    finally:
+        connection.close()
 
 
 def _run_predecessor(
@@ -287,6 +386,7 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
         fixture_member_id=MEMBER,
     )
     lineage = asyncio.run(seed_lineage(settings))
+    asyncio.run(_seed_preserved_history(settings, lineage["source_event_id"]))
     initial = asyncio.run(_retained(settings))
     # Establish the real old consumer version/checkpoint through its own app.
     # Maintenance must not borrow a current-runtime startup or edit that offset.
@@ -300,6 +400,7 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
     )
     assert baseline["source_health"] == "degraded"
     before = asyncio.run(_retained(settings))
+    checkpoint_positions = _checkpoint_positions(settings)
     checkpoints = _checkpoint_bytes(settings)
     assert checkpoints[str(settings.instance.bus_checkpoint_path)] is not None
     operation = tmp_path / "private-maintenance-operation"
@@ -329,7 +430,10 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
 
     monkeypatch.setattr(maintenance, "build_skill_runtime", fixture_runtime)
 
-    def execute() -> dict[str, Any]:
+    async def forbidden_model(*_args, **_kwargs):
+        raise AssertionError("publication-only resume must never invoke a model")
+
+    def execute(*, publication_only: bool = False) -> dict[str, Any]:
         return asyncio.run(
             maintenance.run_source_contract_recovery(
                 instance_dir=settings.instance.instance_dir,
@@ -339,6 +443,8 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
                 gateway_token=None,
                 batch=batch,
                 requested_by_actor="fixture-reviewed-release-operator",
+                publication_only=publication_only,
+                run_skill_fn=forbidden_model if publication_only else None,
             )
         )
 
@@ -374,13 +480,56 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
             == 1
         )
         assert not any(
-            event["type"]
-            in {"triage.item.proposed", "triage.source_publication.completed"}
+            event["type"] == "triage.source_publication.completed"
+            or (
+                event["type"] == "triage.item.proposed"
+                and event["payload"]["proposal_id"] != PRESERVED_PROPOSAL
+            )
             for event in interrupted
         )
         assert _checkpoint_bytes(settings) == checkpoints
 
-    result = execute()
+        # Real failure cleanup starts 890, which can report source health from
+        # the v4 assessment while ignoring the stored publication plan. Its
+        # legitimately advanced checkpoints form the new suffix-only baseline.
+        cleanup = _run_predecessor(
+            archive,
+            settings,
+            lineage,
+            assessment_id=terminal["assessment_event_id"],
+            failed=0,
+            retained=interrupted,
+        )
+        assert cleanup["source_health"] == "healthy"
+        assert asyncio.run(_terminal(settings, request["event_id"])) == terminal
+        cleanup_positions = _checkpoint_positions(settings)
+        assert any(
+            (position or "") > (checkpoint_positions.get(name) or "")
+            for name, position in cleanup_positions.items()
+        )
+        cleanup_checkpoints = _checkpoint_bytes(settings)
+        assert cleanup_checkpoints != checkpoints
+        checkpoints = cleanup_checkpoints
+        after_cleanup = asyncio.run(_retained(settings))
+        cleanup_manifest = _manifest(after_cleanup)
+        assert all(
+            cleanup_manifest[key] == value
+            for key, value in _manifest(interrupted).items()
+        )
+        assert not any(
+            event["type"] == "triage.source_publication.completed"
+            for event in after_cleanup
+        )
+
+        def forbidden_runtime(**_kwargs):
+            raise AssertionError(
+                "publication-only resume must not build a model transport"
+            )
+
+        monkeypatch.setattr(maintenance, "build_skill_runtime", forbidden_runtime)
+        before = after_cleanup
+
+    result = execute(publication_only=crash_after_receipt)
     assert result["status"] == "completed"
     assert result["completed_assessment_contract"] == ASSESSMENT_CONTRACT
     assert result["publication_complete"] is True
@@ -409,7 +558,12 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
         assessment["payload"]["supersedes_assessment_event_id"]
         == lineage["latest_assessment_event_id"]
     )
-    proposals = [event for event in repaired if event["type"] == "triage.item.proposed"]
+    proposals = [
+        event
+        for event in repaired
+        if event["type"] == "triage.item.proposed"
+        and event["payload"]["proposal_id"] != PRESERVED_PROPOSAL
+    ]
     assert proposals and all(event["schema_version"] == 5 for event in proposals)
     assert all(
         event["payload"]["extraction_event_id"] == assessment["event_id"]
@@ -421,7 +575,7 @@ def test_exact_maintenance_and_publication_resume_converge_on_actual_predecessor
     )
 
     # An explicit repeat is idempotent before the actual predecessor starts.
-    assert execute() == result
+    assert execute(publication_only=crash_after_receipt) == result
     assert calls == [120_000]
     assert asyncio.run(_retained(settings)) == repaired
     assert _checkpoint_bytes(settings) == checkpoints

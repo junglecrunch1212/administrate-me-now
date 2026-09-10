@@ -134,6 +134,24 @@ def test_preflight_requires_full_doctor_consumer_inventory_and_exact_failure(tmp
         corrupt(d, r)
         with pytest.raises(control.ContractRecoveryControlError):
             control.validate_live_preflight(d, r, _plan(), **kwargs)
+    for field in ("degraded", "poison_event_id", "consecutive_failures"):
+        truncated = copy.deepcopy(diagnostics)
+        del truncated["capabilities"][next(iter(consumers))]["details"][field]
+        with pytest.raises(
+            control.ContractRecoveryControlError, match="consumer_not_settled"
+        ):
+            control.validate_live_preflight(doctor, truncated, _plan(), **kwargs)
+    for field, invalid in (
+        ("degraded", 0),
+        ("poison_event_id", ""),
+        ("consecutive_failures", False),
+    ):
+        mistyped = copy.deepcopy(diagnostics)
+        mistyped["capabilities"][next(iter(consumers))]["details"][field] = invalid
+        with pytest.raises(
+            control.ContractRecoveryControlError, match="consumer_not_settled"
+        ):
+            control.validate_live_preflight(doctor, mistyped, _plan(), **kwargs)
     diagnostics["capabilities"]["openclaw:member-chat"] = {
         "state": "blocked",
         "details": {"configured_members": 0},
@@ -200,7 +218,13 @@ def _controller(tmp_path, monkeypatch):
     monkeypatch.setattr(control, "expected_doctor_checks", lambda _: names)
     monkeypatch.setattr(control, "expected_consumer_capabilities", lambda *_: consumers)
     monkeypatch.setattr(
-        control, "protected_snapshot", lambda _: {"fixture": "immutable"}
+        control,
+        "protected_snapshot",
+        lambda _: {
+            "files": {"synthetic-control": "unchanged"},
+            "gateway_target": "captured-pinned-gateway",
+            "gateway_sha256": "a" * 64,
+        },
     )
     monkeypatch.setattr(
         control, "checkpoint_snapshot", lambda _: {"fixture": "unchanged"}
@@ -214,6 +238,10 @@ def _controller(tmp_path, monkeypatch):
     async def history(*a, **k):
         calls.append("history")
 
+    async def terminal(*a, **k):
+        return None
+
+    monkeypatch.setattr(control, "_operation_terminal", terminal)
     monkeypatch.setattr(control, "validate_stopped_history", history)
     artifact = tmp_path / "fixture-backup.enc"
     artifact.write_bytes(b"opaque synthetic backup")
@@ -249,19 +277,20 @@ def test_same_journal_retry_reuses_identity_and_deadline_without_finishing_on_fa
     records = []
 
     def child(_manager, _path, record):
+        record["worker_terminal_confirmed"] = True
         records.append(copy.deepcopy(record))
         calls.append("child")
         assert record["maintenance_deadline"] == record["maintenance_started_at"] + 600
         return {"status": "failed", "publication_complete": True}
 
     monkeypatch.setattr(control, "run_maintenance_child", child)
-    monkeypatch.setattr(
-        manager,
-        "_recover_interrupted_transaction",
-        lambda _: pytest.fail(
-            "failed contract cannot restart predecessor or close journal"
-        ),
-    )
+
+    def restored(_repository, *, finish_journal=True):
+        assert finish_journal is False
+        calls.append("restore_with_open_journal")
+        return {"status": "predecessor_restored"}
+
+    monkeypatch.setattr(manager, "_recover_interrupted_transaction", restored)
     for advance in (0, 10):
         clock[0] += advance
         with pytest.raises(control.ContractRecoveryControlError, match="not_completed"):
@@ -271,6 +300,11 @@ def test_same_journal_retry_reuses_identity_and_deadline_without_finishing_on_fa
     assert records[0]["maintenance_deadline"] == records[1]["maintenance_deadline"]
     assert manager.activation_journal.load()["phase"] == "recovering"
     assert calls[:5] == ["stop", "history", "backup", "rehearse", "gateway"]
+    assert calls.count("restore_with_open_journal") == 2
+    assert (
+        records[1]["recovery_deadline"]
+        == records[0]["maintenance_started_at"] + control.RECOVERY_SECONDS
+    )
     monkeypatch.setattr(control, "reviewed_candidate_commit", lambda _: "3" * 40)
     before = calls[:]
     with pytest.raises(control.ContractRecoveryControlError, match="operation_changed"):
@@ -340,18 +374,26 @@ def test_completed_assessment_requires_publication_then_existing_full_recovery(
         "completed_assessment_contract": control.ASSESSMENT_CONTRACT,
         "publication_complete": False,
     }
-    monkeypatch.setattr(control, "run_maintenance_child", lambda *_: terminal.copy())
 
-    def existing_recovery(_repository):
+    def child(_manager, _path, record):
+        record["worker_terminal_confirmed"] = True
+        return terminal.copy()
+
+    monkeypatch.setattr(control, "run_maintenance_child", child)
+
+    def existing_recovery(_repository, *, finish_journal=True):
         calls.append("existing_full_recovery")
         assert manager.activation_journal.load()["phase"] == "recovering"
         assert manager._settlement_deadline == manager._recovery_settlement_deadline
+        if not finish_journal:
+            calls.append("healthy_but_journal_kept_open")
+            return {"status": "predecessor_restored", "journal_open": True}
         raise RuntimeError("fixture predecessor full Doctor remains failed")
 
     monkeypatch.setattr(manager, "_recover_interrupted_transaction", existing_recovery)
     with pytest.raises(control.ContractRecoveryControlError, match="not_completed"):
         manager.recover_source_contract(ROOT, plan_path)
-    assert "existing_full_recovery" not in calls
+    assert calls[-1] == "healthy_but_journal_kept_open"
     terminal["publication_complete"] = True
     with pytest.raises(RuntimeError, match="Doctor remains failed"):
         manager.recover_source_contract(ROOT, plan_path)
@@ -363,3 +405,376 @@ def test_completed_assessment_requires_publication_then_existing_full_recovery(
     )
     assert record["phase"] == "maintenance_terminal"
     assert record["recovery_deadline"] < record["deadline"]
+
+
+@pytest.mark.parametrize("stage", ["backup", "worker", "unreaped_worker"])
+def test_failure_cleanup_preserves_primary_and_original_deadline(
+    tmp_path, monkeypatch, stage
+):
+    manager, plan_path, clock, calls = _controller(tmp_path, monkeypatch)
+    original = RuntimeError("fixture primary maintenance failure")
+    seen_deadlines = []
+
+    class BrokenBackup:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create(self):
+            raise original
+
+    def child(_manager, _path, record):
+        record["worker_terminal_confirmed"] = stage != "unreaped_worker"
+        raise original
+
+    def recovery(_repository, *, finish_journal=True):
+        assert finish_journal is False
+        seen_deadlines.append(manager._settlement_deadline)
+        raise RuntimeError("fixture secondary full Doctor failure")
+
+    if stage == "backup":
+        monkeypatch.setattr(control, "BackupManager", BrokenBackup)
+    monkeypatch.setattr(control, "run_maintenance_child", child)
+    monkeypatch.setattr(manager, "_recover_interrupted_transaction", recovery)
+    for advance in (0, 5):
+        clock[0] += advance
+        with pytest.raises(RuntimeError) as raised:
+            manager.recover_source_contract(ROOT, plan_path)
+        assert raised.value is original
+    if stage == "unreaped_worker":
+        assert seen_deadlines == []
+    else:
+        assert len(seen_deadlines) == 2 and seen_deadlines[0] == seen_deadlines[1]
+        assert all("RuntimeError" in note for note in original.__notes__)
+    assert manager.activation_journal.load()["phase"] == "recovering"
+
+
+def test_existing_recovery_can_restore_healthy_predecessor_without_closing_journal(
+    tmp_path, monkeypatch
+):
+    paths = _paths(tmp_path)
+    manager = UpgradeManager(paths, root=ROOT, test_mode=True)
+    journal = manager.activation_journal.create(_journal_value(paths))
+    manager.activation_journal.transition(journal, "recovering")
+    actions = []
+    manager.services = SimpleNamespace(
+        stop=lambda: actions.append("stop"),
+        start=lambda: (
+            actions.append("start")
+            or SimpleNamespace(status="healthy", runtime="running", openclaw="running")
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_install_reviewed_openclaw",
+        lambda _: actions.append("pinned_gateway"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *a, **k: actions.append("plugin"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.install_launch_agents",
+        lambda *a, **k: actions.append("launchagents"),
+    )
+    doctor, _diagnostics, names, _consumers = _proof(tmp_path)
+    for check in doctor["checks"]:
+        check["ok"] = True
+    doctor["status"] = "healthy"
+
+    def proof(_release):
+        assert set(check["name"] for check in doctor["checks"]) == names
+        actions.append("full_doctor")
+        return doctor
+
+    monkeypatch.setattr(manager, "_post_switch_doctor", proof)
+    result = manager._recover_interrupted_transaction(ROOT, finish_journal=False)
+    assert result["status"] == "predecessor_restored"
+    assert result["journal_open"] is True
+    assert actions[-2:] == ["start", "full_doctor"]
+    assert manager.activation_journal.load()["phase"] == "recovering"
+    assert not list(manager.activation_journal.history.glob("*.json"))
+
+
+def _saved_operation(manager):
+    name = f"contract-recovery-{_plan().transaction_id}.json"
+    return name, control._load(manager.activation_journal.directory, name)
+
+
+def _healthy_proof(manager):
+    doctor = manager._run_release_doctor(ROOT)
+    doctor["status"] = "healthy"
+    for check in doctor["checks"]:
+        check["ok"] = True
+    diagnostics = manager.services.runtime_diagnostics()
+    diagnostics["deployment_readiness"].update(ready=True, blocking_dimensions=[])
+    source = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+    source["counts"]["failed"] = 0
+    source["failed"] = []
+    source["watermark_event_id"] = "00000000000000000000000009"
+
+
+def test_publication_reentry_uses_fresh_full_proof_and_retains_all_deadlines(
+    tmp_path, monkeypatch
+):
+    manager, plan_path, clock, calls = _controller(tmp_path, monkeypatch)
+    terminal = {
+        "status": "completed",
+        "completed_assessment_contract": control.ASSESSMENT_CONTRACT,
+        "publication_complete": False,
+    }
+    children = []
+
+    def child(_manager, _path, record):
+        record["worker_terminal_confirmed"] = True
+        children.append(copy.deepcopy(record))
+        return terminal.copy()
+
+    def recovery(_repository, *, finish_journal=True):
+        if not finish_journal:
+            journal = manager.activation_journal.load()
+            control.record_contract_predecessor_controls(manager, journal)
+            control.record_contract_predecessor_restoration(manager, journal)
+            return {"status": "predecessor_restored"}
+        return {"status": "recovered"}
+
+    monkeypatch.setattr(control, "run_maintenance_child", child)
+    monkeypatch.setattr(manager, "_recover_interrupted_transaction", recovery)
+    with pytest.raises(control.ContractRecoveryControlError, match="not_completed"):
+        manager.recover_source_contract(ROOT, plan_path)
+    _name, initial = _saved_operation(manager)
+    _healthy_proof(manager)
+    monkeypatch.setattr(
+        manager.services, "status", lambda: SimpleNamespace(status="healthy")
+    )
+    monkeypatch.setattr(
+        control, "checkpoint_snapshot", lambda _: {"fixture": "legitimate-old-replay"}
+    )
+
+    async def stored_terminal(*a, **k):
+        return terminal.copy()
+
+    monkeypatch.setattr(control, "_operation_terminal", stored_terminal)
+    clock[0] += 700  # Original language phase has expired; it must never restart.
+
+    def suffix(_manager, _path, record):
+        record["worker_terminal_confirmed"] = True
+        children.append(copy.deepcopy(record))
+        assert record["execution_mode"] == "publication_only"
+        assert record["publication_checkpoints"] == {"fixture": "legitimate-old-replay"}
+        terminal["publication_complete"] = True
+        return terminal.copy()
+
+    monkeypatch.setattr(control, "run_maintenance_child", suffix)
+    assert manager.recover_source_contract(ROOT, plan_path)["status"] == "recovered"
+    assert len(children) == 2
+    assert children[1]["fingerprint"] == initial["fingerprint"]
+    assert children[1]["plan"] == initial["plan"]
+    for field in ("deadline", "maintenance_deadline", "recovery_deadline"):
+        assert children[1][field] == initial[field]
+    assert children[1]["publication_deadline"] == clock[0] + 600
+    # Crash after complete publication needs only existing recovery, no child.
+    before = len(children)
+    assert manager.recover_source_contract(ROOT, plan_path)["status"] == "recovered"
+    assert len(children) == before
+
+
+@pytest.mark.parametrize("unspent", [True, False])
+def test_only_unspent_command_can_refresh_after_source_failed_cleanup(
+    tmp_path, monkeypatch, unspent
+):
+    manager, plan_path, clock, calls = _controller(tmp_path, monkeypatch)
+    real_backup = control.BackupManager
+    primary = RuntimeError("fixture backup failed before command append")
+
+    class BrokenBackup:
+        def __init__(self, *a, **k):
+            pass
+
+        def create(self):
+            raise primary
+
+    def recovery(_repository, *, finish_journal=True):
+        if not finish_journal:
+            control.record_contract_predecessor_controls(
+                manager, manager.activation_journal.load()
+            )
+            raise RuntimeError("fixture exact source remains failed")
+        return {"status": "recovered"}
+
+    monkeypatch.setattr(control, "BackupManager", BrokenBackup)
+    monkeypatch.setattr(manager, "_recover_interrupted_transaction", recovery)
+    with pytest.raises(RuntimeError) as raised:
+        manager.recover_source_contract(ROOT, plan_path)
+    assert raised.value is primary
+    _name, initial = _saved_operation(manager)
+    assert initial["cleanup_intent"] and initial["predecessor_controls_restored"]
+    assert not initial.get("predecessor_restoration_proved")
+    monkeypatch.setattr(control, "BackupManager", real_backup)
+    monkeypatch.setattr(
+        manager.services, "status", lambda: SimpleNamespace(status="degraded")
+    )
+    monkeypatch.setattr(
+        control, "checkpoint_snapshot", lambda _: {"fixture": "newly-settled-prefix"}
+    )
+    source = manager.services.runtime_diagnostics()["capabilities"][
+        "policy:source-assurance"
+    ]["details"]
+    source["watermark_event_id"] = "00000000000000000000000009"
+    no_attempt_checks = []
+
+    async def no_attempts(*a, **k):
+        no_attempt_checks.append("read")
+        return unspent
+
+    monkeypatch.setattr(control, "_operation_has_no_attempts", no_attempts)
+    clock[0] += 10
+    seen = []
+
+    def child(_manager, _path, record):
+        record["worker_terminal_confirmed"] = True
+        seen.append(copy.deepcopy(record))
+        return {
+            "status": "completed",
+            "publication_complete": True,
+            "completed_assessment_contract": control.ASSESSMENT_CONTRACT,
+        }
+
+    monkeypatch.setattr(control, "run_maintenance_child", child)
+    if unspent:
+        assert manager.recover_source_contract(ROOT, plan_path)["status"] == "recovered"
+        assert len(no_attempt_checks) == 2  # live and stopped lineage/reservation proof
+        assert seen[0]["checkpoints"] == {"fixture": "newly-settled-prefix"}
+        assert (
+            seen[0]["preflight"]["watermark_event_id"] == source["watermark_event_id"]
+        )
+        for field in ("fingerprint", "plan", "deadline", "recovery_deadline"):
+            assert seen[0][field] == initial[field]
+    else:
+        with pytest.raises(
+            control.ContractRecoveryControlError, match="checkpoints_changed"
+        ):
+            manager.recover_source_contract(ROOT, plan_path)
+        assert not seen
+        assert len(no_attempt_checks) == 1
+
+
+@pytest.mark.parametrize("publication_complete", [False, True])
+def test_ordinary_rollback_cannot_archive_unfinished_declared_operation(
+    tmp_path, monkeypatch, publication_complete
+):
+    manager, plan_path, _clock, _calls = _controller(tmp_path, monkeypatch)
+
+    def child(_manager, _path, record):
+        record["worker_terminal_confirmed"] = True
+        return {"status": "failed"}
+
+    monkeypatch.setattr(control, "run_maintenance_child", child)
+    monkeypatch.setattr(
+        manager, "_recover_interrupted_transaction", lambda *a, **k: None
+    )
+    with pytest.raises(control.ContractRecoveryControlError, match="not_completed"):
+        manager.recover_source_contract(ROOT, plan_path)
+    monkeypatch.delattr(manager, "_recover_interrupted_transaction")
+    actions = []
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _: None)
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin", lambda *a, **k: None
+    )
+    monkeypatch.setattr("bootstrap.upgrade.install_launch_agents", lambda *a, **k: None)
+    monkeypatch.setattr(
+        manager.services,
+        "start",
+        lambda: SimpleNamespace(
+            status="healthy", runtime="running", openclaw="running"
+        ),
+    )
+    _healthy_proof(manager)
+
+    def full_doctor(_release):
+        actions.append("full_doctor")
+        return manager._run_release_doctor(ROOT)
+
+    monkeypatch.setattr(manager, "_post_switch_doctor", full_doctor)
+
+    async def terminal(*a, **k):
+        return {
+            "status": "completed",
+            "completed_assessment_contract": control.ASSESSMENT_CONTRACT,
+            "publication_complete": publication_complete,
+        }
+
+    monkeypatch.setattr(control, "_operation_terminal", terminal)
+    if publication_complete:
+        assert manager._recover_interrupted_transaction(ROOT)["status"] == "recovered"
+        assert manager.activation_journal.load() is None
+    else:
+        with pytest.raises(
+            control.ContractRecoveryControlError, match="publication_unfinished"
+        ):
+            manager._recover_interrupted_transaction(ROOT)
+        assert manager.activation_journal.load()["phase"] == "recovering"
+        assert not list(manager.activation_journal.history.glob("*.json"))
+    assert actions == ["full_doctor"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["absent", "pending", "reserved", "failed"])
+async def test_unspent_proof_checks_all_exact_reservations_and_current_lineage(
+    tmp_path, monkeypatch, state
+):
+    record = {"plan": _plan().model_dump(mode="json"), "fingerprint": "a" * 64}
+    batch = control._batch(record)
+    request = {
+        "event_id": "00000000000000000000000009",
+        "payload": {"batch_fingerprint": control.contract_batch_fingerprint(batch)},
+    }
+    calls = []
+
+    class Log:
+        def __init__(self, config, key, *, read_only):
+            assert read_only is True
+
+        async def get_by_idempotency(self, tenant, key):
+            assert tenant == "fixture-tenant"
+            assert key == control.contract_request_key(
+                batch.request_id, _plan().target.source_event_id
+            )
+            return None if state == "absent" else request
+
+        async def get_by_idempotency_keys(self, tenant, keys):
+            assert tenant == "fixture-tenant"
+            assert keys == [
+                f"source-assessment-contract-attempt:{request['event_id']}:{slot}"
+                for slot in range(3)
+            ]
+            calls.append("three-exact-slots")
+            return [{"event_id": "spent"}] if state == "reserved" else []
+
+        async def close(self):
+            calls.append("closed")
+
+    async def terminal(log, request_id):
+        assert request_id == request["event_id"]
+        return {"status": "failed" if state == "failed" else "pending"}
+
+    async def lineage(log, target, *, required_tenant_id):
+        assert target == _plan().target
+        assert required_tenant_id == "fixture-tenant"
+        calls.append("frozen-lineage")
+
+    monkeypatch.setattr(control, "EventLog", Log)
+    monkeypatch.setattr(control, "_keys", lambda *a: (b"synthetic", "synthetic"))
+    monkeypatch.setattr(
+        control,
+        "load_instance_config",
+        lambda _: SimpleNamespace(tenant_id="fixture-tenant"),
+    )
+    monkeypatch.setattr(control, "contract_recovery_terminal", terminal)
+    monkeypatch.setattr(control, "validate_contract_recovery_target", lineage)
+    result = await control._operation_has_no_attempts(
+        SimpleNamespace(instance_dir=tmp_path), record, test_mode=True
+    )
+    assert result is (state in {"absent", "pending"})
+    assert ("frozen-lineage" in calls) is result
+    assert ("three-exact-slots" in calls) is (state in {"pending", "reserved"})
+    assert calls[-1] == "closed"

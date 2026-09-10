@@ -14,7 +14,10 @@ from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
 from adminme.runtime import source_contract_recovery as maintenance
-from adminme.source_contract_recovery import SourceAssessmentContractRecoveryBatch
+from adminme.source_contract_recovery import (
+    ASSESSMENT_CONTRACT,
+    SourceAssessmentContractRecoveryBatch,
+)
 from tests.acceptance.test_bounded_triage_execution import OTHER, REPO_ROOT, _settings
 from tests.fixtures.source_contract_recovery import seed_lineage, target_payload
 
@@ -81,6 +84,7 @@ def test_maintenance_repairs_only_exact_source_without_consumers_or_active_state
 
     monkeypatch.setattr(EventBus, "start", no_consumer_start)
     batch = SourceAssessmentContractRecoveryBatch(
+        required_assessment_contract=ASSESSMENT_CONTRACT,
         request_id="fixture-guarded-exact-maintenance",
         targets=[target_payload(lineage)],
     )
@@ -172,6 +176,7 @@ def test_interrupted_transport_reservation_cannot_spend_again_on_restart(
     settings = _settings(tmp_path)
     lineage = asyncio.run(seed_lineage(settings))
     batch = SourceAssessmentContractRecoveryBatch(
+        required_assessment_contract=ASSESSMENT_CONTRACT,
         request_id="fixture-guarded-ambiguous-attempt",
         targets=[target_payload(lineage)],
     )
@@ -236,6 +241,7 @@ def test_maintenance_observation_refusal_precedes_request_or_transport(
     original = asyncio.run(_history(settings))
     calls = _fixture_seam(monkeypatch)
     batch = SourceAssessmentContractRecoveryBatch(
+        required_assessment_contract=ASSESSMENT_CONTRACT,
         request_id="fixture-guarded-observation-required",
         targets=[target_payload(lineage)],
     )

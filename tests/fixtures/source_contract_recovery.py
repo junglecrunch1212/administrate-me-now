@@ -6,6 +6,7 @@ Consumers and new recovery execution are exercised through production roots.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any, Literal
 
@@ -117,9 +118,12 @@ async def seed_lineage(
                 causation_id=source_id,
             )
 
+        source_fingerprint = hashlib.sha256(source_id.encode()).hexdigest()
         for slot in range(3):
             suffix = f":recovery-{slot}" if slot else ""
-            await skill_terminal("8.0.1", f"message-nature:{'a' * 64}{suffix}", True)
+            await skill_terminal(
+                "8.0.1", f"message-nature:{source_fingerprint}{suffix}", True
+            )
         assessment_payload = {
             "intent_id": f"source:{source_id}",
             "source_event_id": source_id,

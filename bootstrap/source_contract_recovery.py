@@ -197,6 +197,7 @@ def validate_live_preflight(
     *,
     doctor_checks: frozenset[str],
     required_consumers: frozenset[str],
+    publication_only: bool = False,
 ) -> dict[str, Any]:
     checks = doctor.get("checks")
     _require(isinstance(checks, list) and bool(checks), "preflight_doctor_absent")
@@ -220,7 +221,9 @@ def validate_live_preflight(
     )
     failed = {row["name"] for row in checks if not row["ok"]}
     _require(
-        "source_assurance_terminal_dispositions" in failed
+        (not failed and doctor.get("status") == "healthy")
+        if publication_only
+        else "source_assurance_terminal_dispositions" in failed
         and failed <= _SOURCE_FAILURE_CHECKS,
         "preflight_unrelated_doctor_failure",
     )
@@ -232,7 +235,13 @@ def validate_live_preflight(
     deployment = diagnostics.get("deployment_readiness") or {}
     _require(
         deployment.get("contract") == "deployment-readiness-v1"
-        and set(deployment.get("blocking_dimensions") or ()) == {"observation_effects"},
+        and (
+            deployment.get("ready") is True
+            and deployment.get("blocking_dimensions") == []
+            if publication_only
+            else set(deployment.get("blocking_dimensions") or ())
+            == {"observation_effects"}
+        ),
         "preflight_unrelated_readiness_failure",
     )
     capabilities = diagnostics.get("capabilities") or {}
@@ -262,9 +271,11 @@ def validate_live_preflight(
             _require(
                 value.get("state") == "healthy"
                 and details.get("lag_count") == 0
-                and not details.get("degraded")
-                and not details.get("poison_event_id")
-                and details.get("consecutive_failures", 0) == 0,
+                and details.get("degraded") is False
+                and "poison_event_id" in details
+                and details["poison_event_id"] is None
+                and type(details.get("consecutive_failures")) is int
+                and details["consecutive_failures"] == 0,
                 "preflight_consumer_not_settled",
             )
     _require(consumers >= 2, "preflight_consumer_evidence_absent")
@@ -275,7 +286,7 @@ def validate_live_preflight(
         source.get("contract") == "source-assurance-v1"
         and source.get("content_exposed") is False
         and counts.get("pending") == counts.get("missing") == 0
-        and counts.get("failed") == 1
+        and counts.get("failed") == (0 if publication_only else 1)
         and counts.get("accounted") == counts.get("obligations")
         and freshness.get("state") == "fresh"
         and freshness.get("revision_current") is True
@@ -286,7 +297,9 @@ def validate_live_preflight(
     )
     failures = source.get("failed") or []
     _require(
-        len(failures) == 1
+        not failures
+        if publication_only
+        else len(failures) == 1
         and failures[0].get("event_id") == plan.target.source_event_id,
         "preflight_failure_set_changed",
     )
@@ -318,7 +331,9 @@ def validate_live_preflight(
     return {
         "watermark_event_id": watermark,
         "counts": counts,
-        "failed_source_event_id": plan.target.source_event_id,
+        "failed_source_event_id": None
+        if publication_only
+        else plan.target.source_event_id,
         "provider_effect_counts": effects["counts"],
         "content_exposed": False,
     }
@@ -450,7 +465,14 @@ async def validate_stopped_history(
         # Every post-preflight append must belong to this one operation. No
         # unrelated ingress or alternate maintenance writer can reuse the proof.
         observed = 0
-        async for event in log.read_since(record["preflight"]["watermark_event_id"]):
+        preflight = (
+            record.get("publication_preflight")
+            if record.get("execution_mode") == "publication_only"
+            else record["preflight"]
+        )
+        _require(isinstance(preflight, dict), "recovery_preflight_absent")
+        assert isinstance(preflight, dict)
+        async for event in log.read_since(preflight["watermark_event_id"]):
             observed += 1
             _require(
                 observed <= 1024
@@ -496,6 +518,221 @@ def _load(directory: Path, name: str) -> dict[str, Any] | None:
         os.close(descriptor)
 
 
+def _declared_operation(
+    manager: Any, journal: dict[str, Any]
+) -> tuple[Path, str, dict[str, Any]] | None:
+    directory = manager.activation_journal.directory
+    name = f"contract-recovery-{journal['transaction_id']}.json"
+    record = _load(directory, name)
+    if record is None:
+        return None
+    plan = ContractRecoveryPlan.model_validate(record.get("plan"))
+    fingerprint = hashlib.sha256(
+        canonical_json(
+            {
+                "controller_commit": record.get("controller_commit"),
+                "plan": plan.model_dump(mode="json"),
+            }
+        )
+    ).hexdigest()
+    _require(
+        record.get("contract") == "guarded-source-contract-operation-v1"
+        and record.get("fingerprint") == fingerprint
+        and plan.transaction_id == journal["transaction_id"]
+        and plan.predecessor_commit == journal["predecessor_commit"],
+        "contract_recovery_operation_changed",
+    )
+    return directory, name, record
+
+
+async def _operation_terminal(
+    paths: DeploymentPaths, record: dict[str, Any], *, test_mode: bool
+) -> dict[str, Any] | None:
+    key, _token = _keys(paths, test_mode)
+    config = load_instance_config(paths.instance_dir)
+    log = EventLog(config, key, read_only=True)
+    try:
+        batch = _batch(record)
+        request = await log.get_by_idempotency(
+            config.tenant_id,
+            contract_request_key(batch.request_id, batch.targets[0].source_event_id),
+        )
+        if request is None:
+            return None
+        _require(
+            (request.get("payload") or {}).get("batch_fingerprint")
+            == contract_batch_fingerprint(batch),
+            "recovery_request_changed",
+        )
+        return await contract_recovery_terminal(log, request["event_id"])
+    finally:
+        await log.close()
+
+
+async def _operation_has_no_attempts(
+    paths: DeploymentPaths, record: dict[str, Any], *, test_mode: bool
+) -> bool:
+    """Only an unspent exact command may obtain a fresh live preflight."""
+    key, _token = _keys(paths, test_mode)
+    config = load_instance_config(paths.instance_dir)
+    log = EventLog(config, key, read_only=True)
+    try:
+        batch = _batch(record)
+        target = batch.targets[0]
+        request = await log.get_by_idempotency(
+            config.tenant_id,
+            contract_request_key(batch.request_id, target.source_event_id),
+        )
+        if request is not None:
+            _require(
+                (request.get("payload") or {}).get("batch_fingerprint")
+                == contract_batch_fingerprint(batch),
+                "recovery_request_changed",
+            )
+            terminal = await contract_recovery_terminal(log, request["event_id"])
+            if terminal["status"] != "pending":
+                return False
+            reservations = await log.get_by_idempotency_keys(
+                config.tenant_id,
+                [
+                    f"source-assessment-contract-attempt:{request['event_id']}:{slot}"
+                    for slot in range(3)
+                ],
+            )
+            if reservations:
+                return False
+        # Re-entry cannot reselect a changed source lineage even before a call.
+        await validate_contract_recovery_target(
+            log, target, required_tenant_id=config.tenant_id
+        )
+        return True
+    finally:
+        await log.close()
+
+
+def record_contract_cleanup_intent(manager: Any, journal: dict[str, Any]) -> None:
+    """Persist before captured recovery changes any selected controls."""
+    declared = _declared_operation(manager, journal)
+    if declared is None:
+        return
+    directory, name, record = declared
+    record["cleanup_intent"] = True
+    _save(directory, name, record)
+
+
+def record_contract_predecessor_controls(manager: Any, journal: dict[str, Any]) -> None:
+    """Record exact restored controls before start, without claiming health."""
+    declared = _declared_operation(manager, journal)
+    if declared is None:
+        return
+    directory, name, record = declared
+    _require(record.get("cleanup_intent") is True, "contract_cleanup_intent_absent")
+    restored = _expected_restored_controls(manager, journal, record)
+    record["predecessor_restored_controls"] = restored
+    record["predecessor_controls_restored"] = True
+    _save(directory, name, record)
+
+
+def _expected_restored_controls(
+    manager: Any, journal: dict[str, Any], record: dict[str, Any]
+) -> dict[str, Any]:
+    original = record.get("initial_controls", record["controls"])
+    restored = protected_snapshot(manager.paths)
+    expected_files = dict(original["files"])
+    restored_files = dict(restored["files"])
+    for filename, field in (
+        ("settings-control.json", "initial_settings_control_sha256"),
+        ("adapters.json", "initial_adapter_config_sha256"),
+    ):
+        path = str(manager.paths.instance_dir / "config" / filename)
+        if restored_files.get(path) != expected_files.get(path):
+            _require(
+                field in journal and restored_files.get(path) == journal[field],
+                "contract_recovery_unexpected_cleanup_control",
+            )
+        expected_files.pop(path, None)
+        restored_files.pop(path, None)
+    readiness = str(manager.paths.instance_dir / "config" / "deployment-readiness.json")
+    expected_files.pop(readiness, None)
+    restored_files.pop(readiness, None)
+    _require(
+        expected_files == restored_files
+        and original["gateway_target"] == restored["gateway_target"]
+        and original["gateway_sha256"] == restored["gateway_sha256"],
+        "contract_recovery_unexpected_cleanup_control",
+    )
+    return restored
+
+
+def record_contract_predecessor_restoration(
+    manager: Any, journal: dict[str, Any]
+) -> None:
+    """Called only after existing recovery's full healthy predecessor proof."""
+    declared = _declared_operation(manager, journal)
+    if declared is None:
+        return
+    directory, name, record = declared
+    _require(record.get("cleanup_intent") is True, "contract_cleanup_intent_absent")
+    record["predecessor_restored_controls"] = _expected_restored_controls(
+        manager, journal, record
+    )
+    record["predecessor_restoration_proved"] = True
+    _save(directory, name, record)
+
+
+def require_contract_publication_complete(
+    manager: Any, journal: dict[str, Any]
+) -> None:
+    """An ordinary rollback cannot close a declared unfinished publication."""
+    declared = _declared_operation(manager, journal)
+    if declared is None:
+        return
+    terminal = asyncio.run(
+        _operation_terminal(manager.paths, declared[2], test_mode=manager.test_mode)
+    )
+    _require(
+        terminal is not None
+        and terminal.get("status") == "completed"
+        and terminal.get("completed_assessment_contract") == ASSESSMENT_CONTRACT
+        and terminal.get("publication_complete") is True,
+        "contract_publication_unfinished",
+    )
+
+
+def _execution_baseline(
+    record: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if record.get("execution_mode") == "publication_only":
+        return record["publication_controls"], record["publication_checkpoints"]
+    return record["controls"], record["checkpoints"]
+
+
+def _worker_deadline(record: dict[str, Any]) -> float:
+    publication = record.get("execution_mode") == "publication_only"
+    prefix = "publication" if publication else "maintenance"
+    started = record[f"{prefix}_started_at"]
+    deadline = record[f"{prefix}_deadline"]
+    ceiling = record["deadline"] - FINALIZATION_RESERVE_SECONDS
+    if publication:
+        ceiling = min(ceiling, record["recovery_deadline"] - 180)
+    else:
+        ceiling -= RECOVERY_SECONDS
+        if "recovery_deadline" in record:
+            ceiling = min(ceiling, record["recovery_deadline"] - 180)
+    _require(
+        type(started) in (int, float)
+        and type(deadline) in (int, float)
+        and math.isfinite(started)
+        and math.isfinite(deadline)
+        and started
+        <= deployment_clock()
+        < deadline
+        <= min(started + MAINTENANCE_SECONDS, ceiling),
+        "maintenance_deadline_exhausted",
+    )
+    return deadline
+
+
 def _remaining(record: dict[str, Any], reserve: float = 0) -> float:
     now = deployment_clock()
     start, deadline = record["started_at"], record["deadline"]
@@ -514,17 +751,8 @@ def _remaining(record: dict[str, Any], reserve: float = 0) -> float:
 def run_maintenance_child(
     manager: Any, record_path: Path, record: dict[str, Any]
 ) -> dict[str, Any]:
-    deadline = record["maintenance_deadline"]
-    _require(
-        record["maintenance_started_at"]
-        <= deployment_clock()
-        < deadline
-        <= min(
-            record["maintenance_started_at"] + MAINTENANCE_SECONDS,
-            record["deadline"] - RECOVERY_SECONDS - FINALIZATION_RESERVE_SECONDS,
-        ),
-        "maintenance_deadline_exhausted",
-    )
+    record["worker_terminal_confirmed"] = True
+    deadline = _worker_deadline(record)
     inherited_lock = os.environ.get("ADMINME_UPGRADE_OPERATION_LOCK_FD")
     _require(
         manager.test_mode or (inherited_lock and inherited_lock.isdecimal()),
@@ -565,6 +793,7 @@ def run_maintenance_child(
             stderr=subprocess.DEVNULL,
             pass_fds=tuple(descriptors),
         )
+        record["worker_terminal_confirmed"] = False
         os.close(parent_read)
         parent_read = -1
         child.wait(timeout=max(0.1, deadline - deployment_clock()))
@@ -593,6 +822,266 @@ def run_maintenance_child(
             child is None or child.poll() is not None,
             "maintenance_child_terminality_unknown",
         )
+        # This in-memory flag is set only after this invocation has reaped its
+        # child. A durable flag from an earlier invocation is never trusted.
+        record["worker_terminal_confirmed"] = True
+
+
+def _recover_captured_predecessor(
+    manager: Any,
+    repository: Path,
+    directory: Path,
+    name: str,
+    record: dict[str, Any],
+    *,
+    finish_journal: bool,
+) -> dict[str, Any] | None:
+    if "recovery_deadline" not in record:
+        record["recovery_started_at"] = deployment_clock()
+        record["recovery_deadline"] = min(
+            record["recovery_started_at"] + RECOVERY_SECONDS,
+            record["deadline"] - FINALIZATION_RESERVE_SECONDS,
+        )
+        _save(directory, name, record)
+    _require(
+        record["recovery_started_at"]
+        <= deployment_clock()
+        < record["recovery_deadline"]
+        <= min(
+            record["recovery_started_at"] + RECOVERY_SECONDS,
+            record["deadline"] - FINALIZATION_RESERVE_SECONDS,
+        ),
+        "contract_recovery_settlement_deadline_exhausted",
+    )
+    record["cleanup_intent"] = True
+    _save(directory, name, record)
+    manager._recovery_settlement_deadline = record["recovery_deadline"]
+    manager._settlement_deadline = record["recovery_deadline"]
+    return manager._recover_interrupted_transaction(
+        repository, finish_journal=finish_journal
+    )
+
+
+def _resume_frozen_publication(
+    manager: Any,
+    repository: Path,
+    directory: Path,
+    name: str,
+    record: dict[str, Any],
+    plan: ContractRecoveryPlan,
+) -> dict[str, Any]:
+    """Resume a stored draft suffix after a proved predecessor restoration."""
+    _require(
+        record.get("predecessor_restoration_proved") is True,
+        "publication_predecessor_restoration_unproved",
+    )
+    expected = record["predecessor_restored_controls"]
+    _require(
+        protected_snapshot(manager.paths) == expected, "publication_controls_changed"
+    )
+    stopped = manager.services.status().status == "stopped"
+    if stopped:
+        _require(
+            record.get("execution_mode") == "publication_only"
+            and isinstance(record.get("publication_preflight"), dict)
+            and checkpoint_snapshot(manager.paths)
+            == record.get("publication_checkpoints"),
+            "publication_stopped_preflight_unproved",
+        )
+    else:
+        journal = manager.activation_journal.load()
+        _require(journal is not None, "contract_recovery_journal_mismatch")
+        assert journal is not None
+        predecessor = Path(journal["predecessor_path"])
+        doctor = manager._run_release_doctor(predecessor, include_synthetic_proof=True)
+        diagnostics = manager.services.runtime_diagnostics()
+        _require(isinstance(diagnostics, dict), "publication_live_preflight_absent")
+        assert isinstance(diagnostics, dict)
+        proof = validate_live_preflight(
+            doctor,
+            diagnostics,
+            plan,
+            doctor_checks=expected_doctor_checks(predecessor),
+            required_consumers=expected_consumer_capabilities(
+                predecessor, manager.paths.instance_dir
+            ),
+            publication_only=True,
+        )
+        _require(
+            proof["provider_effect_counts"]
+            == record["preflight"]["provider_effect_counts"],
+            "publication_provider_effect_baseline_changed",
+        )
+        _require(
+            protected_snapshot(manager.paths) == expected,
+            "publication_controls_changed",
+        )
+        record["publication_preflight"] = proof
+        record["publication_controls"] = expected
+        record["execution_mode"] = "publication_only"
+        _save(directory, name, record)
+    manager.services.stop()
+    recovery_started = False
+    worker_started = False
+    try:
+        _require(
+            protected_snapshot(manager.paths) == expected,
+            "publication_controls_changed",
+        )
+        checkpoints = checkpoint_snapshot(manager.paths)
+        if stopped:
+            _require(
+                checkpoints == record["publication_checkpoints"],
+                "publication_checkpoints_changed",
+            )
+        else:
+            record["publication_checkpoints"] = checkpoints
+            _save(directory, name, record)
+        asyncio.run(
+            validate_stopped_history(manager.paths, record, test_mode=manager.test_mode)
+        )
+        if "publication_deadline" in record:
+            _worker_deadline(record)
+        backup = BackupManager(
+            manager.paths, root=manager.root, test_mode=manager.test_mode
+        )
+        available = (
+            min(
+                _remaining(record, FINALIZATION_RESERVE_SECONDS),
+                record["recovery_deadline"] - deployment_clock(),
+            )
+            - 180
+        )
+        _require(available > 30, "publication_backup_capacity_insufficient")
+        artifact = backup.create()
+        rehearsal = backup.rehearse(
+            Path(artifact["path"]),
+            candidate=repository,
+            timeout_s=min(1800, (available - 30) / 2),
+        )
+        _require(
+            rehearsal.get("receipt_written") is True
+            and rehearsal.get("source_events_appended") == 0,
+            "contract_recovery_backup_unverified",
+        )
+        record["publication_backup"] = {
+            "path": artifact["path"],
+            "sha256": _file_hash(Path(artifact["path"])),
+            "receipt_sha256": rehearsal["receipt_sha256"],
+        }
+        if "publication_deadline" not in record:
+            record["publication_started_at"] = deployment_clock()
+            record["publication_deadline"] = min(
+                record["publication_started_at"] + MAINTENANCE_SECONDS,
+                record["deadline"] - FINALIZATION_RESERVE_SECONDS,
+                record["recovery_deadline"] - 180,
+            )
+        record["execution_mode"] = "publication_only"
+        record["phase"] = "publishing_retained_plan"
+        _save(directory, name, record)
+        _worker_deadline(record)
+        _require(
+            protected_snapshot(manager.paths) == expected
+            and checkpoint_snapshot(manager.paths) == record["publication_checkpoints"],
+            "publication_baseline_changed",
+        )
+        manager.services.start_maintenance_gateway()
+        manager.services.assert_maintenance_boundary()
+        worker_started = True
+        record["worker_terminal_confirmed"] = False
+        result = run_maintenance_child(manager, directory / name, record)
+        manager.services.assert_maintenance_boundary()
+        _require(
+            protected_snapshot(manager.paths) == expected
+            and checkpoint_snapshot(manager.paths) == record["publication_checkpoints"],
+            "publication_mutated_protected_state",
+        )
+        asyncio.run(
+            validate_stopped_history(manager.paths, record, test_mode=manager.test_mode)
+        )
+        _require(
+            result.get("status") == "completed"
+            and result.get("publication_complete") is True
+            and result.get("completed_assessment_contract") == ASSESSMENT_CONTRACT,
+            "contract_publication_unfinished",
+        )
+        record["terminal"] = result
+        _save(directory, name, record)
+        recovery_started = True
+        recovery = _recover_captured_predecessor(
+            manager, repository, directory, name, record, finish_journal=True
+        )
+        _require(
+            recovery is not None and recovery.get("status") == "recovered",
+            "contract_recovery_predecessor_not_healthy",
+        )
+        record["phase"] = "recovered"
+        _save(directory, name, record)
+        return {
+            "status": "recovered",
+            "operation_id": record["fingerprint"],
+            "transaction_id": plan.transaction_id,
+            "contract_recovery": result,
+            "content_exposed": False,
+        }
+    except BaseException as primary:
+        if not recovery_started and (
+            not worker_started or record.get("worker_terminal_confirmed") is True
+        ):
+            try:
+                _recover_captured_predecessor(
+                    manager, repository, directory, name, record, finish_journal=False
+                )
+            except BaseException as recovery_error:
+                primary.add_note(
+                    "Captured predecessor recovery did not complete: "
+                    + type(recovery_error).__name__
+                )
+        raise
+
+
+def _prepare_unspent_reentry(
+    manager: Any,
+    predecessor: Path,
+    directory: Path,
+    name: str,
+    record: dict[str, Any],
+    plan: ContractRecoveryPlan,
+) -> bool:
+    if not (
+        record.get("cleanup_intent") is True
+        and record.get("predecessor_controls_restored") is True
+        and manager.services.status().status != "stopped"
+    ):
+        return False
+    if not asyncio.run(
+        _operation_has_no_attempts(manager.paths, record, test_mode=manager.test_mode)
+    ):
+        return False
+    expected = record["predecessor_restored_controls"]
+    _require(protected_snapshot(manager.paths) == expected, "reentry_controls_changed")
+    doctor = manager._run_release_doctor(predecessor, include_synthetic_proof=True)
+    diagnostics = manager.services.runtime_diagnostics()
+    _require(isinstance(diagnostics, dict), "contract_recovery_live_preflight_absent")
+    assert isinstance(diagnostics, dict)
+    proof = validate_live_preflight(
+        doctor,
+        diagnostics,
+        plan,
+        doctor_checks=expected_doctor_checks(predecessor),
+        required_consumers=expected_consumer_capabilities(
+            predecessor, manager.paths.instance_dir
+        ),
+    )
+    _require(
+        proof["provider_effect_counts"] == record["preflight"]["provider_effect_counts"]
+        and protected_snapshot(manager.paths) == expected,
+        "reentry_protected_baseline_changed",
+    )
+    record["reentry_preflight"] = proof
+    record["reentry_controls"] = expected
+    _save(directory, name, record)
+    return True
 
 
 def recover_source_contract(
@@ -609,7 +1098,8 @@ def recover_source_contract(
             journal is not None
             and journal["phase"] == "recovering"
             and journal["transaction_id"] == plan.transaction_id
-            and journal["predecessor_commit"] == plan.predecessor_commit,
+            and journal["predecessor_commit"] == plan.predecessor_commit
+            and journal.get("was_running") is True,
             "contract_recovery_journal_mismatch",
         )
         predecessor = Path(journal["predecessor_path"])
@@ -634,6 +1124,7 @@ def recover_source_contract(
         directory = manager.activation_journal.directory
         name = f"contract-recovery-{plan.transaction_id}.json"
         record = _load(directory, name)
+        existing_operation = record is not None
         if record is None:
             _require(
                 budget.deadline - deployment_clock()
@@ -685,122 +1176,211 @@ def recover_source_contract(
         manager._deployment_budget = DeploymentBudget(
             record["started_at"], record["deadline"]
         )
+        refresh_unspent = False
+        if existing_operation:
+            terminal = asyncio.run(
+                _operation_terminal(manager.paths, record, test_mode=manager.test_mode)
+            )
+            if (
+                terminal is not None
+                and terminal.get("status") == "completed"
+                and terminal.get("completed_assessment_contract") == ASSESSMENT_CONTRACT
+                and terminal.get("publication_complete") is True
+            ):
+                # A completed suffix needs only the existing bounded predecessor
+                # recovery, never another maintenance child or model seam.
+                recovery = _recover_captured_predecessor(
+                    manager, repository, directory, name, record, finish_journal=True
+                )
+                _require(
+                    recovery is not None and recovery.get("status") == "recovered",
+                    "contract_recovery_predecessor_not_healthy",
+                )
+                return {
+                    "status": "recovered",
+                    "operation_id": fingerprint,
+                    "transaction_id": plan.transaction_id,
+                    "contract_recovery": terminal,
+                    "content_exposed": False,
+                }
+            if (
+                terminal is not None
+                and terminal.get("status") == "completed"
+                and terminal.get("publication_complete") is False
+                and record.get("predecessor_restoration_proved") is True
+            ):
+                return _resume_frozen_publication(
+                    manager, repository, directory, name, record, plan
+                )
+            refresh_unspent = _prepare_unspent_reentry(
+                manager, predecessor, directory, name, record, plan
+            )
+        expected_controls = (
+            record["reentry_controls"] if refresh_unspent else record["controls"]
+        )
         _require(
-            protected_snapshot(manager.paths) == record["controls"],
+            protected_snapshot(manager.paths) == expected_controls,
             "contract_recovery_controls_changed",
         )
         manager.services.stop()
-        _require(
-            protected_snapshot(manager.paths) == record["controls"],
-            "contract_recovery_controls_changed",
-        )
-        checkpoints = checkpoint_snapshot(manager.paths)
-        if "checkpoints" in record:
+        recovery_started = False
+        worker_started = False
+        try:
             _require(
-                checkpoints == record["checkpoints"],
-                "contract_recovery_checkpoints_changed",
+                protected_snapshot(manager.paths) == expected_controls,
+                "contract_recovery_controls_changed",
             )
-        else:
-            record["checkpoints"] = checkpoints
-            _save(directory, name, record)
-        asyncio.run(
-            validate_stopped_history(manager.paths, record, test_mode=manager.test_mode)
-        )
-        backup = BackupManager(
-            manager.paths, root=manager.root, test_mode=manager.test_mode
-        )
-        # A new stopped backup/rehearsal is required on each controller entry.
-        # It does not alter request identity or restore any execution allowance.
-        artifact = backup.create()
-        rehearsal = backup.rehearse(
-            Path(artifact["path"]),
-            candidate=repository,
-            timeout_s=min(
-                1800,
-                (
-                    _remaining(
-                        record,
-                        RECOVERY_SECONDS
-                        + MAINTENANCE_SECONDS
-                        + FINALIZATION_RESERVE_SECONDS,
-                    )
-                    - 30
+            checkpoints = checkpoint_snapshot(manager.paths)
+            if refresh_unspent:
+                _require(
+                    asyncio.run(
+                        _operation_has_no_attempts(
+                            manager.paths, record, test_mode=manager.test_mode
+                        )
+                    ),
+                    "reentry_attempt_started",
                 )
-                / 2,
-            ),
-        )
-        _require(
-            rehearsal.get("receipt_written") is True
-            and rehearsal.get("source_events_appended") == 0,
-            "contract_recovery_backup_unverified",
-        )
-        record["backup"] = {
-            "path": artifact["path"],
-            "sha256": _file_hash(Path(artifact["path"])),
-            "receipt_sha256": rehearsal["receipt_sha256"],
-        }
-        if "maintenance_deadline" not in record:
-            record["maintenance_started_at"] = deployment_clock()
-            record["maintenance_deadline"] = min(
-                record["maintenance_started_at"] + MAINTENANCE_SECONDS,
-                record["deadline"] - RECOVERY_SECONDS - FINALIZATION_RESERVE_SECONDS,
+                record.setdefault("initial_controls", record["controls"])
+                record.setdefault("initial_preflight", record["preflight"])
+                record["preflight"] = record["reentry_preflight"]
+                record["checkpoints"] = checkpoints
+                record["controls"] = expected_controls
+                _save(directory, name, record)
+            elif "checkpoints" in record:
+                _require(
+                    checkpoints == record["checkpoints"],
+                    "contract_recovery_checkpoints_changed",
+                )
+            else:
+                record["checkpoints"] = checkpoints
+                _save(directory, name, record)
+            asyncio.run(
+                validate_stopped_history(
+                    manager.paths, record, test_mode=manager.test_mode
+                )
             )
-        record["phase"] = "maintenance"
-        _save(directory, name, record)
-        _require(
-            checkpoint_snapshot(manager.paths) == record["checkpoints"]
-            and protected_snapshot(manager.paths) == record["controls"],
-            "contract_recovery_baseline_changed",
-        )
-        manager.services.start_maintenance_gateway()
-        manager.services.assert_maintenance_boundary()
-        result = run_maintenance_child(manager, directory / name, record)
-        manager.services.assert_maintenance_boundary()
-        _require(
-            protected_snapshot(manager.paths) == record["controls"]
-            and checkpoint_snapshot(manager.paths) == record["checkpoints"],
-            "contract_recovery_mutated_protected_state",
-        )
-        asyncio.run(
-            validate_stopped_history(manager.paths, record, test_mode=manager.test_mode)
-        )
-        record["terminal"] = result
-        record["phase"] = "maintenance_terminal"
-        _save(directory, name, record)
-        _require(
-            result.get("status") == "completed"
-            and result.get("publication_complete") is True
-            and result.get("completed_assessment_contract") == ASSESSMENT_CONTRACT,
-            "contract_recovery_not_completed",
-        )
-        # The worker has been reaped and all encrypted handles closed. Existing
-        # recovery restores only the captured predecessor and requires full Doctor.
-        if "recovery_deadline" not in record:
-            record["recovery_deadline"] = min(
-                deployment_clock() + RECOVERY_SECONDS,
-                record["deadline"] - FINALIZATION_RESERVE_SECONDS,
+            backup = BackupManager(
+                manager.paths, root=manager.root, test_mode=manager.test_mode
             )
+            # A new stopped backup/rehearsal is required on each controller entry.
+            # It does not alter request identity or restore any execution allowance.
+            available = _remaining(
+                record,
+                RECOVERY_SECONDS + MAINTENANCE_SECONDS + FINALIZATION_RESERVE_SECONDS,
+            )
+            if "recovery_deadline" in record:
+                available = min(
+                    available,
+                    record["recovery_deadline"]
+                    - deployment_clock()
+                    - MAINTENANCE_SECONDS
+                    - 180,
+                )
+            if "maintenance_deadline" in record:
+                _worker_deadline(record)
+                available = min(
+                    available, record["maintenance_deadline"] - deployment_clock()
+                )
+            _require(available > 30, "contract_recovery_backup_capacity_insufficient")
+            artifact = backup.create()
+            rehearsal = backup.rehearse(
+                Path(artifact["path"]),
+                candidate=repository,
+                timeout_s=min(1800, (available - 30) / 2),
+            )
+            _require(
+                rehearsal.get("receipt_written") is True
+                and rehearsal.get("source_events_appended") == 0,
+                "contract_recovery_backup_unverified",
+            )
+            record["backup"] = {
+                "path": artifact["path"],
+                "sha256": _file_hash(Path(artifact["path"])),
+                "receipt_sha256": rehearsal["receipt_sha256"],
+            }
+            if "maintenance_deadline" not in record:
+                record["maintenance_started_at"] = deployment_clock()
+                record["maintenance_deadline"] = min(
+                    record["maintenance_started_at"] + MAINTENANCE_SECONDS,
+                    record["deadline"]
+                    - RECOVERY_SECONDS
+                    - FINALIZATION_RESERVE_SECONDS,
+                    record.get("recovery_deadline", record["deadline"]) - 180,
+                )
+            _worker_deadline(record)
+            record["phase"] = "maintenance"
             _save(directory, name, record)
-        _require(
-            deployment_clock() < record["recovery_deadline"],
-            "contract_recovery_settlement_deadline_exhausted",
-        )
-        manager._recovery_settlement_deadline = record["recovery_deadline"]
-        manager._settlement_deadline = record["recovery_deadline"]
-        recovery = manager._recover_interrupted_transaction(repository)
-        _require(
-            recovery is not None and recovery.get("status") == "recovered",
-            "contract_recovery_predecessor_not_healthy",
-        )
-        record["phase"] = "recovered"
-        _save(directory, name, record)
-        return {
-            "status": "recovered",
-            "operation_id": fingerprint,
-            "transaction_id": plan.transaction_id,
-            "contract_recovery": result,
-            "content_exposed": False,
-        }
+            _require(
+                checkpoint_snapshot(manager.paths) == record["checkpoints"]
+                and protected_snapshot(manager.paths) == expected_controls,
+                "contract_recovery_baseline_changed",
+            )
+            manager.services.start_maintenance_gateway()
+            manager.services.assert_maintenance_boundary()
+            worker_started = True
+            record["worker_terminal_confirmed"] = False
+            result = run_maintenance_child(manager, directory / name, record)
+            manager.services.assert_maintenance_boundary()
+            _require(
+                protected_snapshot(manager.paths) == expected_controls
+                and checkpoint_snapshot(manager.paths) == record["checkpoints"],
+                "contract_recovery_mutated_protected_state",
+            )
+            asyncio.run(
+                validate_stopped_history(
+                    manager.paths, record, test_mode=manager.test_mode
+                )
+            )
+            record["terminal"] = result
+            record["phase"] = "maintenance_terminal"
+            _save(directory, name, record)
+            _require(
+                result.get("status") == "completed"
+                and result.get("publication_complete") is True
+                and result.get("completed_assessment_contract") == ASSESSMENT_CONTRACT,
+                "contract_recovery_not_completed",
+            )
+            # The worker has been reaped and all encrypted handles closed. Existing
+            # recovery restores only the captured predecessor and requires full Doctor.
+            recovery_started = True
+            recovery = _recover_captured_predecessor(
+                manager, repository, directory, name, record, finish_journal=True
+            )
+            _require(
+                recovery is not None and recovery.get("status") == "recovered",
+                "contract_recovery_predecessor_not_healthy",
+            )
+            record["phase"] = "recovered"
+            _save(directory, name, record)
+            return {
+                "status": "recovered",
+                "operation_id": fingerprint,
+                "transaction_id": plan.transaction_id,
+                "contract_recovery": result,
+                "content_exposed": False,
+            }
+        except BaseException as primary:
+            # A failed operation must not strand the captured predecessor off.
+            # Unknown worker terminality is the one boundary at which starting
+            # another runtime would be unsafe. The guardian retains its lease.
+            if not recovery_started and (
+                not worker_started or record.get("worker_terminal_confirmed") is True
+            ):
+                try:
+                    _recover_captured_predecessor(
+                        manager,
+                        repository,
+                        directory,
+                        name,
+                        record,
+                        finish_journal=False,
+                    )
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Captured predecessor recovery did not complete: "
+                        + type(recovery_error).__name__
+                    )
+            raise
 
 
 def _parent_watch(fd: int) -> None:
@@ -861,20 +1441,16 @@ def main() -> None:
     _require(
         record.get("boot_identity") == _boot_identity(), "maintenance_boot_changed"
     )
-    _remaining(record, RECOVERY_SECONDS + FINALIZATION_RESERVE_SECONDS)
-    _require(
-        record["maintenance_started_at"]
-        <= deployment_clock()
-        < record["maintenance_deadline"]
-        <= min(
-            record["maintenance_started_at"] + MAINTENANCE_SECONDS,
-            record["deadline"] - RECOVERY_SECONDS - FINALIZATION_RESERVE_SECONDS,
-        ),
-        "maintenance_deadline_exhausted",
+    publication_only = record.get("execution_mode") == "publication_only"
+    _remaining(
+        record,
+        FINALIZATION_RESERVE_SECONDS + (180 if publication_only else RECOVERY_SECONDS),
     )
+    _worker_deadline(record)
+    expected_controls, expected_checkpoints = _execution_baseline(record)
     _require(
-        protected_snapshot(paths) == record["controls"]
-        and checkpoint_snapshot(paths) == record["checkpoints"],
+        protected_snapshot(paths) == expected_controls
+        and checkpoint_snapshot(paths) == expected_checkpoints,
         "maintenance_protected_baseline_changed",
     )
     ServiceManager(paths, test_mode=args.test_mode).assert_maintenance_boundary()
@@ -895,6 +1471,7 @@ def main() -> None:
             encryption_key=key,
             gateway_token=token,
             batch=_batch(record),
+            publication_only=publication_only,
             requested_by_actor=f"guarded-updater:{record['controller_commit']}",
         )
     )

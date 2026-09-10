@@ -60,6 +60,40 @@ typed commitments and authenticated instructions retain their authority.
 The production composition proof uses a mixed iMessage source and verifies both
 the genuine promise and the unsupported sibling through the member API.
 
+### Preserving predecessor processing progress
+
+Rollback checkpoint recovery is **MODERNIZE** under the bootstrap topology and
+acceptance contracts. The durable bus historically kept one checkpoint per
+subscriber, so a newer consumer version overwrote the old version's position.
+Downgrading then replayed already processed messages against later conversation
+history and could collide with an occupied immutable assessment key.
+
+The guarded recovery path may restore the exact healthy predecessor subscriber
+row captured in its journal-bound encrypted backup. It must authenticate the
+backup and rehearsal, verify the predecessor's consumer version, and prove that
+the live encrypted log retains identical history through that checkpoint with
+no inserted earlier events. A fresh encrypted backup preserves the failed state
+before an atomic replacement recorded in a durable operation receipt. Services
+must be proven stopped. No checkpoint may be invented or moved beyond the
+captured proof; other subscriber rows and projection offsets remain unchanged.
+
+Encrypted source facts, all later events, installed predecessor code, member
+decisions, provider configuration, and full health requirements are **PRESERVE**.
+The untouched predecessor resumes unseen work and must pass bounded settlement
+and full Doctor. A source failure remains a source failure after checkpoint
+restoration; this operation grants no classifier retries or contract-completion
+claim. AC-62 requires an actual archived-predecessor regression and refusal
+proofs for changed history, wrong backup identity, unsafe state, and interruption.
+
+A validated current-generation `no_candidate` assessment is likewise reused
+before rebuilding conversation context or calling the model. Its exact source,
+scope, producer, schema, immutable key, completed state, and empty candidate set
+must agree. Proven language failure remains failed even when an old completion
+enum says otherwise. This is **MODERNIZE** replay idempotency, not a shortcut for
+legacy successes: later messages still receive their own assessments, existing
+positive publication plans still resume normally, and invalid occupied receipts
+grant no new model authority.
+
 ### Assessment recovery across a rollback
 
 **MODERNIZE recovery provenance; PRESERVE bounded attempts and immutable truth:**
@@ -106,7 +140,15 @@ The maintenance process dispatches only the exact durable command. It cannot
 create canonical household objects, external-write requests, or provider
 effects. Crash recovery reuses the operation identity and deadline and rejects
 unexpected state drift; it cannot silently create a new request. Every child
-must be reaped before the predecessor starts. A maintenance success alone never
+must be reaped before the predecessor starts. If cleanup restores the predecessor
+before a frozen publication plan is complete, a durable close guard also blocks
+later ordinary rollback from closing the journal. Reentry may finish only that
+exact stored plan with a transport seam that forbids model calls. It requires a
+fresh full healthy Doctor, settled consumers, unchanged protected controls, and
+zero effects after the authorized predecessor cleanup; it then freezes a new
+checkpoint and watermark for publication alone. A separately persisted, bounded
+publication deadline remains inside the same original operation deadline. It
+cannot renew language attempts or reinterpret source content. A maintenance success alone never
 closes the activation journal: the existing recovery path still has to settle
 the captured predecessor and pass its full healthy Doctor. A failed prerequisite,
 uncertain process ownership, persistent language failure, or unrelated

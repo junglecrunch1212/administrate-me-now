@@ -39,6 +39,7 @@ from adminme.candidate_policy import (
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import (
+    TriageIntentFeaturesExtractedV3,
     TriageSourcePublicationPlannedV1,
     TriageSourcePublicationCompletedV1,
 )
@@ -726,6 +727,10 @@ class NoiseFilteringPipeline:
                     assessment = await ctx.event_log.get(
                         terminal["assessment_event_id"]
                     )
+                    if source is None or assessment is None:
+                        raise RuntimeError(
+                            "contract recovery terminal source or assessment is unavailable"
+                        )
                     await self._resume_source_publication(source, ctx, assessment)
                 return
             try:
@@ -827,6 +832,62 @@ class NoiseFilteringPipeline:
         async with source_lock:
             await self._handle_source(event, ctx)
 
+    async def _reuse_current_negative_assessment(
+        self, event: dict[str, Any], ctx: PipelineContext
+    ) -> bool:
+        """An occupied current negative is immutable when thread context grows."""
+        if not hasattr(ctx.event_log, "get_by_idempotency"):
+            return False
+        source_id = str(event.get("event_id") or "")
+        assessment = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"],
+            f"triage:message-features:v{_REPLAY_GENERATION}:{source_id}",
+        )
+        if (
+            assessment is None
+            or (assessment.get("payload") or {}).get("assessment_outcome")
+            != "no_candidate"
+        ):
+            return False
+        owner = str(event.get("owner_scope") or "")
+        if (
+            assessment.get("schema_version") != 3
+            or not source_assessment_identity_valid(source=event, assessment=assessment)
+            or not owner.startswith("private:")
+            or not owner.removeprefix("private:")
+            or event.get("visibility_scope") != owner
+            or event.get("sensitivity") not in {"normal", "sensitive"}
+            or (event.get("payload") or {}).get(
+                "member_id", owner.removeprefix("private:")
+            )
+            != owner.removeprefix("private:")
+        ):
+            raise RuntimeError(
+                "retained current negative assessment identity is invalid"
+            )
+        try:
+            payload = TriageIntentFeaturesExtractedV3.model_validate(
+                assessment.get("payload")
+            )
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError(
+                "retained current negative assessment payload is invalid"
+            ) from exc
+        outcome, _reason = await resolved_assessment_disposition(
+            ctx.event_log, assessment, source_event=event
+        )
+        if outcome == "failed":
+            # A recorded defensive default cannot become a clean result merely
+            # because its legacy receipt used a successful-looking outcome.
+            return True
+        if (
+            payload.extraction_state != "complete"
+            or payload.candidates
+            or outcome != "no_candidate"
+        ):
+            raise RuntimeError("retained current negative assessment is not complete")
+        return True
+
     async def _handle_source(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         source_event_id = str(event.get("event_id") or "")
@@ -865,6 +926,8 @@ class NoiseFilteringPipeline:
                 )
                 if prior_outcome == "failed":
                     return
+            if await self._reuse_current_negative_assessment(event, ctx):
+                return
         if event.get("sensitivity") == "privileged":
             await self._emit_triage_assessment(
                 event=event,
