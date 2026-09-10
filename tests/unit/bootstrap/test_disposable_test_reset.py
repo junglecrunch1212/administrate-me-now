@@ -210,7 +210,13 @@ def test_interrupted_reversal_resumes_exact_original_control(
 
 
 @pytest.mark.parametrize(
-    "relative", ["config/member-mapping.json", "config/adapters.json"]
+    "relative",
+    [
+        "config/member-mapping.json",
+        "config/adapters.json",
+        "openclaw/runtime/openclaw.json",
+        "bridges/member-mapping.json",
+    ],
 )
 def test_stale_identity_or_source_configuration_refuses_before_archive(
     reset_fixture, relative
@@ -271,7 +277,7 @@ def test_failed_initial_intent_publication_never_stops_services(
     assert operation.restore()["phase"] == "original_restored_health_unproven"
 
 
-@pytest.mark.parametrize("failure", ["prepare", "doctor", "stop"])
+@pytest.mark.parametrize("failure", ["prepare", "doctor", "stop", "restore_install"])
 def test_controller_failure_reverses_real_state_moves_and_retains_failure(
     reset_fixture, monkeypatch, failure
 ):
@@ -344,7 +350,19 @@ def test_controller_failure_reverses_real_state_moves_and_retains_failure(
     monkeypatch.setattr(
         openclaw_tools, "reconcile_administrateme_plugin", lambda *args, **kwargs: None
     )
-    monkeypatch.setattr(wizard, "install_launch_agents", lambda *args, **kwargs: None)
+    restore_install_failed = False
+
+    def install_agents(_paths, release, **kwargs):
+        nonlocal restore_install_failed
+        if (
+            failure == "restore_install"
+            and release == Path("fixture-release")
+            and not restore_install_failed
+        ):
+            restore_install_failed = True
+            raise RuntimeError("fixture-interrupted-original-service-restoration")
+
+    monkeypatch.setattr(wizard, "install_launch_agents", install_agents)
     monkeypatch.setattr(
         candidate_readiness,
         "capture_deployment_snapshot",
@@ -395,6 +413,23 @@ def test_controller_failure_reverses_real_state_moves_and_retains_failure(
     try:
         with pytest.raises((RuntimeError, ResetError)):
             module.execute_reset(manager, paths.root / "candidate", manifest_path)
+        if failure == "restore_install":
+            assert not running
+            assert (paths.app_dir / "disposable-test-reset-active.json").exists()
+            pending = json.loads(
+                (
+                    paths.rollback_dir
+                    / f"test-reset-{manifest['reset_id']}"
+                    / "reset.json"
+                ).read_text()
+            )
+            assert pending["phase"] == "original_restored_health_unproven"
+            assert "original_service_restoration_complete" not in pending
+            resumed = module.execute_reset(
+                manager, paths.root / "candidate", manifest_path
+            )
+            assert resumed["original_service_restoration_complete"] is True
+            assert resumed["original_service_status"] == "degraded"
         assert running
         assert trace[0] == "attest"
         assert trace.count("stop") >= 2
@@ -415,6 +450,7 @@ def test_controller_failure_reverses_real_state_moves_and_retains_failure(
         )
         assert record["phase"] == "original_restored_health_unproven"
         assert record["original_health_proven"] is False
+        assert record["original_service_restoration_complete"] is True
     finally:
         try:
             os.close(descriptor)

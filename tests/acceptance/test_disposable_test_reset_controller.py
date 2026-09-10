@@ -16,7 +16,7 @@ from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.disposable_test_reset import build_manifest, select_messages
 from bootstrap.services import ServiceManager
 from bootstrap.upgrade import UpgradeManager
-from bootstrap.wizard import BootstrapWizard
+from bootstrap.wizard import BootstrapWizard, install_launch_agents
 from tests.acceptance.test_macos_bootstrap_operations import (
     REPO_ROOT,
     _committed_candidate_from_worktree,
@@ -35,13 +35,9 @@ def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
     candidate = tmp_path / "candidate"
     predecessor_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
-    paths.create()
-    predecessor = paths.app_dir / "releases" / predecessor_commit
-    predecessor.parent.mkdir(mode=0o700, exist_ok=True)
-    _extract_git_archive(candidate, predecessor_commit, predecessor)
     BootstrapWizard(
         paths,
-        root=predecessor,
+        root=candidate,
         fixture="two-adult-one-child",
         test_mode=True,
         dry_run=True,
@@ -51,6 +47,10 @@ def test_supported_reset_rehearses_fresh_backup_and_accepts_selection(
             "macos_version": "26.0",
         },
     ).run()
+    predecessor = paths.app_dir / "releases" / predecessor_commit
+    predecessor.parent.mkdir(mode=0o700, exist_ok=True)
+    _extract_git_archive(candidate, predecessor_commit, predecessor)
+    install_launch_agents(paths, predecessor, test_mode=True)
     _json(
         paths.app_dir / "current-release.json",
         {"commit": predecessor_commit, "path": str(predecessor)},

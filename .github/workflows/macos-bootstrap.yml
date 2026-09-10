@@ -79,7 +79,7 @@ jobs:
 
       - name: Validate encrypted metadata migration and production replay
         run: >-
-          poetry run pytest -p no:cacheprovider -q
+          poetry run pytest -p no:cacheprovider -q --maxfail=1
           tests/unit/bootstrap/test_disposable_test_reset.py
           tests/unit/bootstrap/test_backup_rehearsal.py
           tests/unit/test_disposable_reset_readiness.py

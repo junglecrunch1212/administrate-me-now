@@ -34,6 +34,10 @@ RESET_CONFIG_FILES = frozenset(
     }
 )
 MUTABLE_CONFIG_FILES = RESET_CONFIG_FILES | {"pack-manifests.json"}
+PRESERVED_CONFIGURATION = (
+    "openclaw/runtime/openclaw.json",
+    "bridges/member-mapping.json",
+)
 
 
 class TestResetError(RuntimeError):
@@ -87,6 +91,18 @@ def _config_hashes(paths: DeploymentPaths) -> dict[str, str]:
             continue
         payload, _metadata = _read_private_file(path)
         result[path.name] = hashlib.sha256(payload).hexdigest()
+    return result
+
+
+def _preserved_config_hashes(paths: DeploymentPaths) -> dict[str, str | None]:
+    result = {}
+    for relative in PRESERVED_CONFIGURATION:
+        path = paths.instance_dir / relative
+        result[relative] = (
+            hashlib.sha256(_read_private_file(path)[0]).hexdigest()
+            if os.path.lexists(path)
+            else None
+        )
     return result
 
 
@@ -149,6 +165,7 @@ def build_manifest(
         "state_coordinate": list(state_coordinate),
         "state_directories": names,
         "configuration_sha256": _config_hashes(paths),
+        "preserved_configuration_sha256": _preserved_config_hashes(paths),
         "acquisition": acquisition,
         "keep": [name for name in KEEP_DIRECTORIES if name in names],
         "replace": list(REPLACE_DIRECTORIES),
@@ -486,6 +503,23 @@ def execute_reset(
             active_reset.unlink()
             _sync(active_reset.parent)
 
+    def validate_restored_control(record: dict[str, Any]) -> None:
+        if (
+            list(_directory(upgrades.paths.instance_dir))
+            != record["original_coordinate"]
+            or _read_private_file(upgrades.paths.app_dir / "current-release.json")[0]
+            != _read_private_file(operation.archive / "original-release.json")[0]
+        ):
+            raise TestResetError("restored original release coordinate changed")
+        journal = upgrades.paths.app_dir / "activation" / "active.json"
+        digest = (
+            hashlib.sha256(_read_private_file(journal)[0]).hexdigest()
+            if journal.exists()
+            else None
+        )
+        if digest != manifest["activation_journal"]["sha256"]:
+            raise TestResetError("restored original journal changed")
+
     def restore_original() -> dict[str, Any]:
         # No control or state move follows an unproven service stop.
         services.stop()
@@ -493,7 +527,14 @@ def execute_reset(
             raise TestResetError(
                 "reset reversal requires absent managed services and listeners"
             )
-        result = operation.restore()
+        record = _json(operation.record_path)
+        if record.get("phase") == "original_restored_health_unproven":
+            # The state/pointer/journal move completed, but release/service
+            # restoration can still need a retry after an interrupted start.
+            validate_restored_control(record)
+            result = record
+        else:
+            result = operation.restore()
         original = _json(operation.archive / "original-release.json")
         old_release = Path(original["path"])
         upgrades._install_reviewed_openclaw(old_release)
@@ -504,6 +545,7 @@ def execute_reset(
         status = services.start()
         result["original_service_status"] = status.status
         result["original_health_proven"] = False
+        result["original_service_restoration_complete"] = True
         operation._record(result)
         clear_active_reset()
         return result
@@ -518,8 +560,11 @@ def execute_reset(
             _accepted_dataset(upgrades.paths, commit)
             clear_active_reset()
             return record
-        if record["phase"] == "original_restored_health_unproven":
-            validate_manifest(upgrades.paths, manifest)
+        if (
+            record["phase"] == "original_restored_health_unproven"
+            and record.get("original_service_restoration_complete") is True
+        ):
+            validate_restored_control(record)
             clear_active_reset()
             return record
         return restore_original()
