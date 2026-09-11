@@ -24,6 +24,13 @@ Do not run candidate services on the family Host. A desktop viewport or mobile
 emulation is useful layout evidence but does not prove actual iPhone Safari,
 macOS permissions, bridge enrollment, or another member's device behavior.
 
+The existing credential-free macOS workflow in
+`.github/workflows/macos-bootstrap.yml` includes member-browser validation.
+`scripts/acceptance/release-candidate.sh` also runs the pinned console harness
+against the production composition root. Use these existing Phase A paths in
+their supported environment; a member acceptance PC does not need another
+application installation merely to inspect the deployed dashboard.
+
 ## Connection inventory
 
 Keep actual device names, addresses, logins, task IDs, SSH configuration,
