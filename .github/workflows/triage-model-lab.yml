@@ -47,7 +47,7 @@ jobs:
         run: |
           poetry run ruff check adminme packs/pipelines/noise_filtering packs/skills/classify_message_nature tests/acceptance/test_source_assessment_revision.py tests/acceptance/test_personal_obligation_assessment.py tests/acceptance/test_attention_rule_lifecycle.py tests/acceptance/test_bounded_triage_execution.py
           poetry run mypy adminme bridge/adminme_bridge
-          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 --runxfail packs/skills/classify_message_nature/tests/test_skill.py tests/acceptance/test_source_assessment_revision.py tests/acceptance/test_personal_obligation_assessment.py tests/acceptance/test_attention_rule_lifecycle.py tests/acceptance/test_bounded_triage_execution.py tests/unit/test_source_assessment_recovery.py tests/unit/test_pipeline_noise_filtering.py tests/unit/test_pipeline_runner.py tests/unit/test_cross_source_reconciliation.py tests/integration/test_pipeline_10b_i_integration.py
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5 --runxfail packs/skills/classify_message_nature/tests/test_skill.py tests/acceptance/test_source_assessment_revision.py tests/acceptance/test_personal_obligation_assessment.py tests/acceptance/test_attention_rule_lifecycle.py tests/acceptance/test_bounded_triage_execution.py tests/unit/test_source_assessment_recovery.py tests/unit/test_pipeline_noise_filtering.py tests/unit/test_pipeline_runner.py tests/unit/test_cross_source_reconciliation.py tests/integration/test_pipeline_10b_i_integration.py
 
   gateway-runtime:
     needs: capture-contract

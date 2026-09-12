@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 import adminme.runtime.application as application
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import EventLog
+from adminme.events.log import AppendValidationError, EventLog
 from adminme.events.writer import EventWriter
 from adminme.source_assessment_revision import (
     REFUSAL_TYPE,
@@ -275,16 +275,12 @@ def test_preview_requires_selected_owner_account_adapter_and_latest_exact_contex
         mismatched_envelope = source(config, 7).model_copy(
             update={"source_account_id": "other-envelope@example.invalid"}
         )
-        wrong = client.portal.call(runtime.events.write, mismatched_envelope)
-        client.portal.call(settle, runtime)
         previous_calls = list(model.calls)
-        assert (
-            client.post(
-                API + "/preview", headers=AUTH, json={"source_event_ids": [wrong]}
-            ).status_code
-            == 409
-        )
+        before_mismatch = client.portal.call(events, runtime)
+        with pytest.raises(AppendValidationError, match="source_account_id"):
+            client.portal.call(runtime.events.write, mismatched_envelope)
         assert model.calls == previous_calls
+        assert client.portal.call(events, runtime) == before_mismatch
         wrong_dataset = {**manifest, "dataset_id": "f" * 32}
         assert client.post(API, headers=AUTH, json=wrong_dataset).status_code == 409
         changed_assessment = copy.deepcopy(manifest)
