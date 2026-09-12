@@ -493,7 +493,7 @@ def test_preview_requires_selected_owner_account_adapter_and_latest_exact_contex
         assert client.post(API, headers=AUTH, json=manifest).status_code == 409
         assert model.calls == previous_calls
         newer = client.portal.call(
-            runtime.events.write, source(config, 6, thread="shared")
+            runtime.events.write, source(config, 8, thread="shared")
         )
         client.portal.call(settle, runtime)
         previous_calls = list(model.calls)
