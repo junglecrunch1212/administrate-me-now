@@ -148,7 +148,9 @@ def _sha_json(value: Any) -> str:
 
 def _save_report(path: Path, report: dict[str, Any], token: str) -> None:
     serialized = json.dumps(report, indent=2, ensure_ascii=False, default=str)
-    serialized = serialized.replace(token, "[REDACTED_GATEWAY_TOKEN]")
+    for secret in (token, os.environ.get("OPENAI_API_KEY", "")):
+        if secret:
+            serialized = serialized.replace(secret, "[REDACTED_LAB_CREDENTIAL]")
     pending = path.with_name(path.name + ".partial")
     with pending.open("w", encoding="utf-8") as stream:
         os.chmod(pending, 0o600)
@@ -717,6 +719,20 @@ def capture(
                                 time.monotonic() - started, 3
                             )
                             _save_report(output, report, token)
+                            print(
+                                json.dumps(
+                                    {
+                                        "case_id": case_report["case_id"],
+                                        "capture_status": case_report.get(
+                                            "capture_status", "incomplete"
+                                        ),
+                                        "duration_seconds": case_report[
+                                            "duration_seconds"
+                                        ],
+                                    }
+                                ),
+                                flush=True,
+                            )
                 finally:
                     report["events"] = client.portal.call(_events, runtime)
                     report["original_source_count"] = len(source_ids)

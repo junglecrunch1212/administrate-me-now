@@ -72,9 +72,8 @@ def gateway_config(state: Path, token: str) -> dict[str, Any]:
             "entries": {
                 "llm-task": {
                     "enabled": True,
+                    "llm": {"allowedCompletionModels": [MODEL]},
                     "config": {
-                        "defaultProvider": "openai",
-                        "defaultModel": "gpt-5.6-sol",
                         "maxTokens": 6000,
                         "timeoutMs": 120000,
                     },

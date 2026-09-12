@@ -14,6 +14,7 @@ from tools.triage_model_lab import (
     LabRefused,
     _case_evidence,
     _retry_policy,
+    _save_report,
     load_frozen_cases,
     validate_environment,
 )
@@ -159,3 +160,17 @@ def test_model_lab_never_scores_missing_or_failed_inference_as_no_action():
     assert _case_evidence([failure, receipt, assessment], source_id)["failures"] == [
         "failed_or_suppressed_classifier_attempt"
     ]
+
+
+def test_model_capture_redacts_both_lab_credentials_before_writing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-dedicated-provider-key")
+    report = {"failure": "fixture-gateway-key fixture-dedicated-provider-key"}
+    output = tmp_path / "capture.json"
+    _save_report(output, report, "fixture-gateway-key")
+    saved = output.read_text()
+    assert "fixture-gateway-key" not in saved
+    assert "fixture-dedicated-provider-key" not in saved
+    assert report["failure"] == "fixture-gateway-key fixture-dedicated-provider-key"
+    assert output.stat().st_mode & 0o777 == 0o600
