@@ -314,10 +314,11 @@
                         "ownership",
                         "recurrence"
                       ],
-                      "description": "Apply only to this candidate action and object. negation cancels or removes this same action; completion affirms this same action was performed. Unrelated unaffected accounts, not-yet-completed work and undecided attendance are neither completion nor cancellation of another action. condition cites a genuine prerequisite, not a desired result."
+                      "description": "Apply only to this candidate action and object. negation cancels or removes this same action; completion affirms this same action was performed. Unrelated unaffected accounts, not-yet-completed work and undecided attendance are neither completion nor cancellation of another action. condition cites a genuine prerequisite, not a desired result. Paid purchase or completed registration does not mean future attendance was completed: never use its payment or registration clause as completion evidence on a calendar attendance candidate."
                     }
                   }
-                }
+                },
+                "description": "List only clauses that qualify this candidate action and object, not every status clause in the message. completion or negation asserts this candidate has no remaining action. For future attendance, exclude completed payment, purchase or registration from these roles; cite the confirmed booking as ownership and its occurrence time as date. A paid future booking remains open attendance with no payment task. Omit unrelated terminal clauses rather than labeling them completion."
               }
             }
           }

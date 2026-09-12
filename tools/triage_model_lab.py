@@ -383,8 +383,7 @@ def _case_evidence(events: list[dict[str, Any]], source_id: str) -> dict[str, An
     }
 
 
-def _complete_g12a(client: Any, source_id: str) -> dict[str, Any]:
-    surface = _member_surface(client, "triage")
+def _g12a_items(surface: dict[str, Any], source_id: str) -> tuple[dict, dict]:
     candidates = [
         item
         for item in surface["items"]
@@ -393,7 +392,202 @@ def _complete_g12a(client: Any, source_id: str) -> dict[str, Any]:
     ]
     if len(candidates) != 1:
         raise RuntimeError("G12a requires exactly one actually produced task candidate")
-    item = candidates[0]
+    selected = candidates[0]
+    if selected.get("admission_decision") != "duplicate":
+        return selected, selected
+    primary_id = selected.get("duplicate_of_proposal_id")
+    primary = [
+        item for item in surface["items"] if item.get("proposal_id") == primary_id
+    ]
+    if (
+        not primary_id
+        or len(primary) != 1
+        or primary[0] is selected
+        or primary[0].get("duplicate_of_proposal_id")
+        or primary[0].get("target_kind") != "task"
+    ):
+        raise RuntimeError(
+            "G12a exact duplicate must identify one available primary proposal"
+        )
+    return selected, primary[0]
+
+
+def _validate_g12a_link(
+    selected: dict[str, Any],
+    effective: dict[str, Any],
+    evidence: dict[str, dict[str, Any]],
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Accept one exact production duplicate pointer, never a similarity search."""
+    from adminme.source_publication import source_assessment_identity_valid
+
+    def scoped(value):
+        return (
+            value.get("tenant_id") == tenant_id
+            and value.get("owner_scope") == f"private:{MEMBER}"
+            and value.get("visibility_scope") == f"private:{MEMBER}"
+            and value.get("sensitivity") in {"normal", "sensitive"}
+        )
+
+    def proof(item):
+        source = evidence.get(str(item.get("source_event_id"))) or {}
+        proposal = evidence.get(str(item.get("proposal_event_id"))) or {}
+        assessment = evidence.get(str(item.get("extraction_event_id"))) or {}
+        payload = proposal.get("payload") or {}
+        source_payload = source.get("payload") or {}
+        interpretation = payload.get("interpretation") or {}
+        obligation = interpretation.get("obligation_assessment") or {}
+        references = interpretation.get("evidence_refs") or []
+        candidate = payload.get("candidate") or {}
+        if (
+            not all(scoped(value) for value in (item, source, proposal, assessment))
+            or item.get("target_kind") != "task"
+            or item.get("owner_member_id") != MEMBER
+            or item.get("route") != {"member_id": MEMBER}
+            or source.get("type") != "messaging.received"
+            or source.get("source_adapter") != "fixture-model-lab-source"
+            or source.get("source_account_id") != ACCOUNT
+            or source_payload.get("member_id") != MEMBER
+            or source_payload.get("provider_account_id") != ACCOUNT
+            or source_payload.get("provider") != "gmail"
+            or source_payload.get("workspace") != "personal"
+            or proposal.get("type") != "triage.item.proposed"
+            or proposal.get("source_adapter") != "deterministic_candidate_eligibility"
+            or proposal.get("source_account_id") != "pipeline"
+            or payload.get("proposal_id") != item.get("proposal_id")
+            or payload.get("source_event_id") != source.get("event_id")
+            or payload.get("target_kind") != "task"
+            or payload.get("owner_member_id") != MEMBER
+            or payload.get("route") != {"member_id": MEMBER}
+            or payload.get("extraction_event_id") != assessment.get("event_id")
+            or proposal.get("causation_id") != assessment.get("event_id")
+            or item.get("content_revision_event_id") != proposal.get("event_id")
+            or item.get("candidate") != candidate
+            or item.get("title") != payload.get("title")
+            or item.get("interpretation") != interpretation
+            or not source_assessment_identity_valid(
+                source=source, assessment=assessment
+            )
+            or (assessment.get("payload") or {}).get("assessment_outcome")
+            != "eligible_candidates"
+            or (assessment.get("payload") or {}).get("extraction_state") != "complete"
+            or obligation.get("evidence_verified") is not True
+            or obligation.get("independent_obligation") is not True
+            or obligation.get("actionability") != "required"
+            or obligation.get("condition_state") not in {"met", "not_applicable"}
+            or obligation.get("date_role") != "deadline"
+            or "due" not in (obligation.get("verified_date_fields") or [])
+            or interpretation.get("action_owner") != "member"
+            or interpretation.get("lifecycle_state") != "open"
+            or len(references) != 1
+        ):
+            raise RuntimeError(
+                "G12a proposal lacks exact owned source/assessment/grounding proof"
+            )
+        quote = references[0].get("quote")
+        if (
+            not isinstance(quote, str)
+            or not quote
+            or references[0].get("source_event_id") != source["event_id"]
+            or quote not in str(source_payload.get("body_text") or "")
+            or quote != payload.get("title")
+            or not any(
+                value.get("role") == "date"
+                and value.get("source_event_id") == source["event_id"]
+                and value.get("quote")
+                and value["quote"] in source_payload["body_text"]
+                for value in obligation.get("evidence") or []
+            )
+        ):
+            raise RuntimeError("G12a action or due evidence is not exact source text")
+        try:
+            due = datetime.fromisoformat(str(candidate["due"]).replace("Z", "+00:00"))
+            if due.tzinfo is None:
+                raise ValueError("due has no time zone")
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError(
+                "G12a requires an actually produced grounded task due"
+            ) from exc
+        return quote, due.astimezone(timezone.utc).isoformat()
+
+    selected_identity = proof(selected)
+    effective_identity = proof(effective)
+    if selected_identity != effective_identity:
+        raise RuntimeError("G12a duplicate primary has different action or due")
+    if (
+        effective.get("admission_decision") != "admit"
+        or effective.get("state") != "pending_review"
+        or effective.get("duplicate_of_proposal_id")
+        or (effective.get("review_state") or {}).get("state") != "ready"
+    ):
+        raise RuntimeError("G12a effective task proposal is not currently approvable")
+    duplicate = selected.get("proposal_id") != effective.get("proposal_id")
+    reconciliation_id = None
+    if duplicate:
+        reconciliation_id = (selected.get("reconciliation") or {}).get("event_id")
+        receipt = evidence.get(str(reconciliation_id)) or {}
+        payload = receipt.get("payload") or {}
+        relationships = payload.get("relationships") or []
+        if (
+            selected.get("admission_decision") != "duplicate"
+            or selected.get("state") != "dismissed"
+            or selected.get("resolved_by") != "system:cross-source-reconciliation"
+            or selected.get("resolution_reason") != "reconciliation:duplicate"
+            or selected.get("last_event_id") != reconciliation_id
+            or selected.get("duplicate_of_proposal_id") != effective.get("proposal_id")
+            or not scoped(receipt)
+            or receipt.get("type") != "triage.reconciliation.decided"
+            or receipt.get("source_adapter") != "cross-source-reconciliation"
+            or receipt.get("source_account_id") != "internal"
+            or payload.get("decision") != "duplicate"
+            or payload.get("admission_active") is not True
+            or payload.get("proposal_id") != selected.get("proposal_id")
+            or payload.get("source_event_id") != selected.get("source_event_id")
+            or payload.get("owner_member_id") != MEMBER
+            or payload.get("primary_proposal_id") != effective.get("proposal_id")
+            or not any(
+                value.get("relationship_type") == "exact_duplicate"
+                and value.get("automatic_effect") is True
+                and value.get("authority") == "deterministic_derived"
+                and value.get("related_source_event_id")
+                == effective.get("source_event_id")
+                for value in relationships
+            )
+        ):
+            raise RuntimeError(
+                "G12a duplicate pointer lacks authoritative exact reconciliation"
+            )
+    return {
+        "selected_source_event_id": selected["source_event_id"],
+        "selected_proposal_id": selected["proposal_id"],
+        "effective_source_event_id": effective["source_event_id"],
+        "effective_proposal_id": effective["proposal_id"],
+        "effective_assessment_event_id": effective["extraction_event_id"],
+        "exact_duplicate_reconciliation_event_id": reconciliation_id,
+        "followed_exact_duplicate": duplicate,
+        "action_quote": selected_identity[0],
+        "due": selected_identity[1],
+    }
+
+
+def _complete_g12a(client: Any, source_id: str) -> dict[str, Any]:
+    selected, item = _g12a_items(_member_surface(client, "triage"), source_id)
+    runtime = client.app.state.runtime
+    evidence_ids = {
+        str(value[key])
+        for value in (selected, item)
+        for key in ("source_event_id", "proposal_event_id", "extraction_event_id")
+        if value.get(key)
+    }
+    if selected.get("reconciliation", {}).get("event_id"):
+        evidence_ids.add(selected["reconciliation"]["event_id"])
+    evidence = {
+        event_id: client.portal.call(runtime.event_log.get, event_id)
+        for event_id in sorted(evidence_ids)
+    }
+    linkage = _validate_g12a_link(
+        selected, item, evidence, runtime.settings.instance.tenant_id
+    )
     approved = client.post(
         f"/api/member/v1/triage/{item['proposal_id']}/approve",
         headers=HEADERS,
@@ -409,6 +603,7 @@ def _complete_g12a(client: Any, source_id: str) -> dict[str, Any]:
     if (
         destination.get("record_kind") != "task"
         or destination.get("state") != "materialized"
+        or destination.get("record_id") != f"triage_task_{item['proposal_id']}"
     ):
         raise RuntimeError("G12a approval did not materialize its actual local task")
     task_id = destination["record_id"]
@@ -416,8 +611,13 @@ def _complete_g12a(client: Any, source_id: str) -> dict[str, Any]:
     tasks = [
         task for task in reminders["cockpit"]["tasks"] if task["task_id"] == task_id
     ]
-    if len(tasks) != 1:
-        raise RuntimeError("actual G12a task is not singular in the member surface")
+    if (
+        len(tasks) != 1
+        or tasks[0].get("owner_member_id") != MEMBER
+        or tasks[0].get("title") != item["title"]
+        or tasks[0].get("due_date") != item["candidate"]["due"]
+    ):
+        raise RuntimeError("actual G12a task is not singular with its approved fields")
     completed = client.post(
         "/api/member/v1/lifecycle",
         headers=HEADERS,
@@ -436,7 +636,13 @@ def _complete_g12a(client: Any, source_id: str) -> dict[str, Any]:
         raise RuntimeError(
             f"actual G12a completion failed: HTTP {completed.status_code}"
         )
-    return {"approval": approval, "completion": completed.json(), "task_id": task_id}
+    return {
+        "source_proposal_link": linkage,
+        "selection_evidence": list(evidence.values()),
+        "approval": approval,
+        "completion": completed.json(),
+        "task_id": task_id,
+    }
 
 
 def _immutable_counts(events: list[dict[str, Any]]) -> dict[str, list[str]]:

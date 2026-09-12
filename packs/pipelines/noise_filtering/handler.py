@@ -102,7 +102,7 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "8.0.2"
+SKILL_VERSION = "8.0.3"
 _RETAINED_CLASSIFICATION_VERSION = "8.0.0"
 DEFAULT_CLASSIFICATION = "personal"
 _REPLAY_GENERATION = 23

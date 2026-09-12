@@ -84,9 +84,9 @@ than automatically consolidating its distinct obligations.
 ## Bounded semantic correction of the disposable sample
 
 **MODERNIZE the language contract; PRESERVE CO-017/CO-018/CO-022 authority and
-history:** classifier8.0.2 names the supported typed candidate fields and
+history:** classifier8.0.3 names the supported typed candidate fields and
 distinguishes action-specific negation/completion, due timing, actual failures,
-and optional prerequisites. Old8.0.0/8.0.1 receipts remain compatible. Neither
+and optional prerequisites. Paid/completed transaction clauses do not terminate future attendance. Old8.0.0/8.0.1/8.0.2 receipts remain compatible. Neither
 the pipeline version nor its durable checkpoint changes. Frozen actual-model
 cases, including all prior passing negative/priority/lifecycle cases, decide
 semantic acceptance separately from deterministic process tests.

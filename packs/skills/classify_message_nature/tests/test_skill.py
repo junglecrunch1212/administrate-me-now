@@ -73,8 +73,12 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "8.0.2"
-    assert loaded.skill_frontmatter["compatible_success_versions"] == ["8.0.0", "8.0.1"]
+    assert loaded.version == "8.0.3"
+    assert loaded.skill_frontmatter["compatible_success_versions"] == [
+        "8.0.0",
+        "8.0.1",
+        "8.0.2",
+    ]
     assert loaded.skill_frontmatter["timeout_seconds"] == 120
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (

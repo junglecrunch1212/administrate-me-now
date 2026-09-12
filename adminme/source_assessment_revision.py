@@ -32,7 +32,7 @@ REVISION_PLAN_TYPE = "triage.source_revision_publication.planned"
 REVISION_COMPLETION_TYPE = "triage.source_revision_publication.completed"
 MAX_TARGETS = 9
 ATTEMPT_LIMIT = 3
-CLASSIFIER_SHA256 = "8d6efcd66dc9d0b8cfdb460444ae5369147d66532af1c78a575ebb50a5124b59"
+CLASSIFIER_SHA256 = "a51260af6880c1093c9385ef6b9135387b00dc7035a7e78f977364dec149683c"
 
 
 class RevisionRefused(ValueError):

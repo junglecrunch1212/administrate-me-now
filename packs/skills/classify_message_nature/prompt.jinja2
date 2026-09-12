@@ -177,6 +177,14 @@ THAT action, not the presence of a word or the tone of the whole message:
   A paid ticket completes payment; confirmed future attendance remains an open
   `calendar_event`, with purpose `appointment`, actionability `required` and
   date_role `occurrence`. Its source may still be classified transactional.
+  Do not put the payment's `completion` quote in the attendance candidate's
+  `qualifying_evidence`. That would assert that attendance itself is complete.
+  Cite the confirmed booking as `ownership` and its event time as `date`;
+  mention payment only in the summary when useful. For example, "Paid in full.
+  Your theatre booking is confirmed for 2031-04-12 at 19:00 UTC" supports an
+  open calendar event with ownership/date evidence, zero completion evidence,
+  and no payment task. If the source instead says the performance has ended
+  or the booking was cancelled, that terminal evidence concerns attendance.
 - `condition` is a prerequisite for whether this action applies. Use `met` when
   source evidence establishes it now; use `unmet` only when evidence explicitly
   establishes it is false. A choice not yet made or participation not confirmed

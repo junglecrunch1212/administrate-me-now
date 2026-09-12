@@ -1,8 +1,8 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 8.0.2
-compatible_success_versions: [8.0.0, 8.0.1]
+version: 8.0.3
+compatible_success_versions: [8.0.0, 8.0.1, 8.0.2]
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -103,7 +103,10 @@ Triage. The dedicated commitment pipeline continues to own richer attributed
 inbound-request semantics; this skill covers grounded outbound member promises
 that the legacy pipeline intentionally suppresses without a sender identity.
 
-Version 8.0.2 clarifies the existing candidate field vocabulary and the scope
+Version 8.0.3 clarifies the existing candidate field vocabulary and the scope
 and polarity of each action's qualifiers. Output-schema annotations guide new
-inference without invalidating retained 8.0.0/8.0.1 receipts. Ordinary history
+inference without invalidating retained 8.0.0/8.0.1/8.0.2 receipts. Ordinary history
 reuses those successes unchanged; a prompt correction does not request replay.
+
+Completed payment or registration is excluded from the qualifying completion
+evidence of future attendance; it remains a separate transaction state.

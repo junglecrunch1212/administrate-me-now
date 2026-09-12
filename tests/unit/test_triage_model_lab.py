@@ -13,6 +13,7 @@ from tools.triage_model_lab import (
     SEMANTIC_IDS,
     LabRefused,
     _case_evidence,
+    _g12a_items,
     _retry_policy,
     _save_report,
     load_frozen_cases,
@@ -174,3 +175,34 @@ def test_model_capture_redacts_both_lab_credentials_before_writing(
     assert "fixture-dedicated-provider-key" not in saved
     assert report["failure"] == "fixture-gateway-key fixture-dedicated-provider-key"
     assert output.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "case", ["missing", "ambiguous", "self", "chain", "source_ambiguous"]
+)
+def test_g12_duplicate_lookup_never_searches_for_a_similar_task(case):
+    selected = {
+        "proposal_id": "fixture-selected",
+        "source_event_id": "fixture-g12a",
+        "target_kind": "task",
+        "admission_decision": "duplicate",
+        "duplicate_of_proposal_id": "fixture-primary",
+    }
+    primary = {
+        "proposal_id": "fixture-primary",
+        "source_event_id": "fixture-g10",
+        "target_kind": "task",
+    }
+    items = [selected, primary]
+    if case == "missing":
+        items.remove(primary)
+    elif case == "ambiguous":
+        items.append(dict(primary))
+    elif case == "self":
+        selected["duplicate_of_proposal_id"] = selected["proposal_id"]
+    elif case == "chain":
+        primary["duplicate_of_proposal_id"] = "fixture-third"
+    else:
+        items.append({**selected, "proposal_id": "fixture-another-task"})
+    with pytest.raises(RuntimeError, match="G12a"):
+        _g12a_items({"items": items}, "fixture-g12a")
