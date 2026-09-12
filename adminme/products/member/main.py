@@ -84,6 +84,7 @@ from adminme.products.bridge.auth import EnrollmentMemberIdResolver
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import (
+    _triage_owed_to_party_available,
     _triage_review_state,
     authorize_surface,
     build_surface,
@@ -1252,7 +1253,10 @@ def _owned_reviewable_triage_item(
     """Return current owned proposal truth plus the member review contract."""
 
     item = _owned_triage_item(runtime, session, proposal_id)
-    item["review_state"] = _triage_review_state(item)
+    item["review_state"] = _triage_review_state(
+        item,
+        owed_to_party_available=_triage_owed_to_party_available(runtime, session, item),
+    )
     return item
 
 
@@ -1794,6 +1798,17 @@ def _materialization_envelopes(
         owed_to = candidate.get("owed_to_party_id")
         if not owed_to:
             raise HTTPException(422, "a commitment requires an owed-to party")
+        if runtime.projections is None:
+            raise HTTPException(503, "parties projection unavailable")
+        if (
+            get_party(
+                runtime.projections.connection("parties"),
+                session,
+                party_id=str(owed_to),
+            )
+            is None
+        ):
+            raise HTTPException(422, "commitment owed-to Party is unavailable")
         commitment_id = f"triage_commitment_{item['proposal_id']}"
         proposed = EventEnvelope(
             **common,

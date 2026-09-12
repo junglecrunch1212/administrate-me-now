@@ -37,11 +37,14 @@ def triage_review_state(
     *,
     candidate: Mapping[str, Any] | None = None,
     route: Mapping[str, Any] | None = None,
+    owed_to_party_available: bool | None = None,
 ) -> dict[str, Any]:
     """Explain whether a proposal has the typed fields needed for review.
 
     A `ready` result is presentation readiness only. Every approval still
     traverses domain governance and the exact settlement contract.
+    Member readers supply scoped Party availability; deterministic projection
+    callers can assess field completeness without reading another projection.
     """
 
     candidate = candidate if candidate is not None else item.get("candidate")
@@ -62,7 +65,9 @@ def triage_review_state(
         missing.append("title")
     if not route.get("member_id"):
         missing.append("member")
-    if target == "commitment" and not candidate.get("owed_to_party_id"):
+    if target == "commitment" and (
+        not candidate.get("owed_to_party_id") or owed_to_party_available is False
+    ):
         missing.append("owed_to_party")
     if target == "calendar_event":
         if not candidate.get("start"):
