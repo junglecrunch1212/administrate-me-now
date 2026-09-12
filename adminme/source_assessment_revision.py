@@ -168,24 +168,26 @@ async def inspect_target(
         raise RevisionRefused("latest_episode_anchor_required")
     context_ids = sorted(message.source_event_id for message in context.messages)
     episode_ids = sorted(context.episode_source_event_ids)
-    # A member decision freezes that episode for this one test correction.
-    async for proposal in event_log.read_since(
-        owner_scope=owner_scope, types=["triage.item.proposed"]
+    # Member writes point to the current item receipt, which may be a later
+    # reconciliation/enrichment rather than the original proposal event.
+    proposal_ids = {
+        proposal["payload"]["proposal_id"]
+        async for proposal in event_log.read_since(
+            owner_scope=owner_scope, types=["triage.item.proposed"]
+        )
+        if proposal.get("payload", {}).get("source_event_id") in episode_ids
+    }
+    async for decision in event_log.read_since(
+        owner_scope=owner_scope,
+        types=[
+            "triage.item.enriched",
+            "triage.item.managed",
+            "triage.item.confirmed",
+            "triage.item.materialized",
+            "triage.item.dismissed",
+        ],
     ):
-        if proposal.get("payload", {}).get("source_event_id") not in episode_ids:
-            continue
-        descendants = await event_log.get_by_causation(proposal["event_id"])
-        if any(
-            child.get("type")
-            in {
-                "triage.item.enriched",
-                "triage.item.managed",
-                "triage.item.confirmed",
-                "triage.item.materialized",
-                "triage.item.dismissed",
-            }
-            for child in descendants
-        ):
+        if decision.get("payload", {}).get("proposal_id") in proposal_ids:
             raise RevisionRefused("member_decision_preserved")
     if policy is not None:
         for event_id in sorted(set(context_ids) | set(episode_ids)):

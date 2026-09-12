@@ -18,6 +18,7 @@ import tarfile
 import threading
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -26,6 +27,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.source_assessment_revision import (
+    REFUSAL_TYPE,
     REQUEST_TYPE,
     REVISION,
     REVISION_COMPLETION_TYPE,
@@ -367,6 +369,131 @@ def test_queued_manifest_rechecks_authority_and_context_after_restart(
         assert not [call for call in model.calls[len(before_calls) :] if call[1] == 0]
         _unchanged_history(client, before)
         snapshot(client)
+
+
+@pytest.mark.parametrize("change", ["member_decision", "context"])
+def test_change_during_model_await_spends_receipt_without_publishing_revision(
+    tmp_path, monkeypatch, change
+):
+    config = settings(tmp_path / "instance", ROOT)
+    model = _model(monkeypatch)
+    responding = model.respond
+    entered = threading.Event()
+    release = asyncio.Event()
+    changed_quote = "complete the fixture preparation form for activity 1."
+
+    async def delayed_transport(request, args):
+        index = int(args["input"]["subject"].rsplit(" ", 1)[-1])
+        revising = model.mode == "revision" and index == 1
+        if revising:
+            entered.set()
+            await asyncio.wait_for(release.wait(), timeout=30)
+        response = await responding(request, args)
+        payload = response.json()
+        output = payload["result"]["details"]["json"]
+        if revising:
+            # This remains an exact source substring but changes both title
+            # and candidate identity, exercising more than exact-key dedupe.
+            [candidate] = output["candidates"]
+            candidate.update(
+                title=changed_quote,
+                evidence_quote=changed_quote,
+                compact_summary=changed_quote,
+            )
+        elif index == 2:
+            # The newer context follows its ordinary production assessment;
+            # the external fixture deliberately finds no additional work.
+            output["candidates"] = []
+        return httpx.Response(200, json=payload, request=request)
+
+    monkeypatch.setattr(model, "respond", delayed_transport)
+    with TestClient(application.create_application(config)) as client:
+        runtime = client.app.state.runtime
+        source_id = client.portal.call(runtime.events.write, source(config, 1))
+        client.portal.call(settle, runtime)
+        before = snapshot(client)["events"]
+        [original] = _of_type(before, "triage.item.proposed")
+        assert original["payload"]["title"] != changed_quote
+        manifest = _preview(client, [source_id])["manifest"]
+        model.mode = "revision"
+        command = _request(client, manifest)
+        assert entered.wait(30), "revision did not enter the real model transport"
+        decision_id = None
+        try:
+            if change == "member_decision":
+                response = client.get(
+                    "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+                    headers=AUTH,
+                )
+                assert response.status_code == 200, response.text
+                [item] = response.json()["items"]
+                response = client.post(
+                    f"/api/member/v1/triage/{item['proposal_id']}/dismiss",
+                    headers=AUTH,
+                    json={
+                        "request_id": "fixture-revision-during-inference",
+                        "expected_last_event_id": item["last_event_id"],
+                        "reason": "Already handled during source assessment",
+                    },
+                )
+                assert response.status_code == 200, response.text
+                decision_id = response.json()["event_id"]
+            else:
+                client.portal.call(
+                    runtime.events.write,
+                    source(config, 2, thread="fixture-revision-thread-1"),
+                )
+        finally:
+            client.portal.call(release.set)
+        client.portal.call(settle, runtime)
+        after = snapshot(client)["events"]
+        _unchanged_history(client, before)
+        status = _status(client, command["request_event_id"])
+        assert status["terminal"] is True
+        [target] = status["targets"]
+        assert target["state"] == "refused" and target["outcome"] is None
+        assert target["refusal_reason"] in (
+            {"member_decision_preserved"}
+            if change == "member_decision"
+            else {"latest_episode_anchor_required", "assessment_or_context_changed"}
+        )
+        [receipt] = [
+            event
+            for event in _of_type(after, "skill.call.recorded")
+            if "message-nature:revision:" in event["idempotency_key"]
+        ]
+        assert receipt["causation_id"] == source_id
+        assert (
+            receipt["payload"]["outputs"]["candidates"][0]["evidence_quote"]
+            == changed_quote
+        )
+        [refusal] = _of_type(after, REFUSAL_TYPE)
+        assert receipt["event_id"] < refusal["event_id"]
+        assert _of_type(after, "triage.item.proposed") == [original]
+        assert _of_type(after, REVISION_PLAN_TYPE, REVISION_COMPLETION_TYPE) == []
+        assert not [
+            event
+            for event in _of_type(after, "triage.intent.features_extracted")
+            if event["schema_version"] == 5
+        ]
+        if decision_id is not None:
+            row = (
+                runtime.projections.connection("triage")
+                .execute(
+                    "SELECT state,last_event_id FROM triage_items WHERE proposal_id=?",
+                    (original["payload"]["proposal_id"],),
+                )
+                .fetchone()
+            )
+            assert tuple(row) == ("dismissed", decision_id)
+        calls = list(model.calls)
+        assert (
+            _request(client, manifest)["request_event_id"]
+            == command["request_event_id"]
+        )
+        client.portal.call(settle, runtime)
+        assert model.calls == calls
+        assert client.portal.call(events, runtime) == after
 
 
 def test_failed_revision_spends_three_attempts_across_duplicate_and_three_restarts(
