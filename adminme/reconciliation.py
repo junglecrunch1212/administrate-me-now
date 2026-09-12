@@ -969,6 +969,7 @@ def choose_decision(
     if signals.security_alert and not any(
         (
             signals.authenticated_member_instruction,
+            signals.verified_obligation,
             signals.known_human_incoming_request,
             signals.member_promise,
             signals.transactional_deadline,

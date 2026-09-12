@@ -102,6 +102,10 @@ Interpret the primary conversation as a whole, not as isolated messages. Find
 every distinct open ask, decision, promise, deadline, payment, document step,
 appointment, reminder, and recurrence supported by the words. One conversation
 may produce several candidates; do not collapse them into a vague topic card.
+Count distinct outcomes, not verbs. An instruction to review affected
+credentials and replace exposed passwords is one remediation action when
+review is a preparatory step toward that same outcome. Separately requested
+submission and confirmation are two actions, especially with separate deadlines.
 Use related messages only to explain or resolve the primary thread's status.
 Never emit a candidate whose primary evidence is a `related` message; that
 message is assessed separately when it is its own primary source.
@@ -135,6 +139,63 @@ For each candidate:
   or date clause in `qualifying_evidence` using the supplied source aliases.
   A normalized date needs its own date citation, including the year when
   stated. Unknown conditions or missing evidence remain unknown.
+
+Use these exact keys inside `candidate`, according to `target_kind`:
+- task: description, due, energy, effort_min.
+- commitment: kind, owed_to_party_id, due, urgency, source_interaction_id,
+  source_message_preview.
+- calendar_event: start, end, all_day, event_type, location.
+- reminder or list_item: due, notes, priority.
+- list: notes.
+- recurrence: recurrence_text, rrule, next_occurrence, kind, lead_time_days,
+  trackable, linked_kind, linked_id, notes.
+- party_identifier: surviving_party_id, candidate_kind, candidate_value,
+  candidate_value_normalized.
+- party_candidate: kind, display_name, sort_name, nickname, organization_name,
+  job_title, identifier_kind, identifier_value, identifier_value_normalized.
+- party_relationship: party_a, party_b, label, direction, since.
+- relationship_fact: party_id, kind, label, value, effective_date, evidence_quote.
+Omit unsupported or unknown fields. Never invent identifiers or resolve People
+identity. Never use `action`, `deadline`, `date`, `time`, or `scheduled_at` inside
+`candidate`: these are not supported candidate keys. Put the action in `title`
+and a supported description/notes field when applicable. Use `due` for a task,
+commitment, reminder or list-item deadline, `start`/`end` for an event, and
+`next_occurrence` for a recurrence. Dates use supported ISO 8601 strings;
+preserve an explicit time and offset, and do not invent a time, zone or end.
+For example, a form required by 2031-04-09T17:00:00Z has
+`candidate: {"due": "2031-04-09T17:00:00Z"}` and a verbatim `date` citation.
+The top-level message `deadline` does not populate a candidate's `due`.
+
+For EACH candidate, determine the action, its object, and its owner before
+assigning any qualifying evidence. Qualifier roles describe their effect on
+THAT action, not the presence of a word or the tone of the whole message:
+- `negation` means the same action is explicitly unnecessary, prohibited or
+  cancelled. A separate unaffected account does not negate remediation of an
+  affected account. Do not attach that unrelated clause to the remediation.
+- `completion` means the same action has already been performed. Not yet
+  registered, not completed, undecided and not affected do not assert completion.
+  A paid ticket completes payment; confirmed future attendance remains an open
+  `calendar_event`, with purpose `appointment`, actionability `required` and
+  date_role `occurrence`. Its source may still be classified transactional.
+- `condition` is a prerequisite for whether this action applies. Use `met` when
+  source evidence establishes it now; use `unmet` only when evidence explicitly
+  establishes it is false. A choice not yet made or participation not confirmed
+  is `unknown`, not `unmet`. Preserve optional opportunities as conditional,
+  with unknown choice/ownership where appropriate, rather than firm obligations.
+  Cite the actual condition, not an unrelated negative or completion clause.
+- Before a confirmed visit or arrival describes when preparation is due, not
+  an unmet prerequisite. Use date_role `deadline`, condition null and
+  condition_state `not_applicable`; cite the date separately when present.
+- An explicitly stopped or broken connection is a current problem. An explicit
+  request to reconnect is applicable now: the prerequisite is `met`, or there
+  is no prerequisite (`not_applicable`). "To restore service" is the desired
+  result of reconnecting, not a condition that must hold before reconnecting.
+  A hypothetical future outage while the source says service is healthy does
+  not establish a current repair obligation.
+Use `informational` or `none` only for the particular candidate's lack of an
+open action; the message's receipt/newsletter category does not decide it.
+Never manufacture personal ownership, satisfaction of a prerequisite, or
+agreement to an optional plan. Retain the exact supporting source clauses.
 
 Read before deciding: zero balance, no payment due, payment received, scheduled
 autopay, later completion, changed plans, and cancellation can eliminate or

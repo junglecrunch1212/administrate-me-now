@@ -120,7 +120,8 @@
             "maxLength": 1000
           },
           "candidate": {
-            "type": "object"
+            "type": "object",
+            "description": "Use only the exact supported fields for target_kind documented below. Omit unknown values. Do not use action, deadline, date, time or scheduled_at as candidate keys; those names do not populate product fields. Existing receipts retain their original validation contract."
           },
           "confidence": {
             "type": "number",
@@ -245,14 +246,16 @@
                   "informational",
                   "none",
                   "unknown"
-                ]
+                ],
+                "description": "Assess this action, not the message category. Confirmed future attendance remains an open required appointment after its payment is complete. An optional choice remains conditional."
               },
               "condition": {
                 "type": [
                   "string",
                   "null"
                 ],
-                "maxLength": 500
+                "maxLength": 500,
+                "description": "Actual prerequisite for whether this action applies; null when not applicable. Before-arrival timing is a deadline; to restore service describes a desired outcome, not a prerequisite."
               },
               "condition_state": {
                 "enum": [
@@ -260,7 +263,8 @@
                   "unmet",
                   "unknown",
                   "not_applicable"
-                ]
+                ],
+                "description": "met: source proves the prerequisite holds now; unmet: source explicitly proves it false; unknown: not established or not yet chosen; not_applicable: there is no prerequisite. Never infer acceptance or ownership."
               },
               "beneficiary": {
                 "type": [
@@ -277,7 +281,8 @@
                   "reporting",
                   "none",
                   "unknown"
-                ]
+                ],
+                "description": "deadline is when an action must be done, including preparation before a confirmed visit; occurrence is the time of a confirmed event; reporting frequency is not recurrence."
               },
               "qualifying_evidence": {
                 "type": "array",
@@ -308,14 +313,413 @@
                         "date",
                         "ownership",
                         "recurrence"
-                      ]
+                      ],
+                      "description": "Apply only to this candidate action and object. negation cancels or removes this same action; completion affirms this same action was performed. Unrelated unaffected accounts, not-yet-completed work and undecided attendance are neither completion nor cancellation of another action. condition cites a genuine prerequisite, not a desired result."
                     }
                   }
                 }
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "task"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For task, emit only these keys: description, due, energy, effort_min. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "description": {
+                      "description": "Text describing this one grounded action; do not split a preparatory verb into a duplicate outcome."
+                    },
+                    "due": {
+                      "description": "Supported ISO 8601 action deadline, with an exact date citation. Preserve stated time and offset; omit rather than invent them. Not a prerequisite or an event start."
+                    },
+                    "energy": {
+                      "description": "Source-supported energy label: low, medium or high; omit when unstated."
+                    },
+                    "effort_min": {
+                      "description": "Nonnegative integer effort in minutes only when supported."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "commitment"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For commitment, emit only these keys: kind, owed_to_party_id, due, urgency, source_interaction_id, source_message_preview. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "kind": {
+                      "description": "Source-supported kind for commitment; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "owed_to_party_id": {
+                      "description": "Source-supported owed_to_party_id for commitment; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "due": {
+                      "description": "Supported ISO 8601 action deadline, with an exact date citation. Preserve stated time and offset; omit rather than invent them. Not a prerequisite or an event start."
+                    },
+                    "urgency": {
+                      "description": "Supported commitment urgency: today, this_week, this_month or no_rush."
+                    },
+                    "source_interaction_id": {
+                      "description": "Source-supported source_interaction_id for commitment; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "source_message_preview": {
+                      "description": "Verbatim short excerpt supporting this commitment."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "calendar_event"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For calendar_event, emit only these keys: start, end, all_day, event_type, location. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "start": {
+                      "description": "Supported ISO 8601 start of a confirmed event; cite its occurrence date. A deadline or tentative invitation alone is not an event."
+                    },
+                    "end": {
+                      "description": "Supported ISO 8601 end only if evidenced; never invent duration."
+                    },
+                    "all_day": {
+                      "description": "Boolean true only when the event is explicitly all-day or date-only."
+                    },
+                    "event_type": {
+                      "description": "Source-supported calendar event type."
+                    },
+                    "location": {
+                      "description": "Location explicitly supported for this event."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "reminder"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For reminder, emit only these keys: due, notes, priority. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "due": {
+                      "description": "Supported ISO 8601 action deadline, with an exact date citation. Preserve stated time and offset; omit rather than invent them. Not a prerequisite or an event start."
+                    },
+                    "notes": {
+                      "description": "Source-supported detail about this candidate."
+                    },
+                    "priority": {
+                      "description": "Supported numeric priority: 0 none, 1 high, 5 medium, 9 low; omit when unstated."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "list"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For list, emit only these keys: notes. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "notes": {
+                      "description": "Source-supported detail about this candidate."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "list_item"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For list_item, emit only these keys: due, notes, priority. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "due": {
+                      "description": "Supported ISO 8601 action deadline, with an exact date citation. Preserve stated time and offset; omit rather than invent them. Not a prerequisite or an event start."
+                    },
+                    "notes": {
+                      "description": "Source-supported detail about this candidate."
+                    },
+                    "priority": {
+                      "description": "Supported numeric priority: 0 none, 1 high, 5 medium, 9 low; omit when unstated."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "recurrence"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For recurrence, emit only these keys: recurrence_text, rrule, next_occurrence, kind, lead_time_days, trackable, linked_kind, linked_id, notes. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "recurrence_text": {
+                      "description": "Verbatim recurring responsibility wording, not message or reporting frequency."
+                    },
+                    "rrule": {
+                      "description": "RFC 5545 recurrence rule only when the repeating action is explicit."
+                    },
+                    "next_occurrence": {
+                      "description": "Supported ISO 8601 next occurrence of an explicit repeating responsibility, with date and recurrence evidence."
+                    },
+                    "kind": {
+                      "description": "Source-supported kind for recurrence; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "lead_time_days": {
+                      "description": "Supported nonnegative whole number of advance-notice days."
+                    },
+                    "trackable": {
+                      "description": "Boolean indicating an explicitly trackable recurring responsibility."
+                    },
+                    "linked_kind": {
+                      "description": "Source-supported linked_kind for recurrence; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "linked_id": {
+                      "description": "Source-supported linked_id for recurrence; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "notes": {
+                      "description": "Source-supported detail about this candidate."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "party_identifier"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For party_identifier, emit only these keys: surviving_party_id, candidate_kind, candidate_value, candidate_value_normalized. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "surviving_party_id": {
+                      "description": "Source-supported surviving_party_id for party_identifier; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "candidate_kind": {
+                      "description": "Source-supported candidate_kind for party_identifier; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "candidate_value": {
+                      "description": "Source-supported candidate_value for party_identifier; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "candidate_value_normalized": {
+                      "description": "Source-supported candidate_value_normalized for party_identifier; omit when unknown. Never invent or resolve an internal identity."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "party_candidate"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For party_candidate, emit only these keys: kind, display_name, sort_name, nickname, organization_name, job_title, identifier_kind, identifier_value, identifier_value_normalized. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "kind": {
+                      "description": "Source-supported kind for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "display_name": {
+                      "description": "Source-supported display_name for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "sort_name": {
+                      "description": "Source-supported sort_name for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "nickname": {
+                      "description": "Source-supported nickname for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "organization_name": {
+                      "description": "Source-supported organization_name for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "job_title": {
+                      "description": "Source-supported job_title for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "identifier_kind": {
+                      "description": "Source-supported identifier_kind for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "identifier_value": {
+                      "description": "Source-supported identifier_value for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "identifier_value_normalized": {
+                      "description": "Source-supported identifier_value_normalized for party_candidate; omit when unknown. Never invent or resolve an internal identity."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "party_relationship"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For party_relationship, emit only these keys: party_a, party_b, label, direction, since. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "party_a": {
+                      "description": "Source-supported party_a for party_relationship; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "party_b": {
+                      "description": "Source-supported party_b for party_relationship; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "label": {
+                      "description": "Source-supported label for party_relationship; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "direction": {
+                      "description": "Source-supported direction for party_relationship; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "since": {
+                      "description": "Source-supported since for party_relationship; omit when unknown. Never invent or resolve an internal identity."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "relationship_fact"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "candidate": {
+                  "description": "For relationship_fact, emit only these keys: party_id, kind, label, value, effective_date, evidence_quote. Values must be supported by this candidate's own evidence.",
+                  "properties": {
+                    "party_id": {
+                      "description": "Source-supported party_id for relationship_fact; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "kind": {
+                      "description": "Source-supported kind for relationship_fact; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "label": {
+                      "description": "Source-supported label for relationship_fact; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "value": {
+                      "description": "Source-supported value for relationship_fact; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "effective_date": {
+                      "description": "Source-supported effective_date for relationship_fact; omit when unknown. Never invent or resolve an internal identity."
+                    },
+                    "evidence_quote": {
+                      "description": "Source-supported evidence_quote for relationship_fact; omit when unknown. Never invent or resolve an internal identity."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "assessment_contract": {

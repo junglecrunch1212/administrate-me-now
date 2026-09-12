@@ -276,7 +276,7 @@ class TriageSourcePublicationPlannedV1(BaseModel):
     contract: Literal["triage-source-publication-v1"]
     source_event_id: str = Field(min_length=1, max_length=240)
     assessment_idempotency_key: str = Field(min_length=1, max_length=240)
-    assessment_schema_version: Literal[3, 4]
+    assessment_schema_version: Literal[3, 4, 5]
     proposals: list[TriageSourceProposalDraftV1] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
@@ -426,6 +426,16 @@ class TriageIntentFeaturesExtractedV4(TriageIntentFeaturesExtractedV3):
     recovery_attempt_limit: Literal[3]
 
 
+class TriageIntentFeaturesExtractedV5(TriageIntentFeaturesExtractedV3):
+    """Explicit semantic revision; prior completed assessments remain history."""
+
+    model_config = {"extra": "forbid"}
+    supersedes_assessment_event_id: str = Field(min_length=1, max_length=240)
+    revision_request_event_id: str = Field(min_length=1, max_length=240)
+    assessment_revision: Literal["triage-semantics-2026-09-v1"]
+    revision_attempt_limit: Literal[3]
+
+
 class TriageItemEnrichedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -565,6 +575,17 @@ registry.register(
 registry.register(
     "triage.intent.features_extracted", 4, TriageIntentFeaturesExtractedV4
 )
+registry.register(
+    "triage.intent.features_extracted", 5, TriageIntentFeaturesExtractedV5
+)
+registry.register(
+    "triage.source_revision_publication.planned", 1, TriageSourcePublicationPlannedV1
+)
+registry.register(
+    "triage.source_revision_publication.completed",
+    1,
+    TriageSourcePublicationCompletedV1,
+)
 registry.register("triage.item.enriched", 1, TriageItemEnrichedV1)
 registry.register("triage.item.confirmed", 1, TriageItemConfirmedV1)
 registry.register("triage.item.confirmed", 2, TriageItemConfirmedV2)
@@ -599,4 +620,5 @@ __all__ = [
     "TriageIntentFeaturesExtractedV2",
     "TriageIntentFeaturesExtractedV3",
     "TriageIntentFeaturesExtractedV4",
+    "TriageIntentFeaturesExtractedV5",
 ]

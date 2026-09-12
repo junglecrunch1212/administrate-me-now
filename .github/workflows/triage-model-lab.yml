@@ -15,7 +15,7 @@ concurrency:
 jobs:
   capture-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: "1"
@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14.6"
@@ -30,14 +31,27 @@ jobs:
         run: |
           pipx install poetry==2.4.1
           poetry sync --with dev --no-interaction
+      - name: Generate the catalog for the new event schemas in isolation
+        run: poetry run python scripts/generate_event_lifecycle_catalog.py --output "$RUNNER_TEMP/event-lifecycle-catalog.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: triage-revision-catalog-${{ github.sha }}
+          path: ${{ runner.temp }}/event-lifecycle-catalog.json
+          retention-days: 7
       - name: Check the bounded capture contract without model access
         run: |
           poetry run ruff check tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py adminme/lib/skill_runner/wrapper.py tests/unit/test_skill_wrapper.py
           poetry run ruff format --check --diff tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py adminme/lib/skill_runner/wrapper.py tests/unit/test_skill_wrapper.py
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py tests/unit/test_skill_wrapper.py
+      - name: Verify the bounded semantic correction and durable application
+        run: |
+          poetry run ruff check adminme packs/pipelines/noise_filtering packs/skills/classify_message_nature tests/acceptance/test_source_assessment_revision.py tests/acceptance/test_personal_obligation_assessment.py tests/acceptance/test_bounded_triage_execution.py
+          poetry run mypy adminme bridge/adminme_bridge
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 --runxfail packs/skills/classify_message_nature/tests/test_skill.py tests/acceptance/test_source_assessment_revision.py tests/acceptance/test_personal_obligation_assessment.py tests/acceptance/test_bounded_triage_execution.py tests/unit/test_source_assessment_recovery.py tests/unit/test_pipeline_noise_filtering.py tests/unit/test_pipeline_runner.py tests/unit/test_cross_source_reconciliation.py tests/integration/test_pipeline_10b_i_integration.py
 
   gateway-runtime:
     needs: capture-contract
+    if: vars.ADMINME_MODEL_LAB_APPROVED_SHA != '' && github.sha == vars.ADMINME_MODEL_LAB_APPROVED_SHA
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

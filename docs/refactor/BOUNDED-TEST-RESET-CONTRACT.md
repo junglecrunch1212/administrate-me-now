@@ -149,6 +149,19 @@ same forward behavior, plus an encrypted restore that replaces the state inode.
 
 ## Truthful acceptance
 
+The CO-030 classifier correction has a separate, explicit application gate for
+an already selected sample. The supported source-assessment-revision API freezes
+one manifest of at most nine episode anchors and permits at most three durable
+attempts per source under one reviewed semantic revision. Preview is read-only;
+dataset, exact account/selected IDs, current assessment/context, observation and
+classifier identity must still match when the command executes. Member-decided
+episodes are preserved by refusal. Old receipts remain immutable and no source
+slot, cursor or consumer checkpoint is reset. Interrupted result publication
+uses the existing durable publication mechanism. Actual-model correction,
+bounded process proof and protected-predecessor compatibility must pass before
+the exact private manifest is applied to the local sample. See CO-030 for the
+command contract; this is not a second reset or general production recovery.
+
 An explicitly marked test dataset has a separate, release/dataset/manifest-bound
 reset proof: original state and failed journal retained, diagnostic archive
 authenticated, fresh clean backup restored/rebuilt, automatic state reversal

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -124,6 +124,43 @@ class SourceAssessmentRecoveryRequestedV1(BaseModel):
     max_concurrency: Literal[2]
 
 
+class SourceAssessmentRevisionRequestedV1(BaseModel):
+    """One exact, finite manifest for the reviewed disposable semantic revision."""
+
+    model_config = {"extra": "forbid"}
+    manifest: dict
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_by_actor: str = Field(min_length=1, max_length=240)
+    attempt_limit_per_source: Literal[3]
+
+    @model_validator(mode="after")
+    def exact_manifest(self) -> SourceAssessmentRevisionRequestedV1:
+        from adminme.source_assessment_revision import RevisionManifest
+
+        manifest = RevisionManifest.model_validate(self.manifest)
+        if manifest.fingerprint() != self.manifest_sha256:
+            raise ValueError("revision manifest digest mismatch")
+        return self
+
+
+class SourceAssessmentRevisionRefusedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    revision: Literal["triage-semantics-2026-09-v1"]
+    reason: Literal[
+        "observation_inactive",
+        "source_scope_mismatch",
+        "completed_assessment_required",
+        "latest_episode_anchor_required",
+        "assessment_or_context_changed",
+        "context_outside_selected_test_sample",
+        "disposable_dataset_or_selection_changed",
+        "reviewed_classifier_contract_changed",
+        "member_decision_preserved",
+    ]
+
+
 class SourceAssessmentRecoveryRefusedV1(BaseModel):
     """Stable refusal receipt; it contains identifiers and reason only."""
 
@@ -160,4 +197,10 @@ registry.register(
 )
 registry.register(
     "source.assessment.recovery_refused", 1, SourceAssessmentRecoveryRefusedV1
+)
+registry.register(
+    "source.assessment.revision_requested", 1, SourceAssessmentRevisionRequestedV1
+)
+registry.register(
+    "source.assessment.revision_refused", 1, SourceAssessmentRevisionRefusedV1
 )
