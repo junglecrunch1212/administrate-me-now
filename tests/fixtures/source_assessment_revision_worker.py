@@ -24,6 +24,7 @@ MEMBER = "fixture-revision-member"  # fixture:tenant_data:ok
 OTHER = "fixture-revision-other"  # fixture:tenant_data:ok
 ACCOUNT = "revision-fixture@example.invalid"
 ADAPTER = "fixture-revision-gmail"
+ADAPTER_KIND = "messaging-gmail-api"
 KEY = b"v" * 32
 AUTH = {"Tailscale-User-Login": "revision-member.ts.net"}
 OTHER_AUTH = {"Tailscale-User-Login": "revision-other.ts.net"}
@@ -48,7 +49,7 @@ def settings(instance: Path, root: Path, *, selected=None, dataset="a" * 32):
         "adapters": [
             {
                 "id": ADAPTER,
-                "kind": "messaging-gmail-api",
+                "kind": ADAPTER_KIND,
                 "enabled": False,
                 "config": {
                     "member_id": MEMBER,
@@ -94,7 +95,13 @@ def settings(instance: Path, root: Path, *, selected=None, dataset="a" * 32):
 
 
 def source(
-    config, index: int, *, thread=None, owner=MEMBER, account=ACCOUNT, adapter=ADAPTER
+    config,
+    index: int,
+    *,
+    thread=None,
+    owner=MEMBER,
+    account=ACCOUNT,
+    adapter=ADAPTER_KIND,
 ):
     occurred = f"2034-02-01T10:{index // 60:02}:{index % 60:02}Z"
     return EventEnvelope(

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, model_validator
 from adminme.adapters.disposable_test_acquisition import (
     DisposableTestAcquisition,
     policy_from_adapter_config,
+    restrict_adapter_config,
 )
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
@@ -49,6 +50,9 @@ def execution_policy(
     """Revalidate runtime authority after a queued command or process restart."""
     manifest = RevisionManifest.model_validate(command["payload"]["manifest"])
     try:
+        # Resolve the selected instance through the same exact Gmail kind and
+        # member/account binding restriction that RuntimeSettings validates.
+        restrict_adapter_config(adapter_config)
         policy = policy_from_adapter_config(adapter_config)
     except ValueError as exc:
         raise RevisionRefused("disposable_dataset_or_selection_changed") from exc
@@ -201,7 +205,9 @@ async def inspect_target(
             payload = (item or {}).get("payload") or {}
             if (
                 item is None
-                or item.get("source_adapter") != policy.adapter_id
+                # Gmail emits its canonical adapter name. The instance ID
+                # selects the reviewed configuration, not the envelope name.
+                or item.get("source_adapter") != "messaging-gmail-api"
                 or item.get("source_account_id") != policy.provider_account_id
                 or item.get("owner_scope") != f"private:{policy.member_id}"
                 or item.get("visibility_scope") != item.get("owner_scope")

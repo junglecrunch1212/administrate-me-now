@@ -7,6 +7,7 @@ exercise authorization and durability, not actual-model semantic accuracy.
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import io
 import json
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -23,6 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import adminme.runtime.application as application
+from adminme.adapters.loader import load_builtin_adapters
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import AppendValidationError, EventLog
 from adminme.events.writer import EventWriter
@@ -35,6 +38,9 @@ from adminme.source_assessment_revision import (
     RevisionRefused,
 )
 from tests.fixtures.source_assessment_revision_worker import (
+    ACCOUNT,
+    ADAPTER,
+    ADAPTER_KIND,
     AUTH,
     MODEL_TYPES,
     OTHER,
@@ -103,6 +109,178 @@ def _unchanged_history(client, before):
             )
             == event
         )
+
+
+class _RevisionGmailService:
+    """Only read-only Gmail responses are substituted; the adapter emits facts."""
+
+    def __init__(self, message):
+        self.message = message
+        self.get_ids = []
+        self.mode = ""
+
+    def users(self):
+        return self
+
+    def messages(self):
+        self.mode = "messages"
+        return self
+
+    def history(self):
+        self.mode = "history"
+        return self
+
+    def getProfile(self, *, userId):
+        assert userId == "me"
+        self.mode = "profile"
+        return self
+
+    def get(self, *, userId, id, format):
+        assert self.mode == "messages" and userId == "me" and format == "full"
+        assert id == self.message["id"]
+        self.get_ids.append(id)
+        return self
+
+    def list(self, **kwargs):
+        assert self.mode == "history", "unselected Gmail acquisition is prohibited"
+        assert kwargs["userId"] == "me"
+        return self
+
+    def execute(self):
+        if self.mode == "profile":
+            return {"historyId": "100", "emailAddress": ACCOUNT}
+        if self.mode == "history":
+            return {"historyId": "100"}
+        return copy.deepcopy(self.message)
+
+
+async def _wait_for_revision_gmail(runtime):
+    deadline = asyncio.get_running_loop().time() + 30
+    adapter = runtime.adapters._managed[ADAPTER].adapter
+    while asyncio.get_running_loop().time() < deadline:
+        status = adapter.status()
+        assert status.state not in {"crashed", "backoff"}, status
+        if status.extra.get("initial_backfill", {}).get("state") == "complete":
+            return adapter
+        await asyncio.sleep(0.01)
+    raise AssertionError("real bounded Gmail acquisition did not complete")
+
+
+def test_real_gmail_emitter_with_distinct_instance_id_can_preview_and_apply_revision(
+    tmp_path, monkeypatch
+):
+    config = settings(tmp_path / "instance", ROOT, selected=["message-0"])
+    config.adapter_config["adapters"][0]["enabled"] = True
+    original = source(config, 0)
+    service = _RevisionGmailService(
+        {
+            "id": "message-0",
+            "threadId": "fixture-revision-thread-0",
+            "internalDate": str(
+                int(
+                    datetime.fromisoformat(
+                        original.occurred_at.replace("Z", "+00:00")
+                    ).timestamp()
+                    * 1000
+                )
+            ),
+            "labelIds": ["CATEGORY_UPDATES"],
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": "no-reply@example.invalid"},
+                    {"name": "To", "value": ACCOUNT},
+                    {"name": "Subject", "value": original.payload["subject"]},
+                ],
+                "body": {
+                    "data": base64.urlsafe_b64encode(
+                        original.payload["body_text"].encode()
+                    ).decode()
+                },
+            },
+        }
+    )
+    [loaded_adapter] = load_builtin_adapters(
+        config.adapter_config, repository_root=ROOT
+    )
+    module = sys.modules[type(loaded_adapter).__module__]
+    monkeypatch.setattr(module, "_default_credentials_resolver", lambda _reference: {})
+
+    def service_factory(_credentials, scopes, subject):
+        assert scopes == ["https://www.googleapis.com/auth/gmail.readonly"]
+        assert subject == ACCOUNT
+        return service
+
+    monkeypatch.setattr(module, "_default_service_factory", service_factory)
+    monkeypatch.setattr(type(loaded_adapter), "POLL_INTERVAL_S", 3600)
+    model = _model(monkeypatch)
+    with TestClient(application.create_application(config)) as client:
+        runtime = client.app.state.runtime
+        adapter = client.portal.call(_wait_for_revision_gmail, runtime)
+        client.portal.call(settle, runtime)
+        before = client.portal.call(events, runtime)
+        [emitted] = _of_type(before, *SOURCE_TYPES)
+        assert set(runtime.adapters.inventory()) == {ADAPTER}
+        assert ADAPTER != ADAPTER_KIND == adapter.name == emitted["source_adapter"]
+        assert emitted["source_account_id"] == ACCOUNT
+        assert emitted["payload"]["native_message_id"] == "message-0"
+        assert emitted["payload"]["body_text"] == original.payload["body_text"]
+        assert service.get_ids == ["message-0"]
+        assert model.calls == [("initial", 0)]
+        source_id = emitted["event_id"]
+        preview = _preview(client, [source_id])
+        assert client.portal.call(events, runtime) == before
+        assert model.calls == [("initial", 0)]
+        assert preview["source_acquisition"] is False
+        assert preview["max_classifier_attempts"] == 3
+        [target] = preview["manifest"]["targets"]
+        assert target["context_source_event_ids"] == [source_id]
+        assert target["episode_source_event_ids"] == [source_id]
+        model.mode = "revision"
+        accepted = _request(client, preview["manifest"])
+        client.portal.call(settle, runtime)
+        status = _status(client, accepted["request_event_id"])
+        assert status["terminal"] is True
+        assert status["targets"][0]["outcome"] == "eligible_candidates"
+        after = client.portal.call(events, runtime)
+        _unchanged_history(client, before)
+        assert _of_type(after, *SOURCE_TYPES) == [emitted]
+        assert model.calls == [("initial", 0), ("revision", 0)]
+        assert service.get_ids == ["message-0"]
+        revisions = [
+            event
+            for event in _of_type(after, "triage.intent.features_extracted")
+            if event["schema_version"] == 5
+        ]
+        assert len(revisions) == 1
+        assert revisions[0]["payload"]["source_event_id"] == source_id
+        response = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+            headers=AUTH,
+        )
+        assert response.status_code == 200, response.text
+        [item] = [
+            item
+            for item in response.json()["items"]
+            if item.get("source_event_id") == source_id
+        ]
+        assert item["target_kind"] == "task"
+        assert item["extraction_event_id"] == revisions[0]["event_id"]
+        assert item["title"] == original.payload["body_text"]
+        assert (
+            _request(client, preview["manifest"])["request_event_id"]
+            == accepted["request_event_id"]
+        )
+        client.portal.call(settle, runtime)
+        assert model.calls == [("initial", 0), ("revision", 0)]
+        assert service.get_ids == ["message-0"]
+        assert not [
+            event
+            for event in client.portal.call(events, runtime)
+            if event["type"].startswith("external_sync.write_")
+            or event["type"] == "external.sent"
+            or event["payload"].get("provider_called") is True
+        ]
 
 
 def test_one_nine_target_manifest_preserves_decisions_and_cannot_be_renewed(
@@ -223,7 +401,9 @@ def test_preview_requires_selected_owner_account_adapter_and_latest_exact_contex
     tmp_path, monkeypatch
 ):
     config = settings(
-        tmp_path / "instance", ROOT, selected=["message-0", "message-1", "message-7"]
+        tmp_path / "instance",
+        ROOT,
+        selected=[f"message-{index}" for index in (0, 1, 2, 3, 4, 5, 7)],
     )
     model = _model(monkeypatch)
     with TestClient(application.create_application(config)) as client:
@@ -258,6 +438,7 @@ def test_preview_requires_selected_owner_account_adapter_and_latest_exact_contex
                 {"owner": OTHER},
                 {"account": "other-revision@example.invalid"},
                 {"adapter": "other-revision-adapter"},
+                {"adapter": ADAPTER},
                 {},
             ),
             start=2,
@@ -367,7 +548,9 @@ def test_queued_manifest_rechecks_authority_and_context_after_restart(
         snapshot(client)
 
 
-@pytest.mark.parametrize("change", ["member_decision", "context"])
+@pytest.mark.parametrize(
+    "change", ["member_decision", "context", "configured_kind", "configured_account"]
+)
 def test_change_during_model_await_spends_receipt_without_publishing_revision(
     tmp_path, monkeypatch, change
 ):
@@ -415,6 +598,7 @@ def test_change_during_model_await_spends_receipt_without_publishing_revision(
         command = _request(client, manifest)
         assert entered.wait(30), "revision did not enter the real model transport"
         decision_id = None
+        original_adapter = copy.deepcopy(config.adapter_config["adapters"][0])
         try:
             if change == "member_decision":
                 response = client.get(
@@ -434,24 +618,37 @@ def test_change_during_model_await_spends_receipt_without_publishing_revision(
                 )
                 assert response.status_code == 200, response.text
                 decision_id = response.json()["event_id"]
-            else:
+            elif change == "context":
                 client.portal.call(
                     runtime.events.write,
                     source(config, 2, thread="fixture-revision-thread-1"),
                 )
+            elif change == "configured_kind":
+                config.adapter_config["adapters"][0]["kind"] = "messaging-imap"
+            else:
+                config.adapter_config["adapters"][0]["config"][
+                    "provider_account_id"
+                ] = "other-revision@example.invalid"
         finally:
             client.portal.call(release.set)
         client.portal.call(settle, runtime)
-        after = snapshot(client)["events"]
-        _unchanged_history(client, before)
         status = _status(client, command["request_event_id"])
         assert status["terminal"] is True
         [target] = status["targets"]
         assert target["state"] == "refused" and target["outcome"] is None
+        # Observe the durable refusal while the binding is still changed;
+        # restoring the fixture config afterward cannot authorize this attempt.
+        config.adapter_config["adapters"][0] = original_adapter
+        after = snapshot(client)["events"]
+        _unchanged_history(client, before)
         assert target["refusal_reason"] in (
             {"member_decision_preserved"}
             if change == "member_decision"
-            else {"latest_episode_anchor_required", "assessment_or_context_changed"}
+            else (
+                {"latest_episode_anchor_required", "assessment_or_context_changed"}
+                if change == "context"
+                else {"disposable_dataset_or_selection_changed"}
+            )
         )
         [receipt] = [
             event
