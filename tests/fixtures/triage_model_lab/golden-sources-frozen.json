@@ -1,0 +1,138 @@
+{
+  "contract": "bounded-triage-golden-input-v1",
+  "frozen_at": "2026-09-10T18:22:30+00:00",
+  "case_count": 12,
+  "unique_source_count": 13,
+  "sources": [
+    {
+      "case_id": "G01",
+      "message_id": "synthetic-message-g01",
+      "thread_id": "synthetic-thread-g01",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": true,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Complete the required intake form before 2026-09-18 at 17:00 UTC."
+    },
+    {
+      "case_id": "G02",
+      "message_id": "synthetic-message-g02",
+      "thread_id": "synthetic-thread-g02",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": true,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Payment received; your ticket is paid in full. Your concert ticket is confirmed for 2026-09-19 at 19:00 UTC in Fixture Hall."
+    },
+    {
+      "case_id": "G03",
+      "message_id": "synthetic-message-g03",
+      "thread_id": "synthetic-thread-g03",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": true,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Please pay by 2026-09-24. Your balance is $0; no payment is required."
+    },
+    {
+      "case_id": "G04",
+      "message_id": "synthetic-message-g04",
+      "thread_id": "synthetic-thread-g04",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": true,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Please pay your bill by 2026-09-25. Autopay will pay this bill on time; no action is needed."
+    },
+    {
+      "case_id": "G05",
+      "message_id": "synthetic-message-g05",
+      "thread_id": "synthetic-thread-g05",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Please call us if you have questions. No response or action is required."
+    },
+    {
+      "case_id": "G06",
+      "message_id": "synthetic-message-g06",
+      "thread_id": "synthetic-thread-g06",
+      "direction": "outgoing",
+      "source_channel": "imessage",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "I will bring the chairs on 2026-09-21 at 18:00 UTC."
+    },
+    {
+      "case_id": "G07",
+      "message_id": "synthetic-message-g07",
+      "thread_id": "synthetic-thread-g07",
+      "direction": "incoming_group",
+      "source_channel": "imessage",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Can someone bring chairs? Please volunteer if you can."
+    },
+    {
+      "case_id": "G08",
+      "message_id": "synthetic-message-g08",
+      "thread_id": "synthetic-thread-g08",
+      "direction": "incoming",
+      "source_channel": "future_reviewed_channel",
+      "automated": true,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Your weekly account summary is ready. Report delivery repeats every Monday; no response is required."
+    },
+    {
+      "case_id": "G09",
+      "message_id": "synthetic-message-g09",
+      "thread_id": "synthetic-thread-g09",
+      "direction": "outgoing",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "The periodic report arrives monthly. I will send the figures next week."
+    },
+    {
+      "case_id": "G10",
+      "message_id": "synthetic-message-g10",
+      "thread_id": "synthetic-thread-g10",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Please upload the signed consent form by 2026-09-17 at 17:00 UTC. Also call the clinic to confirm your contact number by 2026-09-19 at 12:00 UTC."
+    },
+    {
+      "case_id": "G11",
+      "message_id": "synthetic-message-g11",
+      "thread_id": "synthetic-thread-g11",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "If you want to join the picnic, you can register by 2026-09-18 at 17:00 UTC. You have not registered; participation is optional."
+    },
+    {
+      "case_id": "G12a",
+      "message_id": "synthetic-message-g12a",
+      "thread_id": "synthetic-thread-g12",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:20:30Z",
+      "body_text": "Please upload the signed consent form by 2026-09-17 at 17:00 UTC."
+    },
+    {
+      "case_id": "G12b",
+      "message_id": "synthetic-message-g12b",
+      "thread_id": "synthetic-thread-g12",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-10T18:21:30Z",
+      "body_text": "Thanks. Your signed consent form was received. Nothing else is needed."
+    }
+  ]
+}

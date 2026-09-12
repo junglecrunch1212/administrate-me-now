@@ -1,0 +1,155 @@
+{
+  "contract": "bounded-triage-golden-expectations-v1",
+  "frozen_at": "2026-09-10T18:22:30+00:00",
+  "status": "frozen before inference; not executed",
+  "expected_required_actions": 7,
+  "required_positive_source_observations": 6,
+  "no_new_action_observations": 5,
+  "uncertain_or_optional_observations": 2,
+  "scoring": "Source evidence, kind, ownership, date role, conditions, lifecycle; no title string matching. Every unequivocal expectation must pass. Keep expected labels out of model inputs.",
+  "cases": [
+    {
+      "case_id": "G01",
+      "actions": [
+        {
+          "kind": "task",
+          "ownership": "member",
+          "purpose": "required preparation",
+          "deadline": "2026-09-18 at 17:00 UTC"
+        }
+      ]
+    },
+    {
+      "case_id": "G02",
+      "actions": [
+        {
+          "kind": "calendar_event",
+          "occurrence": "2026-09-19 at 19:00 UTC",
+          "location": "Fixture Hall"
+        }
+      ],
+      "forbidden": [
+        "payment task"
+      ]
+    },
+    {
+      "case_id": "G03",
+      "actions": [],
+      "forbidden": [
+        "payment obligation"
+      ],
+      "reason": "explicit zero balance and negation"
+    },
+    {
+      "case_id": "G04",
+      "actions": [],
+      "forbidden": [
+        "manual payment obligation",
+        "member recurrence"
+      ]
+    },
+    {
+      "case_id": "G05",
+      "actions": [],
+      "forbidden": [
+        "call task",
+        "reply task"
+      ]
+    },
+    {
+      "case_id": "G06",
+      "actions": [
+        {
+          "kind": "commitment",
+          "ownership": "member",
+          "deadline": "2026-09-21 at 18:00 UTC",
+          "action": "bring chairs"
+        }
+      ]
+    },
+    {
+      "case_id": "G07",
+      "actions": [],
+      "uncertain": "unresolved ownership and conditional possibility must remain visible",
+      "forbidden": [
+        "required member commitment",
+        "confident member assignment"
+      ]
+    },
+    {
+      "case_id": "G08",
+      "actions": [],
+      "forbidden": [
+        "personal task",
+        "personal recurrence"
+      ]
+    },
+    {
+      "case_id": "G09",
+      "actions": [
+        {
+          "kind": "commitment",
+          "ownership": "member",
+          "action": "send figures",
+          "deadline_precision": "next week only",
+          "priority_rank": 10
+        }
+      ],
+      "forbidden": [
+        "forecast obligation",
+        "invented precise date"
+      ],
+      "optional_forecast_candidate": {
+        "decision": "unresolved",
+        "priority_rank": 60,
+        "must_not_have": "exact_member_commitment"
+      }
+    },
+    {
+      "case_id": "G10",
+      "actions": [
+        {
+          "kind": "task",
+          "action": "upload signed consent form",
+          "deadline": "2026-09-17 at 17:00 UTC"
+        },
+        {
+          "kind": "task",
+          "action": "call clinic to confirm contact number",
+          "deadline": "2026-09-19 at 12:00 UTC"
+        }
+      ],
+      "forbidden": [
+        "merged action",
+        "fabricated appointment"
+      ]
+    },
+    {
+      "case_id": "G11",
+      "actions": [],
+      "uncertain": "conditional optional opportunity, visibly optional",
+      "forbidden": [
+        "required task",
+        "confirmed calendar attendance"
+      ]
+    },
+    {
+      "case_id": "G12a",
+      "actions": [
+        {
+          "kind": "task",
+          "action": "upload signed consent form",
+          "deadline": "2026-09-17 at 17:00 UTC"
+        }
+      ],
+      "after_classification": "confirm and complete actual resulting task through supported lab member controls"
+    },
+    {
+      "case_id": "G12b",
+      "actions": [],
+      "precondition": "G12a classified, resulting task confirmed and completed",
+      "canonical": "existing completed task singular and unchanged",
+      "redelivery": "original G12a envelope produces no extra source, classifier attempt, proposal or canonical task"
+    }
+  ]
+}
