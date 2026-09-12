@@ -9,6 +9,7 @@ from tools.triage_model_lab import (
     CASE_IDS,
     FIXTURE_HASHES,
     FIXTURES,
+    MODEL,
     SEMANTIC_IDS,
     LabRefused,
     _case_evidence,
@@ -137,6 +138,18 @@ def test_model_lab_never_scores_missing_or_failed_inference_as_no_action():
         "incomplete_actual_classifier_receipt"
     ]
     receipt["payload"]["outputs"]["reasons"] = []
+    # A routing placeholder is not actual model provenance, even with an ID.
+    assert _case_evidence([receipt, assessment], source_id)["failures"] == [
+        "incomplete_actual_classifier_receipt"
+    ]
+    receipt["payload"]["provider"] = MODEL
+    receipt["payload"]["openclaw_invocation_id"] = None
+    assert _case_evidence([receipt, assessment], source_id)["failures"] == []
+    receipt["payload"]["provider"] = "openai/fixture-unapproved-model"
+    assert _case_evidence([receipt, assessment], source_id)["failures"] == [
+        "incomplete_actual_classifier_receipt"
+    ]
+    receipt["payload"]["provider"] = MODEL
     failure = {
         "event_id": "fixture-failed-event",
         "type": "skill.call.failed",

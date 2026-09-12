@@ -619,11 +619,8 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         )
     # llm-task returns details.json containing the parsed JSON per
     # docs/reference/openclaw/tools/llm-task.md.
-    parsed = (
-        result.get("details", {}).get("json")
-        if isinstance(result.get("details"), dict)
-        else None
-    )
+    details = result.get("details")
+    parsed = details.get("json") if isinstance(details, dict) else None
     # Allow callers / mocks to put the parsed object at result.json directly
     # for simplicity (the reference llm-task docs show details.json but the
     # Lobster example collapses it). Try both.
@@ -638,6 +635,22 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
             error_detail="response 'result' did not include parsed json output",
         )
     invocation_id = result.get("invocation_id") or result.get("invocationId")
+    provider_model = None
+    # The pinned llm-task reports the actual routed pair beside details.json.
+    # Retain older top-level pairs, but never combine fields from two levels.
+    for provenance in (details, result):
+        if not isinstance(provenance, dict):
+            continue
+        provider = provenance.get("provider")
+        model = provenance.get("model")
+        if (
+            isinstance(provider, str)
+            and provider.strip()
+            and isinstance(model, str)
+            and model.strip()
+        ):
+            provider_model = f"{provider}/{model}"
+            break
     return _OpenClawCallOutcome(
         kind="ok",
         raw_result=parsed,
@@ -651,11 +664,7 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         cost_usd=result.get("cost_usd")
         if isinstance(result.get("cost_usd"), (int, float))
         else None,
-        provider_model=(
-            f"{result.get('provider')}/{result.get('model')}"
-            if result.get("provider") and result.get("model")
-            else None
-        ),
+        provider_model=provider_model,
     )
 
 

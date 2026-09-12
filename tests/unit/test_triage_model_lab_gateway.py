@@ -45,6 +45,7 @@ def test_gateway_configuration_has_only_the_reviewed_lab_route(tmp_path: Path):
     assert config["agents"]["defaults"]["model"] == {"primary": lab.MODEL}
     assert config["channels"] == {}
     assert config["cron"]["enabled"] is False
+    assert config["agents"]["defaults"]["heartbeat"] == {"every": "0m"}
     assert config["browser"]["enabled"] is False
     assert config["gateway"]["bind"] == "loopback"
     assert "OPENAI_API_KEY" not in str(config)

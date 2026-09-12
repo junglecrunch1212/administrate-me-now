@@ -32,9 +32,9 @@ jobs:
           poetry sync --with dev --no-interaction
       - name: Check the bounded capture contract without model access
         run: |
-          poetry run ruff check tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py
-          poetry run ruff format --check --diff tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py
-          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py
+          poetry run ruff check tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py adminme/lib/skill_runner/wrapper.py tests/unit/test_skill_wrapper.py
+          poetry run ruff format --check --diff tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py adminme/lib/skill_runner/wrapper.py tests/unit/test_skill_wrapper.py
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py tests/unit/test_skill_wrapper.py
 
   gateway-runtime:
     needs: capture-contract

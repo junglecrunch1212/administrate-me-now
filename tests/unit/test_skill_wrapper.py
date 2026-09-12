@@ -176,6 +176,103 @@ async def _read_all_events(log: EventLog) -> list[dict[str, Any]]:
     return events
 
 
+@pytest.mark.parametrize(
+    ("details_provenance", "legacy_provenance", "expected_provider"),
+    [
+        (
+            {"provider": "openai", "model": "gpt-5.6-sol"},
+            {},
+            "openai/gpt-5.6-sol",
+        ),
+        (
+            {"provider": "openai", "model": "gpt-5.6-sol"},
+            {"provider": "legacy-provider", "model": "legacy-model"},
+            "openai/gpt-5.6-sol",
+        ),
+        (
+            {},
+            {"provider": "legacy-provider", "model": "legacy-model"},
+            "legacy-provider/legacy-model",
+        ),
+        (
+            {"provider": "nested-provider"},
+            {"model": "legacy-model"},
+            "openclaw-routed",
+        ),
+        (
+            {"model": "nested-model"},
+            {"provider": "legacy-provider"},
+            "openclaw-routed",
+        ),
+        (
+            {"provider": "nested-provider"},
+            {"provider": "legacy-provider", "model": "legacy-model"},
+            "legacy-provider/legacy-model",
+        ),
+        (
+            {"provider": 42, "model": "nested-model"},
+            {},
+            "openclaw-routed",
+        ),
+        (
+            {"provider": "openai", "model": " "},
+            {},
+            "openclaw-routed",
+        ),
+    ],
+)
+async def test_routed_provenance_uses_complete_returned_pair_without_invented_usage(
+    event_log: EventLog,
+    tmp_path: Path,
+    details_provenance: dict[str, Any],
+    legacy_provenance: dict[str, Any],
+    expected_provider: str,
+) -> None:
+    output = {"is_thing": True, "confidence": 0.9}
+    transport = _MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(output)}],
+                    "details": {"json": output, **details_provenance},
+                    **legacy_provenance,
+                },
+            },
+        )
+    )
+    _set_runtime_for_tests(_runtime_for(event_log, tmp_path, transport=transport))
+    try:
+        result = await run_skill(
+            "classify_test", {"text": "hi"}, SkillContext(session=_session())
+        )
+    finally:
+        _set_runtime_for_tests(None)
+
+    assert result.output == output
+    assert result.provider == expected_provider
+    assert result.openclaw_invocation_id is None
+    assert result.input_tokens is None
+    assert result.output_tokens is None
+    assert result.cost_usd is None
+    events = await _read_all_events(event_log)
+    assert len(events) == 1
+    assert events[0]["type"] == "skill.call.recorded"
+    assert events[0]["payload"]["provider"] == expected_provider
+    for field in (
+        "openclaw_invocation_id",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd",
+    ):
+        assert events[0]["payload"][field] is None
+    assert len(transport.requests) == 1
+    args = json.loads(transport.requests[0].content)["args"]
+    assert "provider" not in args
+    assert "model" not in args
+
+
 # ---------------------------------------------------------------------------
 # 1. Happy path
 # ---------------------------------------------------------------------------

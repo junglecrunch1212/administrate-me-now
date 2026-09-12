@@ -41,6 +41,7 @@ SOURCE_TYPES = ("messaging.received", "messaging.sent", "telephony.sms_received"
 SKILL_TYPES = ("skill.call.recorded", "skill.call.failed", "skill.call.suppressed")
 TIMEOUT_SECONDS = 420
 MAX_SOURCES = 19
+MODEL = "openai/gpt-5.6-sol"
 MAX_ATTEMPTS_PER_SOURCE = 3
 
 
@@ -361,8 +362,7 @@ def _case_evidence(events: list[dict[str, Any]], source_id: str) -> dict[str, An
         payload = receipt["payload"]
         output = payload.get("outputs") or {}
         if (
-            not payload.get("openclaw_invocation_id")
-            or payload.get("provider") in {None, "", "fixture", "suppressed"}
+            payload.get("provider") != MODEL
             or "skill_failure_defensive_default" in output.get("reasons", [])
             or output.get("assessment_contract") != "personal-obligation-assessment-v1"
         ):
@@ -528,6 +528,8 @@ def capture(
         "production_retry_policy": _retry_policy(),
         "settlement_deadline_seconds_per_case": TIMEOUT_SECONDS,
         "model_substitutions": False,
+        "expected_provider_model": MODEL,
+        "invocation_identity": "The pinned Gateway omits invocation_id; immutable source-correlated receipt IDs identify app attempts. No Gateway ID is invented.",
         "expected_labels_sent_to_model": False,
         "clock": "real UTC runtime clock; frozen source occurred_at values preserved",
         "gateway": "http://127.0.0.1:18789/tools/invoke",

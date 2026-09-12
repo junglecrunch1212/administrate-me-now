@@ -21,9 +21,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from tools.triage_model_lab import MODEL
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL = "openai/gpt-5.6-sol"
 
 
 def validate_host(*, require_model_authorization: bool = True) -> str:
@@ -61,6 +62,7 @@ def gateway_config(state: Path, token: str) -> dict[str, Any]:
         "agents": {
             "defaults": {
                 "model": {"primary": MODEL},
+                "heartbeat": {"every": "0m"},
                 "workspace": str(state / "workspace"),
             },
             "list": [{"id": "main", "tools": {"allow": ["llm-task"]}}],
