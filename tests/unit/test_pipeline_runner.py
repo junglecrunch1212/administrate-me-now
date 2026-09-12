@@ -36,6 +36,10 @@ from adminme.pipelines import (
 )
 from adminme.pipelines.runner import PipelineRunner
 from adminme.source_assessment_recovery import recovery_refusal_idempotency_key
+from adminme.source_assessment_revision import (
+    REVISION_PLAN_TYPE,
+    REVISION_COMPLETION_TYPE,
+)
 from adminme.source_publication import (
     COMPLETION_EVENT_TYPE,
     PLAN_EVENT_TYPE,
@@ -677,8 +681,16 @@ async def test_publication_startup_snapshot_does_not_expand_during_scan(
         async def append_after_snapshot(*args, **kwargs):
             nonlocal plan
             assert kwargs["through"] == ""
-            assert kwargs["types"] == [PLAN_EVENT_TYPE, COMPLETION_EVENT_TYPE]
-            assert kwargs["include_payload_for"] == [COMPLETION_EVENT_TYPE]
+            assert kwargs["types"] == [
+                PLAN_EVENT_TYPE,
+                COMPLETION_EVENT_TYPE,
+                REVISION_PLAN_TYPE,
+                REVISION_COMPLETION_TYPE,
+            ]
+            assert kwargs["include_payload_for"] == [
+                COMPLETION_EVENT_TYPE,
+                REVISION_COMPLETION_TYPE,
+            ]
             plan = await _source_publication_plan(
                 log, tenant_id=config.tenant_id, index=0
             )

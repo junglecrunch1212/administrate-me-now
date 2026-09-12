@@ -139,6 +139,7 @@ async def inspect_target(
     tenant_id: str,
     owner_scope: str,
     policy: DisposableTestAcquisition | None = None,
+    allow_failed_revision: bool = False,
 ) -> RevisionTarget:
     source = await event_log.get(source_event_id)
     if (
@@ -154,10 +155,15 @@ async def inspect_target(
     ):
         raise RevisionRefused("source_scope_mismatch")
     current = await latest_source_assessment(event_log, source_event_id)
-    if current is None or current.get("payload", {}).get("assessment_outcome") not in {
-        "eligible_candidates",
-        "no_candidate",
-    }:
+    if current is None or not (
+        current.get("payload", {}).get("assessment_outcome")
+        in {"eligible_candidates", "no_candidate"}
+        or (
+            allow_failed_revision
+            and current.get("schema_version") == 5
+            and current.get("payload", {}).get("assessment_outcome") == "failed"
+        )
+    ):
         raise RevisionRefused("completed_assessment_required")
     from adminme.source_publication import source_assessment_identity_valid
 
@@ -221,6 +227,7 @@ async def validate_target(
     tenant_id: str,
     owner_scope: str,
     policy: DisposableTestAcquisition | None = None,
+    allow_failed_revision: bool = False,
 ) -> dict[str, Any]:
     actual = await inspect_target(
         event_log,
@@ -228,6 +235,7 @@ async def validate_target(
         tenant_id=tenant_id,
         owner_scope=owner_scope,
         policy=policy,
+        allow_failed_revision=allow_failed_revision,
     )
     if actual != target:
         raise RevisionRefused("assessment_or_context_changed")

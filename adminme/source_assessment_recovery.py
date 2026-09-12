@@ -467,7 +467,9 @@ async def validate_recovery_target(
         raise SourceAssessmentRecoveryRefused("assessment_not_failed")
     if reason != target.expected_failure_reason:
         raise SourceAssessmentRecoveryRefused("failure_reason_changed")
-    if reason not in RETRYABLE_FAILURE_REASONS:
+    # The explicit test revision owns a finite source budget. A separate
+    # ordinary recovery request cannot renew its already-spent attempts.
+    if latest.get("schema_version") == 5 or reason not in RETRYABLE_FAILURE_REASONS:
         raise SourceAssessmentRecoveryRefused("failure_not_retryable")
     return ValidatedRecoveryTarget(
         source=source,

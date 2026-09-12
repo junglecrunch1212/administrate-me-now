@@ -515,6 +515,31 @@ def test_failed_revision_spends_three_attempts_across_duplicate_and_three_restar
         assert any(":recovery-1:" in event["idempotency_key"] for event in failures)
         assert any(":recovery-2:" in event["idempotency_key"] for event in failures)
         _unchanged_history(client, before)
+        [failed_assessment] = [
+            event
+            for event in _of_type(after, "triage.intent.features_extracted")
+            if event["schema_version"] == 5
+        ]
+        calls = list(model.calls)
+        response = client.post(
+            "/api/system/source-assessment-recoveries",
+            headers=AUTH,
+            json={
+                "request_id": "fixture-revision-cannot-renew-as-ordinary-recovery",
+                "targets": [
+                    {
+                        "source_event_id": source_id,
+                        "failed_assessment_event_id": failed_assessment["event_id"],
+                        "expected_failure_reason": "language_seam_OpenClawTimeout",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "failure_not_retryable"
+        client.portal.call(settle, runtime)
+        assert model.calls == calls
+        assert client.portal.call(events, runtime) == after
     model.mode = "forbid"
     calls = list(model.calls)
     for _ in range(3):
@@ -539,10 +564,17 @@ def test_failed_revision_spends_three_attempts_across_duplicate_and_three_restar
 
 
 @pytest.mark.parametrize(
-    "authority", ["unchanged", "dataset", "selection", "classifier"]
+    ("authority", "model_outcome"),
+    [
+        ("unchanged", "success"),
+        ("dataset", "success"),
+        ("selection", "success"),
+        ("classifier", "success"),
+        ("unchanged", "failed"),
+    ],
 )
 def test_interrupted_revision_publication_requires_unchanged_authority_without_repeating_model(
-    tmp_path, monkeypatch, authority
+    tmp_path, monkeypatch, authority, model_outcome
 ):
     instance = tmp_path / "instance"
     config = settings(instance, ROOT)
@@ -567,15 +599,39 @@ def test_interrupted_revision_publication_requires_unchanged_authority_without_r
         [source_id] = _seed(client, config)
         manifest = _preview(client, [source_id])["manifest"]
         crash = True
-        model.mode = "revision"
+        model.mode = "fail" if model_outcome == "failed" else "revision"
         command = _request(client, manifest)
         assert blocked.wait(30), (
             "real revision publication did not reach interruption boundary"
         )
         before = client.portal.call(events, runtime)
-        assert len(_of_type(before, REVISION_PLAN_TYPE)) == 1
+        [plan] = _of_type(before, REVISION_PLAN_TYPE)
+        assert plan["payload"]["assessment_schema_version"] == 5
+        assert len(plan["payload"]["proposals"]) == 1
         assert _of_type(before, REVISION_COMPLETION_TYPE) == []
-        assert len(_of_type(before, "skill.call.recorded")) == 2
+        expected_outcome = (
+            "failed" if model_outcome == "failed" else "eligible_candidates"
+        )
+        [assessment] = [
+            event
+            for event in _of_type(before, "triage.intent.features_extracted")
+            if event["schema_version"] == 5
+        ]
+        assert assessment["payload"]["assessment_outcome"] == expected_outcome
+        assert assessment["event_id"] < plan["event_id"]
+        assert len(_of_type(before, "skill.call.recorded")) == (
+            1 if model_outcome == "failed" else 2
+        )
+        assert len(_of_type(before, "skill.call.failed")) == (
+            3 if model_outcome == "failed" else 0
+        )
+        if model_outcome == "failed":
+            assert model.calls == [
+                ("initial", 0),
+                ("fail", 0),
+                ("fail", 0),
+                ("fail", 0),
+            ]
         assert _of_type(before, "triage.item.proposed") == []
     crash = False
     model.mode = "forbid"
@@ -627,7 +683,7 @@ def test_interrupted_revision_publication_requires_unchanged_authority_without_r
         assert proposal["payload"]["source_event_id"] == source_id
         assert (
             _status(client, command["request_event_id"])["targets"][0]["outcome"]
-            == "eligible_candidates"
+            == expected_outcome
         )
 
 

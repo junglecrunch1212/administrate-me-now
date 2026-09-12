@@ -31,13 +31,8 @@ jobs:
         run: |
           pipx install poetry==2.4.1
           poetry sync --with dev --no-interaction
-      - name: Generate the catalog for the new event schemas in isolation
-        run: poetry run python scripts/generate_event_lifecycle_catalog.py --output "$RUNNER_TEMP/event-lifecycle-catalog.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: triage-revision-catalog-${{ github.sha }}
-          path: ${{ runner.temp }}/event-lifecycle-catalog.json
-          retention-days: 7
+      - name: Verify the catalog for the new event schemas
+        run: poetry run python scripts/generate_event_lifecycle_catalog.py --check
       - name: Check the bounded capture contract without model access
         run: |
           poetry run ruff check tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py adminme/lib/skill_runner/wrapper.py tests/unit/test_skill_wrapper.py

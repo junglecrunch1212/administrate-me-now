@@ -102,7 +102,7 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "8.0.1"
+SKILL_VERSION = "8.0.2"
 _RETAINED_CLASSIFICATION_VERSION = "8.0.0"
 DEFAULT_CLASSIFICATION = "personal"
 _REPLAY_GENERATION = 23
@@ -1116,6 +1116,9 @@ class NoiseFilteringPipeline:
             tenant_id=command["tenant_id"],
             owner_scope=command["owner_scope"],
             policy=ctx.source_revision_authority_fn(command),
+            # The exact failed revision may still own a retained fallback
+            # publication plan. This never admits a failed initial target.
+            allow_failed_revision=assessment_id is not None,
         )
 
     async def _emit_results(

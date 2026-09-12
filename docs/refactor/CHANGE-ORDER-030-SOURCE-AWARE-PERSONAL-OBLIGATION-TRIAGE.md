@@ -102,6 +102,9 @@ prior completed assessment, current context fingerprint and complete context/
 episode ID sets. The runtime marker, selected Gmail account/IDs, private owner,
 observation mode and reviewed classifier bundle are checked at admission and
 execution. A changed context or member decision refuses the affected target.
+The frozen context and decisions are checked again after inference and before
+unfinished publication resumes. Inference already spent remains in history;
+the ordinary failed-source recovery API cannot renew a failed revision's budget.
 All context remains inside the existing selected200-ID sample.
 
 The principal first calls `POST /api/system/source-assessment-revisions/preview`
