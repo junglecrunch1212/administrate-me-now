@@ -73,7 +73,6 @@ def gateway_config(state: Path, token: str) -> dict[str, Any]:
                     "config": {
                         "defaultProvider": "openai",
                         "defaultModel": "gpt-5.6-sol",
-                        "allowedModels": [MODEL],
                         "maxTokens": 6000,
                         "timeoutMs": 120000,
                     },

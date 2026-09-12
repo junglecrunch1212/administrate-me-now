@@ -40,9 +40,9 @@ def test_gateway_configuration_has_only_the_reviewed_lab_route(tmp_path: Path):
         {"id": "main", "tools": {"allow": ["llm-task"]}}
     ]
     assert config["plugins"]["allow"] == ["llm-task"]
-    assert config["plugins"]["entries"]["llm-task"]["config"]["allowedModels"] == [
-        lab.MODEL
-    ]
+    route = config["plugins"]["entries"]["llm-task"]["config"]
+    assert f"{route['defaultProvider']}/{route['defaultModel']}" == lab.MODEL
+    assert config["agents"]["defaults"]["model"] == {"primary": lab.MODEL}
     assert config["channels"] == {}
     assert config["cron"]["enabled"] is False
     assert config["browser"]["enabled"] is False
