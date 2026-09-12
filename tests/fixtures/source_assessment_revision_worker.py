@@ -250,9 +250,16 @@ async def settle(runtime):
         ]
         assert statuses and not any(item["degraded"] for item in statuses), statuses
         latest = await runtime.event_log.latest_event_id()
+        # Workbook regeneration is scheduled after its subscriber checkpoint
+        # advances. Wait for that real work before freezing all-event history.
+        workbooks_idle = runtime.xlsx_projection is not None and all(
+            task.done() for task in runtime.xlsx_projection._pending_tasks.values()
+        )
         stable = (
             stable + 1
-            if latest == previous and all(item["lag_count"] == 0 for item in statuses)
+            if latest == previous
+            and all(item["lag_count"] == 0 for item in statuses)
+            and workbooks_idle
             else 0
         )
         if stable >= 5:
