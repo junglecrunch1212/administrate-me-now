@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from adminme.lib.observation import ObservationManager
     from adminme.lib.session import Session
     from adminme.lib.skill_runner import SkillResult
+    from adminme.adapters.disposable_test_acquisition import DisposableTestAcquisition
 
 
 class PipelinePackLoadError(RuntimeError):
@@ -87,6 +88,9 @@ class PipelineContext:
     correlation_id: str | None
     parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
     candidate_policy_fn: Callable[[str, str], dict[str, Any]] | None = None
+    source_revision_authority_fn: (
+        Callable[[dict[str, Any]], "DisposableTestAcquisition"] | None
+    ) = None
 
 
 def skill_output(result: Any) -> dict[str, Any]:

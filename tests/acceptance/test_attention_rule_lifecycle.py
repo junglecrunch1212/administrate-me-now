@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -602,7 +603,14 @@ def test_completion_does_not_teach_future_suppression_and_trials_expire_at_read(
                 return real_datetime.now(tz) + timedelta(days=8)
 
         monkeypatch.setattr(queries, "datetime", Later)
-        public = queries._public(_row(client, future))
+        response = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        public = next(
+            item for item in response.json()["items"] if item["proposal_id"] == future
+        )
         assert public["learned_policy"]["state"] == "none"
         assert public["disposition"]["ordinary_queue"] is True
         assert public["learned_policy"]["reasons"] == ["trial_expired"]
@@ -637,7 +645,14 @@ def test_expired_specific_trial_restores_remaining_permanent_rule(
                 return real_datetime.now(tz) + timedelta(days=8)
 
         monkeypatch.setattr(queries, "datetime", Later)
-        public = queries._public(_row(client, future))
+        response = client.get(
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        public = next(
+            item for item in response.json()["items"] if item["proposal_id"] == future
+        )
         assert public["learned_policy"]["state"] == "context_only"
         assert public["disposition"]["ordinary_queue"] is False
 
@@ -1026,3 +1041,44 @@ def test_active_alerts_leave_attention_after_member_handling_or_semantic_retirem
             for matter in page.json()["triage"]["matters"]
             for item in matter["candidates"]
         } == {live_alert}
+
+
+def test_member_rules_and_equal_candidate_ids_remain_separate_across_app_instances(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "tenant-a"
+    second = tmp_path / "tenant-b"
+    first.mkdir()
+    second.mkdir()
+    settings_a = _settings(first)
+    settings_b = replace(_settings(second), encryption_key=b"b" * 32)
+    assert settings_a.instance.tenant_id != settings_b.instance.tenant_id
+    with (
+        TestClient(create_application(settings_a)) as client_a,
+        TestClient(create_application(settings_b)) as client_b,
+    ):
+        proposal = _emit(client_a, 700)
+        assert _emit(client_b, 700) == proposal
+        _save(client_a, _rule(), "tenant-a-only-rule")
+        route = (
+            "/api/member/v1/surfaces/triage?triage_lens=all_candidates&triage_limit=100"
+        )
+        response_a = client_a.get(route, headers=HEADERS)
+        response_b = client_b.get(route, headers=HEADERS)
+        assert response_a.status_code == response_b.status_code == 200
+        [item_a] = response_a.json()["items"]
+        [item_b] = response_b.json()["items"]
+        assert item_a["proposal_id"] == item_b["proposal_id"] == proposal
+        assert item_a["learned_policy"]["state"] == "context_only"
+        assert item_b["learned_policy"]["state"] == "none"
+        assert len(_rules(client_a)) == 1
+        assert _rules(client_b) == []
+        for client in (client_a, client_b):
+            assert client.get(route, headers=OTHER_HEADERS).json()["items"] == []
+            assert (
+                client.get(f"{API}/rules", headers=OTHER_HEADERS).json()["rules"] == []
+            )
+            runtime = client.app.state.runtime
+            client.portal.call(runtime.projections.rebuild, "triage")
+        assert _row(client_a, proposal)["learned_policy_state"] == "context_only"
+        assert _row(client_b, proposal)["learned_policy_state"] == "none"

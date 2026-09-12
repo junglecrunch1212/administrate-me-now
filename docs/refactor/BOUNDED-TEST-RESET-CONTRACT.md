@@ -149,6 +149,31 @@ same forward behavior, plus an encrypted restore that replaces the state inode.
 
 ## Truthful acceptance
 
+The CO-030 classifier correction has a separate, explicit application gate for
+an already selected sample. The supported source-assessment-revision API freezes
+one manifest of at most nine episode anchors and permits at most three durable
+attempts per source under one reviewed semantic revision. Preview is read-only;
+dataset, exact account/selected IDs, current assessment/context, observation and
+classifier identity must still match when the command executes. Member-decided
+episodes are preserved by refusal. Old receipts remain immutable and no source
+slot, cursor or consumer checkpoint is reset. Interrupted result publication
+uses the existing durable publication mechanism. Actual-model correction,
+bounded process proof and protected-predecessor compatibility must pass before
+the exact private manifest is applied to the local sample. See CO-030 for the
+command contract; this is not a second reset or general production recovery.
+
+For an extracted commitment, language evidence establishes the promise and
+grounded deadline, but does not select a canonical Party. Model-origin
+`owed_to_party_id` is excluded from the derived candidate; the raw receipt is
+preserved. Explicit member enrichment may supply a Party reference. Member
+readiness and approval require that exact Party to exist and be visible in the
+member's current tenant/scope, including for retained older proposals. An
+unknown or inaccessible reference remains incomplete and cannot materialize a
+commitment. This **MODERNIZE** correction preserves CO-030's grounded extraction
+and the existing UX/domain authorization boundary. The recorded G06 regression
+proves deterministic handling of an actual captured response; it is separate
+from the completed actual-model inference evidence.
+
 An explicitly marked test dataset has a separate, release/dataset/manifest-bound
 reset proof: original state and failed journal retained, diagnostic archive
 authenticated, fresh clean backup restored/rebuilt, automatic state reversal

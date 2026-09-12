@@ -15,6 +15,8 @@ triggers:
     - telephony.sms_received
     - source.assessment.recovery_requested
     - triage.source_publication.planned
+    - source.assessment.revision_requested
+    - triage.source_revision_publication.planned
 replay:
   # v23 deliberately reassesses retained immutable message facts after a
   # guarded v21 attempt appended partial history. Non-anchor sources receive
@@ -46,3 +48,6 @@ events_emitted:
   - triage.item.proposed
   - triage.item.superseded
   - source.assessment.recovery_refused
+  - source.assessment.revision_refused
+  - triage.source_revision_publication.planned
+  - triage.source_revision_publication.completed

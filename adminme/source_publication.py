@@ -10,6 +10,12 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from adminme.events.schemas.triage import TriageSourcePublicationCompletedV1
+from adminme.source_assessment_revision import (
+    REVISION,
+    REVISION_PLAN_TYPE,
+    REVISION_COMPLETION_TYPE,
+    assessment_key as revision_assessment_key,
+)
 
 PLAN_EVENT_TYPE = "triage.source_publication.planned"
 COMPLETION_EVENT_TYPE = "triage.source_publication.completed"
@@ -35,11 +41,21 @@ def source_assessment_identity_valid(
         prefix, suffix = "triage:message-features:recovery:", f":{source_id}"
         request_id = key.removeprefix(prefix).removesuffix(suffix)
         valid_key = bool(request_id and key == f"{prefix}{request_id}{suffix}")
+    elif assessment.get("schema_version") == 5:
+        valid_key = key == revision_assessment_key(source_id)
     else:
         return False
     payload = assessment.get("payload")
     if isinstance(payload, dict) and (
         payload.get("source_event_id") != source_id
+        or (
+            assessment.get("schema_version") == 5
+            and (
+                payload.get("assessment_revision") != REVISION
+                or payload.get("revision_attempt_limit") != 3
+                or not payload.get("revision_request_event_id")
+            )
+        )
         or (
             assessment.get("schema_version") == 4
             and (
@@ -91,6 +107,8 @@ def publication_completion_valid(
         if not request_id or assessment_key != f"{prefix}{request_id}{suffix}":
             return False
         expected_assessment_key = assessment_key
+    elif assessment.get("schema_version") == 5:
+        expected_assessment_key = revision_assessment_key(source_id)
     else:
         return False
     if (
@@ -104,10 +122,20 @@ def publication_completion_valid(
         or not source.get("tenant_id")
         or assessment.get("type") != "triage.intent.features_extracted"
         or assessment_key != expected_assessment_key
-        or plan.get("type") != PLAN_EVENT_TYPE
+        or plan.get("type")
+        != (
+            REVISION_PLAN_TYPE
+            if assessment.get("schema_version") == 5
+            else PLAN_EVENT_TYPE
+        )
         or plan.get("schema_version") != 1
         or plan.get("idempotency_key") != publication_plan_key(assessment_key)
-        or completion.get("type") != COMPLETION_EVENT_TYPE
+        or completion.get("type")
+        != (
+            REVISION_COMPLETION_TYPE
+            if assessment.get("schema_version") == 5
+            else COMPLETION_EVENT_TYPE
+        )
         or completion.get("schema_version") != 1
         or completion.get("idempotency_key")
         != publication_completion_key(str(plan.get("event_id") or ""))

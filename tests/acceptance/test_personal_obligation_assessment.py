@@ -145,6 +145,72 @@ CASES: dict[str, dict[str, Any]] = {
         "channel": "future_reviewed_channel",
         "bulk": True,
     },
+    "one_remediation_does_not_inherit_other_account_negation": {
+        "body": "Review the affected credentials and replace the exposed passwords. Your separate account was not affected.",
+        "quote": "Review the affected credentials and replace the exposed passwords.",
+        "purpose": "account_alert",
+        "actionability": "required",
+        "owner": "member",
+        "target_kind": "task",
+        "candidate": {},
+        "date_role": "none",
+        "expected_kind": "task",
+        "expected_decision": "admit",
+        "bulk": True,
+    },
+    "before_confirmed_visit_is_preparation_deadline": {
+        "body": "Your appointment is confirmed for October 20, 2030 at 14:00 UTC. Check in online before you arrive.",
+        "quote": "Check in online before you arrive.",
+        "purpose": "preparation",
+        "actionability": "required",
+        "owner": "member",
+        "target_kind": "task",
+        "candidate": {"due": "2030-10-20T14:00:00Z"},
+        "date_role": "deadline",
+        "qualifiers": [("date", "October 20, 2030 at 14:00 UTC")],
+        "expected_kind": "task",
+        "expected_decision": "admit",
+        "bulk": True,
+    },
+    "current_connection_failure_meets_repair_prerequisite": {
+        "body": "Synchronization is stopped because the connection expired. Reconnect to restore synchronization.",
+        "quote": "Reconnect to restore synchronization.",
+        "purpose": "account_alert",
+        "actionability": "required",
+        "owner": "member",
+        "target_kind": "task",
+        "candidate": {},
+        "date_role": "none",
+        "condition": "Synchronization is stopped because the connection expired.",
+        "condition_state": "met",
+        "qualifiers": [
+            ("condition", "Synchronization is stopped because the connection expired.")
+        ],
+        "expected_kind": "task",
+        "expected_decision": "admit",
+        "bulk": True,
+    },
+    "unchosen_optional_registration_is_unknown_not_completed": {
+        "body": "You may attend the optional workshop. Register by October 21, 2030 if you choose to attend. You have not registered and have not decided whether to attend.",
+        "quote": "Register by October 21, 2030 if you choose to attend.",
+        "purpose": "optional_opportunity",
+        "actionability": "conditional",
+        "owner": "unknown",
+        "target_kind": "task",
+        "candidate": {"due": "2030-10-21T00:00:00Z"},
+        "date_role": "deadline",
+        "condition": "if you choose to attend",
+        "condition_state": "unknown",
+        "qualifiers": [
+            ("condition", "if you choose to attend"),
+            ("date", "October 21, 2030"),
+        ],
+        "expected_kind": "task",
+        "expected_decision": "unresolved",
+        "expected_independent": False,
+        "unclear": True,
+        "bulk": True,
+    },
 }
 
 
@@ -259,7 +325,9 @@ def _language_output(inputs: dict[str, Any], case: dict[str, Any]) -> dict[str, 
             "case_summary": None,
             "why_member": None,
             "next_step": None,
-            "thread_state": "unclear" if case.get("group") else "waiting_on_member",
+            "thread_state": "unclear"
+            if case.get("group") or case.get("unclear")
+            else "waiting_on_member",
             "unresolved_questions": ["Who is volunteering?"]
             if case.get("group")
             else [],
@@ -363,13 +431,20 @@ def test_source_qualified_obligation_reaches_production_triage(
             assert proposal["schema_version"] == 5
             assert proposal["source_adapter"] == "deterministic_candidate_eligibility"
             assert proposal["payload"]["target_kind"] == case["expected_kind"]
+            for field, value in case["candidate"].items():
+                assert proposal["payload"]["candidate"][field] == value
             interpretation = proposal["payload"]["interpretation"]
             assert interpretation["contract"] == "triage-context-interpretation-v3"
             assessment = interpretation["obligation_assessment"]
             assert assessment["evidence_verified"] is True
             assert assessment["purpose"] == case["purpose"]
             assert assessment["actionability"] == case["actionability"]
-            assert assessment["independent_obligation"] == (not bool(case.get("group")))
+            assert assessment["independent_obligation"] == case.get(
+                "expected_independent", not bool(case.get("group"))
+            )
+            for field in ("due", "start", "end", "next_occurrence"):
+                if field in case["candidate"]:
+                    assert field in assessment["verified_date_fields"]
             assert all(
                 item["source_event_id"] == source_id and item["quote"] in case["body"]
                 for item in assessment["evidence"]
@@ -425,6 +500,97 @@ def test_source_qualified_obligation_reaches_production_triage(
             client.portal.call(_events, runtime, "external_sync.write_completed") == []
         )
         assert client.portal.call(_events, runtime, "external_sync.write_failed") == []
+
+
+def test_two_independent_actions_keep_separate_supported_deadlines(
+    tmp_path: Path,
+) -> None:
+    """Fixed language output proves field preservation, not model interpretation."""
+    first = "Upload the consent form by October 22, 2030 at 17:00 UTC."
+    second = "Call the clinic to confirm attendance by October 23, 2030 at 12:00 UTC."
+    body = f"{first} {second}"
+    cases = [
+        {
+            "body": body,
+            "quote": quote,
+            "purpose": "preparation",
+            "actionability": "required",
+            "owner": "member",
+            "target_kind": "task",
+            "candidate": {"due": due},
+            "date_role": "deadline",
+            "qualifiers": [("date", date_quote)],
+            "bulk": True,
+        }
+        for quote, due, date_quote in (
+            (first, "2030-10-22T17:00:00Z", "October 22, 2030 at 17:00 UTC"),
+            (second, "2030-10-23T12:00:00Z", "October 23, 2030 at 12:00 UTC"),
+        )
+    ]
+    instance = tmp_path / "independent-deadlines"
+    instance.mkdir()
+    schema = json.loads(
+        (
+            REPO_ROOT
+            / "packs/skills/classify_message_nature/schemas/output.schema.json"
+        ).read_text()
+    )
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        calls: list[str] = []
+
+        async def language_seam(skill_id, inputs, context):
+            assert skill_id == "skill:classify_message_nature"
+            output = _language_output(inputs, cases[0])
+            output["candidates"].extend(
+                _language_output(inputs, cases[1])["candidates"]
+            )
+            jsonschema.validate(output, schema)
+            calls.append(context.triggering_event_id)
+            return SimpleNamespace(output=output)
+
+        runtime.run_skill_fn = language_seam
+        runtime.pipelines._run_skill_fn = language_seam
+        source_id = client.portal.call(
+            runtime.events.write, _source(runtime, "independent-deadlines", cases[0])
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber, "pipeline:pipeline:noise_filtering", source_id
+        )
+        assert calls == [source_id]
+        proposals = [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.proposed")
+            if event["payload"]["source_event_id"] == source_id
+        ]
+        assert len(proposals) == 2
+        assert len({event["payload"]["proposal_id"] for event in proposals}) == 2
+        assert {
+            event["payload"]["title"]: event["payload"]["candidate"]["due"]
+            for event in proposals
+        } == {case["quote"]: case["candidate"]["due"] for case in cases}
+        for proposal in proposals:
+            assessment = proposal["payload"]["interpretation"]["obligation_assessment"]
+            assert assessment["independent_obligation"] is True
+            assert assessment["verified_date_fields"] == ["due"]
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "triage-reconciliation:admission",
+                proposal["event_id"],
+            )
+            decisions = [
+                event
+                for event in client.portal.call(
+                    runtime.event_log.get_by_causation, proposal["event_id"]
+                )
+                if event["type"] == "triage.reconciliation.decided"
+            ]
+            assert decisions[-1]["payload"]["decision"] == "admit"
+            assert decisions[-1]["payload"]["provider_effects"] is False
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
 
 
 @pytest.mark.parametrize("unsupported_kind", ["recurrence", "commitment"])

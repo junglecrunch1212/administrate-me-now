@@ -1,0 +1,48 @@
+{
+  "contract": "synthetic-source-semantics-supplement-v1",
+  "frozen_at": "2026-09-10T23:02:16.629539+00:00",
+  "inputs": [
+    {
+      "case_id": "S01",
+      "subject": "Security follow-up",
+      "body_text": "A password saved on your device for Service Cedar appeared in a breach. Review the exposed credential and replace that password. Your separate Service Birch account was not affected.",
+      "direction": "received",
+      "source_context": "synthetic first-party notification addressed to the fixture account owner"
+    },
+    {
+      "case_id": "S02",
+      "subject": "Security follow-up",
+      "body_text": "The exposed Service Cedar password was already replaced. No further password change is needed.",
+      "direction": "received",
+      "source_context": "synthetic first-party notification addressed to the fixture account owner"
+    },
+    {
+      "case_id": "S03",
+      "subject": "Appointment preparation",
+      "body_text": "Your appointment is September 24, 2026 at 2:00 PM. Complete online check-in before you arrive.",
+      "direction": "received",
+      "source_context": "synthetic first-party notification addressed to the fixture account owner"
+    },
+    {
+      "case_id": "S04",
+      "subject": "Appointment option",
+      "body_text": "If you decide to attend the optional September 24 workshop, complete registration before it starts. You have not chosen whether to attend.",
+      "direction": "received",
+      "source_context": "synthetic first-party notification addressed to the fixture account owner"
+    },
+    {
+      "case_id": "S05",
+      "subject": "Connection status",
+      "body_text": "Sync for your account is currently stopped because its connection expired. Reconnect your account to resume sync.",
+      "direction": "received",
+      "source_context": "synthetic first-party notification addressed to the fixture account owner"
+    },
+    {
+      "case_id": "S06",
+      "subject": "Connection guidance",
+      "body_text": "If sync ever stops because a connection expires, reconnect your account to resume sync. Your connection is currently healthy.",
+      "direction": "received",
+      "source_context": "synthetic first-party notification addressed to the fixture account owner"
+    }
+  ]
+}

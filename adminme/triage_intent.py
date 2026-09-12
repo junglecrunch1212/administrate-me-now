@@ -699,6 +699,10 @@ def extract_grounded_nlp_candidates(
         if kind == "task":
             fields["description"] = quote
         elif kind == "commitment":
+            # A quoted promise or recipient handle does not establish a
+            # canonical Party. Only explicit member enrichment may select
+            # this reference; keep the promise and its grounded deadline.
+            fields.pop("owed_to_party_id", None)
             commitment_kind = str(fields.get("kind") or "other")
             fields["kind"] = (
                 commitment_kind

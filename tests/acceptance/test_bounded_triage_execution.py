@@ -220,8 +220,9 @@ def _index(args):
     return int(match.group(1)) - 1
 
 
+@pytest.mark.parametrize("retained_skill_version", ["8.0.0", "8.0.1"])
 def test_patch_reuses_retained_successes_and_requires_explicit_failed_source_recovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retained_skill_version: str
 ) -> None:
     settings = _settings(tmp_path)
     source_ids = asyncio.run(_seed(settings, count=5, other_last=True))
@@ -235,11 +236,11 @@ def test_patch_reuses_retained_successes_and_requires_explicit_failed_source_rec
         if old_release and pack.pack_id == "skill:classify_message_nature":
             return replace(
                 pack,
-                version="8.0.0",
+                version=retained_skill_version,
                 skill_frontmatter={
                     **pack.skill_frontmatter,
-                    "version": "8.0.0",
-                    "timeout_seconds": 60,
+                    "version": retained_skill_version,
+                    "timeout_seconds": 60 if retained_skill_version == "8.0.0" else 120,
                     "compatible_success_versions": [],
                 },
             )
@@ -294,7 +295,7 @@ def test_patch_reuses_retained_successes_and_requires_explicit_failed_source_rec
             for event in proposals
         )
         assert {receipt["payload"]["skill_version"] for receipt in receipts} == {
-            "8.0.0"
+            retained_skill_version
         }
         assert any(":recovery-1:" in receipt["idempotency_key"] for receipt in receipts)
         assert any(":recovery-2:" in receipt["idempotency_key"] for receipt in receipts)
@@ -352,7 +353,7 @@ def test_patch_reuses_retained_successes_and_requires_explicit_failed_source_rec
         new_receipts = client.portal.call(_events, runtime, "skill.call.recorded")
         assert any(
             event["causation_id"] == fresh_id
-            and event["payload"]["skill_version"] == "8.0.1"
+            and event["payload"]["skill_version"] == "8.0.3"
             for event in new_receipts
         )
         for event in baseline:
@@ -1050,7 +1051,7 @@ def test_required_classifier_never_counts_a_fresh_defensive_default_as_complete(
             event for event in baseline if event["type"] == "skill.call.failed"
         ]
         assert failure["payload"]["failure_class"] == failure_class
-        assert failure["payload"]["skill_version"] == "8.0.1"
+        assert failure["payload"]["skill_version"] == "8.0.3"
         assert not any(
             event["type"] == "skill.call.recorded"
             and event["causation_id"] == source_ids[0]

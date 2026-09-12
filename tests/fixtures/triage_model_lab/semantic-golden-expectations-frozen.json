@@ -1,0 +1,50 @@
+{
+  "contract": "synthetic-source-semantics-expectations-v1",
+  "frozen_at": "2026-09-10T23:02:16.629539+00:00",
+  "labels": [
+    {
+      "case_id": "S01",
+      "active_action_count": 1,
+      "action": "review and replace the exposed Service Cedar password",
+      "qualifier_limit": "The unaffected Service Birch account must not negate the Cedar action.",
+      "ownership": "explicit addressee ownership; do not infer authority to perform an external write"
+    },
+    {
+      "case_id": "S02",
+      "active_action_count": 0,
+      "reason": "explicit completion and cancellation concern the same password action"
+    },
+    {
+      "case_id": "S03",
+      "active_action_count": 1,
+      "action": "complete online check-in",
+      "condition": null,
+      "condition_state": "not_applicable",
+      "date_role": "deadline or bounded before-appointment timing",
+      "note": "An appointment fact may be separate; it does not replace the check-in action."
+    },
+    {
+      "case_id": "S04",
+      "active_action_count": 0,
+      "conditional_action": "complete registration only if choosing to attend",
+      "condition_state": "unknown",
+      "note": "The future date does not remove the unmet decision prerequisite."
+    },
+    {
+      "case_id": "S05",
+      "active_action_count": 1,
+      "action": "reconnect the account",
+      "condition_state": "met or not_applicable",
+      "note": "The source reports a current failure; resumed sync is the desired result. Do not claim a live provider check or perform a provider mutation."
+    },
+    {
+      "case_id": "S06",
+      "active_action_count": 0,
+      "conditional_action": "reconnect if a future connection failure occurs",
+      "condition_state": "unmet",
+      "note": "General troubleshooting guidance is not a current personal obligation."
+    }
+  ],
+  "inference_performed": false,
+  "limitations": "These are source-grounded expectations, not observed classifier results. Preserve original golden files unchanged. Keep labels out of all model inputs. Run only in the authorized disposable pinned OpenClaw lab through the normal production classifier seam."
+}

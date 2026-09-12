@@ -81,6 +81,51 @@ their observed issuer; a shared reference string across unrelated issuers is
 not a global identity. Matching an account reference remains contextual rather
 than automatically consolidating its distinct obligations.
 
+## Bounded semantic correction of the disposable sample
+
+**MODERNIZE the language contract; PRESERVE CO-017/CO-018/CO-022 authority and
+history:** classifier8.0.3 names the supported typed candidate fields and
+distinguishes action-specific negation/completion, due timing, actual failures,
+and optional prerequisites. Paid/completed transaction clauses do not terminate future attendance. Old8.0.0/8.0.1/8.0.2 receipts remain compatible. Neither
+the pipeline version nor its durable checkpoint changes. Frozen actual-model
+cases, including all prior passing negative/priority/lifecycle cases, decide
+semantic acceptance separately from deterministic process tests.
+The security-alert shortcut also recognizes a verified independent obligation;
+an actual source-grounded repair can reach ordinary review while an
+informational or conditional security alert retains its alert route. Explicit
+member source/purpose controls and all other admission checks still apply.
+
+Installing this correction does not reassess retained messages. The explicit
+test-only revision `triage-semantics-2026-09-v1` accepts one immutable manifest
+per member/dataset: at most nine distinct episode anchors, each with an exact
+prior completed assessment, current context fingerprint and complete context/
+episode ID sets. The runtime marker, selected Gmail account/IDs, private owner,
+observation mode and reviewed classifier bundle are checked at admission and
+execution. A changed context or member decision refuses the affected target.
+The frozen context and decisions are checked again after inference and before
+unfinished publication resumes. Inference already spent remains in history;
+the ordinary failed-source recovery API cannot renew a failed revision's budget.
+All context remains inside the existing selected200-ID sample.
+
+The principal first calls `POST /api/system/source-assessment-revisions/preview`
+with the selected source IDs and reviews its identifier-only manifest, digest
+and maximum call count. `POST /api/system/source-assessment-revisions` accepts
+that exact manifest once; no caller-chosen request ID or changed selection
+renews it. `GET /api/system/source-assessment-revisions/{request_event_id}`
+reports the durable terminal outcomes. Each source+revision has at most three
+sequential classifier attempts; the existing source locks and bounded recovery
+semaphore apply. No adapter fetch, provider write, checkpoint reset or automatic
+source replay is involved.
+
+New schema5 assessments retain the superseded assessment and revision command
+references. Untouched suggestions use revision-specific identities through the
+existing durable publication machinery. Separate revision-publication event
+types let the protected predecessor ignore this new control suffix; actual
+predecessor startup and reactivation must be proved before deployment. Member
+decisions and prior receipts are retained, never rewritten. This bounded test
+path does not supersede the failed-source recovery API or establish general
+production-history recovery readiness.
+
 ## Member source controls
 
 Settings presents the authenticated member's exact connection/account and,

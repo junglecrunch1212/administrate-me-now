@@ -70,6 +70,7 @@ from adminme.projections.money.queries import finance_snapshot, flows_in_range
 from adminme.projections.parties.queries import (
     all_parties,
     contact_records_for_person,
+    get_party,
     get_visible_person,
     identifiers_for_person,
     list_visible_people,
@@ -134,6 +135,25 @@ _PROVIDER_WRITE_CAPABILITIES: dict[str, frozenset[str]] = {
     "twilio_sms": frozenset({"reply", "send"}),
     "twilio_whatsapp": frozenset({"reply", "send"}),
 }
+
+
+def _triage_owed_to_party_available(
+    runtime: Any, session: Session, item: dict[str, Any]
+) -> bool | None:
+    """Check an exact Party reference without resolving a name or handle."""
+    if item.get("target_kind") != "commitment":
+        return None
+    party_id = (item.get("candidate") or {}).get("owed_to_party_id")
+    if not party_id or runtime.projections is None:
+        return False
+    return (
+        get_party(
+            runtime.projections.connection("parties"),
+            session,
+            party_id=str(party_id),
+        )
+        is not None
+    )
 
 
 def _json_string_list(value: Any) -> list[str]:
@@ -902,7 +922,12 @@ def build_surface(
         ):
             recent_items.insert(0, focused_item)
         for item in [*items, *recent_items]:
-            item["review_state"] = _triage_review_state(item)
+            item["review_state"] = _triage_review_state(
+                item,
+                owed_to_party_available=_triage_owed_to_party_available(
+                    runtime, session, item
+                ),
+            )
             item["surface_link"] = surface_link(
                 "triage",
                 object_kind="item",

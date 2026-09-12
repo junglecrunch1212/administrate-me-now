@@ -46,6 +46,13 @@ from adminme.source_assessment_recovery import (
     recovery_assessment_idempotency_key,
     recovery_refusal_idempotency_key,
 )
+from adminme.source_assessment_revision import (
+    REQUEST_TYPE as REVISION_REQUEST_TYPE,
+    REVISION_PLAN_TYPE,
+    REVISION_COMPLETION_TYPE,
+    command_status as revision_command_status,
+)
+from adminme.adapters.disposable_test_acquisition import DisposableTestAcquisition
 from adminme.source_publication import (
     COMPLETION_EVENT_TYPE,
     PLAN_EVENT_TYPE,
@@ -98,6 +105,10 @@ class PipelineRunner:
         profile_loader: Callable[[str], dict[str, Any] | None] | None = None,
         persona_loader: Callable[[], dict[str, Any] | None] | None = None,
         candidate_policy_fn: Callable[[str, str], dict[str, Any]] | None = None,
+        source_revision_authority_fn: Callable[
+            [dict[str, Any]], DisposableTestAcquisition
+        ]
+        | None = None,
     ) -> None:
         self._bus = bus
         self._log = event_log
@@ -110,6 +121,7 @@ class PipelineRunner:
         self._profile_loader = profile_loader
         self._persona_loader = persona_loader
         self._candidate_policy_fn = candidate_policy_fn
+        self._source_revision_authority_fn = source_revision_authority_fn
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
 
@@ -249,7 +261,7 @@ class PipelineRunner:
         pending: list[dict[str, Any]] = []
         async for metadata in self._log.read_metadata_since(
             through=watermark or "",
-            types=[_SOURCE_RECOVERY_EVENT],
+            types=[_SOURCE_RECOVERY_EVENT, REVISION_REQUEST_TYPE],
         ):
             request = await self._log.get(str(metadata["event_id"]))
             if request is None:
@@ -268,6 +280,8 @@ class PipelineRunner:
         return len(pending)
 
     async def _recovery_terminal(self, request: dict[str, Any]) -> bool:
+        if request.get("type") == REVISION_REQUEST_TYPE:
+            return bool((await revision_command_status(self._log, request))["terminal"])
         request_event_id = str(request.get("event_id") or "")
         payload = request.get("payload") or {}
         source_event_id = str(payload.get("source_event_id") or "")
@@ -310,10 +324,15 @@ class PipelineRunner:
         completions: dict[str, list[dict[str, Any]]] = {}
         async for metadata in self._log.read_metadata_since(
             through=watermark or "",
-            types=[PLAN_EVENT_TYPE, COMPLETION_EVENT_TYPE],
-            include_payload_for=[COMPLETION_EVENT_TYPE],
+            types=[
+                PLAN_EVENT_TYPE,
+                COMPLETION_EVENT_TYPE,
+                REVISION_PLAN_TYPE,
+                REVISION_COMPLETION_TYPE,
+            ],
+            include_payload_for=[COMPLETION_EVENT_TYPE, REVISION_COMPLETION_TYPE],
         ):
-            if metadata["type"] == PLAN_EVENT_TYPE:
+            if metadata["type"] in {PLAN_EVENT_TYPE, REVISION_PLAN_TYPE}:
                 plans.append(str(metadata["event_id"]))
             else:
                 completions.setdefault(
@@ -457,6 +476,7 @@ class PipelineRunner:
                 correlation_id=correlation,
                 parties_conn_factory=self._parties_conn_factory,
                 candidate_policy_fn=self._candidate_policy_fn,
+                source_revision_authority_fn=self._source_revision_authority_fn,
             )
             await pack.instance.handle(event, ctx)
 
