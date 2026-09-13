@@ -45,7 +45,7 @@ jobs:
           poetry run ruff format --check --diff tools/triage_model_lab.py scripts/acceptance/run_triage_model_lab.py tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py adminme/lib/skill_runner/wrapper.py tests/unit/test_skill_wrapper.py
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=1 tests/unit/test_triage_model_lab.py tests/unit/test_triage_model_lab_gateway.py tests/unit/test_skill_wrapper.py
       - name: Verify exact currentness and payment uncertainty regressions
-        run: poetry run pytest -p no:cacheprovider -q -ra --maxfail=4 --runxfail tests/acceptance/test_triage_currentness.py tests/unit/test_triage_related_completion.py tests/unit/test_obligation_assessment.py tests/unit/test_human_triage_management.py
+        run: poetry run pytest -p no:cacheprovider -q -ra --maxfail=4 --runxfail tests/acceptance/test_triage_currentness.py tests/acceptance/test_triage_interpretation_replay.py tests/unit/test_triage_related_completion.py tests/unit/test_obligation_assessment.py tests/unit/test_human_triage_management.py
       - name: Verify finite currentness application and predecessor continuity
         run: poetry run pytest -p no:cacheprovider -q -ra --maxfail=3 --runxfail tests/acceptance/test_source_currentness_revision.py tests/acceptance/test_disposable_dataset_continuity.py::test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward
       - name: Verify the bounded semantic correction and durable application
