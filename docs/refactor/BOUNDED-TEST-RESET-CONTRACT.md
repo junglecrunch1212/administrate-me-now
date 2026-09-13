@@ -227,3 +227,32 @@ validation and sample quality is not whole-mailbox accuracy.
 - **DEFER:** no required product or safety capability. Production historical
   rollback correctness is outside the reset's claims and remains governed by
   the ordinary release and recovery contracts.
+
+## Currentness and unresolved obligation questions
+
+**MODERNIZE uncertainty enforcement; PRESERVE typed source authority (CO-030):**
+classifier8.0.4 declares `blocking_question_indices` for each candidate's existing
+`unresolved_questions`. The list identifies questions that prevent establishing
+whether that action is required. Empty means remaining questions concern only
+execution details or there are no questions. Indexes are unique, bounded and
+validated against that candidate's actual question list. Code retains unknown
+obligations as clarification rather than independently required work, preserving
+the action, exact evidence and dates. A billing date or payment link alone cannot
+establish an amount payable or outstanding requirement; independent statement
+review is assessed separately. A payment with established obligation is not held
+merely because its method is undecided.
+
+The new field is optional for validation of historical8.0.0–8.0.3 receipts. During
+new interpretation, unanswered questions with no declaration remain conservative;
+persisted proposals and member decisions are not rewritten. Raw immutable skill
+receipts retain the declaration; derived assessment actionability reflects the
+verified structural decision. The model still supplies semantic scope, so fixed
+transport process tests do not establish actual-model accuracy. No provider SDK,
+new model route, full history replay, cap renewal or extra inference authority is
+introduced. Any additional model round or application to the completed sample
+requires its separately bounded operating manifest and budget.
+
+Exact linked completion handling follows ADR-0010; no shared sender, subject or
+account can supply missing relationship authority. The existing source-pair
+confirmation mechanism remains the only member-authorized alternative to strong
+provider links. A measured quality failure does not invent those confirmations.

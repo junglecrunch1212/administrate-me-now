@@ -376,6 +376,7 @@ def extract_grounded_context_candidates(
             primary_quote=quote,
             action_owner=owner,
             fields=base.fields,
+            unresolved_questions=raw.get("unresolved_questions"),
         )
         if (
             assessment
@@ -528,6 +529,82 @@ def extract_grounded_context_candidates(
             )
         )
     return admitted
+
+
+def extract_grounded_related_completions(
+    context_pack: MessageContextPack, raw_candidates: Any
+) -> set[tuple[str, str, str]]:
+    """Identify exact old actions completed by later authorized thread evidence.
+
+    Related text cannot create work. A recorded terminal interpretation may
+    retire an untouched system proposal only when its source, kind and exact
+    original action quote match, and a later primary message supplies the
+    grounded completion. The context builder owns all relationship authority.
+    """
+    if (
+        not isinstance(raw_candidates, list)
+        or not context_pack.current_is_thread_anchor
+    ):
+        return set()
+    aliases = context_pack.alias_map()
+    completed: set[tuple[str, str, str]] = set()
+    for raw in raw_candidates[:20]:
+        if not isinstance(raw, dict) or raw.get("lifecycle_state") != "completed":
+            continue
+        alias = str(raw.get("evidence_source_id") or "")
+        source = aliases.get(alias)
+        if (
+            source is None
+            or source.relation != "related"
+            or not source.authored_text_reliable
+            or raw.get("action_owner") not in {"member", "group_including_member"}
+            or raw.get("target_kind")
+            not in {"task", "commitment", "calendar_event", "reminder", "list_item"}
+        ):
+            continue
+        bases = extract_grounded_nlp_candidates(source.source_text(), [raw])
+        if not bases:
+            continue
+        base = bases[0]
+        assessment = ground_obligation_assessment(
+            raw.get("obligation_assessment"),
+            source_texts={
+                key: (message.source_event_id, message.source_text())
+                for key, message in aliases.items()
+                if message.authored_text_reliable
+            },
+            primary_alias=alias,
+            primary_quote=base.title,
+            action_owner=str(raw["action_owner"]),
+            fields=base.fields,
+            unresolved_questions=raw.get("unresolved_questions"),
+        )
+        if not assessment or assessment["actionability"] != "none":
+            continue
+        completion_sources = {
+            item["source_event_id"]
+            for item in assessment["evidence"]
+            if item["role"] == "completion"
+        }
+        try:
+            original_time = datetime.fromisoformat(
+                source.occurred_at.replace("Z", "+00:00")
+            )
+            later_primary = any(
+                message.relation == "thread"
+                and message.authored_text_reliable
+                and message.source_event_id in completion_sources
+                and message.source_event_id in source.relationship_source_event_ids
+                and original_time.tzinfo is not None
+                and datetime.fromisoformat(message.occurred_at.replace("Z", "+00:00"))
+                > original_time
+                for message in context_pack.messages
+            )
+        except (ValueError, TypeError):
+            continue
+        if later_primary:
+            completed.add((source.source_event_id, base.target_kind, base.title))
+    return completed
 
 
 _MESSAGE_BOILERPLATE = re.compile(

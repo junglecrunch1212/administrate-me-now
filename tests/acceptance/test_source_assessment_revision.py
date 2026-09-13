@@ -708,7 +708,7 @@ def test_failed_revision_spends_three_attempts_across_duplicate_and_three_restar
         after = snapshot(client)["events"]
         failures = _of_type(after, "skill.call.failed")
         assert len(failures) == 3
-        assert all(event["payload"]["skill_version"] == "8.0.3" for event in failures)
+        assert all(event["payload"]["skill_version"] == "8.0.4" for event in failures)
         assert any(":recovery-1:" in event["idempotency_key"] for event in failures)
         assert any(":recovery-2:" in event["idempotency_key"] for event in failures)
         _unchanged_history(client, before)

@@ -93,6 +93,7 @@ from adminme.triage_intent import (
     MESSAGE_FALLBACK_EXTRACTOR_ID,
     extract_grounded_nlp_candidates,
     extract_grounded_context_candidates,
+    extract_grounded_related_completions,
     extract_message_fallback_candidates,
     is_inbound_reply_request,
     merge_intent_candidates,
@@ -102,7 +103,7 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "8.0.3"
+SKILL_VERSION = "8.0.4"
 _RETAINED_CLASSIFICATION_VERSION = "8.0.0"
 DEFAULT_CLASSIFICATION = "personal"
 _REPLAY_GENERATION = 23
@@ -1363,6 +1364,11 @@ class NoiseFilteringPipeline:
             source_event_id=source_event_id,
             context_pack=context_pack,
             candidates=candidates,
+            completed_related_actions=(
+                extract_grounded_related_completions(context_pack, raw_candidates)
+                if semantic_assessment_complete and policy.get("language_enabled")
+                else set()
+            ),
         )
         candidates = _deduplicate_candidate_keys(candidates)
         intent_id = f"source:{source_event_id}"
@@ -1573,6 +1579,7 @@ class NoiseFilteringPipeline:
         source_event_id: str,
         context_pack: MessageContextPack,
         candidates: list[Any],
+        completed_related_actions: set[tuple[str, str, str]],
     ) -> tuple[list[Any], set[str]]:
         """Replace untouched older thread interpretations; preserve decisions.
 
@@ -1589,6 +1596,9 @@ class NoiseFilteringPipeline:
         ):
             return candidates, set()
         thread_source_ids = set(context_pack.episode_source_event_ids)
+        inspected_source_ids = thread_source_ids | {
+            source_id for source_id, _, _ in completed_related_actions
+        }
         current_same_source_fallbacks = {
             (
                 candidate.target_kind,
@@ -1608,7 +1618,7 @@ class NoiseFilteringPipeline:
         for prior in await self._proposals_for_sources(
             event_log=ctx.event_log,
             owner_scope=str(event.get("owner_scope") or ""),
-            source_event_ids=thread_source_ids,
+            source_event_ids=inspected_source_ids,
         ):
             payload = prior.get("payload") or {}
             if prior.get("source_adapter") not in {
@@ -1618,6 +1628,18 @@ class NoiseFilteringPipeline:
             }:
                 continue
             interpretation = payload.get("interpretation")
+            if str(payload.get("source_event_id") or "") not in thread_source_ids:
+                if not isinstance(interpretation, dict) or not any(
+                    (
+                        str(reference.get("source_event_id") or ""),
+                        str(payload.get("target_kind") or ""),
+                        str(reference.get("quote") or ""),
+                    )
+                    in completed_related_actions
+                    for reference in interpretation.get("evidence_refs", [])
+                    if isinstance(reference, dict)
+                ):
+                    continue
             if (
                 str(payload.get("source_event_id") or "") == source_event_id
                 and isinstance(interpretation, dict)

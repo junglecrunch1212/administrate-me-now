@@ -136,7 +136,11 @@ def _items(client, *, lens="all_candidates", auth=AUTH):
     )
     assert response.status_code == 200, response.text
     items = response.json()["items"]
-    return [item for item in items if item["attention_view"] == "needs_you"] if lens == "needs_you" else items
+    return (
+        [item for item in items if item["attention_view"] == "needs_you"]
+        if lens == "needs_you"
+        else items
+    )
 
 
 def _append(client, envelope):
@@ -294,10 +298,16 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
 
 
 @pytest.mark.parametrize(
-    "balance_known", [False, True], ids=["unknown-obligation", "method-only-unknown"]
+    "balance_known, declare_question_scope",
+    [(False, False), (False, True), (True, True)],
+    ids=[
+        "legacy-unknown-obligation",
+        "declared-unknown-obligation",
+        "method-only-unknown",
+    ],
 )
 def test_payment_uncertainty_cannot_borrow_independent_statement_review(
-    tmp_path, monkeypatch, balance_known
+    tmp_path, monkeypatch, balance_known, declare_question_scope
 ):
     config = settings(tmp_path / "instance", ROOT, selected=["message-0"])
     payment_quote = EXPLICIT_PAYMENT if balance_known else PAYMENT_DATE
@@ -342,6 +352,13 @@ def test_payment_uncertainty_cannot_borrow_independent_statement_review(
                 },
             ],
         )
+        if declare_question_scope:
+            # The sources and expected outcomes are frozen. The new schema
+            # response states question scope explicitly; the legacy unknown
+            # response above remains unchanged as a regression.
+            payment["obligation_assessment"]["blocking_question_indices"] = (
+                [] if balance_known else [0, 1]
+            )
         return [review, payment]
 
     model = _Model(candidates)

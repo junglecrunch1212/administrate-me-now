@@ -165,3 +165,58 @@ def test_paid_text_does_not_complete_an_unrelated_action_in_same_message():
         },
     )
     assert profile.current_state == "current"
+
+
+@pytest.mark.parametrize(
+    "blocking,expected",
+    [(None, "unknown"), ([0], "unknown"), ([], "required")],
+)
+def test_unanswered_question_scope_is_enforced_without_interpreting_prose(
+    blocking, expected
+):
+    quote = "Please perform the requested fixture action."
+    raw = {
+        "purpose": "payment",
+        "actionability": "required",
+        "condition_state": "not_applicable",
+        "date_role": "none",
+        "qualifying_evidence": [],
+    }
+    if blocking is not None:
+        raw["blocking_question_indices"] = blocking
+    result = ground_obligation_assessment(
+        raw,
+        source_texts={"m01": ("source-fixture", quote)},
+        primary_alias="m01",
+        primary_quote=quote,
+        action_owner="member",
+        fields={},
+        unresolved_questions=["An unanswered fixture question?"],
+    )
+    assert result is not None
+    assert result["actionability"] == expected
+    assert result["independent_obligation"] is (expected == "required")
+    assert result["evidence_verified"] is True
+
+
+@pytest.mark.parametrize("blocking", [[True], [-1], [1], [0, 0], ["0"], "0"])
+def test_invalid_question_indexes_cannot_establish_an_obligation(blocking):
+    quote = "Please perform the fixture action."
+    assert (
+        ground_obligation_assessment(
+            {
+                "purpose": "payment",
+                "actionability": "required",
+                "condition_state": "not_applicable",
+                "date_role": "none",
+                "blocking_question_indices": blocking,
+            },
+            source_texts={"m01": ("source-fixture", quote)},
+            primary_alias="m01",
+            primary_quote=quote,
+            action_owner="member",
+            fields={},
+            unresolved_questions=["A fixture question?"],
+        )
+        is None
+    )

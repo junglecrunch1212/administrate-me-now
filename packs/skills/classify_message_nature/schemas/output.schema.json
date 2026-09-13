@@ -319,6 +319,17 @@
                   }
                 },
                 "description": "List only clauses that qualify this candidate action and object, not every status clause in the message. completion or negation asserts this candidate has no remaining action. For future attendance, exclude completed payment, purchase or registration from these roles; cite the confirmed booking as ownership and its occurrence time as date. A paid future booking remains open attendance with no payment task. Omit unrelated terminal clauses rather than labeling them completion."
+              },
+              "blocking_question_indices": {
+                "type": "array",
+                "maxItems": 8,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 7
+                },
+                "description": "Zero-based indexes into this candidate's unresolved_questions that prevent establishing whether the obligation is currently required. Include amount/balance or already-paid/scheduled uncertainty when payment itself is not established. Use [] when there are no unanswered questions or the remaining questions concern only execution details of an established obligation, such as payment method. Do not borrow questions from another action. Omission remains accepted for historical receipts but does not establish nonblocking uncertainty during new processing."
               }
             }
           }

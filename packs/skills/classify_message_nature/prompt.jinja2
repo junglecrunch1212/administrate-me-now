@@ -111,16 +111,23 @@ Never emit a candidate whose primary evidence is a `related` message; that
 message is assessed separately when it is its own primary source.
 
 For each candidate:
-- `evidence_source_id` identifies the primary `thread` message containing the
-  exact quote. The quote must be contiguous in that message's subject or body.
+- For new open/unknown candidates, `evidence_source_id` identifies the primary
+  `thread` message containing the exact quote. Only an exact completed-action
+  interpretation described below may cite a `related` message as its original
+  action source. The quote must be contiguous in that message's subject or body.
 - `action_owner` is `member` only when the words assign the action to the
   member, `group_including_member` when the member is one of an addressed
   group, `other_party` when clearly assigned elsewhere, or `unknown` when the
   language does not settle it.
 - `lifecycle_state` is `open`, `answered`, `completed`, `superseded`, or
-  `unknown` based only on the supplied context. Include completed/other-party
-  interpretations in your reasoning internally, but they will not be admitted
-  as member candidates by deterministic code.
+  `unknown` based only on the supplied context. Completed/other-party
+  interpretations cannot create member candidates. For an explicitly linked related
+  source, return a completed interpretation only to identify an existing old
+  action whose completion is explicit in a later primary thread message.
+  Quote that exact original action using its related source alias and cite
+  the later completion clause with role completion. This terminal record
+  cannot create a new candidate. Do not mark a whole message or its other
+  actions completed, infer completion from age, or link sources yourself.
 - `compact_summary` says what this review decision is in at most 160 characters.
 - `case_summary` explains the surrounding matter in at most 600 characters.
 - `why_member` explains why the item may concern the member in at most 240
@@ -130,6 +137,15 @@ For each candidate:
 - `thread_state` is one closed value from the schema.
 - `unresolved_questions` lists only questions genuinely unanswered by the
   supplied context.
+- `obligation_assessment.blocking_question_indices` lists the zero-based indexes
+  of unresolved questions that prevent establishing this obligation. Always
+  return the list; use [] for no questions or execution details only. A date
+  label and generic payment link do not establish a payable balance or an
+  outstanding payment requirement. If those facts are unknown, retain the
+  payment as unknown/conditional and index those questions. An independently
+  requested statement review remains a separate action. A stated amount owed
+  and explicit payment instruction remain required when only the payment
+  method is undecided; that method question does not block the obligation.
 - `related_source_ids` lists only aliases from the deterministic `related`
   context that materially support the interpretation.
 - `obligation_assessment` distinguishes an actual personal action from a
@@ -269,6 +285,7 @@ Return ONLY valid JSON matching this schema:
       "condition_state": "met" | "unmet" | "unknown" | "not_applicable",
       "beneficiary": <person/group described in source, or null>,
       "date_role": "deadline" | "occurrence" | "expiry" | "reporting" | "none" | "unknown",
+      "blocking_question_indices": [],
       "qualifying_evidence": [{"source_id": <mNN alias>, "quote": <exact contiguous quote>, "role": "condition" | "negation" | "completion" | "date" | "ownership" | "recurrence"}]
     }
   }]
