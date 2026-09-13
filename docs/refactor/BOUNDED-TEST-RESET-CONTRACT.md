@@ -242,6 +242,13 @@ establish an amount payable or outstanding requirement; independent statement
 review is assessed separately. A payment with established obligation is not held
 merely because its method is undecided.
 
+The existing member lane selector evaluates typed uncertainty and unresolved or
+conflicting admission before deadline, promise/request priority, or waiting
+labels. Explicit unmet optional opportunities retain their possibilities lane;
+established obligations retain their ordinary priority. New proposal and
+reconciliation events derive both the stored lane and effective disposition
+through this selector. This does not migrate old rows or rewrite prior decisions.
+
 The new field is optional for validation of historical8.0.0–8.0.3 receipts. During
 new interpretation, unanswered questions with no declaration remain conservative;
 persisted proposals and member decisions are not rewritten. Raw immutable skill

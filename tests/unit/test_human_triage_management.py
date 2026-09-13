@@ -168,6 +168,107 @@ def test_required_human_lanes_are_deterministic() -> None:
     assert human_triage_lane(base) == "low_confidence_review"
 
 
+@pytest.mark.parametrize(
+    "decision, actionability, condition_state, basis, expected",
+    [
+        (
+            "unresolved",
+            "unknown",
+            "not_applicable",
+            "verified_deadline",
+            "clarification_conflict",
+        ),
+        (
+            "unresolved",
+            "unknown",
+            "not_applicable",
+            "known_human_actionable_request",
+            "clarification_conflict",
+        ),
+        (
+            "unresolved",
+            "unknown",
+            "not_applicable",
+            "exact_member_commitment",
+            "clarification_conflict",
+        ),
+        (
+            "unresolved",
+            "unknown",
+            "not_applicable",
+            "standard_actionable_candidate",
+            "clarification_conflict",
+        ),
+        (
+            "conflict_review",
+            "required",
+            "not_applicable",
+            "verified_deadline",
+            "clarification_conflict",
+        ),
+        (
+            "unresolved",
+            "conditional",
+            "unknown",
+            "verified_deadline",
+            "clarification_conflict",
+        ),
+        (
+            "unresolved",
+            "conditional",
+            "unmet",
+            "verified_deadline",
+            "possible_opportunity",
+        ),
+        (
+            "admit",
+            "required",
+            "not_applicable",
+            "verified_deadline",
+            "scheduled_deadline",
+        ),
+        (
+            "admit",
+            "conditional",
+            "unmet",
+            "explicit_member_instruction",
+            "direct_instruction",
+        ),
+    ],
+)
+def test_uncertainty_precedes_date_and_waiting_presentation(
+    decision, actionability, condition_state, basis, expected
+):
+    item = {
+        "target_kind": "task",
+        "candidate": {"due": "2034-10-18T00:00:00Z", "waiting_for": "details"},
+        "interpretation": {
+            "contract": "triage-context-interpretation-v3",
+            "assessment_state": "verified",
+            "thread_state": "waiting_on_member",
+            "obligation_assessment": {
+                "purpose": "payment",
+                "actionability": actionability,
+                "condition_state": condition_state,
+                "independent_obligation": actionability == "required",
+                "date_role": "deadline",
+                "verified_date_fields": ["due"],
+                "evidence": [
+                    {
+                        "source_event_id": "fixture-source",
+                        "quote": "October 18, 2034",
+                        "role": "date",
+                    }
+                ],
+            },
+        },
+    }
+    assert (
+        human_triage_lane(item, {"decision": decision, "priority_basis": [basis]})
+        == expected
+    )
+
+
 @pytest.mark.parametrize("target_kind", ["task", "commitment", "recurrence"])
 def test_unverified_candidate_kind_cannot_label_a_member_promise(
     target_kind: str,

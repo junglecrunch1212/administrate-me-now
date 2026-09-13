@@ -433,6 +433,11 @@ def test_payment_uncertainty_cannot_borrow_independent_statement_review(
             assert payment["candidate"]["due"] == "2034-10-18T00:00:00Z"
             assert assessment["verified_date_fields"] == ["due"]
             assert payment["review_state"]["state"] == "ready"
+            assert (
+                payment["human_lane"]
+                == payment["disposition"]["lane"]
+                == "scheduled_deadline"
+            )
         else:
             assert assessment["actionability"] in {"unknown", "conditional"}, (
                 "A date label and unresolved payment requirement cannot establish required payment",
@@ -440,7 +445,11 @@ def test_payment_uncertainty_cannot_borrow_independent_statement_review(
             )
             assert assessment["independent_obligation"] is False
             assert payment["admission_decision"] == "unresolved"
-            assert payment["disposition"]["lane"] == "clarification_conflict"
+            assert (
+                payment["human_lane"]
+                == payment["disposition"]["lane"]
+                == "clarification_conflict"
+            )
             assert payment["attention_view"] == "needs_you"
         _assert_private_no_effects(client)
         _assert_redelivery_unchanged(client, envelope, source_id, model)
