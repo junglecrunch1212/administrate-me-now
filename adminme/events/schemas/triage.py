@@ -292,6 +292,29 @@ class TriageSourcePublicationPlannedV1(BaseModel):
         return self
 
 
+class TriageCurrentnessPublicationPlannedV1(BaseModel):
+    """Private durable suffix, committed atomically with its source assessment."""
+
+    model_config = {"extra": "forbid"}
+    contract: Literal["triage-source-publication-v1"]
+    source_event_id: str = Field(min_length=1, max_length=240)
+    assessment_idempotency_key: str = Field(min_length=1, max_length=240)
+    assessment_schema_version: Literal[1]
+    proposals: list[TriageSourceProposalDraftV1] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def unique_exact_source_drafts(self) -> "TriageCurrentnessPublicationPlannedV1":
+        keys = [proposal.idempotency_key for proposal in self.proposals]
+        if len(keys) != len(set(keys)):
+            raise ValueError("publication draft keys must be unique")
+        if any(
+            proposal.payload["source_event_id"] != self.source_event_id
+            for proposal in self.proposals
+        ):
+            raise ValueError("publication draft must belong to the assessed source")
+        return self
+
+
 class TriageSourcePublicationCompletedV1(BaseModel):
     """Content-free acknowledgement of every exact private publication draft."""
 
@@ -433,6 +456,16 @@ class TriageIntentFeaturesExtractedV5(TriageIntentFeaturesExtractedV3):
     supersedes_assessment_event_id: str = Field(min_length=1, max_length=240)
     revision_request_event_id: str = Field(min_length=1, max_length=240)
     assessment_revision: Literal["triage-semantics-2026-09-v1"]
+    revision_attempt_limit: Literal[3]
+
+
+class TriageCurrentnessFeaturesExtractedV1(TriageIntentFeaturesExtractedV3):
+    """Explicit semantic revision; prior completed assessments remain history."""
+
+    model_config = {"extra": "forbid"}
+    supersedes_assessment_event_id: str = Field(min_length=1, max_length=240)
+    revision_request_event_id: str = Field(min_length=1, max_length=240)
+    assessment_revision: Literal["currentness-v1"]
     revision_attempt_limit: Literal[3]
 
 
@@ -622,3 +655,13 @@ __all__ = [
     "TriageIntentFeaturesExtractedV4",
     "TriageIntentFeaturesExtractedV5",
 ]
+
+registry.register(
+    "triage.currentness.features_extracted", 1, TriageCurrentnessFeaturesExtractedV1
+)
+registry.register(
+    "triage.currentness_publication.planned", 1, TriageCurrentnessPublicationPlannedV1
+)
+registry.register(
+    "triage.currentness_publication.completed", 1, TriageSourcePublicationCompletedV1
+)

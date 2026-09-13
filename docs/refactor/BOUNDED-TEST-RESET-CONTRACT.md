@@ -264,6 +264,29 @@ account can supply missing relationship authority. The existing source-pair
 confirmation mechanism remains the only member-authorized alternative to strong
 provider links. A measured quality failure does not invent those confirmations.
 
+**MODERNIZE bounded application; PRESERVE closed authority:** the separate
+`currentness-v1` command accepts one immutable manifest of at most three selected
+episode anchors, with at most three durable classifier attempts per anchor.
+The earlier nine-anchor semantic revision retains its original classifier digest,
+request keys, schema and closed budget. A changed manifest or repeated request
+cannot renew either allowance. The currentness preview and application endpoints
+under `/api/system/source-currentness-revisions` reuse the existing exact dataset,
+selection, member, assessment, context, observation and member-decision checks.
+The classifier contract is fixed to the reviewed8.0.4 bundle. Existing member
+source-pair confirmations, when required, must precede the exact context preview;
+selection alone supplies no relationship authority.
+
+Currentness command, refusal, assessment and publication records have distinct
+event types. Current readers include those outcomes, while the protected
+predecessor ignores their control suffix. Ordinary recovery cannot renew a failed
+currentness allowance. Publication uses the existing durable mechanism; a
+completion-only correction can retire an exact untouched proposal without making
+another proposal. Production-composition tests preserve earlier receipts and
+decisions through interrupted completion, publication, repeated requests, source
+redelivery and predecessor reactivation. None of these isolated proofs constitutes
+application to the existing sample: that requires its exact private manifest and
+operating approval after actual-model and protected delivery gates.
+
 The currentness model proof uses the unchanged nineteen original frozen sources
 and six separately frozen sources in `tests/fixtures/triage_currentness_model_lab`.
 The new sequence covers two independent original requests, a weakly similar

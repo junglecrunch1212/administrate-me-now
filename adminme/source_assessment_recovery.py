@@ -417,7 +417,8 @@ async def latest_source_assessment(
     assessments = [
         event
         for event in related
-        if event.get("type") == "triage.intent.features_extracted"
+        if event.get("type")
+        in {"triage.intent.features_extracted", "triage.currentness.features_extracted"}
         and str((event.get("payload") or {}).get("source_event_id") or "")
         == source_event_id
     ]
@@ -469,7 +470,11 @@ async def validate_recovery_target(
         raise SourceAssessmentRecoveryRefused("failure_reason_changed")
     # The explicit test revision owns a finite source budget. A separate
     # ordinary recovery request cannot renew its already-spent attempts.
-    if latest.get("schema_version") == 5 or reason not in RETRYABLE_FAILURE_REASONS:
+    if (
+        latest.get("schema_version") == 5
+        or latest.get("type") == "triage.currentness.features_extracted"
+        or reason not in RETRYABLE_FAILURE_REASONS
+    ):
         raise SourceAssessmentRecoveryRefused("failure_not_retryable")
     return ValidatedRecoveryTarget(
         source=source,

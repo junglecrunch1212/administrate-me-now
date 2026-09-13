@@ -53,6 +53,12 @@ from adminme.source_assessment_revision import (
     command_status as revision_command_status,
 )
 from adminme.adapters.disposable_test_acquisition import DisposableTestAcquisition
+from adminme.source_currentness_revision import (
+    REQUEST_TYPE as CURRENTNESS_REQUEST_TYPE,
+    PLAN_TYPE as CURRENTNESS_PLAN_TYPE,
+    COMPLETION_TYPE as CURRENTNESS_COMPLETION_TYPE,
+    command_status as currentness_command_status,
+)
 from adminme.source_publication import (
     COMPLETION_EVENT_TYPE,
     PLAN_EVENT_TYPE,
@@ -261,7 +267,11 @@ class PipelineRunner:
         pending: list[dict[str, Any]] = []
         async for metadata in self._log.read_metadata_since(
             through=watermark or "",
-            types=[_SOURCE_RECOVERY_EVENT, REVISION_REQUEST_TYPE],
+            types=[
+                _SOURCE_RECOVERY_EVENT,
+                REVISION_REQUEST_TYPE,
+                CURRENTNESS_REQUEST_TYPE,
+            ],
         ):
             request = await self._log.get(str(metadata["event_id"]))
             if request is None:
@@ -280,6 +290,10 @@ class PipelineRunner:
         return len(pending)
 
     async def _recovery_terminal(self, request: dict[str, Any]) -> bool:
+        if request.get("type") == CURRENTNESS_REQUEST_TYPE:
+            return bool(
+                (await currentness_command_status(self._log, request))["terminal"]
+            )
         if request.get("type") == REVISION_REQUEST_TYPE:
             return bool((await revision_command_status(self._log, request))["terminal"])
         request_event_id = str(request.get("event_id") or "")
@@ -329,10 +343,20 @@ class PipelineRunner:
                 COMPLETION_EVENT_TYPE,
                 REVISION_PLAN_TYPE,
                 REVISION_COMPLETION_TYPE,
+                CURRENTNESS_PLAN_TYPE,
+                CURRENTNESS_COMPLETION_TYPE,
             ],
-            include_payload_for=[COMPLETION_EVENT_TYPE, REVISION_COMPLETION_TYPE],
+            include_payload_for=[
+                COMPLETION_EVENT_TYPE,
+                REVISION_COMPLETION_TYPE,
+                CURRENTNESS_COMPLETION_TYPE,
+            ],
         ):
-            if metadata["type"] in {PLAN_EVENT_TYPE, REVISION_PLAN_TYPE}:
+            if metadata["type"] in {
+                PLAN_EVENT_TYPE,
+                REVISION_PLAN_TYPE,
+                CURRENTNESS_PLAN_TYPE,
+            }:
                 plans.append(str(metadata["event_id"]))
             else:
                 completions.setdefault(

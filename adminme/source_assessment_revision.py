@@ -49,6 +49,25 @@ def execution_policy(
 ) -> DisposableTestAcquisition:
     """Revalidate runtime authority after a queued command or process restart."""
     manifest = RevisionManifest.model_validate(command["payload"]["manifest"])
+    return _execution_policy_for_manifest(
+        command,
+        dataset_id=manifest.dataset_id,
+        classifier_sha256=CLASSIFIER_SHA256,
+        adapter_config=adapter_config,
+        dataset_marker=dataset_marker,
+        repository_root=repository_root,
+    )
+
+
+def _execution_policy_for_manifest(
+    command: dict[str, Any],
+    *,
+    dataset_id: str,
+    classifier_sha256: str,
+    adapter_config: dict[str, Any],
+    dataset_marker: dict[str, Any],
+    repository_root: Path,
+) -> DisposableTestAcquisition:
     try:
         # Resolve the selected instance through the same exact Gmail kind and
         # member/account binding restriction that RuntimeSettings validates.
@@ -58,7 +77,7 @@ def execution_policy(
         raise RevisionRefused("disposable_dataset_or_selection_changed") from exc
     if (
         policy is None
-        or dataset_marker.get("dataset_id") != manifest.dataset_id
+        or dataset_marker.get("dataset_id") != dataset_id
         or dataset_marker.get("contract") != "disposable-test-dataset-v1"
         or command.get("owner_scope") != f"private:{policy.member_id}"
     ):
@@ -73,7 +92,7 @@ def execution_policy(
         "schemas/output.schema.json",
     ):
         digest.update(name.encode() + b"\0" + (root / name).read_bytes() + b"\0")
-    if digest.hexdigest() != CLASSIFIER_SHA256:
+    if digest.hexdigest() != classifier_sha256:
         raise RevisionRefused("reviewed_classifier_contract_changed")
     return policy
 
@@ -164,7 +183,10 @@ async def inspect_target(
         in {"eligible_candidates", "no_candidate"}
         or (
             allow_failed_revision
-            and current.get("schema_version") == 5
+            and (
+                current.get("schema_version") == 5
+                or current.get("type") == "triage.currentness.features_extracted"
+            )
             and current.get("payload", {}).get("assessment_outcome") == "failed"
         )
     ):

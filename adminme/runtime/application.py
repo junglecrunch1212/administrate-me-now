@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
 from adminme.adapters.cursor_store import AdapterCursorStore
+from adminme import source_currentness_revision as currentness_revision
 from adminme.source_assessment_revision import (
     RevisionManifest,
     RevisionPreview,
@@ -945,11 +946,13 @@ class AdministrateMeRuntime:
                 profile_loader=self.extensions.profile_for,
                 persona_loader=self.extensions.active_persona,
                 candidate_policy_fn=self.settings_control.effective_candidate_policy,
-                source_revision_authority_fn=lambda command: revision_execution_policy(
-                    command,
-                    adapter_config=self.settings.adapter_config,
-                    dataset_marker=self.settings.test_dataset_marker,
-                    repository_root=self.settings.repository_root,
+                source_revision_authority_fn=lambda command: (
+                    currentness_revision.execution_policy(
+                        command,
+                        adapter_config=self.settings.adapter_config,
+                        dataset_marker=self.settings.test_dataset_marker,
+                        repository_root=self.settings.repository_root,
+                    )
                 ),
             )
             await self.pipelines.discover(
@@ -3484,6 +3487,124 @@ async def source_assessment_revision_status(
     ):
         raise HTTPException(404, "source revision not found")
     return await revision_command_status(runtime.event_log, command)
+
+
+@system_router.post("/source-currentness-revisions/preview")
+async def preview_source_currentness_revision(
+    body: currentness_revision.CurrentnessPreview,
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Read the exact retained episode manifest without invoking a model."""
+    require_principal(session)
+    runtime = request.app.state.runtime
+    if runtime.event_log is None:
+        raise HTTPException(503, "source revision is unavailable")
+    try:
+        policy = _revision_policy(runtime, session)
+        targets = [
+            await inspect_revision_target(
+                runtime.event_log,
+                source_id,
+                tenant_id=session.tenant_id,
+                owner_scope=f"private:{session.view_member_id}",
+                policy=policy,
+            )
+            for source_id in body.source_event_ids
+        ]
+        manifest = currentness_revision.CurrentnessManifest(
+            dataset_id=runtime.settings.test_dataset_marker["dataset_id"],
+            targets=targets,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "manifest": manifest.model_dump(mode="json"),
+        "manifest_sha256": manifest.fingerprint(),
+        "max_classifier_attempts": len(targets) * 3,
+        "source_acquisition": False,
+        "external_write_requests": 0,
+    }
+
+
+@system_router.post("/source-currentness-revisions", status_code=202)
+async def request_source_currentness_revision(
+    body: currentness_revision.CurrentnessManifest,
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Accept one immutable manifest; changed or repeated IDs cannot renew it."""
+    require_principal(session)
+    runtime = request.app.state.runtime
+    if runtime.event_log is None or runtime.events is None:
+        raise HTTPException(503, "source revision is unavailable")
+    if runtime.observation is None or not await runtime.observation.is_active():
+        raise HTTPException(409, "source revision requires observation mode")
+    owner_scope = f"private:{session.view_member_id}"
+    try:
+        policy = _revision_policy(runtime, session)
+        if body.dataset_id != runtime.settings.test_dataset_marker["dataset_id"]:
+            raise RevisionRefused("disposable_dataset_changed")
+        prior = await runtime.event_log.get_by_idempotency(
+            session.tenant_id, currentness_revision.request_key(owner_scope)
+        )
+        if prior is None:
+            for target in body.targets:
+                await validate_revision_target(
+                    runtime.event_log,
+                    target,
+                    tenant_id=session.tenant_id,
+                    owner_scope=owner_scope,
+                    policy=policy,
+                )
+            envelope = currentness_revision.request_envelope(
+                body,
+                tenant_id=session.tenant_id,
+                owner_scope=owner_scope,
+                actor=session.auth_member_id,
+            )
+            currentness_revision.execution_policy(
+                envelope.model_dump(mode="json"),
+                adapter_config=runtime.settings.adapter_config,
+                dataset_marker=runtime.settings.test_dataset_marker,
+                repository_root=runtime.settings.repository_root,
+            )
+            try:
+                event_id = await runtime.events.write(
+                    envelope, correlation_id=session.correlation_id
+                )
+                prior = await runtime.event_log.get(event_id)
+            except IdempotencyConflict:
+                prior = await runtime.event_log.get_by_idempotency(
+                    session.tenant_id, currentness_revision.request_key(owner_scope)
+                )
+        if prior is None or prior["payload"]["manifest_sha256"] != body.fingerprint():
+            raise RevisionRefused("reviewed_revision_manifest_already_spent")
+        return await currentness_revision.command_status(runtime.event_log, prior)
+    except RevisionRefused as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@system_router.get("/source-currentness-revisions/{request_event_id}")
+async def source_currentness_revision_status(
+    request_event_id: str,
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    runtime = request.app.state.runtime
+    if runtime.event_log is None:
+        raise HTTPException(503, "source revision is unavailable")
+    command = await runtime.event_log.get(request_event_id)
+    if (
+        command is None
+        or command.get("type") != currentness_revision.REQUEST_TYPE
+        or command.get("tenant_id") != session.tenant_id
+        or command.get("owner_scope") != f"private:{session.view_member_id}"
+        or session.auth_member_id != session.view_member_id
+    ):
+        raise HTTPException(404, "source revision not found")
+    return await currentness_revision.command_status(runtime.event_log, command)
 
 
 def create_application(settings: RuntimeSettings) -> FastAPI:

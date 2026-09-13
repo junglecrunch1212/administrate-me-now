@@ -17,6 +17,29 @@ from adminme.source_assessment_revision import (
     assessment_key as revision_assessment_key,
 )
 
+from adminme.source_currentness_revision import (
+    REVISION as CURRENTNESS_REVISION,
+    ASSESSMENT_TYPE as CURRENTNESS_ASSESSMENT_TYPE,
+    PLAN_TYPE as CURRENTNESS_PLAN_TYPE,
+    COMPLETION_TYPE as CURRENTNESS_COMPLETION_TYPE,
+    assessment_key as currentness_assessment_key,
+)
+
+
+def assessment_revision(assessment: Mapping[str, Any]) -> str | None:
+    if (
+        assessment.get("type") == CURRENTNESS_ASSESSMENT_TYPE
+        and assessment.get("schema_version") == 1
+    ):
+        return CURRENTNESS_REVISION
+    if (
+        assessment.get("type") == "triage.intent.features_extracted"
+        and assessment.get("schema_version") == 5
+    ):
+        return REVISION
+    return None
+
+
 PLAN_EVENT_TYPE = "triage.source_publication.planned"
 COMPLETION_EVENT_TYPE = "triage.source_publication.completed"
 
@@ -33,9 +56,16 @@ def source_assessment_identity_valid(
     *, source: Mapping[str, Any], assessment: Mapping[str, Any]
 ) -> bool:
     """A newer terminal receipt must belong to this exact private source."""
+    if (
+        assessment.get("type") == CURRENTNESS_ASSESSMENT_TYPE
+        and assessment_revision(assessment) != CURRENTNESS_REVISION
+    ):
+        return False
     source_id = str(source.get("event_id") or "")
     key = str(assessment.get("idempotency_key") or "")
-    if assessment.get("schema_version") == 3:
+    if assessment_revision(assessment) == CURRENTNESS_REVISION:
+        valid_key = key == currentness_assessment_key(source_id)
+    elif assessment.get("schema_version") == 3:
         valid_key = key == f"triage:message-features:v23:{source_id}"
     elif assessment.get("schema_version") == 4:
         prefix, suffix = "triage:message-features:recovery:", f":{source_id}"
@@ -49,9 +79,9 @@ def source_assessment_identity_valid(
     if isinstance(payload, dict) and (
         payload.get("source_event_id") != source_id
         or (
-            assessment.get("schema_version") == 5
+            assessment_revision(assessment) is not None
             and (
-                payload.get("assessment_revision") != REVISION
+                payload.get("assessment_revision") != assessment_revision(assessment)
                 or payload.get("revision_attempt_limit") != 3
                 or not payload.get("revision_request_event_id")
             )
@@ -70,7 +100,8 @@ def source_assessment_identity_valid(
     return bool(
         source_id
         and valid_key
-        and assessment.get("type") == "triage.intent.features_extracted"
+        and assessment.get("type")
+        in {"triage.intent.features_extracted", CURRENTNESS_ASSESSMENT_TYPE}
         and assessment.get("causation_id") == source_id
         and assessment.get("source_adapter") == "deterministic_candidate_eligibility"
         and assessment.get("source_account_id") == "pipeline"
@@ -95,10 +126,17 @@ def publication_completion_valid(
         )
     except (ValueError, TypeError):
         return False
+    if (
+        assessment.get("type") == CURRENTNESS_ASSESSMENT_TYPE
+        and assessment_revision(assessment) != CURRENTNESS_REVISION
+    ):
+        return False
     source_id = str(source.get("event_id") or "")
     owner = str(source.get("owner_scope") or "")
     assessment_key = str(assessment.get("idempotency_key") or "")
-    if assessment.get("schema_version") == 3:
+    if assessment_revision(assessment) == CURRENTNESS_REVISION:
+        expected_assessment_key = currentness_assessment_key(source_id)
+    elif assessment.get("schema_version") == 3:
         expected_assessment_key = f"triage:message-features:v23:{source_id}"
     elif assessment.get("schema_version") == 4:
         prefix = "triage:message-features:recovery:"
@@ -120,11 +158,14 @@ def publication_completion_valid(
         or source.get("type")
         not in {"messaging.received", "messaging.sent", "telephony.sms_received"}
         or not source.get("tenant_id")
-        or assessment.get("type") != "triage.intent.features_extracted"
+        or assessment.get("type")
+        not in {"triage.intent.features_extracted", CURRENTNESS_ASSESSMENT_TYPE}
         or assessment_key != expected_assessment_key
         or plan.get("type")
         != (
-            REVISION_PLAN_TYPE
+            CURRENTNESS_PLAN_TYPE
+            if assessment_revision(assessment) == CURRENTNESS_REVISION
+            else REVISION_PLAN_TYPE
             if assessment.get("schema_version") == 5
             else PLAN_EVENT_TYPE
         )
@@ -132,7 +173,9 @@ def publication_completion_valid(
         or plan.get("idempotency_key") != publication_plan_key(assessment_key)
         or completion.get("type")
         != (
-            REVISION_COMPLETION_TYPE
+            CURRENTNESS_COMPLETION_TYPE
+            if assessment_revision(assessment) == CURRENTNESS_REVISION
+            else REVISION_COMPLETION_TYPE
             if assessment.get("schema_version") == 5
             else COMPLETION_EVENT_TYPE
         )

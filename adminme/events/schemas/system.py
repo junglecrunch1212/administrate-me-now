@@ -161,6 +161,43 @@ class SourceAssessmentRevisionRefusedV1(BaseModel):
     ]
 
 
+class SourceCurrentnessRequestedV1(BaseModel):
+    """One exact, finite manifest for the reviewed disposable semantic revision."""
+
+    model_config = {"extra": "forbid"}
+    manifest: dict
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_by_actor: str = Field(min_length=1, max_length=240)
+    attempt_limit_per_source: Literal[3]
+
+    @model_validator(mode="after")
+    def exact_manifest(self) -> SourceCurrentnessRequestedV1:
+        from adminme.source_currentness_revision import CurrentnessManifest
+
+        manifest = CurrentnessManifest.model_validate(self.manifest)
+        if manifest.fingerprint() != self.manifest_sha256:
+            raise ValueError("revision manifest digest mismatch")
+        return self
+
+
+class SourceCurrentnessRefusedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    revision: Literal["currentness-v1"]
+    reason: Literal[
+        "observation_inactive",
+        "source_scope_mismatch",
+        "completed_assessment_required",
+        "latest_episode_anchor_required",
+        "assessment_or_context_changed",
+        "context_outside_selected_test_sample",
+        "disposable_dataset_or_selection_changed",
+        "reviewed_classifier_contract_changed",
+        "member_decision_preserved",
+    ]
+
+
 class SourceAssessmentRecoveryRefusedV1(BaseModel):
     """Stable refusal receipt; it contains identifiers and reason only."""
 
@@ -204,3 +241,8 @@ registry.register(
 registry.register(
     "source.assessment.revision_refused", 1, SourceAssessmentRevisionRefusedV1
 )
+
+registry.register(
+    "source.currentness.revision_requested", 1, SourceCurrentnessRequestedV1
+)
+registry.register("source.currentness.revision_refused", 1, SourceCurrentnessRefusedV1)

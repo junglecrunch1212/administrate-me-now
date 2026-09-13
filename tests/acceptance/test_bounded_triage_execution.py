@@ -353,7 +353,7 @@ def test_patch_reuses_retained_successes_and_requires_explicit_failed_source_rec
         new_receipts = client.portal.call(_events, runtime, "skill.call.recorded")
         assert any(
             event["causation_id"] == fresh_id
-            and event["payload"]["skill_version"] == "8.0.3"
+            and event["payload"]["skill_version"] == "8.0.4"
             for event in new_receipts
         )
         for event in baseline:
@@ -1051,7 +1051,7 @@ def test_required_classifier_never_counts_a_fresh_defensive_default_as_complete(
             event for event in baseline if event["type"] == "skill.call.failed"
         ]
         assert failure["payload"]["failure_class"] == failure_class
-        assert failure["payload"]["skill_version"] == "8.0.3"
+        assert failure["payload"]["skill_version"] == "8.0.4"
         assert not any(
             event["type"] == "skill.call.recorded"
             and event["causation_id"] == source_ids[0]

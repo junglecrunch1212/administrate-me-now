@@ -405,6 +405,7 @@ async def audit_source_assurance(
         {
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
+            "triage.currentness.features_extracted",
             "external_sync.legacy_effect_reconciled",
             "skill.call.failed",
         }
@@ -422,6 +423,7 @@ async def audit_source_assurance(
         {
             "source.assessment.recovery_requested",
             "source.assessment.recovery_refused",
+            "triage.currentness.features_extracted",
             "external_sync.legacy_effect_reconciled",
             "messaging.source_observed",
             "skill.call.failed",
@@ -452,7 +454,10 @@ async def audit_source_assurance(
         include_payload_for=sorted(payload_types),
     ):
         payload = event.get("payload") or {}
-        if event.get("type") == "triage.intent.features_extracted":
+        if event.get("type") in {
+            "triage.intent.features_extracted",
+            "triage.currentness.features_extracted",
+        }:
             assessments[str(payload.get("source_event_id") or "")] = event
             recovery_request_event_id = str(
                 payload.get("recovery_request_event_id") or ""
