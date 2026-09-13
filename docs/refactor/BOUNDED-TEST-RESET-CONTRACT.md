@@ -256,3 +256,20 @@ Exact linked completion handling follows ADR-0010; no shared sender, subject or
 account can supply missing relationship authority. The existing source-pair
 confirmation mechanism remains the only member-authorized alternative to strong
 provider links. A measured quality failure does not invent those confirmations.
+
+The currentness model proof uses the unchanged nineteen original frozen sources
+and six separately frozen sources in `tests/fixtures/triage_currentness_model_lab`.
+The new sequence covers two independent original requests, a weakly similar
+unrelated request, a later thread anchor, an exactly RFC-linked completion, and
+unknown-versus-established payment. Expected outcomes are separately hashed and
+never enter classifier inputs. Source metadata supplies the actual RFC edge;
+the harness does not insert a model relationship or completion result.
+
+The existing disposable runner captures all twenty-five sources through the
+pinned `llm-task` seam. Its production retry ceiling is seventy-five source
+invocations plus one separately counted Doctor invocation per run. This is a new
+proof proposal, not reuse of the completed three-round authorization. An exact
+commit and finite total run/call budget require owner approval before setting
+the existing inference trigger. Manual `gateway_preflight_only` dispatch builds
+and proves the same Gateway without exposing the model secret, even if that
+trigger is set. No local instance or member device becomes a model lab.

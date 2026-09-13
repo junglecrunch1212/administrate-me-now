@@ -1,0 +1,78 @@
+{
+  "contract": "triage-currentness-model-expectations-v1",
+  "frozen_at": "2026-09-13T16:50:30+00:00",
+  "labels": [
+    {
+      "case_id": "U01",
+      "required_actions": [
+        "schedule the annual inspection for the blue workshop",
+        "prepare the separate tool inventory"
+      ],
+      "forbidden": [
+        "combining the two independent actions into one candidate"
+      ]
+    },
+    {
+      "case_id": "U02",
+      "required_actions": [
+        "schedule the inspection for the green workshop"
+      ],
+      "forbidden": [
+        "using same sender or subject to complete or merge the blue and green scheduling actions"
+      ]
+    },
+    {
+      "case_id": "U03",
+      "required_actions": [
+        "retain exactly one active blue scheduling action",
+        "retain exactly one active separate inventory action"
+      ],
+      "forbidden": [
+        "duplicate active copies of either U01 action"
+      ],
+      "source_evidence": "The normal thread anchor is U03; its prior actionable source text is U01."
+    },
+    {
+      "case_id": "U04",
+      "required_actions": [
+        "retire only the blue scheduling action grounded in U01",
+        "retain the separate inventory action",
+        "retain the unrelated green scheduling action"
+      ],
+      "completed_action": "schedule the annual inspection for the blue workshop",
+      "forbidden": [
+        "active blue scheduling action after settlement",
+        "new related-source obligation",
+        "canonical task completion without a member command"
+      ],
+      "source_evidence": "The exact RFC reference authorizes U01 as related context. U04 is later completion evidence; same sender and subject do not authorize U02."
+    },
+    {
+      "case_id": "U05",
+      "required_actions": [
+        "review the statement for errors"
+      ],
+      "uncertainty": "Neither an outstanding amount nor unpaid status is established. If a payment candidate is produced it must remain conditional or unknown and visibly request clarification. A date label and navigation link cannot establish required payment.",
+      "forbidden": [
+        "required payment",
+        "borrowing the separate review obligation as payment ownership",
+        "claiming to have inspected an attachment or payment page"
+      ]
+    },
+    {
+      "case_id": "U06",
+      "required_actions": [
+        "review the statement for errors",
+        "pay the outstanding $42 by October 18, 2034"
+      ],
+      "uncertainty": "Payment method is not stated, but it does not make the explicitly outstanding payment optional or unestablished.",
+      "forbidden": [
+        "suppressing the explicit payment because its method is unstated",
+        "combining review and payment as a single obligation",
+        "claiming to inspect an attachment or payment page"
+      ]
+    }
+  ],
+  "inference_performed": false,
+  "scope": "Supplement the unchanged original nineteen goldens through the same production composition and actual pinned llm-task seam. Expectations never enter model requests. Member-decision and malformed-evidence contrasts remain separate deterministic process proof."
+}

@@ -927,7 +927,7 @@ def route_for_policy(
         and not (
             policy.attention_mode == "possibilities"
             and signals.purpose_evidence_verified
-            and signals.obligation_actionability == "conditional"
+            and signals.obligation_actionability in {"conditional", "unknown"}
         )
     ):
         triage = "none"

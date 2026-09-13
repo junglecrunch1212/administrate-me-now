@@ -1065,6 +1065,11 @@ def test_closed_revision_refuses_the_current_unapproved_classifier(
         response = client.post(
             API + "/preview", headers=AUTH, json={"source_event_ids": [source_id]}
         )
+        assert response.status_code == 200, response.text
+        manifest = response.json()["manifest"]
+        assert snapshot(client) == before
+        assert model.calls == calls
+        response = client.post(API, headers=AUTH, json=manifest)
         assert response.status_code == 409
         assert response.json()["detail"] == "reviewed_classifier_contract_changed"
         assert snapshot(client) == before

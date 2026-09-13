@@ -4,6 +4,12 @@ on:
   push:
     branches: [codex/bounded-triage-model-acceptance]
   workflow_dispatch:
+    inputs:
+      gateway_preflight_only:
+        description: Build and prove the pinned disposable Gateway without inference
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -48,9 +54,9 @@ jobs:
 
   gateway-runtime:
     needs: capture-contract
-    if: vars.ADMINME_MODEL_LAB_APPROVED_SHA != '' && github.sha == vars.ADMINME_MODEL_LAB_APPROVED_SHA
+    if: inputs.gateway_preflight_only == true || (vars.ADMINME_MODEL_LAB_APPROVED_SHA != '' && github.sha == vars.ADMINME_MODEL_LAB_APPROVED_SHA)
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 210
     env:
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: "1"
@@ -119,7 +125,7 @@ jobs:
           --output "$RUNNER_TEMP/triage-model-preflight.json"
       - name: Capture the actual classifier through the pinned Gateway
         # Ordinary pushes cannot invoke a model or reuse household credentials.
-        if: vars.ADMINME_MODEL_LAB_APPROVED_SHA != '' && github.sha == vars.ADMINME_MODEL_LAB_APPROVED_SHA
+        if: inputs.gateway_preflight_only != true && vars.ADMINME_MODEL_LAB_APPROVED_SHA != '' && github.sha == vars.ADMINME_MODEL_LAB_APPROVED_SHA
         env:
           OPENAI_API_KEY: ${{ secrets.ADMINME_MODEL_LAB_OPENAI_API_KEY }}
         run: >-

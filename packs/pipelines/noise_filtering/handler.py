@@ -1707,10 +1707,36 @@ class NoiseFilteringPipeline:
                 continue
             prior_proposals.append(prior)
 
+        # A member command can cite a later reconciliation receipt as its
+        # causation, so direct children of the original proposal are incomplete.
+        # The stable proposal ID is the authority for preserving the decision.
+        prior_ids = {
+            str(prior["payload"].get("proposal_id") or "") for prior in prior_proposals
+        }
+        member_decision_ids = (
+            {
+                str((decision.get("payload") or {}).get("proposal_id") or "")
+                async for decision in ctx.event_log.read_since(
+                    owner_scope=str(event.get("owner_scope") or ""),
+                    types=[
+                        "triage.item.enriched",
+                        "triage.item.managed",
+                        "triage.item.confirmed",
+                        "triage.item.materialized",
+                        "triage.item.dismissed",
+                    ],
+                )
+                if decision.get("tenant_id") == event.get("tenant_id")
+                and str((decision.get("payload") or {}).get("proposal_id") or "")
+                in prior_ids
+            }
+            if prior_ids
+            else set()
+        )
         for prior in prior_proposals:
             payload = prior.get("payload") or {}
             descendants = await ctx.event_log.get_by_causation(prior["event_id"])
-            member_decided = any(
+            member_decided = payload.get("proposal_id") in member_decision_ids or any(
                 child.get("type")
                 in {
                     "triage.item.enriched",

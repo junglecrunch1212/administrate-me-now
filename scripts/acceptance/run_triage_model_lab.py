@@ -21,7 +21,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from tools.triage_model_lab import MODEL
+from tools.triage_model_lab import (
+    MAX_ATTEMPTS_PER_SOURCE,
+    MAX_SOURCES,
+    MODEL,
+    TIMEOUT_SECONDS,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -149,7 +154,9 @@ def main() -> int:
             "runtime_registered_llm_task": False,
             "gateway_only": args.check_gateway_only,
             "doctor_invocation_limit": 0 if args.check_gateway_only else 1,
-            "source_classifier_attempt_limit": 0 if args.check_gateway_only else 57,
+            "source_classifier_attempt_limit": 0
+            if args.check_gateway_only
+            else MAX_SOURCES * MAX_ATTEMPTS_PER_SOURCE,
         }
         exit_code = 1
         phase = "configuration_validation"
@@ -218,7 +225,7 @@ def main() -> int:
                             cwd=REPO_ROOT,
                             env=env,
                             check=False,
-                            timeout=19 * 420 + 120,
+                            timeout=MAX_SOURCES * TIMEOUT_SECONDS + 120,
                         )
                         exit_code = result.returncode
                 finally:

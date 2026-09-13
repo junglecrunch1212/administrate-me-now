@@ -33,6 +33,12 @@ FIXTURE_HASHES = {
 }
 CASE_IDS = tuple([f"G{index:02}" for index in range(1, 12)] + ["G12a", "G12b"])
 SEMANTIC_IDS = tuple(f"S{index:02}" for index in range(1, 7))
+CURRENTNESS_FIXTURES = ROOT / "tests/fixtures/triage_currentness_model_lab"
+CURRENTNESS_HASHES = {
+    "sources-frozen.json": "9ec293ed714bb3b5513edf77ab218f904aa46a4dee7fd49b873e79ab809ec007",
+    "expectations-frozen.json": "efbe5b27d9662c762868f3768de0f075bd38b6f025a9e34a36a4a8ff24816d05",
+}
+CURRENTNESS_IDS = tuple(f"U{index:02}" for index in range(1, 7))
 MEMBER = "fixture-model-lab-member"
 ACCOUNT = "fixture-model-lab-account"
 HEADERS = {"Tailscale-User-Login": "fixture-model-lab.ts.net"}
@@ -40,7 +46,7 @@ CLASSIFIER = "skill:classify_message_nature"
 SOURCE_TYPES = ("messaging.received", "messaging.sent", "telephony.sms_received")
 SKILL_TYPES = ("skill.call.recorded", "skill.call.failed", "skill.call.suppressed")
 TIMEOUT_SECONDS = 420
-MAX_SOURCES = 19
+MAX_SOURCES = 25
 MODEL = "openai/gpt-5.6-sol"
 MAX_ATTEMPTS_PER_SOURCE = 3
 
@@ -131,10 +137,41 @@ def load_frozen_cases(directory: Path = FIXTURES) -> list[dict[str, Any]]:
                 "body_text": item["body_text"],
             }
         )
-    if len(result) != MAX_SOURCES or len({item["message_id"] for item in result}) != 19:
+    if len(result) != 19 or len({item["message_id"] for item in result}) != 19:
         raise LabRefused(
             "exactly nineteen distinct frozen source messages are required"
         )
+    return result
+
+
+def load_currentness_cases(
+    directory: Path = CURRENTNESS_FIXTURES,
+) -> list[dict[str, Any]]:
+    """A new finite proof; the completed nineteen-source fixture stays intact."""
+    if {path.name for path in directory.iterdir()} != set(CURRENTNESS_HASHES):
+        raise LabRefused("currentness fixture manifest requires exactly two files")
+    documents = {}
+    for name, expected in CURRENTNESS_HASHES.items():
+        raw = (directory / name).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raise LabRefused(f"frozen currentness fixture digest mismatch: {name}")
+        documents[name] = json.loads(raw)
+    sources = documents["sources-frozen.json"]["sources"]
+    if (
+        documents["sources-frozen.json"]["unique_source_count"] != 6
+        or tuple(item["case_id"] for item in sources) != CURRENTNESS_IDS
+        or tuple(
+            item["case_id"] for item in documents["expectations-frozen.json"]["labels"]
+        )
+        != CURRENTNESS_IDS
+    ):
+        raise LabRefused("currentness source/expectation manifest is incomplete")
+    result = [*load_frozen_cases(), *sources]
+    if (
+        len(result) != MAX_SOURCES
+        or len({item["message_id"] for item in result}) != MAX_SOURCES
+    ):
+        raise LabRefused("exactly twenty-five frozen distinct sources are required")
     return result
 
 
@@ -176,6 +213,11 @@ def _source_envelope(case: Mapping[str, Any], tenant_id: str) -> Any:
         "source_channel": channel,
         "native_message_id": case["message_id"],
         "thread_id": case["thread_id"],
+        **{
+            key: case[key]
+            for key in ("rfc_message_id", "references", "in_reply_to")
+            if key in case
+        },
         "subject": case.get("subject"),
         "body_text": case["body_text"],
         "body_html": None,
@@ -726,12 +768,13 @@ def capture(
     pack_root = ROOT / "packs/skills/classify_message_nature"
     pack = load_pack(pack_root)
     report: dict[str, Any] = {
-        "contract": "triage-actual-model-capture-v1",
+        "contract": "triage-currentness-actual-model-capture-v1",
         "commit": head,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "golden_semantic_acceptance": "pending_review",
         "capture_status": "incomplete",
         "fixture_sha256": FIXTURE_HASHES,
+        "currentness_fixture_sha256": CURRENTNESS_HASHES,
         "original_source_limit": MAX_SOURCES,
         "production_retry_policy": _retry_policy(),
         "settlement_deadline_seconds_per_case": TIMEOUT_SECONDS,
@@ -1045,7 +1088,7 @@ def main() -> int:
         raise LabRefused(
             "report must be a new file under RUNNER_TEMP outside the fresh instance"
         )
-    cases = load_frozen_cases()
+    cases = load_currentness_cases()
     return capture(output, temporary_root, head, cases)
 
 

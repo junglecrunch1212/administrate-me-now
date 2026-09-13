@@ -1,0 +1,93 @@
+{
+  "contract": "triage-currentness-model-sources-v1",
+  "frozen_at": "2026-09-13T16:50:30+00:00",
+  "unique_source_count": 6,
+  "sources": [
+    {
+      "case_id": "U01",
+      "message_id": "synthetic-currentness-u01",
+      "thread_id": "synthetic-currentness-thread-u01",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-13T00:00:00+00:00",
+      "subject": "Synthetic workshop notices",
+      "body_text": "Please schedule the annual inspection for the blue workshop. Please prepare the separate tool inventory.",
+      "rfc_message_id": "<currentness-u01@example.invalid>",
+      "references": [],
+      "in_reply_to": null
+    },
+    {
+      "case_id": "U02",
+      "message_id": "synthetic-currentness-u02",
+      "thread_id": "synthetic-currentness-thread-u02",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-13T00:01:00+00:00",
+      "subject": "Synthetic workshop notices",
+      "body_text": "Please schedule the inspection for the green workshop.",
+      "rfc_message_id": "<currentness-u02@example.invalid>",
+      "references": [],
+      "in_reply_to": null
+    },
+    {
+      "case_id": "U03",
+      "message_id": "synthetic-currentness-u03",
+      "thread_id": "synthetic-currentness-thread-u01",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-13T00:02:00+00:00",
+      "subject": "Synthetic workshop notices",
+      "body_text": "The two workshop requests above are still open.",
+      "rfc_message_id": "<currentness-u03@example.invalid>",
+      "references": [],
+      "in_reply_to": null
+    },
+    {
+      "case_id": "U04",
+      "message_id": "synthetic-currentness-u04",
+      "thread_id": "synthetic-currentness-thread-u04",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-13T00:03:00+00:00",
+      "subject": "Synthetic workshop notices",
+      "body_text": "Scheduling the annual inspection for the blue workshop is complete; your booking is confirmed. The separate tool inventory is still required.",
+      "rfc_message_id": "<currentness-u04@example.invalid>",
+      "references": [
+        "<currentness-u01@example.invalid>"
+      ],
+      "in_reply_to": null
+    },
+    {
+      "case_id": "U05",
+      "message_id": "synthetic-currentness-u05",
+      "thread_id": "synthetic-currentness-thread-u05",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-13T00:04:00+00:00",
+      "subject": "Synthetic statement notice",
+      "body_text": "Review the attached statement for errors. Payment due date: October 18, 2034. Open the payment page.",
+      "rfc_message_id": "<currentness-u05@example.invalid>",
+      "references": [],
+      "in_reply_to": null
+    },
+    {
+      "case_id": "U06",
+      "message_id": "synthetic-currentness-u06",
+      "thread_id": "synthetic-currentness-thread-u06",
+      "direction": "incoming",
+      "source_channel": "gmail",
+      "automated": false,
+      "occurred_at": "2026-09-13T00:05:00+00:00",
+      "subject": "Synthetic statement notice",
+      "body_text": "Review the attached statement for errors. Please pay the outstanding $42 by October 18, 2034. Open the payment page.",
+      "rfc_message_id": "<currentness-u06@example.invalid>",
+      "references": [],
+      "in_reply_to": null
+    }
+  ]
+}
