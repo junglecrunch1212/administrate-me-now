@@ -129,12 +129,14 @@ def _source(config, index, body, *, references=()):
 
 
 def _items(client, *, lens="all_candidates", auth=AUTH):
+    query_lens = "all_candidates" if lens == "needs_you" else lens
     response = client.get(
-        f"/api/member/v1/surfaces/triage?triage_lens={lens}&triage_limit=100",
+        f"/api/member/v1/surfaces/triage?triage_lens={query_lens}&triage_limit=100",
         headers=auth,
     )
     assert response.status_code == 200, response.text
-    return response.json()["items"]
+    items = response.json()["items"]
+    return [item for item in items if item["attention_view"] == "needs_you"] if lens == "needs_you" else items
 
 
 def _append(client, envelope):
