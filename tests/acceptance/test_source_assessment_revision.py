@@ -58,8 +58,42 @@ from tests.fixtures.source_assessment_revision_worker import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = ROOT
+REVIEWED_CLASSIFIER_COMMIT = "e12156545c02bd6ed0673ce7b5c1dc3f69313903"
 PREDECESSOR = "d54d2e4ce43cd78f317e9a7bb8d13ad3d644ce84"
 API = "/api/system/source-assessment-revisions"
+
+
+@pytest.fixture(scope="module")
+def reviewed_revision_repository(tmp_path_factory):
+    """Run current code with the exact classifier authorized by the closed revision."""
+    root = tmp_path_factory.mktemp("reviewed-revision-packs")
+    for directory in ("packs", "bootstrap", "docs/refactor"):
+        shutil.copytree(REPOSITORY_ROOT / directory, root / directory)
+    bundle = "packs/skills/classify_message_nature"
+    shutil.rmtree(root / bundle)
+    archive_bytes = subprocess.check_output(
+        [
+            "git",
+            "--no-replace-objects",
+            "-C",
+            str(REPOSITORY_ROOT),
+            "archive",
+            REVIEWED_CLASSIFIER_COMMIT,
+            bundle,
+        ],
+        timeout=60,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+        archive.extractall(root, filter="data")
+    return root
+
+
+@pytest.fixture(autouse=True)
+def use_reviewed_revision_bundle(monkeypatch, reviewed_revision_repository):
+    # Only synthetic runtime pack inputs change. Production authorization and
+    # its closed classifier digest remain unmodified.
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", reviewed_revision_repository)
 
 
 def _model(monkeypatch):
@@ -708,7 +742,7 @@ def test_failed_revision_spends_three_attempts_across_duplicate_and_three_restar
         after = snapshot(client)["events"]
         failures = _of_type(after, "skill.call.failed")
         assert len(failures) == 3
-        assert all(event["payload"]["skill_version"] == "8.0.4" for event in failures)
+        assert all(event["payload"]["skill_version"] == "8.0.3" for event in failures)
         assert any(":recovery-1:" in event["idempotency_key"] for event in failures)
         assert any(":recovery-2:" in event["idempotency_key"] for event in failures)
         _unchanged_history(client, before)
@@ -890,7 +924,7 @@ def _predecessor(tmp_path):
             "git",
             "--no-replace-objects",
             "-C",
-            str(ROOT),
+            str(REPOSITORY_ROOT),
             "rev-parse",
             f"{PREDECESSOR}^{{commit}}",
         ],
@@ -899,7 +933,14 @@ def _predecessor(tmp_path):
     ).strip()
     assert resolved == PREDECESSOR
     archive_bytes = subprocess.check_output(
-        ["git", "--no-replace-objects", "-C", str(ROOT), "archive", PREDECESSOR],
+        [
+            "git",
+            "--no-replace-objects",
+            "-C",
+            str(REPOSITORY_ROOT),
+            "archive",
+            PREDECESSOR,
+        ],
         timeout=60,
     )
     root = tmp_path / "protected-predecessor"
@@ -911,7 +952,9 @@ def _predecessor(tmp_path):
 
 def _run_predecessor(root, instance, mode):
     result = instance.parent / f"predecessor-{mode}.json"
-    worker = (ROOT / "tests/fixtures/source_assessment_revision_worker.py").read_text()
+    worker = (
+        REPOSITORY_ROOT / "tests/fixtures/source_assessment_revision_worker.py"
+    ).read_text()
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -1006,3 +1049,23 @@ def test_protected_predecessor_still_serves_after_explicit_revision_without_recl
         )
         _unchanged_history(client, revised)
         snapshot(client)
+
+
+def test_closed_revision_refuses_the_current_unapproved_classifier(
+    tmp_path, monkeypatch
+):
+    config = settings(
+        tmp_path / "current-bundle", REPOSITORY_ROOT, selected=["message-0"]
+    )
+    model = _model(monkeypatch)
+    with TestClient(application.create_application(config)) as client:
+        [source_id] = _seed(client, config)
+        before = snapshot(client)
+        calls = list(model.calls)
+        response = client.post(
+            API + "/preview", headers=AUTH, json={"source_event_ids": [source_id]}
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "reviewed_classifier_contract_changed"
+        assert snapshot(client) == before
+        assert model.calls == calls

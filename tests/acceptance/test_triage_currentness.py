@@ -110,16 +110,17 @@ class _Model:
         )
 
 
-def _source(config, index, body, *, references=()):
+def _source(config, index, body, *, references=(), thread=None):
     envelope = source(config, index)
     return envelope.model_copy(
         update={
             "payload": {
                 **envelope.payload,
-                # Deliberately shared weak coordinates; each native thread is
-                # distinct. Only the explicit RFC edge may admit related text.
+                # Deliberately shared weak coordinates. Cross-thread context
+                # still requires the explicit RFC edge below.
                 "subject": "Synthetic workshop notices",
                 "body_text": body,
+                "thread_id": thread or envelope.payload["thread_id"],
                 "rfc_message_id": f"<currentness-{index}@example.invalid>",
                 "references": list(references),
                 "in_reply_to": None,
@@ -177,13 +178,20 @@ def _assert_redelivery_unchanged(client, envelope, event_id, model):
 @pytest.mark.parametrize(
     "member_decided", [False, True], ids=["untouched", "member-decided"]
 )
+@pytest.mark.parametrize(
+    "later_anchor", [False, True], ids=["original-anchor", "later-anchor"]
+)
 def test_exact_cross_thread_completion_retires_only_its_requested_action(
-    tmp_path, monkeypatch, member_decided
+    tmp_path, monkeypatch, member_decided, later_anchor
 ):
+    source_count = 4 if later_anchor else 3
     config = settings(
-        tmp_path / "instance", ROOT, selected=[f"message-{i}" for i in range(3)]
+        tmp_path / "instance",
+        ROOT,
+        selected=[f"message-{i}" for i in range(source_count)],
     )
     original_body = f"{SCHEDULE} {PREPARE}"
+    anchor_body = "The two workshop requests above are still open."
     completion_body = f"{COMPLETION} The separate tool inventory is still required."
 
     def candidates(inputs):
@@ -197,6 +205,18 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
             # Same sender and subject do not join the two scheduling requests.
             assert len(pack["messages"]) == 1
             return [_candidate(alias, OTHER_SCHEDULE)]
+        if current["body_text"] == anchor_body:
+            assert later_anchor and len(pack["messages"]) == 2
+            [earlier] = [m for m in pack["messages"] if m["source_id"] != alias]
+            assert earlier["relation"] == "thread"
+            assert earlier["body_text"] == original_body
+            assert earlier["occurred_at"] < current["occurred_at"]
+            # These proposals belong to this newer assessment anchor B,
+            # while their exact action evidence remains the original A.
+            return [
+                _candidate(earlier["source_id"], SCHEDULE),
+                _candidate(earlier["source_id"], PREPARE),
+            ]
         assert current["body_text"] == completion_body
         [related] = [m for m in pack["messages"] if m["relation"] == "related"]
         assert len(pack["messages"]) == 2
@@ -220,8 +240,20 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
         runtime = client.app.state.runtime
         original_id = _append(client, _source(config, 0, original_body))
         unrelated_id = _append(client, _source(config, 1, OTHER_SCHEDULE))
+        anchor_id = original_id
+        if later_anchor:
+            anchor_id = _append(
+                client,
+                _source(config, 2, anchor_body, thread="fixture-revision-thread-0"),
+            )
+            assert anchor_id != original_id
         by_title = {item["title"]: item for item in _items(client, lens="needs_you")}
         assert set(by_title) == {SCHEDULE, PREPARE, OTHER_SCHEDULE}
+        for quote in (SCHEDULE, PREPARE):
+            assert by_title[quote]["source_event_id"] == anchor_id
+            assert by_title[quote]["interpretation"]["evidence_refs"] == [
+                {"source_event_id": original_id, "quote": quote}
+            ]
         decision_id = None
         if member_decided:
             item = by_title[SCHEDULE]
@@ -240,25 +272,28 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
         before = client.portal.call(events, runtime)
         completion = _source(
             config,
-            2,
+            source_count - 1,
             completion_body,
             references=["<currentness-0@example.invalid>"],
         )
         completion_id = _append(client, completion)
-        assert len(model.calls) == 3
+        assert len(model.calls) == source_count
         assert model.calls[-1]["output"]["candidates"][0]["lifecycle_state"] == (
             "completed"
         )
         after = client.portal.call(events, runtime)
         recorded = [event for event in after if event["type"] == "skill.call.recorded"]
-        assert len(recorded) == 3
+        assert len(recorded) == source_count
         assert recorded[-1]["payload"]["outputs"] == model.calls[-1]["output"]
         assert not [
             event
             for event in after
             if event["type"] in {"skill.call.failed", "skill.call.suppressed"}
         ]
-        assert len([event for event in after if event["type"] in SOURCE_TYPES]) == 3
+        assert (
+            len([event for event in after if event["type"] in SOURCE_TYPES])
+            == source_count
+        )
         for event in before:
             assert client.portal.call(runtime.event_log.get, event["event_id"]) == event
         active = _items(client, lens="needs_you")
@@ -271,7 +306,7 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
         assert (
             active_by_title[PREPARE]["proposal_id"] == by_title[PREPARE]["proposal_id"]
         )
-        assert active_by_title[PREPARE]["source_event_id"] == original_id
+        assert active_by_title[PREPARE]["source_event_id"] == anchor_id
         assert (
             active_by_title[OTHER_SCHEDULE]["proposal_id"]
             == by_title[OTHER_SCHEDULE]["proposal_id"]

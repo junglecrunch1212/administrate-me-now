@@ -138,6 +138,7 @@ class _ProposalInputHistory:
     def __init__(self) -> None:
         self.cursor: str | None = None
         self.by_source_event_id: dict[str, list[dict[str, Any]]] = {}
+        self.by_evidence_source_event_id: dict[str, list[dict[str, Any]]] = {}
         self.lock = asyncio.Lock()
 
 
@@ -341,8 +342,21 @@ class NoiseFilteringPipeline:
         event_log: Any,
         owner_scope: str,
         source_event_ids: set[str],
+        evidence_source_event_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Read each immutable proposal once, then serve exact source buckets."""
+
+        evidence_ids = evidence_source_event_ids or set()
+
+        def evidence_sources(proposal: dict[str, Any]) -> set[str]:
+            interpretation = (proposal.get("payload") or {}).get("interpretation")
+            if not isinstance(interpretation, dict):
+                return set()
+            return {
+                str(reference.get("source_event_id") or "")
+                for reference in interpretation.get("evidence_refs", [])
+                if isinstance(reference, dict)
+            }
 
         try:
             owner_histories = self._proposal_histories.setdefault(event_log, {})
@@ -355,6 +369,7 @@ class NoiseFilteringPipeline:
                 )
                 if str((proposal.get("payload") or {}).get("source_event_id") or "")
                 in source_event_ids
+                or evidence_ids.intersection(evidence_sources(proposal))
             ]
         history = owner_histories.setdefault(owner_scope, _ProposalInputHistory())
         async with history.lock:
@@ -374,13 +389,24 @@ class NoiseFilteringPipeline:
                     history.by_source_event_id.setdefault(source_event_id, []).append(
                         proposal
                     )
+                for evidence_id in evidence_sources(proposal):
+                    history.by_evidence_source_event_id.setdefault(
+                        evidence_id, []
+                    ).append(proposal)
             if suffix:
                 history.cursor = str(suffix[-1]["event_id"])
-            return [
+            selected = [
                 proposal
                 for source_event_id in source_event_ids
                 for proposal in history.by_source_event_id.get(source_event_id, ())
             ]
+            selected.extend(
+                proposal
+                for evidence_id in evidence_ids
+                for proposal in history.by_evidence_source_event_id.get(evidence_id, ())
+            )
+            unique = {str(proposal["event_id"]): proposal for proposal in selected}
+            return [unique[event_id] for event_id in sorted(unique)]
 
     @staticmethod
     def _recovery_assessment_key(request_event_id: str, source_event_id: str) -> str:
@@ -1596,7 +1622,7 @@ class NoiseFilteringPipeline:
         ):
             return candidates, set()
         thread_source_ids = set(context_pack.episode_source_event_ids)
-        inspected_source_ids = thread_source_ids | {
+        completion_evidence_ids = {
             source_id for source_id, _, _ in completed_related_actions
         }
         current_same_source_fallbacks = {
@@ -1618,9 +1644,12 @@ class NoiseFilteringPipeline:
         for prior in await self._proposals_for_sources(
             event_log=ctx.event_log,
             owner_scope=str(event.get("owner_scope") or ""),
-            source_event_ids=inspected_source_ids,
+            source_event_ids=thread_source_ids,
+            evidence_source_event_ids=completion_evidence_ids,
         ):
             payload = prior.get("payload") or {}
+            if prior.get("tenant_id") != event.get("tenant_id"):
+                continue
             if prior.get("source_adapter") not in {
                 "deterministic_candidate_eligibility",
                 "noise_filtering",
