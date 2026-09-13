@@ -43,6 +43,7 @@ from tests.fixtures.source_assessment_revision_worker import (
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "e12156545c02bd6ed0673ce7b5c1dc3f69313903"
+ROLLBACK_PREDECESSOR = "fa77d3a7105d3fdd655edea4b3e0da1b673e282a"
 API = "/api/system/source-currentness-revisions"
 
 
@@ -97,7 +98,18 @@ def _predecessor_case(
     }
     environment["PYTHONPATH"] = os.pathsep.join((str(root), str(root / "bridge")))
     environment["PYTHONNOUSERSITE"] = "1"
-    worker = (ROOT / "tests/fixtures/source_currentness_revision_worker.py").read_text()
+    # fa77 predates this test helper. Supply only the existing synthetic fixture
+    # scaffold; its application/skill-wrapper imports still resolve in root.
+    helper = (ROOT / "tests/fixtures/source_assessment_revision_worker.py").read_text()
+    worker = (
+        "import sys, types\n"
+        "fixture_module = types.ModuleType('tests.fixtures.source_assessment_revision_worker')\n"
+        "sys.modules[fixture_module.__name__] = fixture_module\n"
+        f"exec(compile({helper!r}, '<synthetic-predecessor-fixture>', 'exec'), fixture_module.__dict__)\n"
+        + (ROOT / "tests/fixtures/source_currentness_revision_worker.py")
+        .read_text()
+        .replace("from __future__ import annotations\n", "", 1)
+    )
     process = subprocess.run(
         [
             sys.executable,
@@ -604,12 +616,21 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
     assert model.calls == calls
 
 
-@pytest.mark.parametrize("outcome", ["revision", "fail"])
-def test_currentness_preserves_closed_receipts_and_e121565_predecessor(
-    tmp_path, monkeypatch, outcome
+@pytest.mark.parametrize(
+    "predecessor_commit", [PREDECESSOR, ROLLBACK_PREDECESSOR], ids=["e121565", "fa77"]
+)
+@pytest.mark.parametrize("outcome", ["revision", "fail", "pending"])
+def test_currentness_preserves_closed_receipts_and_exact_predecessor(
+    tmp_path, monkeypatch, outcome, predecessor_commit
 ):
-    monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
+    monkeypatch.setattr(legacy, "PREDECESSOR", predecessor_commit)
     predecessor = legacy._predecessor(tmp_path)
+    closed_repository = predecessor
+    if predecessor_commit != PREDECESSOR:
+        historical = tmp_path / "closed-revision-release"
+        historical.mkdir()
+        monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
+        closed_repository = legacy._predecessor(historical)
     instance = tmp_path / "instance"
     retained = legacy._run_predecessor(predecessor, instance, "prepare")
     [source_id] = [
@@ -620,7 +641,7 @@ def test_currentness_preserves_closed_receipts_and_e121565_predecessor(
     model = legacy._model(monkeypatch)
     # Spend the closed revision once with its actual historical classifier.
     with TestClient(
-        application.create_application(settings(instance, predecessor))
+        application.create_application(settings(instance, closed_repository))
     ) as client:
         client.portal.call(settle, client.app.state.runtime)
         old_manifest = legacy._preview(client, [source_id])["manifest"]
@@ -636,6 +657,21 @@ def test_currentness_preserves_closed_receipts_and_e121565_predecessor(
         before = _history(client)
     model.mode = "forbid"
     config = settings(instance, ROOT)
+    blocked = threading.Event()
+    original_write = EventWriter.write
+    crash = outcome == "pending"
+
+    async def interrupted(writer, envelope, **kwargs):
+        if (
+            crash
+            and envelope.type == "triage.item.proposed"
+            and ":revision:currentness-v1:" in (envelope.idempotency_key or "")
+        ):
+            blocked.set()
+            await asyncio.Future()
+        return await original_write(writer, envelope, **kwargs)
+
+    monkeypatch.setattr(EventWriter, "write", interrupted)
     with TestClient(application.create_application(config)) as client:
         client.portal.call(settle, client.app.state.runtime)
         assert (
@@ -646,11 +682,17 @@ def test_currentness_preserves_closed_receipts_and_e121565_predecessor(
         assert (
             manifest["targets"][0]["assessment_event_id"] == old_assessment["event_id"]
         )
-        model.mode = outcome
+        model.mode = "revision" if outcome == "pending" else outcome
         command = _request(client, manifest)
-        client.portal.call(settle, client.app.state.runtime)
+        if outcome == "pending":
+            assert blocked.wait(30), "currentness never reached pending publication"
+        else:
+            client.portal.call(settle, client.app.state.runtime)
         revised = snapshot(client)
         assert len(legacy._of_type(revised["events"], currentness.ASSESSMENT_TYPE)) == 1
+        if outcome == "pending":
+            assert len(legacy._of_type(revised["events"], currentness.PLAN_TYPE)) == 1
+            assert legacy._of_type(revised["events"], currentness.COMPLETION_TYPE) == []
         for event in before:
             assert (
                 next(
@@ -700,7 +742,7 @@ def test_currentness_preserves_closed_receipts_and_e121565_predecessor(
     assert legacy._of_type(
         rolled_back["events"], "triage.item.dismissed"
     ) == legacy._of_type(retained["events"], "triage.item.dismissed")
-    model.mode = "forbid"
+    crash, model.mode = False, "forbid"
     calls = list(model.calls)
     with TestClient(application.create_application(config)) as client:
         client.portal.call(settle, client.app.state.runtime)
@@ -712,7 +754,22 @@ def test_currentness_preserves_closed_receipts_and_e121565_predecessor(
             legacy._request(client, old_manifest)["request_event_id"]
             == old_command["request_event_id"]
         )
-        assert _stable(_history(client)) == _stable(rolled_back["events"])
+        if outcome == "pending":
+            after = _history(client)
+            for event in rolled_back["events"]:
+                assert (
+                    next(
+                        item for item in after if item["event_id"] == event["event_id"]
+                    )
+                    == event
+                )
+            assert len(legacy._of_type(after, currentness.COMPLETION_TYPE)) == 1
+            for types in (SOURCE_TYPES, MODEL_TYPES, ("triage.item.dismissed",)):
+                assert legacy._of_type(after, *types) == legacy._of_type(
+                    rolled_back["events"], *types
+                )
+        else:
+            assert _stable(_history(client)) == _stable(rolled_back["events"])
         assert model.calls == calls
         assert _assurance(client)["counts"]["failed"] == (1 if outcome == "fail" else 0)
         subscriber = "pipeline:pipeline:noise_filtering"

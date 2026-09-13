@@ -410,6 +410,96 @@ def _tree_fingerprints(root: Path) -> dict[str, str]:
     }
 
 
+def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
+    tmp_path, monkeypatch
+):
+    paths, candidate, manifest, abandoned_journal = accepted_reset_fixture(
+        tmp_path, monkeypatch, predecessor_pointer_depth=62
+    )
+    pointer_path = paths.app_dir / "current-release.json"
+    predecessor_pointer = pointer_path.read_bytes()
+    manager = UpgradeManager(paths, root=candidate, test_mode=True)
+    assert len(manager._release_pointer_state()[4]) == 63
+    first_commit = manifest["candidate_commit"]
+    config = paths.instance_dir / "config"
+    policy_bytes = (config / "adapters.json").read_bytes()
+    marker_bytes = (config / "disposable-test-dataset.json").read_bytes()
+    settings_path = config / "settings-control.json"
+    settings_bytes = settings_path.read_bytes()
+    admission_path = Path(manifest["lifetime_admissions"]["path"])
+    admission_bytes = admission_path.read_bytes()
+    archive = Path(manifest["archive"])
+    archive_bytes = (archive / "reset.json").read_bytes()
+    releases = paths.app_dir / "releases"
+    retained_directories = {
+        path.name: path.stat().st_ino for path in releases.iterdir() if path.is_dir()
+    }
+    retained_tail = {
+        path: path.read_bytes() for path in releases.glob("*/retained-history.txt")
+    }
+    assert len(retained_tail) == 61
+    services = ServiceManager(paths, test_mode=True)
+    second_commit = _commit(candidate, "fixture activation fills pointer slot 64")
+    pending = _pending(paths, candidate, second_commit, monkeypatch)
+    services.start()
+    manager = UpgradeManager(
+        paths, root=candidate, test_mode=True, pending_attestation_id=pending
+    )
+    assert manager.activate(candidate)["commit"] == second_commit
+    assert len(manager._release_pointer_state()[4]) == 64
+    _accepted_dataset(paths, second_commit)
+    full_pointer = pointer_path.read_bytes()
+    history = manager.activation_journal.history
+    committed_history = _tree_fingerprints(history)
+    assert committed_history
+    with pytest.raises(UpgradeError, match="retention limit"):
+        manager.activate(candidate)
+    assert pointer_path.read_bytes() == full_pointer
+    assert _tree_fingerprints(history) == committed_history
+
+    rolled_back = manager.rollback(recovery_repository=candidate)
+    assert rolled_back["commit"] == first_commit
+    assert pointer_path.read_bytes() == predecessor_pointer
+    assert len(manager._release_pointer_state()[4]) == 63
+    assert services.status().status == "healthy"
+    assert settings_path.read_bytes() == settings_bytes
+    assert (config / "adapters.json").read_bytes() == policy_bytes
+    _accepted_dataset(paths, first_commit)
+    with pytest.raises(UpgradeError, match="already consumed"):
+        manager._publish_release(candidate, second_commit)
+
+    # New preparation and pending evidence bind the actual rolled-back pointer.
+    # No pointer, release or journal is rewritten by this test after fixture setup.
+    third_commit = _commit(candidate, "fixture fresh forward fills pointer slot 64")
+    pending = _pending(paths, candidate, third_commit, monkeypatch)
+    manager = UpgradeManager(
+        paths, root=candidate, test_mode=True, pending_attestation_id=pending
+    )
+    assert manager.activate(candidate)["commit"] == third_commit
+    assert len(manager._release_pointer_state()[4]) == 64
+    assert _read(pointer_path)["previous"] == json.loads(predecessor_pointer)
+    assert services.status().status == "healthy"
+    _accepted_dataset(paths, third_commit)
+    for name, inode in retained_directories.items():
+        assert (releases / name).stat().st_ino == inode
+    assert (releases / second_commit).is_dir()
+    assert (releases / third_commit).is_dir()
+    for path, payload in retained_tail.items():
+        assert path.read_bytes() == payload
+    final_history = _tree_fingerprints(history)
+    assert len(final_history) == len(committed_history) + 2
+    assert all(
+        final_history[name] == digest for name, digest in committed_history.items()
+    )
+    assert (config / "disposable-test-dataset.json").read_bytes() == marker_bytes
+    assert (config / "adapters.json").read_bytes() == policy_bytes
+    assert admission_path.read_bytes() == admission_bytes
+    assert (archive / "reset.json").read_bytes() == archive_bytes
+    assert (archive / "original-activation.json").read_bytes() == abandoned_journal
+    assert not (paths.app_dir / "activation/active.json").exists()
+    services.stop()
+
+
 def test_bounded_restore_rejects_other_datasets_and_unadmitted_ids_before_mutation(
     tmp_path, monkeypatch
 ):

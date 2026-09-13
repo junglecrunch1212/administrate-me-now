@@ -686,10 +686,13 @@ async def test_publication_startup_snapshot_does_not_expand_during_scan(
                 COMPLETION_EVENT_TYPE,
                 REVISION_PLAN_TYPE,
                 REVISION_COMPLETION_TYPE,
+                "triage.currentness_publication.planned",
+                "triage.currentness_publication.completed",
             ]
             assert kwargs["include_payload_for"] == [
                 COMPLETION_EVENT_TYPE,
                 REVISION_COMPLETION_TYPE,
+                "triage.currentness_publication.completed",
             ]
             plan = await _source_publication_plan(
                 log, tenant_id=config.tenant_id, index=0
