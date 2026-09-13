@@ -416,6 +416,14 @@ def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
     paths, candidate, manifest, abandoned_journal = accepted_reset_fixture(
         tmp_path, monkeypatch, predecessor_pointer_depth=62
     )
+    # Match the existing continuity fixture's synthetic observation-window
+    # prerequisite before any of the activation/rollback transitions under test.
+    readiness_path = paths.instance_dir / "config/deployment-readiness.json"
+    evidence = _read(readiness_path)
+    evidence["provider_effect_window"] = {
+        "started_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    }
+    _write(readiness_path, evidence)
     pointer_path = paths.app_dir / "current-release.json"
     predecessor_pointer = pointer_path.read_bytes()
     manager = UpgradeManager(paths, root=candidate, test_mode=True)
