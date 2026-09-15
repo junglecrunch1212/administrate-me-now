@@ -107,15 +107,23 @@ credentials and replace exposed passwords is one remediation action when
 review is a preparatory step toward that same outcome. Separately requested
 submission and confirmation are two actions, especially with separate deadlines.
 Use related messages to explain or resolve the primary thread's status.
-Never emit new open/unknown work whose primary evidence is a `related` message;
-that message is assessed separately as its own primary source. The completed
-action exception below can retire only exact matched existing work.
+Distinguish a new requested outcome from a report that an earlier action remains
+open. When the primary thread merely restates an unchanged action originating
+in a supplied `related` message, retain that original action's related alias and
+exact original request quote. Keep its open lifecycle; this interpretation is
+context only and cannot publish another candidate. Do not move its evidence to
+the newer status sentence to make a second copy. The originating conversation
+owns that action. A genuinely new primary request for a different outcome
+remains a separate candidate; a relationship alone never makes actions equal.
+Related-origin interpretations cannot create new work. Only the exact completed
+action interpretation below can retire matched existing work.
 
 For each candidate:
 - For new open/unknown candidates, `evidence_source_id` identifies the primary
-  `thread` message containing the exact quote. Only an exact completed-action
-  interpretation described below may cite a `related` message as its original
-  action source. The quote must be contiguous in that message's subject or body.
+  `thread` message containing the exact quote. For a status interpretation of
+  an unchanged related action, cite its original related request instead, as
+  above. The completed-action interpretation below also cites the original
+  action. Every quote must be contiguous in its declared message's subject or body.
 - `action_owner` is `member` only when the words assign the action to the
   member, `group_including_member` when the member is one of an addressed
   group, `other_party` when clearly assigned elsewhere, or `unknown` when the
@@ -265,7 +273,7 @@ Return ONLY valid JSON matching this schema:
   "candidates": [{
     "target_kind": "task" | "commitment" | "calendar_event" | "reminder" | "recurrence" | "list" | "list_item" | "party_identifier" | "party_candidate" | "party_relationship" | "relationship_fact",
     "title": <short review title>,
-    "evidence_source_id": <stable mNN alias for a primary thread message>,
+    "evidence_source_id": <stable mNN alias for the original action evidence>,
     "evidence_quote": <exact verbatim substring from subject or body>,
     "candidate": <object containing only grounded typed fields>,
     "confidence": <float 0-1>,

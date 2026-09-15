@@ -744,7 +744,7 @@ def test_failed_revision_spends_three_attempts_across_duplicate_and_three_restar
         assert len(failures) == 3
         # The historical classifier bundle is exercised by the current
         # pipeline; failure receipts retain its requested-version context.
-        assert all(event["payload"]["skill_version"] == "8.0.4" for event in failures)
+        assert all(event["payload"]["skill_version"] == "8.0.5" for event in failures)
         assert any(":recovery-1:" in event["idempotency_key"] for event in failures)
         assert any(":recovery-2:" in event["idempotency_key"] for event in failures)
         _unchanged_history(client, before)

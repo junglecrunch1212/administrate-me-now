@@ -272,7 +272,7 @@ request keys, schema and closed budget. A changed manifest or repeated request
 cannot renew either allowance. The currentness preview and application endpoints
 under `/api/system/source-currentness-revisions` reuse the existing exact dataset,
 selection, member, assessment, context, observation and member-decision checks.
-The classifier contract is fixed to the reviewed8.0.4 bundle. Existing member
+The classifier contract is fixed to the reviewed8.0.5 bundle. Existing member
 source-pair confirmations, when required, must precede the exact context preview;
 selection alone supplies no relationship authority.
 

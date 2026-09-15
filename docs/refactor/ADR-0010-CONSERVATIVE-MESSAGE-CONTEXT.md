@@ -49,6 +49,15 @@ complete a canonical object, broaden acquisition, or request global replay.
 Immutable interpretation receipts and compare-and-apply supersession remain the
 audit trail. Original relationship restrictions above continue to govern.
 
+**MODERNIZE status grounding; PRESERVE originating scope:** a primary message's
+restatement that an unchanged related action remains open keeps the exact
+original related request as its action evidence. This open interpretation is
+context only under the existing related-origin exclusion; it cannot create a
+second review item. A new primary request for a different outcome remains
+eligible. No semantic similarity, shared subject or related-source list alone
+establishes action identity. Synthetic captured-response tests verify this
+boundary separately from actual-model acceptance of the prompt correction.
+
 One `authored-message-text-v2` function normalizes line endings, removes
 recognized plain-text or HTML reply/forward containers including a boundary at
 offset zero, and supplies fallback extraction, pinned-skill input, exact-quote

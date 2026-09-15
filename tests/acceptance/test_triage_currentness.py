@@ -8,6 +8,8 @@ These tests do not establish actual-model accuracy or acquire provider data.
 from __future__ import annotations
 
 import copy
+import json
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 import adminme.runtime.application as application
 from tests.fixtures.source_assessment_revision_worker import (
     AUTH,
+    MEMBER,
     OTHER_AUTH,
     SOURCE_TYPES,
     events,
@@ -78,9 +81,8 @@ class _Model:
         self.candidates = candidates
         self.calls = []
 
-    async def respond(self, request, args):
-        inputs = args["input"]
-        output = {
+    def output(self, inputs):
+        return {
             "assessment_contract": "personal-obligation-assessment-v1",
             "classification": "transactional",
             "confidence": 0.9,
@@ -93,6 +95,10 @@ class _Model:
             "deadline": None,
             "candidates": self.candidates(inputs),
         }
+
+    async def respond(self, request, args):
+        inputs = args["input"]
+        output = self.output(inputs)
         self.calls.append({"inputs": copy.deepcopy(inputs), "output": output})
         return httpx.Response(
             200,
@@ -232,7 +238,17 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
                 {"source_id": alias, "role": "completion", "quote": COMPLETION}
             ],
         )
-        return [completed]
+        continued = _candidate(related["source_id"], PREPARE)
+        continued["obligation_assessment"]["qualifying_evidence"] = [
+            {
+                "source_id": alias,
+                "role": "ownership",
+                "quote": "The separate tool inventory is still required.",
+            }
+        ]
+        # Open related-origin interpretations remain in the language receipt;
+        # they neither create new work here nor retire the existing inventory.
+        return [completed, continued]
 
     model = _Model(candidates)
     monkeypatch.setattr(application, "build_fixture_runtime", runtime_factory(model))
@@ -247,7 +263,9 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
                 _source(config, 2, anchor_body, thread="fixture-revision-thread-0"),
             )
             assert anchor_id != original_id
-        by_title = {item["title"]: item for item in _items(client, lens="needs_you")}
+        before_items = _items(client, lens="needs_you")
+        assert len(before_items) == 3, before_items
+        by_title = {item["title"]: item for item in before_items}
         assert set(by_title) == {SCHEDULE, PREPARE, OTHER_SCHEDULE}
         for quote in (SCHEDULE, PREPARE):
             assert by_title[quote]["source_event_id"] == anchor_id
@@ -297,6 +315,7 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
         for event in before:
             assert client.portal.call(runtime.event_log.get, event["event_id"]) == event
         active = _items(client, lens="needs_you")
+        assert len(active) == 2, active
         active_by_title = {item["title"]: item for item in active}
         assert SCHEDULE not in active_by_title, (
             "The exact RFC-linked, later completion was recorded but the old scheduling ask remained active",
@@ -330,6 +349,200 @@ def test_exact_cross_thread_completion_retires_only_its_requested_action(
             ]
         _assert_private_no_effects(client)
         _assert_redelivery_unchanged(client, completion, completion_id, model)
+
+
+class _RecordedCurrentnessModel(_Model):
+    """Replay recorded synthetic outputs; never claim a fresh provider call."""
+
+    def __init__(self, records, *, original_action_grounding):
+        super().__init__(None)
+        self.records = records
+        self.original_action_grounding = original_action_grounding
+
+    def output(self, inputs):
+        assert len(self.calls) < len(self.records), "Unexpected extra classifier call"
+        record = self.records[len(self.calls)]
+        pack = inputs["context_pack"]
+        assert [
+            {key: message[key] for key in ("source_id", "relation", "body_text")}
+            for message in pack["messages"]
+        ] == record["context"]
+        output = copy.deepcopy(record["outputs"])
+        if record["case_id"] == "U04" and self.original_action_grounding:
+            [inventory] = [
+                candidate
+                for candidate in output["candidates"]
+                if candidate["evidence_quote"]
+                == "The separate tool inventory is still required."
+            ]
+            [related] = [
+                message
+                for message in pack["messages"]
+                if message["relation"] == "related"
+            ]
+            assert PREPARE in related["body_text"]
+            inventory["evidence_source_id"] = related["source_id"]
+            inventory["evidence_quote"] = PREPARE
+        return output
+
+
+@pytest.mark.parametrize(
+    "original_action_grounding",
+    [False, True],
+    ids=["recorded-restatement-duplicates", "original-action-grounding-retains"],
+)
+def test_recorded_related_continuation_preserves_exact_original_action(
+    tmp_path, monkeypatch, original_action_grounding
+):
+    fixture_root = ROOT / "tests/fixtures/triage_currentness_model_lab"
+    observed = json.loads(
+        (fixture_root / "observed-round1-candidates.json").read_text()
+    )
+    frozen = json.loads((fixture_root / "sources-frozen.json").read_text())
+    sources = frozen["sources"][:4]
+    assert (
+        [row["case_id"] for row in observed["cases"]]
+        == [row["case_id"] for row in sources]
+        == ["U01", "U02", "U03", "U04"]
+    )
+    config = settings(
+        tmp_path / "instance",
+        ROOT,
+        selected=[row["message_id"] for row in sources],
+    )
+    model = _RecordedCurrentnessModel(
+        observed["cases"], original_action_grounding=original_action_grounding
+    )
+    monkeypatch.setattr(application, "build_fixture_runtime", runtime_factory(model))
+    envelopes = []
+    for index, row in enumerate(sources):
+        envelope = source(config, index)
+        envelopes.append(
+            envelope.model_copy(
+                update={
+                    "occurred_at": datetime.fromisoformat(row["occurred_at"]),
+                    "payload": {
+                        **envelope.payload,
+                        **{
+                            key: row[key]
+                            for key in (
+                                "subject",
+                                "body_text",
+                                "thread_id",
+                                "rfc_message_id",
+                                "references",
+                                "in_reply_to",
+                            )
+                        },
+                        "native_message_id": row["message_id"],
+                        "received_at": row["occurred_at"],
+                        "provider_labels": ["INBOX"],
+                    },
+                }
+            )
+        )
+    with TestClient(application.create_application(config)) as client:
+        runtime = client.app.state.runtime
+        initial_ids = [_append(client, envelope) for envelope in envelopes[:3]]
+        before = [item for item in _items(client) if item["state"] == "pending_review"]
+        assert len(before) == 3, before
+        by_title = {item["title"]: item for item in before}
+        assert set(by_title) == {SCHEDULE, PREPARE, OTHER_SCHEDULE}
+        for quote in (SCHEDULE, PREPARE):
+            assert by_title[quote]["source_event_id"] == initial_ids[2]
+            assert by_title[quote]["interpretation"]["evidence_refs"] == [
+                {"source_event_id": initial_ids[0], "quote": quote}
+            ]
+        assert by_title[OTHER_SCHEDULE]["source_event_id"] == initial_ids[1]
+        before_events = client.portal.call(events, runtime)
+        completion_id = _append(client, envelopes[-1])
+        after = [item for item in _items(client) if item["state"] == "pending_review"]
+        tasks = [item for item in after if item["target_kind"] == "task"]
+        # This branch intentionally characterizes the observed failure. Exact
+        # scope/quote guards cannot infer action identity from a paraphrase.
+        assert len(tasks) == (2 if original_action_grounding else 3), tasks
+        assert len(after) == len(tasks) + 1, after
+        for quote in (PREPARE, OTHER_SCHEDULE):
+            [retained] = [item for item in tasks if item["title"] == quote]
+            assert retained["proposal_id"] == by_title[quote]["proposal_id"]
+            assert retained["last_event_id"] == by_title[quote]["last_event_id"]
+            assert retained["interpretation"] == by_title[quote]["interpretation"]
+            assert retained["admission_decision"] == "admit"
+        assert all(item["title"] != SCHEDULE for item in tasks)
+        continued = [item for item in tasks if item["source_event_id"] == completion_id]
+        assert len(continued) == (0 if original_action_grounding else 1), continued
+        if continued:
+            assert continued[0]["interpretation"]["evidence_refs"] == [
+                {
+                    "source_event_id": completion_id,
+                    "quote": "The separate tool inventory is still required.",
+                }
+            ]
+            assert continued[0]["duplicate_of_proposal_id"] is None
+        [calendar] = [item for item in after if item["target_kind"] == "calendar_event"]
+        assert calendar["source_event_id"] == completion_id
+        assert calendar["review_state"]["state"] == "needs_details"
+        assert all(item["owner_member_id"] == MEMBER for item in after)
+        assert all(item["tenant_id"] == config.instance.tenant_id for item in after)
+        all_events = client.portal.call(events, runtime)
+        new_events = all_events[len(before_events) :]
+        supersessions = [
+            event for event in new_events if event["type"] == "triage.item.superseded"
+        ]
+        [anchor_retirement] = [
+            event
+            for event in supersessions
+            if event["payload"]["proposal_id"] == by_title[SCHEDULE]["proposal_id"]
+        ]
+        assert (
+            anchor_retirement["payload"]["replacement_source_event_id"] == completion_id
+        )
+        assert not any(
+            event["payload"]["proposal_id"]
+            in {
+                by_title[PREPARE]["proposal_id"],
+                by_title[OTHER_SCHEDULE]["proposal_id"],
+            }
+            for event in supersessions
+        )
+        assert all_events[: len(before_events)] == before_events
+        assert (
+            len([event for event in all_events if event["type"] in SOURCE_TYPES]) == 4
+        )
+        receipts = [
+            event for event in all_events if event["type"] == "skill.call.recorded"
+        ]
+        assert len(receipts) == len(model.calls) == 4
+        assert [event["payload"]["outputs"] for event in receipts] == [
+            call["output"] for call in model.calls
+        ]
+        assert all(
+            event["payload"]["provider"] == "fixture/synthetic-currentness-regression"
+            for event in receipts
+        )
+        expected = copy.deepcopy([record["outputs"] for record in observed["cases"]])
+        if original_action_grounding:
+            # Only these two grounding fields differ from the observed output;
+            # summaries, qualifiers, lifecycle and independent calendar stay.
+            expected[-1]["candidates"][2]["evidence_source_id"] = "m02"
+            expected[-1]["candidates"][2]["evidence_quote"] = PREPARE
+        assert [call["output"] for call in model.calls] == expected
+        assert not [
+            event
+            for event in all_events
+            if event["type"]
+            in {
+                "skill.call.failed",
+                "skill.call.suppressed",
+                "triage.item.confirmed",
+                "triage.item.materialized",
+                "commitment.created",
+                "commitment.fulfilled",
+            }
+            or event["type"].startswith(("task.", "calendar.", "reminder."))
+        ]
+        _assert_private_no_effects(client)
+        _assert_redelivery_unchanged(client, envelopes[-1], completion_id, model)
 
 
 @pytest.mark.parametrize(

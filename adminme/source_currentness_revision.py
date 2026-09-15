@@ -38,7 +38,7 @@ PLAN_TYPE = "triage.currentness_publication.planned"
 COMPLETION_TYPE = "triage.currentness_publication.completed"
 MAX_TARGETS = 3
 ATTEMPT_LIMIT = 3
-CLASSIFIER_SHA256 = "69c832f981fc4b87c8a8936d269b5259923237842ccaaf5ba2b52ad2a6121969"
+CLASSIFIER_SHA256 = "d47d77ec45eb3d123002ff69878da13c80c3892feffe31e36bb5760733d7a9a9"
 
 
 class CurrentnessPreview(BaseModel):

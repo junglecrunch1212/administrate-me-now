@@ -1,8 +1,8 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 8.0.4
-compatible_success_versions: [8.0.0, 8.0.1, 8.0.2, 8.0.3]
+version: 8.0.5
+compatible_success_versions: [8.0.0, 8.0.1, 8.0.2, 8.0.3, 8.0.4]
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -118,3 +118,10 @@ interpretations for retirement of untouched earlier system proposals. Historical
 8.0.0–8.0.3 receipts remain schema-valid and reusable; persisted proposals and
 member decisions are unchanged. Missing question scope on newly processed output
 with unanswered questions remains uncertain. No global replay is requested.
+
+Version 8.0.5 clarifies the originating evidence of an unchanged related action.
+A later status restatement retains the exact original related request and open
+lifecycle as a nonpublishing interpretation. Existing deterministic grounding
+excludes related-origin work; new primary requests remain separately eligible.
+The output schema and historical 8.0.0–8.0.4 receipts remain compatible. No
+semantic-similarity deduplication or historical replay is introduced.
