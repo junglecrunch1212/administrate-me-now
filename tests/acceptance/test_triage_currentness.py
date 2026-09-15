@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -420,7 +419,7 @@ def test_recorded_related_continuation_preserves_exact_original_action(
         envelopes.append(
             envelope.model_copy(
                 update={
-                    "occurred_at": datetime.fromisoformat(row["occurred_at"]),
+                    "occurred_at": row["occurred_at"],
                     "payload": {
                         **envelope.payload,
                         **{
