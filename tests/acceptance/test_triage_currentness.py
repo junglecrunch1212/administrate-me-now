@@ -396,7 +396,7 @@ def test_recorded_related_continuation_preserves_exact_original_action(
 ):
     fixture_root = ROOT / "tests/fixtures/triage_currentness_model_lab"
     observed = json.loads(
-        (fixture_root / "observed-round1-candidates.json").read_text()
+        (fixture_root.parent / "triage_currentness_observed_round1.json").read_text()
     )
     frozen = json.loads((fixture_root / "sources-frozen.json").read_text())
     sources = frozen["sources"][:4]
