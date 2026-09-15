@@ -17,6 +17,8 @@ triggers:
     - triage.source_publication.planned
     - source.assessment.revision_requested
     - triage.source_revision_publication.planned
+    - source.currentness.revision_requested
+    - triage.currentness_publication.planned
 replay:
   # v23 deliberately reassesses retained immutable message facts after a
   # guarded v21 attempt appended partial history. Non-anchor sources receive
@@ -51,3 +53,7 @@ events_emitted:
   - source.assessment.revision_refused
   - triage.source_revision_publication.planned
   - triage.source_revision_publication.completed
+  - source.currentness.revision_refused
+  - triage.currentness.features_extracted
+  - triage.currentness_publication.planned
+  - triage.currentness_publication.completed

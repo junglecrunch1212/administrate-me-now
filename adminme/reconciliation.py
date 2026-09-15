@@ -1019,7 +1019,7 @@ def choose_decision(
         and "purpose_route:review" not in policy.reason_codes
         and not (
             signals.purpose_evidence_verified
-            and signals.obligation_actionability == "conditional"
+            and signals.obligation_actionability in {"conditional", "unknown"}
             and policy.triage_route == "review"
         )
     ):

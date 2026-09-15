@@ -3783,8 +3783,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 132,
-    "technical_event_schemas": 331,
-    "technical_event_types": 265,
+    "technical_event_schemas": 336,
+    "technical_event_types": 270,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -32178,6 +32178,87 @@
     },
     {
       "additional_properties": false,
+      "event_type": "source.currentness.revision_refused",
+      "family": "source_assurance",
+      "properties": {
+        "reason": {
+          "enum": [
+            "observation_inactive",
+            "source_scope_mismatch",
+            "completed_assessment_required",
+            "latest_episode_anchor_required",
+            "assessment_or_context_changed",
+            "context_outside_selected_test_sample",
+            "disposable_dataset_or_selection_changed",
+            "reviewed_classifier_contract_changed",
+            "member_decision_preserved"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "revision": {
+          "const": "currentness-v1",
+          "title": "Revision",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_event_id",
+        "source_event_id",
+        "revision",
+        "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "source.currentness.revision_requested",
+      "family": "source_assurance",
+      "properties": {
+        "attempt_limit_per_source": {
+          "const": 3,
+          "title": "Attempt Limit Per Source",
+          "type": "integer"
+        },
+        "manifest": {
+          "additionalProperties": true,
+          "title": "Manifest",
+          "type": "object"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "requested_by_actor": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Requested By Actor",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest",
+        "manifest_sha256",
+        "requested_by_actor",
+        "attempt_limit_per_source"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "source.policy_v2.shadow_evaluated",
       "family": "source_policy",
       "properties": {
@@ -34630,6 +34711,255 @@
         "saved_by_member_id"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.currentness.features_extracted",
+      "family": "triage",
+      "properties": {
+        "assessment_outcome": {
+          "enum": [
+            "eligible_candidates",
+            "no_candidate",
+            "quarantined",
+            "failed"
+          ],
+          "title": "Assessment Outcome",
+          "type": "string"
+        },
+        "assessment_revision": {
+          "const": "currentness-v1",
+          "title": "Assessment Revision",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/TriageFeatureCandidateV1"
+          },
+          "maxItems": 20,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "extracted_at": {
+          "format": "date-time",
+          "title": "Extracted At",
+          "type": "string"
+        },
+        "extraction_state": {
+          "enum": [
+            "complete",
+            "defensive_default",
+            "unavailable",
+            "invalid"
+          ],
+          "title": "Extraction State",
+          "type": "string"
+        },
+        "extractor_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Extractor Id",
+          "type": "string"
+        },
+        "intent_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "revision_attempt_limit": {
+          "const": 3,
+          "title": "Revision Attempt Limit",
+          "type": "integer"
+        },
+        "revision_request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Revision Request Event Id",
+          "type": "string"
+        },
+        "skill_call_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Call Event Id"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "supersedes_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Supersedes Assessment Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "source_event_id",
+        "extractor_id",
+        "extraction_state",
+        "extracted_at",
+        "assessment_outcome",
+        "reason_codes",
+        "supersedes_assessment_event_id",
+        "revision_request_event_id",
+        "assessment_revision",
+        "revision_attempt_limit"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.currentness_publication.completed",
+      "family": "triage",
+      "properties": {
+        "already_present_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Already Present Count",
+          "type": "integer"
+        },
+        "assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Assessment Event Id",
+          "type": "string"
+        },
+        "contract": {
+          "const": "triage-source-publication-completed-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "member_decided_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Member Decided Count",
+          "type": "integer"
+        },
+        "plan_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Plan Event Id",
+          "type": "string"
+        },
+        "planned_count": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Planned Count",
+          "type": "integer"
+        },
+        "published_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Published Count",
+          "type": "integer"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "superseded_count": {
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Superseded Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "plan_event_id",
+        "source_event_id",
+        "assessment_event_id",
+        "planned_count",
+        "published_count",
+        "already_present_count",
+        "member_decided_count",
+        "superseded_count"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.currentness_publication.planned",
+      "family": "triage",
+      "properties": {
+        "assessment_idempotency_key": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Assessment Idempotency Key",
+          "type": "string"
+        },
+        "assessment_schema_version": {
+          "const": 1,
+          "title": "Assessment Schema Version",
+          "type": "integer"
+        },
+        "contract": {
+          "const": "triage-source-publication-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "proposals": {
+          "items": {
+            "$ref": "#/$defs/TriageSourceProposalDraftV1"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Proposals",
+          "type": "array"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "source_event_id",
+        "assessment_idempotency_key",
+        "assessment_schema_version",
+        "proposals"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,

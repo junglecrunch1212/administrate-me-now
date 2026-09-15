@@ -104,6 +104,7 @@ def ground_obligation_assessment(
     primary_quote: str,
     action_owner: str,
     fields: Mapping[str, Any],
+    unresolved_questions: Any = None,
 ) -> dict[str, Any] | None:
     """Resolve bounded model aliases to exact authorized source citations.
 
@@ -111,6 +112,26 @@ def ground_obligation_assessment(
     model event IDs and model-supplied verification booleans are never accepted.
     """
     if not isinstance(raw, Mapping) or primary_alias not in source_texts:
+        return None
+    questions = [] if unresolved_questions is None else unresolved_questions
+    if (
+        not isinstance(questions, list)
+        or len(questions) > 8
+        or any(
+            not isinstance(question, str) or not question.strip()
+            for question in questions
+        )
+    ):
+        return None
+    blocking = raw.get("blocking_question_indices")
+    if blocking is not None and (
+        not isinstance(blocking, list)
+        or any(
+            type(index) is not int or not 0 <= index < len(questions)
+            for index in blocking
+        )
+        or len(set(blocking)) != len(blocking)
+    ):
         return None
     primary_id, primary_text = source_texts[primary_alias]
     if not primary_quote or primary_quote not in primary_text:
@@ -165,6 +186,12 @@ def ground_obligation_assessment(
     if assessment.condition_state in {"unmet", "unknown"} and assessment.condition:
         actionability = "conditional"
     elif actionability == "required" and assessment.condition_state == "unknown":
+        actionability = "unknown"
+    if actionability == "required" and questions and blocking != []:
+        # The language seam must distinguish questions about whether an
+        # obligation exists from questions about how to perform established
+        # work. Missing declarations on newly processed legacy responses do
+        # not establish that their unanswered questions are harmless.
         actionability = "unknown"
     if roles.intersection({"negation", "completion"}):
         # These roles explicitly qualify this action. Another action in the

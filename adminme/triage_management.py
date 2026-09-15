@@ -122,17 +122,10 @@ def human_triage_lane(
     }
     if decision == "alert_only":
         return "alerts_safety"
+    # An authenticated instruction supplies member authority independently
+    # of a passive source's optional-purpose assessment.
     if "explicit_member_instruction" in basis:
         return "direct_instruction"
-    if (
-        "exact_member_commitment" in basis
-        or item.get("source_kind") == "commitment_proposal"
-    ):
-        return "member_promise"
-    if "known_human_actionable_request" in basis:
-        return "known_human_request"
-    if "verified_deadline" in basis:
-        return "scheduled_deadline"
     interpretation = _mapping(item.get("interpretation"))
     candidate = _mapping(item.get("candidate"))
     if not interpretation and item.get("interpretation_json"):
@@ -149,18 +142,6 @@ def human_triage_lane(
         and interpretation.get("assessment_state") == "invalid"
     ):
         return "clarification_conflict"
-    if interpretation.get("thread_state") in {"waiting_on_member", "waiting_on_other"}:
-        return "waiting_follow_up"
-    if any(
-        candidate.get(field) not in (None, "", [])
-        for field in (
-            "waiting_for",
-            "follow_up_at",
-            "follow_up_on",
-            "next_contact_at",
-        )
-    ):
-        return "waiting_follow_up"
     if decision == "conflict_review":
         return "clarification_conflict"
     if (
@@ -179,6 +160,29 @@ def human_triage_lane(
         return "clarification_conflict"
     if interpretation.get("thread_state") in {"blocked", "unclear"}:
         return "clarification_conflict"
+    # Admission and typed uncertainty govern the lane before priority or
+    # conversation timing. A real date cannot establish an unknown obligation.
+    if (
+        "exact_member_commitment" in basis
+        or item.get("source_kind") == "commitment_proposal"
+    ):
+        return "member_promise"
+    if "known_human_actionable_request" in basis:
+        return "known_human_request"
+    if "verified_deadline" in basis:
+        return "scheduled_deadline"
+    if interpretation.get("thread_state") in {"waiting_on_member", "waiting_on_other"}:
+        return "waiting_follow_up"
+    if any(
+        candidate.get(field) not in (None, "", [])
+        for field in (
+            "waiting_for",
+            "follow_up_at",
+            "follow_up_on",
+            "next_contact_at",
+        )
+    ):
+        return "waiting_follow_up"
     if assessment is not None and assessment.independent_obligation:
         return "ordinary_obligation"
     if any(

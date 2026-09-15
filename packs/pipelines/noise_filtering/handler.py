@@ -40,6 +40,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import (
     TriageSourcePublicationPlannedV1,
+    TriageCurrentnessPublicationPlannedV1,
     TriageSourcePublicationCompletedV1,
 )
 from adminme.lib.skill_runner import (
@@ -57,6 +58,7 @@ from adminme.message_context import MessageContextPack, build_message_context_pa
 from adminme.pipelines.base import PipelineContext, Triggers, skill_output
 from adminme.source_publication import (
     publication_completion_valid,
+    assessment_revision,
     source_assessment_identity_valid,
     publication_plan_key,
     publication_completion_key,
@@ -80,12 +82,20 @@ from adminme.source_assessment_revision import (
     REFUSAL_TYPE as REVISION_REFUSAL_TYPE,
     REVISION_PLAN_TYPE,
     REVISION_COMPLETION_TYPE,
-    RevisionManifest,
     RevisionRefused,
-    assessment_key as revision_assessment_key,
     refusal_key as revision_refusal_key,
-    request_key as revision_request_key,
     validate_target as validate_revision_target,
+)
+from adminme.source_currentness_revision import (
+    REVISION as CURRENTNESS_REVISION,
+    REQUEST_TYPE as CURRENTNESS_REQUEST_TYPE,
+    REFUSAL_TYPE as CURRENTNESS_REFUSAL_TYPE,
+    ASSESSMENT_TYPE as CURRENTNESS_ASSESSMENT_TYPE,
+    PLAN_TYPE as CURRENTNESS_PLAN_TYPE,
+    COMPLETION_TYPE as CURRENTNESS_COMPLETION_TYPE,
+    manifest_for_request,
+    assessment_key_for_revision as revision_assessment_key,
+    request_key_for_revision as revision_request_key,
 )
 from adminme.triage_intent import (
     CONTEXTUAL_NLP_EXTRACTOR_ID,
@@ -93,6 +103,7 @@ from adminme.triage_intent import (
     MESSAGE_FALLBACK_EXTRACTOR_ID,
     extract_grounded_nlp_candidates,
     extract_grounded_context_candidates,
+    extract_grounded_related_completions,
     extract_message_fallback_candidates,
     is_inbound_reply_request,
     merge_intent_candidates,
@@ -102,7 +113,7 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "8.0.3"
+SKILL_VERSION = "8.0.5"
 _RETAINED_CLASSIFICATION_VERSION = "8.0.0"
 DEFAULT_CLASSIFICATION = "personal"
 _REPLAY_GENERATION = 23
@@ -137,6 +148,7 @@ class _ProposalInputHistory:
     def __init__(self) -> None:
         self.cursor: str | None = None
         self.by_source_event_id: dict[str, list[dict[str, Any]]] = {}
+        self.by_evidence_source_event_id: dict[str, list[dict[str, Any]]] = {}
         self.lock = asyncio.Lock()
 
 
@@ -318,6 +330,8 @@ class NoiseFilteringPipeline:
             "triage.source_publication.planned",
             REVISION_REQUEST_TYPE,
             REVISION_PLAN_TYPE,
+            CURRENTNESS_REQUEST_TYPE,
+            CURRENTNESS_PLAN_TYPE,
         ]
     }
 
@@ -340,8 +354,21 @@ class NoiseFilteringPipeline:
         event_log: Any,
         owner_scope: str,
         source_event_ids: set[str],
+        evidence_source_event_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Read each immutable proposal once, then serve exact source buckets."""
+
+        evidence_ids = evidence_source_event_ids or set()
+
+        def evidence_sources(proposal: dict[str, Any]) -> set[str]:
+            interpretation = (proposal.get("payload") or {}).get("interpretation")
+            if not isinstance(interpretation, dict):
+                return set()
+            return {
+                str(reference.get("source_event_id") or "")
+                for reference in interpretation.get("evidence_refs", [])
+                if isinstance(reference, dict)
+            }
 
         try:
             owner_histories = self._proposal_histories.setdefault(event_log, {})
@@ -354,6 +381,7 @@ class NoiseFilteringPipeline:
                 )
                 if str((proposal.get("payload") or {}).get("source_event_id") or "")
                 in source_event_ids
+                or evidence_ids.intersection(evidence_sources(proposal))
             ]
         history = owner_histories.setdefault(owner_scope, _ProposalInputHistory())
         async with history.lock:
@@ -373,13 +401,24 @@ class NoiseFilteringPipeline:
                     history.by_source_event_id.setdefault(source_event_id, []).append(
                         proposal
                     )
+                for evidence_id in evidence_sources(proposal):
+                    history.by_evidence_source_event_id.setdefault(
+                        evidence_id, []
+                    ).append(proposal)
             if suffix:
                 history.cursor = str(suffix[-1]["event_id"])
-            return [
+            selected = [
                 proposal
                 for source_event_id in source_event_ids
                 for proposal in history.by_source_event_id.get(source_event_id, ())
             ]
+            selected.extend(
+                proposal
+                for evidence_id in evidence_ids
+                for proposal in history.by_evidence_source_event_id.get(evidence_id, ())
+            )
+            unique = {str(proposal["event_id"]): proposal for proposal in selected}
+            return [unique[event_id] for event_id in sorted(unique)]
 
     @staticmethod
     def _recovery_assessment_key(request_event_id: str, source_event_id: str) -> str:
@@ -587,7 +626,7 @@ class NoiseFilteringPipeline:
 
     async def _handle_revision_request(self, event, ctx) -> None:
         payload = event.get("payload") or {}
-        manifest = RevisionManifest.model_validate(payload.get("manifest"))
+        manifest = manifest_for_request(event)
         owner = str(event.get("owner_scope") or "")
         if (
             event.get("source_adapter") != "source_assessment_revision"
@@ -598,7 +637,8 @@ class NoiseFilteringPipeline:
             or payload.get("requested_by_actor") != owner.removeprefix("private:")
             or payload.get("manifest_sha256") != manifest.fingerprint()
             or payload.get("attempt_limit_per_source") != 3
-            or event.get("idempotency_key") != revision_request_key(owner)
+            or event.get("idempotency_key")
+            != revision_request_key(manifest.revision, owner)
         ):
             raise RevisionRefused("source_scope_mismatch")
         for target in manifest.targets:
@@ -606,7 +646,8 @@ class NoiseFilteringPipeline:
             lock = self._recovery_source_locks.setdefault(lock_key, asyncio.Lock())
             async with lock:
                 terminal = await ctx.event_log.get_by_idempotency(
-                    event["tenant_id"], revision_assessment_key(target.source_event_id)
+                    event["tenant_id"],
+                    revision_assessment_key(manifest.revision, target.source_event_id),
                 )
                 if terminal is not None:
                     source = await ctx.event_log.get(target.source_event_id)
@@ -643,7 +684,7 @@ class NoiseFilteringPipeline:
                     source["_assessment_recovery"] = {
                         "request_event_id": event["event_id"],
                         "prior_assessment_event_id": target.assessment_event_id,
-                        "assessment_revision": REVISION,
+                        "assessment_revision": manifest.revision,
                     }
                     async with self._recovery_request_semaphore:
                         await self._handle_source(source, ctx)
@@ -652,7 +693,9 @@ class NoiseFilteringPipeline:
                         EventEnvelope(
                             event_at_ms=self._derived_event_at_ms(event),
                             tenant_id=event["tenant_id"],
-                            type=REVISION_REFUSAL_TYPE,
+                            type=CURRENTNESS_REFUSAL_TYPE
+                            if manifest.revision == CURRENTNESS_REVISION
+                            else REVISION_REFUSAL_TYPE,
                             schema_version=1,
                             occurred_at=event["occurred_at"],
                             source_adapter="source_assessment_revision",
@@ -666,7 +709,7 @@ class NoiseFilteringPipeline:
                             payload={
                                 "request_event_id": event["event_id"],
                                 "source_event_id": target.source_event_id,
-                                "revision": REVISION,
+                                "revision": manifest.revision,
                                 "reason": str(exc),
                             },
                         ),
@@ -677,8 +720,16 @@ class NoiseFilteringPipeline:
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
-        if event_type in {"triage.source_publication.planned", REVISION_PLAN_TYPE}:
-            payload = TriageSourcePublicationPlannedV1.model_validate(event["payload"])
+        if event_type in {
+            "triage.source_publication.planned",
+            REVISION_PLAN_TYPE,
+            CURRENTNESS_PLAN_TYPE,
+        }:
+            payload = (
+                TriageCurrentnessPublicationPlannedV1
+                if event_type == CURRENTNESS_PLAN_TYPE
+                else TriageSourcePublicationPlannedV1
+            ).model_validate(event["payload"])
             source = await ctx.event_log.get(payload.source_event_id)
             assessment = await ctx.event_log.get_by_idempotency(
                 event["tenant_id"], payload.assessment_idempotency_key
@@ -697,7 +748,7 @@ class NoiseFilteringPipeline:
         if event_type == "source.assessment.recovery_requested":
             await self._handle_recovery_request(event, ctx)
             return
-        if event_type == REVISION_REQUEST_TYPE:
+        if event_type in {REVISION_REQUEST_TYPE, CURRENTNESS_REQUEST_TYPE}:
             await self._handle_revision_request(event, ctx)
             return
         if event_type not in (
@@ -914,8 +965,9 @@ class NoiseFilteringPipeline:
         retry_prior_failure = True
         if isinstance(recovery, dict):
             invocation_identity = (
-                f"message-nature:revision:{REVISION}:{source_event_id}"
-                if recovery.get("assessment_revision") == REVISION
+                f"message-nature:revision:{recovery['assessment_revision']}:{source_event_id}"
+                if recovery.get("assessment_revision")
+                in {REVISION, CURRENTNESS_REVISION}
                 else "message-nature:recovery:"
                 f"{recovery['request_event_id']}:{invocation_fingerprint}"
             )
@@ -1101,7 +1153,7 @@ class NoiseFilteringPipeline:
             or not await ctx.observation_manager.is_active()
         ):
             raise RevisionRefused("disposable_dataset_or_selection_changed")
-        manifest = RevisionManifest.model_validate(command["payload"]["manifest"])
+        manifest = manifest_for_request(command)
         target = next(
             (item for item in manifest.targets if item.source_event_id == source_id),
             None,
@@ -1137,7 +1189,10 @@ class NoiseFilteringPipeline:
         recovery: dict[str, str] | None,
         skill_version: str = SKILL_VERSION,
     ) -> None:
-        if recovery and recovery.get("assessment_revision") == REVISION:
+        if recovery and recovery.get("assessment_revision") in {
+            REVISION,
+            CURRENTNESS_REVISION,
+        }:
             command = await ctx.event_log.get(recovery["request_event_id"])
             # Inference spent its durable attempt, but changed evidence or a
             # member decision cannot authorize publishing a stale replacement.
@@ -1363,6 +1418,11 @@ class NoiseFilteringPipeline:
             source_event_id=source_event_id,
             context_pack=context_pack,
             candidates=candidates,
+            completed_related_actions=(
+                extract_grounded_related_completions(context_pack, raw_candidates)
+                if semantic_assessment_complete and policy.get("language_enabled")
+                else set()
+            ),
         )
         candidates = _deduplicate_candidate_keys(candidates)
         intent_id = f"source:{source_event_id}"
@@ -1437,9 +1497,12 @@ class NoiseFilteringPipeline:
                 f"{proposal_fingerprint}:{candidate.candidate_key}:"
                 f"{candidate.target_kind}"
             )
-            if recovery and recovery.get("assessment_revision") == REVISION:
+            if recovery and recovery.get("assessment_revision") in {
+                REVISION,
+                CURRENTNESS_REVISION,
+            }:
                 proposal_key = (
-                    f"triage:message-candidate:revision:{REVISION}:{source_event_id}:"
+                    f"triage:message-candidate:revision:{recovery['assessment_revision']}:{source_event_id}:"
                     f"{candidate.candidate_key}:{candidate.target_kind}"
                 )
             if (
@@ -1573,6 +1636,7 @@ class NoiseFilteringPipeline:
         source_event_id: str,
         context_pack: MessageContextPack,
         candidates: list[Any],
+        completed_related_actions: set[tuple[str, str, str]],
     ) -> tuple[list[Any], set[str]]:
         """Replace untouched older thread interpretations; preserve decisions.
 
@@ -1589,6 +1653,9 @@ class NoiseFilteringPipeline:
         ):
             return candidates, set()
         thread_source_ids = set(context_pack.episode_source_event_ids)
+        completion_evidence_ids = {
+            source_id for source_id, _, _ in completed_related_actions
+        }
         current_same_source_fallbacks = {
             (
                 candidate.target_kind,
@@ -1609,8 +1676,11 @@ class NoiseFilteringPipeline:
             event_log=ctx.event_log,
             owner_scope=str(event.get("owner_scope") or ""),
             source_event_ids=thread_source_ids,
+            evidence_source_event_ids=completion_evidence_ids,
         ):
             payload = prior.get("payload") or {}
+            if prior.get("tenant_id") != event.get("tenant_id"):
+                continue
             if prior.get("source_adapter") not in {
                 "deterministic_candidate_eligibility",
                 "noise_filtering",
@@ -1618,6 +1688,18 @@ class NoiseFilteringPipeline:
             }:
                 continue
             interpretation = payload.get("interpretation")
+            if str(payload.get("source_event_id") or "") not in thread_source_ids:
+                if not isinstance(interpretation, dict) or not any(
+                    (
+                        str(reference.get("source_event_id") or ""),
+                        str(payload.get("target_kind") or ""),
+                        str(reference.get("quote") or ""),
+                    )
+                    in completed_related_actions
+                    for reference in interpretation.get("evidence_refs", [])
+                    if isinstance(reference, dict)
+                ):
+                    continue
             if (
                 str(payload.get("source_event_id") or "") == source_event_id
                 and isinstance(interpretation, dict)
@@ -1656,10 +1738,36 @@ class NoiseFilteringPipeline:
                 continue
             prior_proposals.append(prior)
 
+        # A member command can cite a later reconciliation receipt as its
+        # causation, so direct children of the original proposal are incomplete.
+        # The stable proposal ID is the authority for preserving the decision.
+        prior_ids = {
+            str(prior["payload"].get("proposal_id") or "") for prior in prior_proposals
+        }
+        member_decision_ids = (
+            {
+                str((decision.get("payload") or {}).get("proposal_id") or "")
+                async for decision in ctx.event_log.read_since(
+                    owner_scope=str(event.get("owner_scope") or ""),
+                    types=[
+                        "triage.item.enriched",
+                        "triage.item.managed",
+                        "triage.item.confirmed",
+                        "triage.item.materialized",
+                        "triage.item.dismissed",
+                    ],
+                )
+                if decision.get("tenant_id") == event.get("tenant_id")
+                and str((decision.get("payload") or {}).get("proposal_id") or "")
+                in prior_ids
+            }
+            if prior_ids
+            else set()
+        )
         for prior in prior_proposals:
             payload = prior.get("payload") or {}
             descendants = await ctx.event_log.get_by_causation(prior["event_id"])
-            member_decided = any(
+            member_decided = payload.get("proposal_id") in member_decision_ids or any(
                 child.get("type")
                 in {
                     "triage.item.enriched",
@@ -1962,9 +2070,10 @@ class NoiseFilteringPipeline:
             "assessment_outcome": outcome,
             "reason_codes": list(dict.fromkeys(reason_codes))[:20],
         }
-        is_revision = (
-            recovery is not None and recovery.get("assessment_revision") == REVISION
-        )
+        is_revision = recovery is not None and recovery.get("assessment_revision") in {
+            REVISION,
+            CURRENTNESS_REVISION,
+        }
         if is_revision and recovery is not None:
             payload.update(
                 {
@@ -1972,7 +2081,7 @@ class NoiseFilteringPipeline:
                         "prior_assessment_event_id"
                     ],
                     "revision_request_event_id": recovery_request_event_id,
-                    "assessment_revision": REVISION,
+                    "assessment_revision": recovery["assessment_revision"],
                     "revision_attempt_limit": 3,
                 }
             )
@@ -1991,8 +2100,16 @@ class NoiseFilteringPipeline:
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
-            type="triage.intent.features_extracted",
-            schema_version=5 if is_revision else 4 if recovery is not None else 3,
+            type=CURRENTNESS_ASSESSMENT_TYPE
+            if recovery and recovery.get("assessment_revision") == CURRENTNESS_REVISION
+            else "triage.intent.features_extracted",
+            schema_version=1
+            if recovery and recovery.get("assessment_revision") == CURRENTNESS_REVISION
+            else 5
+            if is_revision
+            else 4
+            if recovery is not None
+            else 3,
             occurred_at=assessed_at,
             source_adapter="deterministic_candidate_eligibility",
             source_account_id="pipeline",
@@ -2002,7 +2119,9 @@ class NoiseFilteringPipeline:
             ),
             sensitivity=event.get("sensitivity", "normal"),
             idempotency_key=(
-                revision_assessment_key(source_event_id)
+                revision_assessment_key(
+                    str((recovery or {}).get("assessment_revision")), source_event_id
+                )
                 if is_revision
                 else self._recovery_assessment_key(
                     str(recovery_request_event_id), source_event_id
@@ -2039,13 +2158,19 @@ class NoiseFilteringPipeline:
             "assessment_schema_version": envelope.schema_version,
             "proposals": proposal_drafts,
         }
-        TriageSourcePublicationPlannedV1.model_validate(plan_payload)
+        (
+            TriageCurrentnessPublicationPlannedV1
+            if envelope.type == CURRENTNESS_ASSESSMENT_TYPE
+            else TriageSourcePublicationPlannedV1
+        ).model_validate(plan_payload)
         envelope = envelope.model_copy(
             update={"event_at_ms": self._derived_event_at_ms(event)}
         )
         plan = envelope.model_copy(
             update={
-                "type": REVISION_PLAN_TYPE
+                "type": CURRENTNESS_PLAN_TYPE
+                if envelope.type == CURRENTNESS_ASSESSMENT_TYPE
+                else REVISION_PLAN_TYPE
                 if is_revision
                 else "triage.source_publication.planned",
                 "schema_version": 1,
@@ -2107,8 +2232,8 @@ class NoiseFilteringPipeline:
         owner = str(source.get("owner_scope") or "")
         recovery_id = assessment.get("payload", {}).get("recovery_request_event_id")
         expected_key = (
-            revision_assessment_key(source_id)
-            if assessment.get("schema_version") == 5
+            revision_assessment_key(str(assessment_revision(assessment)), source_id)
+            if assessment_revision(assessment) is not None
             else self._recovery_assessment_key(str(recovery_id), source_id)
             if recovery_id
             else f"triage:message-features:v{_REPLAY_GENERATION}:{source_id}"
@@ -2126,10 +2251,19 @@ class NoiseFilteringPipeline:
             or source.get("visibility_scope") != owner
             or source.get("sensitivity") == "privileged"
             or key != expected_key
-            or assessment.get("type") != "triage.intent.features_extracted"
+            or assessment.get("type")
+            not in {"triage.intent.features_extracted", CURRENTNESS_ASSESSMENT_TYPE}
+            or (
+                assessment.get("type") == CURRENTNESS_ASSESSMENT_TYPE
+                and not source_assessment_identity_valid(
+                    source=source, assessment=assessment
+                )
+            )
             or plan.get("type")
             != (
-                REVISION_PLAN_TYPE
+                CURRENTNESS_PLAN_TYPE
+                if assessment_revision(assessment) == CURRENTNESS_REVISION
+                else REVISION_PLAN_TYPE
                 if assessment.get("schema_version") == 5
                 else "triage.source_publication.planned"
             )
@@ -2152,7 +2286,11 @@ class NoiseFilteringPipeline:
             )
         ):
             raise RuntimeError("source publication receipt scope is invalid")
-        payload = TriageSourcePublicationPlannedV1.model_validate(plan["payload"])
+        payload = (
+            TriageCurrentnessPublicationPlannedV1
+            if plan.get("type") == CURRENTNESS_PLAN_TYPE
+            else TriageSourcePublicationPlannedV1
+        ).model_validate(plan["payload"])
         if (
             payload.source_event_id != source_id
             or assessment.get("payload", {}).get("source_event_id") != source_id
@@ -2166,7 +2304,7 @@ class NoiseFilteringPipeline:
         if completion is not None:
             self._validate_publication_completion(source, assessment, plan, completion)
             return True
-        if assessment.get("schema_version") == 5:
+        if assessment_revision(assessment) is not None:
             command = await ctx.event_log.get(
                 assessment["payload"]["revision_request_event_id"]
             )
@@ -2206,7 +2344,9 @@ class NoiseFilteringPipeline:
             EventEnvelope(
                 event_at_ms=self._derived_event_at_ms(plan),
                 tenant_id=source["tenant_id"],
-                type=REVISION_COMPLETION_TYPE
+                type=CURRENTNESS_COMPLETION_TYPE
+                if assessment_revision(assessment) == CURRENTNESS_REVISION
+                else REVISION_COMPLETION_TYPE
                 if assessment.get("schema_version") == 5
                 else "triage.source_publication.completed",
                 schema_version=1,
@@ -2259,9 +2399,9 @@ class NoiseFilteringPipeline:
             ):
                 raise RuntimeError("source publication proposal scope is invalid")
             proposal_key = str(draft["idempotency_key"])
-            if assessment.get("schema_version") == 5:
+            if assessment_revision(assessment) is not None:
                 valid_key = proposal_key == (
-                    f"triage:message-candidate:revision:{REVISION}:{source_id}:"
+                    f"triage:message-candidate:revision:{assessment_revision(assessment)}:{source_id}:"
                     f"{payload.get('candidate_key')}:{payload['target_kind']}"
                 )
             else:

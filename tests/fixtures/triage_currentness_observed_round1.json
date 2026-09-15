@@ -1,0 +1,497 @@
+{
+  "contract": "triage-currentness-observed-candidates-v1",
+  "description": "Synthetic-only recorded U01-U04 llm-task outputs from the first authorized currentness model round. Fixed transport replay is deterministic composition evidence, not a new model inference or semantic acceptance claim.",
+  "observed_run_id": "34976590391",
+  "observed_commit": "fbd6f2b95ab15d3fb95087b5dfa9e816cd0dbe1c",
+  "observed_capture_sha256": "7eecf2419684a11970dc9e7c17928624058ada40b0a55c2b5d6618cc898c0427",
+  "observed_classifier": {
+    "skill_version": "8.0.4",
+    "prompt_sha256": "ad70269de6a48b5f93cba8d43bdb9c5d8c706b25483f13561e1c8534588b31c8",
+    "input_schema_sha256": "19ea2c830f3f6c1880b59392eca3bd685f79e419516b09c20b0b4d27a51f26a1",
+    "output_schema_sha256": "587a51d9683d12ea870858fc5b79a661d5aeb3569eaf758a74df9ccb55c8f188",
+    "manifest_sha256": "c005dede4e37c94bac87b36b6030ae699546a253158729d7b79a7227036ca120"
+  },
+  "cases": [
+    {
+      "case_id": "U01",
+      "observed_source_event_id": "ev_01M2JPB8JV0000",
+      "observed_skill_receipt_event_id": "ev_01M2JPBNMV0000",
+      "observed_provider": "openai/gpt-5.6-sol",
+      "context": [
+        {
+          "source_id": "m01",
+          "relation": "thread",
+          "body_text": "Please schedule the annual inspection for the blue workshop. Please prepare the separate tool inventory."
+        }
+      ],
+      "outputs": {
+        "classification": "personal",
+        "confidence": 0.62,
+        "reasons": [
+          "Directly addressed message with two explicit requests",
+          "No clear evidence of a work relationship or automated delivery"
+        ],
+        "reply_signal": "not_required",
+        "automated": false,
+        "transactional_due": false,
+        "security_code": false,
+        "person_to_person": true,
+        "deadline": null,
+        "assessment_contract": "personal-obligation-assessment-v1",
+        "candidates": [
+          {
+            "target_kind": "task",
+            "title": "Schedule the blue workshop inspection",
+            "evidence_source_id": "m01",
+            "evidence_quote": "Please schedule the annual inspection for the blue workshop.",
+            "candidate": {
+              "description": "Schedule the annual inspection for the blue workshop."
+            },
+            "confidence": 0.96,
+            "reasons": [
+              "Explicit request to schedule an inspection",
+              "The inspection is described as annual, but the scheduling action has no explicit recurrence pattern"
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "Schedule the annual inspection for the blue workshop.",
+            "case_summary": "The sender separately requests scheduling an annual workshop inspection and preparing a tool inventory.",
+            "why_member": "The request is directly addressed to the recipient.",
+            "next_step": "Determine a suitable inspection date and schedule it.",
+            "thread_state": "waiting_on_member",
+            "unresolved_questions": [
+              "When should the inspection occur?",
+              "Who should perform the inspection?"
+            ],
+            "related_source_ids": [],
+            "obligation_assessment": {
+              "purpose": "personal_request",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "Please schedule the annual inspection for the blue workshop.",
+                  "role": "ownership"
+                }
+              ]
+            }
+          },
+          {
+            "target_kind": "task",
+            "title": "Prepare the separate tool inventory",
+            "evidence_source_id": "m01",
+            "evidence_quote": "Please prepare the separate tool inventory.",
+            "candidate": {
+              "description": "Prepare the separate tool inventory."
+            },
+            "confidence": 0.96,
+            "reasons": [
+              "Explicit and distinct request to prepare a tool inventory"
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "Prepare the separate tool inventory.",
+            "case_summary": "The tool inventory is a separate requested outcome from scheduling the annual inspection.",
+            "why_member": "The request is directly addressed to the recipient.",
+            "next_step": "Prepare the requested tool inventory.",
+            "thread_state": "waiting_on_member",
+            "unresolved_questions": [
+              "Which tools and inventory format are required?"
+            ],
+            "related_source_ids": [],
+            "obligation_assessment": {
+              "purpose": "personal_request",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "Please prepare the separate tool inventory.",
+                  "role": "ownership"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "U02",
+      "observed_source_event_id": "ev_01M2JPBP8M0000",
+      "observed_skill_receipt_event_id": "ev_01M2JPC08H0000",
+      "observed_provider": "openai/gpt-5.6-sol",
+      "context": [
+        {
+          "source_id": "m01",
+          "relation": "thread",
+          "body_text": "Please schedule the inspection for the green workshop."
+        }
+      ],
+      "outputs": {
+        "classification": "personal",
+        "confidence": 0.65,
+        "reasons": [
+          "Direct message to a specific recipient",
+          "Explicit human-style request to schedule an inspection",
+          "No clear commercial, automated, or established work context"
+        ],
+        "reply_signal": "not_required",
+        "automated": false,
+        "transactional_due": false,
+        "security_code": false,
+        "person_to_person": true,
+        "deadline": null,
+        "assessment_contract": "personal-obligation-assessment-v1",
+        "candidates": [
+          {
+            "target_kind": "task",
+            "title": "Schedule the green workshop inspection",
+            "evidence_source_id": "m01",
+            "evidence_quote": "Please schedule the inspection for the green workshop.",
+            "candidate": {
+              "description": "Schedule the inspection for the green workshop."
+            },
+            "confidence": 0.96,
+            "reasons": [
+              "The sender explicitly asks the recipient to schedule an inspection",
+              "No date or time is supplied for a calendar event"
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "Schedule an inspection for the green workshop.",
+            "case_summary": "The sender asks the member to arrange an inspection for the green workshop. No deadline or proposed inspection time is given.",
+            "why_member": "The request is directly addressed to the message recipient.",
+            "next_step": "Determine the inspection timing and arrange the appointment.",
+            "thread_state": "waiting_on_member",
+            "unresolved_questions": [
+              "When should the inspection be scheduled?",
+              "Who will perform the inspection?"
+            ],
+            "related_source_ids": [],
+            "obligation_assessment": {
+              "purpose": "personal_request",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "Please schedule the inspection for the green workshop.",
+                  "role": "ownership"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "U03",
+      "observed_source_event_id": "ev_01M2JPC0VB0000",
+      "observed_skill_receipt_event_id": "ev_01M2JPCF3B0000",
+      "observed_provider": "openai/gpt-5.6-sol",
+      "context": [
+        {
+          "source_id": "m01",
+          "relation": "thread",
+          "body_text": "Please schedule the annual inspection for the blue workshop. Please prepare the separate tool inventory."
+        },
+        {
+          "source_id": "m02",
+          "relation": "thread",
+          "body_text": "The two workshop requests above are still open."
+        }
+      ],
+      "outputs": {
+        "classification": "professional",
+        "confidence": 0.82,
+        "reasons": [
+          "Work-like workshop inspection and inventory requests",
+          "The follow-up explicitly says both prior requests remain open"
+        ],
+        "reply_signal": "required",
+        "automated": false,
+        "transactional_due": false,
+        "security_code": false,
+        "person_to_person": true,
+        "deadline": null,
+        "assessment_contract": "personal-obligation-assessment-v1",
+        "candidates": [
+          {
+            "target_kind": "task",
+            "title": "Schedule the blue workshop annual inspection",
+            "evidence_source_id": "m01",
+            "evidence_quote": "Please schedule the annual inspection for the blue workshop.",
+            "candidate": {
+              "description": "Schedule the annual inspection for the blue workshop."
+            },
+            "confidence": 0.95,
+            "reasons": [
+              "The sender directly requests scheduling an inspection",
+              "The latest thread message says both workshop requests remain open"
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "Schedule the annual inspection for the blue workshop; the follow-up says this request is still open.",
+            "case_summary": "The sender made two separate workshop requests. This one concerns scheduling the blue workshop's annual inspection, and the later message confirms it remains open.",
+            "why_member": "The request is addressed to the recipient and explicitly asks them to schedule the inspection.",
+            "next_step": "Review scheduling options for the annual inspection.",
+            "thread_state": "waiting_on_member",
+            "unresolved_questions": [
+              "When should the inspection be scheduled?",
+              "Who will conduct the inspection?"
+            ],
+            "related_source_ids": [],
+            "obligation_assessment": {
+              "purpose": "personal_request",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "Please schedule the annual inspection for the blue workshop.",
+                  "role": "ownership"
+                },
+                {
+                  "source_id": "m02",
+                  "quote": "The two workshop requests above are still open.",
+                  "role": "ownership"
+                }
+              ]
+            }
+          },
+          {
+            "target_kind": "task",
+            "title": "Prepare the separate tool inventory",
+            "evidence_source_id": "m01",
+            "evidence_quote": "Please prepare the separate tool inventory.",
+            "candidate": {
+              "description": "Prepare the separate tool inventory."
+            },
+            "confidence": 0.95,
+            "reasons": [
+              "The sender directly requests preparation of a distinct inventory",
+              "The latest thread message says both workshop requests remain open"
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "Prepare the separate tool inventory; the follow-up says this request is still open.",
+            "case_summary": "The sender made two separate workshop requests. This one concerns preparing a separate tool inventory, and the later message confirms it remains open.",
+            "why_member": "The request is addressed to the recipient and explicitly asks them to prepare the inventory.",
+            "next_step": "Prepare the requested separate tool inventory.",
+            "thread_state": "waiting_on_member",
+            "unresolved_questions": [
+              "Which tools should the inventory cover?",
+              "What format should the inventory use?"
+            ],
+            "related_source_ids": [],
+            "obligation_assessment": {
+              "purpose": "personal_request",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "Please prepare the separate tool inventory.",
+                  "role": "ownership"
+                },
+                {
+                  "source_id": "m02",
+                  "quote": "The two workshop requests above are still open.",
+                  "role": "ownership"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "U04",
+      "observed_source_event_id": "ev_01M2JPCFRK0000",
+      "observed_skill_receipt_event_id": "ev_01M2JPD6H50000",
+      "observed_provider": "openai/gpt-5.6-sol",
+      "context": [
+        {
+          "source_id": "m01",
+          "relation": "thread",
+          "body_text": "Scheduling the annual inspection for the blue workshop is complete; your booking is confirmed. The separate tool inventory is still required."
+        },
+        {
+          "source_id": "m02",
+          "relation": "related",
+          "body_text": "Please schedule the annual inspection for the blue workshop. Please prepare the separate tool inventory."
+        }
+      ],
+      "outputs": {
+        "classification": "professional",
+        "confidence": 0.86,
+        "reasons": [
+          "The message concerns workshop inspection scheduling and a required tool inventory.",
+          "The wording is consistent with a work-context status notice."
+        ],
+        "reply_signal": "not_required",
+        "automated": false,
+        "transactional_due": true,
+        "security_code": false,
+        "person_to_person": true,
+        "deadline": null,
+        "assessment_contract": "personal-obligation-assessment-v1",
+        "candidates": [
+          {
+            "target_kind": "task",
+            "title": "Schedule the annual inspection for the blue workshop",
+            "evidence_source_id": "m02",
+            "evidence_quote": "Please schedule the annual inspection for the blue workshop.",
+            "candidate": {
+              "description": "Schedule the annual inspection for the blue workshop."
+            },
+            "confidence": 0.99,
+            "reasons": [
+              "The related source contains the original explicit request.",
+              "The primary thread explicitly states that scheduling is complete and the booking is confirmed."
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "completed",
+            "compact_summary": "The requested inspection scheduling is complete and the booking is confirmed.",
+            "case_summary": "A related message requested scheduling of the annual blue workshop inspection. The primary message explicitly reports that scheduling is complete and the booking is confirmed.",
+            "why_member": "The original related message directly asked the recipient to schedule the inspection.",
+            "next_step": null,
+            "thread_state": "in_progress",
+            "unresolved_questions": [],
+            "related_source_ids": [
+              "m02"
+            ],
+            "obligation_assessment": {
+              "purpose": "appointment",
+              "actionability": "none",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m02",
+                  "quote": "Please schedule the annual inspection for the blue workshop.",
+                  "role": "ownership"
+                },
+                {
+                  "source_id": "m01",
+                  "quote": "Scheduling the annual inspection for the blue workshop is complete",
+                  "role": "completion"
+                }
+              ]
+            }
+          },
+          {
+            "target_kind": "calendar_event",
+            "title": "Annual inspection for the blue workshop",
+            "evidence_source_id": "m01",
+            "evidence_quote": "your booking is confirmed",
+            "candidate": {
+              "event_type": "inspection"
+            },
+            "confidence": 0.8,
+            "reasons": [
+              "The primary message confirms a booking for the annual inspection.",
+              "No supported date or time is provided."
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "The annual inspection booking for the blue workshop is confirmed, but its date and time are not supplied.",
+            "case_summary": "Scheduling is complete and the inspection booking is confirmed. The message provides no occurrence date, time, or location beyond identifying the blue workshop.",
+            "why_member": "The message addresses the recipient as the holder of the confirmed booking.",
+            "next_step": "Review the booking details if the inspection date and time are needed.",
+            "thread_state": "in_progress",
+            "unresolved_questions": [
+              "When is the inspection scheduled?"
+            ],
+            "related_source_ids": [
+              "m02"
+            ],
+            "obligation_assessment": {
+              "purpose": "appointment",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "unknown",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "your booking is confirmed",
+                  "role": "ownership"
+                }
+              ]
+            }
+          },
+          {
+            "target_kind": "task",
+            "title": "Prepare the separate tool inventory",
+            "evidence_source_id": "m01",
+            "evidence_quote": "The separate tool inventory is still required.",
+            "candidate": {
+              "description": "Prepare the separate tool inventory."
+            },
+            "confidence": 0.97,
+            "reasons": [
+              "The primary message explicitly says the separate tool inventory remains required.",
+              "The related request clarifies that the required action is to prepare the inventory."
+            ],
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "compact_summary": "The separate tool inventory remains required.",
+            "case_summary": "The earlier request asked the recipient to prepare a separate tool inventory. The primary message confirms that this requirement remains open despite completion of inspection scheduling.",
+            "why_member": "The related message directly asked the recipient to prepare the inventory, and the primary message says it is still required.",
+            "next_step": "Prepare the separate tool inventory.",
+            "thread_state": "waiting_on_member",
+            "unresolved_questions": [
+              "When is the tool inventory due?"
+            ],
+            "related_source_ids": [
+              "m02"
+            ],
+            "obligation_assessment": {
+              "purpose": "preparation",
+              "actionability": "required",
+              "condition": null,
+              "condition_state": "not_applicable",
+              "beneficiary": null,
+              "date_role": "none",
+              "blocking_question_indices": [],
+              "qualifying_evidence": [
+                {
+                  "source_id": "m01",
+                  "quote": "The separate tool inventory is still required.",
+                  "role": "ownership"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

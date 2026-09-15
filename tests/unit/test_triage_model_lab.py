@@ -7,6 +7,9 @@ import pytest
 
 from tools.triage_model_lab import (
     CASE_IDS,
+    CURRENTNESS_FIXTURES,
+    CURRENTNESS_HASHES,
+    CURRENTNESS_IDS,
     FIXTURE_HASHES,
     FIXTURES,
     MODEL,
@@ -17,6 +20,7 @@ from tools.triage_model_lab import (
     _retry_policy,
     _save_report,
     load_frozen_cases,
+    load_currentness_cases,
     validate_environment,
 )
 
@@ -98,11 +102,45 @@ def test_model_lab_rejects_modified_or_added_frozen_input(tmp_path):
         load_frozen_cases(tmp_path)
 
 
+def test_currentness_model_lab_preserves_original_sources_and_exact_edges():
+    cases = load_currentness_cases()
+    assert cases[:19] == load_frozen_cases()
+    assert tuple(case["case_id"] for case in cases[19:]) == CURRENTNESS_IDS
+    assert len(cases) == len({case["message_id"] for case in cases}) == 25
+    original, unrelated, anchor, completion, unknown, established = cases[19:]
+    assert anchor["thread_id"] == original["thread_id"]
+    assert unrelated["thread_id"] != original["thread_id"]
+    assert completion["thread_id"] != original["thread_id"]
+    assert completion["references"] == [original["rfc_message_id"]]
+    assert original["occurred_at"] < anchor["occurred_at"] < completion["occurred_at"]
+    forbidden = {
+        "required_actions",
+        "forbidden",
+        "expected",
+        "source_evidence",
+        "uncertainty",
+    }
+    assert all(not forbidden.intersection(case) for case in cases)
+
+
+def test_currentness_model_lab_refuses_modified_or_extra_frozen_files(tmp_path):
+    for name in CURRENTNESS_HASHES:
+        (tmp_path / name).write_bytes((CURRENTNESS_FIXTURES / name).read_bytes())
+    path = tmp_path / "expectations-frozen.json"
+    path.write_bytes(path.read_bytes() + b"\n")
+    with pytest.raises(LabRefused, match="digest"):
+        load_currentness_cases(tmp_path)
+    path.write_bytes((CURRENTNESS_FIXTURES / path.name).read_bytes())
+    (tmp_path / "extra.json").write_text("{}")
+    with pytest.raises(LabRefused, match="two files"):
+        load_currentness_cases(tmp_path)
+
+
 def test_model_lab_attempt_ceiling_is_bound_to_current_production_retry_constant():
     policy = _retry_policy()
     assert policy["delay_seconds"] == [0.5, 2.0]
     assert policy["max_gateway_skill_attempts_per_source"] == 3
-    assert policy["max_source_gateway_skill_attempts"] == 57
+    assert policy["max_source_gateway_skill_attempts"] == 75
 
 
 def test_model_lab_never_scores_missing_or_failed_inference_as_no_action():

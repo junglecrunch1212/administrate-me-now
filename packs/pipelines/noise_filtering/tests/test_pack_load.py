@@ -25,6 +25,8 @@ def test_pack_loads_cleanly() -> None:
         "triage.source_publication.planned",
         "source.assessment.revision_requested",
         "triage.source_revision_publication.planned",
+        "source.currentness.revision_requested",
+        "triage.currentness_publication.planned",
     ]
     assert "messaging.classified" in pack.events_emitted
     assert "messaging.semantic_features_extracted" in pack.events_emitted

@@ -274,11 +274,17 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
         replacements = [p for p in proposals if p["payload"]["proposal_id"] != PROPOSAL]
         assert len(replacements) == int(actionable) + int(member_action is not None)
         supersessions = client.portal.call(_events, runtime, "triage.item.superseded")
-        assert len(supersessions) == 1
-        retirement = supersessions[0]
-        assert retirement["schema_version"] == 4
-        assert retirement["payload"]["expected_content_revision_event_id"] == prior_id
-        assert prior_id < receipt_id < retirement["event_id"]
+        # Scoped member-decision lookup now avoids even a redundant retirement
+        # attempt. Untouched interpretations still require the exact receipt;
+        # projection and sibling protections below remain independently checked.
+        assert len(supersessions) == int(member_action is None)
+        if supersessions:
+            retirement = supersessions[0]
+            assert retirement["schema_version"] == 4
+            assert (
+                retirement["payload"]["expected_content_revision_event_id"] == prior_id
+            )
+            assert prior_id < receipt_id < retirement["event_id"]
         for proposal in proposals:
             client.portal.call(
                 runtime.wait_for_subscriber,

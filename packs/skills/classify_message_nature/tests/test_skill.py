@@ -40,6 +40,11 @@ def test_declared_legacy_compatibility_preserves_validation_contract() -> None:
         assert hashlib.sha256((PACK_ROOT / name).read_bytes()).hexdigest() == digest
     schema = json.loads((PACK_ROOT / "schemas/output.schema.json").read_text())
     item = schema["properties"]["candidates"]["items"]
+    assessment = item["properties"]["obligation_assessment"]
+    assert "blocking_question_indices" not in assessment["required"]
+    question_scope = assessment["properties"].pop("blocking_question_indices")
+    assert question_scope["uniqueItems"] is True
+    assert question_scope["maxItems"] == 8
     # Every new conditional branch contains annotations only. Its true branch
     # must impose no new required fields, types or additional-property limits.
     for branch in item.pop("allOf"):
@@ -73,11 +78,13 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "8.0.3"
+    assert loaded.version == "8.0.5"
     assert loaded.skill_frontmatter["compatible_success_versions"] == [
         "8.0.0",
         "8.0.1",
         "8.0.2",
+        "8.0.3",
+        "8.0.4",
     ]
     assert loaded.skill_frontmatter["timeout_seconds"] == 120
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"

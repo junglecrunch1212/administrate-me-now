@@ -227,3 +227,79 @@ validation and sample quality is not whole-mailbox accuracy.
 - **DEFER:** no required product or safety capability. Production historical
   rollback correctness is outside the reset's claims and remains governed by
   the ordinary release and recovery contracts.
+
+## Currentness and unresolved obligation questions
+
+**MODERNIZE uncertainty enforcement; PRESERVE typed source authority (CO-030):**
+classifier8.0.4 declares `blocking_question_indices` for each candidate's existing
+`unresolved_questions`. The list identifies questions that prevent establishing
+whether that action is required. Empty means remaining questions concern only
+execution details or there are no questions. Indexes are unique, bounded and
+validated against that candidate's actual question list. Code retains unknown
+obligations as clarification rather than independently required work, preserving
+the action, exact evidence and dates. A billing date or payment link alone cannot
+establish an amount payable or outstanding requirement; independent statement
+review is assessed separately. A payment with established obligation is not held
+merely because its method is undecided.
+
+The existing member lane selector evaluates typed uncertainty and unresolved or
+conflicting admission before deadline, promise/request priority, or waiting
+labels. Explicit unmet optional opportunities retain their possibilities lane;
+established obligations retain their ordinary priority. New proposal and
+reconciliation events derive both the stored lane and effective disposition
+through this selector. This does not migrate old rows or rewrite prior decisions.
+
+The new field is optional for validation of historical8.0.0–8.0.3 receipts. During
+new interpretation, unanswered questions with no declaration remain conservative;
+persisted proposals and member decisions are not rewritten. Raw immutable skill
+receipts retain the declaration; derived assessment actionability reflects the
+verified structural decision. The model still supplies semantic scope, so fixed
+transport process tests do not establish actual-model accuracy. No provider SDK,
+new model route, full history replay, cap renewal or extra inference authority is
+introduced. Any additional model round or application to the completed sample
+requires its separately bounded operating manifest and budget.
+
+Exact linked completion handling follows ADR-0010; no shared sender, subject or
+account can supply missing relationship authority. The existing source-pair
+confirmation mechanism remains the only member-authorized alternative to strong
+provider links. A measured quality failure does not invent those confirmations.
+
+**MODERNIZE bounded application; PRESERVE closed authority:** the separate
+`currentness-v1` command accepts one immutable manifest of at most three selected
+episode anchors, with at most three durable classifier attempts per anchor.
+The earlier nine-anchor semantic revision retains its original classifier digest,
+request keys, schema and closed budget. A changed manifest or repeated request
+cannot renew either allowance. The currentness preview and application endpoints
+under `/api/system/source-currentness-revisions` reuse the existing exact dataset,
+selection, member, assessment, context, observation and member-decision checks.
+The classifier contract is fixed to the reviewed8.0.5 bundle. Existing member
+source-pair confirmations, when required, must precede the exact context preview;
+selection alone supplies no relationship authority.
+
+Currentness command, refusal, assessment and publication records have distinct
+event types. Current readers include those outcomes, while the protected
+predecessor ignores their control suffix. Ordinary recovery cannot renew a failed
+currentness allowance. Publication uses the existing durable mechanism; a
+completion-only correction can retire an exact untouched proposal without making
+another proposal. Production-composition tests preserve earlier receipts and
+decisions through interrupted completion, publication, repeated requests, source
+redelivery and predecessor reactivation. None of these isolated proofs constitutes
+application to the existing sample: that requires its exact private manifest and
+operating approval after actual-model and protected delivery gates.
+
+The currentness model proof uses the unchanged nineteen original frozen sources
+and six separately frozen sources in `tests/fixtures/triage_currentness_model_lab`.
+The new sequence covers two independent original requests, a weakly similar
+unrelated request, a later thread anchor, an exactly RFC-linked completion, and
+unknown-versus-established payment. Expected outcomes are separately hashed and
+never enter classifier inputs. Source metadata supplies the actual RFC edge;
+the harness does not insert a model relationship or completion result.
+
+The existing disposable runner captures all twenty-five sources through the
+pinned `llm-task` seam. Its production retry ceiling is seventy-five source
+invocations plus one separately counted Doctor invocation per run. This is a new
+proof proposal, not reuse of the completed three-round authorization. An exact
+commit and finite total run/call budget require owner approval before setting
+the existing inference trigger. Manual `gateway_preflight_only` dispatch builds
+and proves the same Gateway without exposing the model secret, even if that
+trigger is set. No local instance or member device becomes a model lab.

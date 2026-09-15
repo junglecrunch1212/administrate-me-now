@@ -32,7 +32,7 @@ def _json(path: Path, value: object) -> None:
     atomic_write(path, json.dumps(value, indent=2).encode())
 
 
-def accepted_reset_fixture(tmp_path, monkeypatch):
+def accepted_reset_fixture(tmp_path, monkeypatch, *, predecessor_pointer_depth=1):
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     candidate = tmp_path / "candidate"
     predecessor_commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
@@ -53,9 +53,31 @@ def accepted_reset_fixture(tmp_path, monkeypatch):
     predecessor.parent.mkdir(mode=0o700, exist_ok=True)
     _extract_git_archive(candidate, predecessor_commit, predecessor)
     install_launch_agents(paths, predecessor, test_mode=True)
+    previous = None
+    # Synthetic inert history is established before the reset manifest exists.
+    # Only the real immediate predecessor is ever selected or executed.
+    assert 1 <= predecessor_pointer_depth <= 62
+    for index in range(predecessor_pointer_depth - 1):
+        historical_commit = f"{index + 1:040x}"
+        historical = predecessor.parent / historical_commit
+        historical.mkdir(mode=0o700)
+        atomic_write(
+            historical / "retained-history.txt", b"synthetic retained history\n"
+        )
+        previous = {
+            "commit": historical_commit,
+            "path": str(historical),
+            "previous": previous,
+        }
+    pointer: dict[str, object] = {
+        "commit": predecessor_commit,
+        "path": str(predecessor),
+    }
+    if previous is not None:
+        pointer["previous"] = previous
     _json(
         paths.app_dir / "current-release.json",
-        {"commit": predecessor_commit, "path": str(predecessor)},
+        pointer,
     )
     # A distinct immutable candidate is required; never edit an installed release.
     atomic_write(

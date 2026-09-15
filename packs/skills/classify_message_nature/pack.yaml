@@ -1,7 +1,7 @@
 pack:
   id: skill:classify_message_nature
   name: Classify message nature
-  version: 8.0.3
+  version: 8.0.5
   kind: skill
   author: built-in
   license: Apache-2.0

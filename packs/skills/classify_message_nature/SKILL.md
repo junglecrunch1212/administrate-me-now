@@ -1,8 +1,8 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 8.0.3
-compatible_success_versions: [8.0.0, 8.0.1, 8.0.2]
+version: 8.0.5
+compatible_success_versions: [8.0.0, 8.0.1, 8.0.2, 8.0.3, 8.0.4]
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -97,7 +97,8 @@ selects an existing party or asserts identity. Direction is derived from the eve
 member. Every admitted candidate
 must carry a stable source alias and verbatim source quote; deterministic code
 rejects ungrounded, completed, other-owned, or related-only
-output, filters candidate fields, preserves privacy scope, and owns Triage
+output as new work. An exact later linked completion can retire only its matched
+untouched earlier system proposal. Code filters candidate fields, preserves privacy scope, and owns Triage
 eligibility. They remain derived proposals until the member reviews them in
 Triage. The dedicated commitment pipeline continues to own richer attributed
 inbound-request semantics; this skill covers grounded outbound member promises
@@ -110,3 +111,17 @@ reuses those successes unchanged; a prompt correction does not request replay.
 
 Completed payment or registration is excluded from the qualifying completion
 evidence of future attendance; it remains a separate transaction state.
+
+Version 8.0.4 adds an optional, bounded question-index declaration to distinguish
+unknown obligations from execution details, and exposes exact linked completion
+interpretations for retirement of untouched earlier system proposals. Historical
+8.0.0–8.0.3 receipts remain schema-valid and reusable; persisted proposals and
+member decisions are unchanged. Missing question scope on newly processed output
+with unanswered questions remains uncertain. No global replay is requested.
+
+Version 8.0.5 clarifies the originating evidence of an unchanged related action.
+A later status restatement retains the exact original related request and open
+lifecycle as a nonpublishing interpretation. Existing deterministic grounding
+excludes related-origin work; new primary requests remain separately eligible.
+The output schema and historical 8.0.0–8.0.4 receipts remain compatible. No
+semantic-similarity deduplication or historical replay is introduced.
