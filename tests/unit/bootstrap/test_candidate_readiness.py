@@ -330,6 +330,14 @@ def test_htr03_member_set_excludes_deferred_household_records(tmp_path: Path) ->
 def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+
+    # The active builder reads the clock internally; match the explicit clock
+    # used to record and load this fixed synthetic evidence.
+    monkeypatch.setattr(candidate_readiness, "datetime", FixtureClock)
     paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
         _arguments(tmp_path, monkeypatch)
     )
