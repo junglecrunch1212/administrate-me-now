@@ -195,9 +195,6 @@ def validate_candidate(
         raise UpgradeError(f"candidate is incomplete: {missing}")
     active = load_versions(active_root)
     incoming = load_versions(candidate)
-    communication_intake_policies = _require_communication_intake_compatibility(
-        active, incoming
-    )
     active_claw = active["openclaw"]
     incoming_claw = incoming["openclaw"]
     for key in ("version", "plugin_api"):
@@ -249,6 +246,9 @@ def validate_candidate(
             "candidate changes the Python/Node runtime baseline; rerun only after "
             "the clean migration rehearsal and explicit --approve-runtime-migration"
         )
+    communication_intake_policies = _require_communication_intake_compatibility(
+        active, incoming
+    )
     return {
         "compatible": True,
         "openclaw_version": active_claw["version"],

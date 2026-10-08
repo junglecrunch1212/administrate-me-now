@@ -1253,6 +1253,7 @@ def test_runtime_recovery_endpoint_is_scoped_append_only_and_human_gated(
     instance_dir.mkdir()
     settings = RuntimeSettings.credential_free(
         instance_dir,
+        legacy_personal_obligation_compatibility=True,
         encryption_key=TEST_KEY,
         repository_root=REPO_ROOT,
         member_identities={
@@ -1428,7 +1429,9 @@ async def test_runtime_startup_terminalizes_checkpointed_recovery_command(
 ) -> None:
     """Production startup repairs a command ledger without moving checkpoints."""
 
-    settings = _settings(tmp_path)
+    settings = replace(
+        _settings(tmp_path), legacy_personal_obligation_compatibility=True
+    )
     log = EventLog(settings.instance, TEST_KEY)
     try:
         source_id = await log.append(

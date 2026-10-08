@@ -773,5 +773,7 @@ def test_currentness_preserves_closed_receipts_and_exact_predecessor(
         assert model.calls == calls
         assert _assurance(client)["counts"]["failed"] == (1 if outcome == "fail" else 0)
         subscriber = "pipeline:pipeline:noise_filtering"
-        for state in (retained, revised, rolled_back, snapshot(client)):
+        for state in (retained, rolled_back):
             assert state["consumers"][subscriber]["consumer_version"] == "23.0.0"
+        for state in (revised, snapshot(client)):
+            assert state["consumers"][subscriber]["consumer_version"] == "24.0.0"

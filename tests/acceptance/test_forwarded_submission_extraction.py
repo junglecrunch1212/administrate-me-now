@@ -197,6 +197,18 @@ def _calendar_destination(client: TestClient) -> None:
     assert result.status_code == 202, result.text
 
 
+def _calendar_bridge_headers(client: TestClient) -> dict[str, str]:
+    """Bind the fixture request to its existing active enrollment coordinate."""
+    identity = "bridge-triage.ts.net"
+    enrollment = client.app.state.bridge_enrollments[identity]
+    assert enrollment["member_id"] == MEMBER
+    assert enrollment["status"] == "active"
+    return {
+        "Tailscale-User-Login": identity,
+        "X-AdministrateMe-Bridge-Enrollment": enrollment["enrollment_id"],
+    }
+
+
 def test_full_forward_after_long_evidence_routes_only_after_both_approvals(
     tmp_path: Path,
 ) -> None:
@@ -337,7 +349,7 @@ def test_full_forward_after_long_evidence_routes_only_after_both_approvals(
         assert executed.status_code == 200, executed.text
         queued = client.get(
             "/api/bridge/commands?providers=apple_calendar",
-            headers={"Tailscale-User-Login": "bridge-triage.ts.net"},
+            headers=_calendar_bridge_headers(client),
         )
         assert queued.status_code == 200, queued.text
         assert queued.json()["commands"] == []

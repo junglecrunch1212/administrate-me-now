@@ -55,6 +55,7 @@ jobs:
           tests/unit/adapters/messaging/test_gmail_forwarded_intake.py
 
       - name: Validate architecture, style, and types
+        if: ${{ !cancelled() }}
         run: |
           poetry run ruff check .
           poetry run ruff format --check --diff adminme bootstrap bridge packs scripts tests tools

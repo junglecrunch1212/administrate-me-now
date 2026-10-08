@@ -102,13 +102,36 @@ async def _command_already_terminal(event_log: EventLog, event: dict[str, Any]) 
     )
 
 
-async def retire_passive_obligation_candidates(
-    *, event_log: EventLog, event_sink: EventSink, tenant_id: str
+async def preview_passive_obligation_candidates(
+    *, event_log: EventLog, tenant_id: str
 ) -> dict[str, Any]:
-    """Preserve source facts and member work; retire only untouched auto drafts."""
+    """Content-free, read-only counts from the exact production retirement scan.
+
+    The returned watermarks identify this preview. New source/member decisions
+    can change the later activation selection, so preview again at quiescence.
+    This helper accepts a read-only EventLog and needs no runtime or event sink.
+    """
+    return await retire_passive_obligation_candidates(
+        event_log=event_log, tenant_id=tenant_id, dry_run=True
+    )
+
+
+async def retire_passive_obligation_candidates(
+    *,
+    event_log: EventLog,
+    tenant_id: str,
+    event_sink: EventSink | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Preserve source facts/member work; optionally preview without any writes."""
+    if not dry_run and event_sink is None:
+        raise ValueError(
+            "applying communication intake retirement requires an event sink"
+        )
     epoch = await event_log.get_by_idempotency(tenant_id, POLICY_EVENT_KEY)
-    if epoch is None:
-        source_watermark = await event_log.latest_event_id()
+    source_watermark = await event_log.latest_event_id()
+    if epoch is None and not dry_run:
+        assert event_sink is not None
         now = datetime.now(timezone.utc)
         epoch_id = await event_sink.write(
             EventEnvelope(
@@ -132,9 +155,10 @@ async def retire_passive_obligation_candidates(
             )
         )
         epoch = await event_log.get(epoch_id)
-    if (
-        epoch is None
-        or epoch.get("type") != POLICY_EVENT_TYPE
+    if epoch is None and not dry_run:
+        raise RuntimeError("communication intake policy epoch was not recorded")
+    if epoch is not None and (
+        epoch.get("type") != POLICY_EVENT_TYPE
         or epoch.get("tenant_id") != tenant_id
         or epoch.get("source_adapter") != "communication-intake-policy"
         or epoch.get("payload", {}).get("policy_id") != POLICY_ID
@@ -142,21 +166,32 @@ async def retire_passive_obligation_candidates(
         or epoch.get("visibility_scope") != "shared:household"
     ):
         raise RuntimeError("communication intake policy epoch is invalid")
-    cutoff = epoch["payload"].get("previous_source_watermark")
+    cutoff = (
+        epoch["payload"].get("previous_source_watermark")
+        if epoch is not None
+        else source_watermark
+    )
     counts: dict[str, Any] = {
         "policy_id": POLICY_ID,
-        "policy_event_id": epoch["event_id"],
+        "policy_event_id": epoch["event_id"] if epoch is not None else None,
+        "preview_only": dry_run,
+        "source_watermark": cutoff,
+        "member_decision_watermark": source_watermark,
         "selected": 0,
         "retired": 0,
+        "would_retire": 0,
         "preserved_member_decision": 0,
         "already_retired": 0,
         "sources_not_selected": 0,
         "commands_retired": 0,
+        "would_retire_commands": 0,
+        "would_mark_sources_not_selected": 0,
     }
     if not cutoff:
         return counts
 
     current_watermark = await event_log.latest_event_id()
+    counts["member_decision_watermark"] = current_watermark
     decided: set[tuple[str, str]] = set()
     retired: set[tuple[str, str]] = set()
     async for event in event_log.read_since(
@@ -190,13 +225,17 @@ async def retire_passive_obligation_candidates(
         if event.get("tenant_id") != tenant_id:
             continue
         if event["type"] in PASSIVE_COMMUNICATION_TYPES:
-            await record_passive_source_skipped(event, ctx)
-            counts["sources_not_selected"] += 1
+            counts["would_mark_sources_not_selected"] += 1
+            if not dry_run:
+                await record_passive_source_skipped(event, ctx)
+                counts["sources_not_selected"] += 1
             continue
         if event["type"] in PASSIVE_CONTROL_TYPES:
             if not await _command_already_terminal(event_log, event):
-                await retire_passive_command(event, ctx)
-                counts["commands_retired"] += 1
+                counts["would_retire_commands"] += 1
+                if not dry_run:
+                    await retire_passive_command(event, ctx)
+                    counts["commands_retired"] += 1
             continue
         if not passive_proposal_producer(event):
             continue
@@ -236,6 +275,10 @@ async def retire_passive_obligation_candidates(
         if key in retired:
             counts["already_retired"] += 1
             continue
+        counts["would_retire"] += 1
+        if dry_run:
+            continue
+        assert event_sink is not None and epoch is not None
         await event_sink.write(
             EventEnvelope(
                 event_at_ms=int(epoch["event_at_ms"]),

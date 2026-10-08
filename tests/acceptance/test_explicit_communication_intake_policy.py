@@ -12,11 +12,15 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from adminme.communication_intake_policy import (
+    POLICY_EVENT_KEY,
     POLICY_EVENT_TYPE,
     POLICY_REASON,
     RETIRED_COMMAND_TYPE,
     SKIPPED_EVENT_TYPE,
     command_retirement,
+)
+from adminme.communication_intake_retirement import (
+    preview_passive_obligation_candidates,
 )
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
@@ -327,6 +331,33 @@ async def _preload(settings) -> dict[str, str]:
 def test_cutover_retires_only_untouched_drafts_and_survives_replay(tmp_path):
     settings = _settings(tmp_path / "instance")
     seeded = asyncio.run(_preload(settings))
+
+    async def preview_without_mutation():
+        log = EventLog(settings.instance, settings.encryption_key, read_only=True)
+        try:
+            before_count = await log.count()
+            before_watermark = await log.latest_event_id()
+            preview = await preview_passive_obligation_candidates(
+                event_log=log, tenant_id=settings.instance.tenant_id
+            )
+            assert await log.count() == before_count
+            assert await log.latest_event_id() == before_watermark
+            assert (
+                await log.get_by_idempotency(
+                    settings.instance.tenant_id, POLICY_EVENT_KEY
+                )
+                is None
+            )
+            assert preview["source_watermark"] == before_watermark
+            assert preview["preview_only"] is True
+            assert preview["retired"] == preview["commands_retired"] == 0
+            assert preview["selected"] == 4
+            assert preview["preserved_member_decision"] == 2
+            return preview
+        finally:
+            await log.close()
+
+    preview = asyncio.run(preview_without_mutation())
     for restart in range(2):
         app = create_application(settings)
         with TestClient(app) as client:
@@ -347,7 +378,27 @@ def test_cutover_retires_only_untouched_drafts_and_survives_replay(tmp_path):
                     command_retirement, runtime.event_log, request
                 )
             assert len(client.portal.call(_events, runtime, POLICY_EVENT_TYPE)) == 1
-            assert len(client.portal.call(_events, runtime, RETIRED_COMMAND_TYPE)) == 2
+            assert (
+                len(client.portal.call(_events, runtime, RETIRED_COMMAND_TYPE))
+                == preview["would_retire_commands"]
+                == 2
+            )
+            supersessions = client.portal.call(
+                _events, runtime, "triage.item.superseded"
+            )
+            assert (
+                sum(
+                    event["payload"].get("reason") == POLICY_REASON
+                    for event in supersessions
+                )
+                == preview["would_retire"]
+                == 2
+            )
+            assert (
+                len(client.portal.call(_events, runtime, SKIPPED_EVENT_TYPE))
+                == preview["would_mark_sources_not_selected"]
+                == 1
+            )
             assert (
                 client.portal.call(
                     _events, runtime, "skill.call.recorded", "skill.call.failed"
