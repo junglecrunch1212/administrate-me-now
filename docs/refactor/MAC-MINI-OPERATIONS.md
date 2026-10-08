@@ -427,6 +427,34 @@ that window start from active readiness and cannot reset it. Its append-only
 `htr-10-review-v1` receipt contains only counts and hashes. A fixture or an
 unreviewed export is not HTR-10 completion.
 
+If the predecessor's export lacks the explicit observation-window origin, use
+the exact merged candidate's read-only exporter before the reducer:
+
+```bash
+python -m bootstrap.htr10_export \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe" \
+  --historical-output /absolute/path/inside/backups/historical.json \
+  --source-output /absolute/path/inside/backups/source-assurance.json \
+  --approve-provider-binding-migration
+```
+
+Here the compatibility-named approval flag confirms review of the exact
+provider-ownership audit view. The exporter prepares that view only in memory;
+it neither enrolls providers nor changes configuration. An already-current
+configuration produces no transition. A non-null transition digest must be
+reviewed separately before it can be carried into pending activation evidence.
+No provider call or runtime construction occurs. Existing outputs are never
+overwritten. Run from the clean merged candidate with its supported interpreter.
+
+Read-only collection can proceed when only deployment attestation dimensions
+are blocked, while operational topology, core capabilities, safe reads,
+ingestion, observation containment and current zero-effect accounting remain
+healthy. It cannot turn an unobserved recovery login or device test into
+evidence. Missing, unknown or broader operational degradation remains blocked.
+Both exported audits must cover the original active observation boundary; the
+reducer and pending writer reject a missing, mismatched or subsequently changed
+origin. Active readiness and physical-check timestamps remain untouched.
+
 ```bash
 python -m bootstrap.candidate_readiness \
   --instance-root "$HOME/Library/Application Support/AdministrateMe" \

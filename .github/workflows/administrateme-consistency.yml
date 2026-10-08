@@ -47,6 +47,8 @@ jobs:
           tests/acceptance/test_explicit_communication_intake_policy.py
           tests/acceptance/test_communication_intake_prerequisite.py
           tests/acceptance/test_communication_intake_upgrade_chain.py
+          tests/acceptance/test_readiness_audit_export.py
+          tests/unit/bootstrap/test_htr10_export.py
           tests/acceptance/test_forwarded_channel_intake.py
           tests/acceptance/test_forwarded_submission_extraction.py
           tests/acceptance/test_provider_creation_replay.py

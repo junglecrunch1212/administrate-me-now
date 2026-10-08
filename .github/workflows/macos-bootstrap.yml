@@ -83,6 +83,8 @@ jobs:
           tests/acceptance/test_explicit_communication_intake_policy.py
           tests/acceptance/test_communication_intake_prerequisite.py
           tests/acceptance/test_communication_intake_upgrade_chain.py
+          tests/acceptance/test_readiness_audit_export.py
+          tests/unit/bootstrap/test_htr10_export.py
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/bootstrap/test_candidate_readiness.py
           tests/unit/test_observation_readiness_window.py

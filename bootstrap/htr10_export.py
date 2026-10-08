@@ -34,6 +34,144 @@ class HTR10ExportError(RuntimeError):
     pass
 
 
+_ATTESTATION_REFRESH_DIMENSIONS = frozenset(
+    {
+        "attestation_binding",
+        "service_account_recovery",
+        "identity_acceptance",
+        "backup_rollback",
+        "observation_effects",
+    }
+)
+_OPERATIONAL_DIMENSIONS = frozenset(
+    {
+        "topology",
+        "provider_bindings",
+        "openclaw",
+        "bridges",
+        "service_channel_identities",
+    }
+)
+_INTEGRITY_ZERO_COUNTS = (
+    "provider_called_unknown",
+    "missing_terminal",
+    "duplicate_terminal",
+    "approval_correlation_missing",
+    "duplicate_request",
+    "malformed_request",
+    "orphan_terminal",
+    "invalid_legacy_reconciliation",
+    "duplicate_legacy_reconciliation",
+)
+
+
+def _runtime_supports_read_only_attestation_refresh(diagnostics: object) -> bool:
+    """Permit fresh audit collection, never activation, while attestations expire.
+
+    Old runtimes may reject a historical observation origin solely because it
+    is older than 31 days. Require their current zero-effect and operational
+    proof, then recompute the full origin-bound audit with this candidate.
+    No stale physical attestation becomes a successful check through this path.
+    """
+
+    if not isinstance(diagnostics, dict) or (
+        diagnostics.get("ready") is not False
+        or diagnostics.get("status") not in {"healthy", "observation_only"}
+        or diagnostics.get("service_ready") is not True
+        or diagnostics.get("safe_reads") is not True
+        or diagnostics.get("event_ingest_ready") is not True
+        or diagnostics.get("observation_active") is not True
+        or diagnostics.get("write_admission") != "blocked"
+        or diagnostics.get("startup_error") is not None
+    ):
+        return False
+    readiness = diagnostics.get("deployment_readiness")
+    if not isinstance(readiness, dict) or (
+        readiness.get("contract") != "deployment-readiness-v1"
+        or readiness.get("ready") is not False
+    ):
+        return False
+    dimensions = readiness.get("dimensions")
+    blockers = readiness.get("blocking_dimensions")
+    if (
+        not isinstance(dimensions, dict)
+        or not (_ATTESTATION_REFRESH_DIMENSIONS | _OPERATIONAL_DIMENSIONS)
+        <= set(dimensions)
+        or not isinstance(blockers, list)
+        or not blockers
+        or not all(isinstance(name, str) for name in blockers)
+        or len(blockers) != len(set(blockers))
+        or not set(blockers) <= _ATTESTATION_REFRESH_DIMENSIONS
+    ):
+        return False
+    observed_blockers: set[str] = set()
+    for name, row in dimensions.items():
+        if not isinstance(row, dict) or not isinstance(row.get("required"), bool):
+            return False
+        state = row.get("state")
+        if name in _ATTESTATION_REFRESH_DIMENSIONS:
+            if row["required"] is not True or state not in {"healthy", "blocked"}:
+                return False
+            if state == "blocked":
+                observed_blockers.add(name)
+        elif row["required"] is True:
+            if state != "healthy":
+                return False
+        elif state not in {
+            "healthy",
+            "disabled",
+            "not_applicable",
+            "planned",
+            "account_created",
+            "channel_not_enrolled",
+            "observation",
+        }:
+            return False
+    if observed_blockers != set(blockers):
+        return False
+    capabilities = diagnostics.get("capabilities")
+    if not isinstance(capabilities, dict) or not capabilities:
+        return False
+    if not any(str(name).startswith("pipeline:") for name in capabilities) or not any(
+        str(name).startswith("projection:") for name in capabilities
+    ):
+        return False
+    if any(
+        not isinstance(row, dict)
+        or row.get("state") not in {"healthy", "observation_only", "disabled"}
+        for row in capabilities.values()
+    ):
+        return False
+    source = capabilities.get("policy:source-assurance", {}).get("details")
+    if not isinstance(source, dict) or source.get("state") != "healthy":
+        return False
+    freshness = source.get("freshness") or {}
+    counts = source.get("counts") or {}
+    effects = source.get("provider_effects") or {}
+    if not all(isinstance(value, dict) for value in (freshness, counts, effects)):
+        return False
+    window = effects.get("observation_window") or {}
+    effect_counts = effects.get("counts") or {}
+    if not isinstance(window, dict) or not isinstance(effect_counts, dict):
+        return False
+    window_counts = window.get("counts") or {}
+    if not isinstance(window_counts, dict):
+        return False
+    return bool(
+        freshness.get("state") == "fresh"
+        and freshness.get("revision_current") is True
+        and freshness.get("refresh_error_type") is None
+        and all(counts.get(name) == 0 for name in ("missing", "pending", "failed"))
+        and effects.get("state") == "healthy"
+        and window.get("state") == "healthy"
+        and window.get("started_at_configured") is True
+        and all(effect_counts.get(name) == 0 for name in _INTEGRITY_ZERO_COUNTS)
+        and all(window_counts.get(name) == 0 for name in _INTEGRITY_ZERO_COUNTS)
+        and window_counts.get("provider_called_true") == 0
+        and window_counts.get("suppressed_false_or_unknown") == 0
+    )
+
+
 def _private_json(path: Path) -> tuple[bytes, dict[str, Any]]:
     payload = path.read_bytes()
     value = json.loads(payload)
@@ -108,7 +246,9 @@ def _runtime_supports_read_only_repair_audit(diagnostics: object) -> bool:
 
     if isinstance(diagnostics, dict) and diagnostics.get("ready") is True:
         return True
-    return bool(isolated_degraded_adapter_ids(diagnostics))
+    return bool(isolated_degraded_adapter_ids(diagnostics)) or (
+        _runtime_supports_read_only_attestation_refresh(diagnostics)
+    )
 
 
 async def export_htr10_audits(
@@ -245,6 +385,8 @@ async def export_htr10_audits(
         "historical_state": historical.get("state"),
         "source_state": assurance.get("state"),
         "provider_binding_transition_sha256": transition_sha256,
+        "activation_authorized": False,
+        "physical_checks_attested": False,
         "content_exposed": False,
     }
 

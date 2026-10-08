@@ -70,6 +70,20 @@ not by themselves prove a successful recovery login or FileVault unlock.
 Existing evidence may be reused only while actually valid and current; missing
 physical evidence must remain unverified. No checkbox or date is fabricated.
 
+An otherwise operational predecessor may export a fresh read-only HTR-10 audit
+while only its deployment attestations are stale or mismatched. This collection
+path requires healthy topology, provider bindings, OpenClaw and selected bridge
+state, healthy capabilities, safe reads and ingestion, active observation,
+blocked writes, fresh source accounting, and zero ambiguous or unintended
+effects. Only the named binding, recovery, identity, backup and observation
+attestation dimensions may block readiness; unknown or operational degradation
+still refuses. Candidate code recomputes both audits from the encrypted log at
+one watermark and retains the original observation boundary. Export neither
+refreshes active readiness nor attests physical checks or authorizes activation.
+The subsequent review, pending evidence, backup and guarded activation gates
+remain independent. This **MODERNIZE** change removes a circular evidence
+collection prerequisite while preserving CO-019's activation requirements.
+
 ## Classification and acceptance
 
 | Classification | Change and governing source |

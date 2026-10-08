@@ -147,3 +147,171 @@ def test_runtime_rejects_unsafe_or_non_adapter_repair_audit(
     mutate(diagnostics)
 
     assert not htr10_export._runtime_supports_read_only_repair_audit(diagnostics)
+
+
+def _expired_attestation_diagnostics() -> dict[str, Any]:
+    zero = {
+        name: 0
+        for name in (
+            "provider_called_true",
+            "provider_called_unknown",
+            "missing_terminal",
+            "duplicate_terminal",
+            "approval_correlation_missing",
+            "duplicate_request",
+            "malformed_request",
+            "orphan_terminal",
+            "invalid_legacy_reconciliation",
+            "duplicate_legacy_reconciliation",
+            "suppressed_false_or_unknown",
+        )
+    }
+    blockers = [
+        "attestation_binding",
+        "service_account_recovery",
+        "identity_acceptance",
+        "backup_rollback",
+        "observation_effects",
+    ]
+    dimensions = {name: {"required": True, "state": "blocked"} for name in blockers}
+    dimensions.update(
+        {
+            name: {"required": True, "state": "healthy"}
+            for name in ("topology", "provider_bindings", "openclaw")
+        }
+    )
+    dimensions["bridges"] = {"required": False, "state": "not_applicable"}
+    dimensions["service_channel_identities"] = {
+        "required": False,
+        "state": "observation",
+    }
+    return {
+        "status": "observation_only",
+        "ready": False,
+        "service_ready": True,
+        "safe_reads": True,
+        "event_ingest_ready": True,
+        "observation_active": True,
+        "write_admission": "blocked",
+        "startup_error": None,
+        "deployment_readiness": {
+            "contract": "deployment-readiness-v1",
+            "ready": False,
+            "blocking_dimensions": blockers,
+            "dimensions": dimensions,
+        },
+        "capabilities": {
+            "pipeline:fixture": {"state": "healthy"},
+            "projection:fixture": {"state": "healthy"},
+            "policy:source-assurance": {
+                "state": "healthy",
+                "details": {
+                    "state": "healthy",
+                    "counts": {"missing": 0, "pending": 0, "failed": 0},
+                    "freshness": {
+                        "state": "fresh",
+                        "revision_current": True,
+                        "refresh_error_type": None,
+                    },
+                    "provider_effects": {
+                        "state": "healthy",
+                        "counts": dict(zero),
+                        "observation_window": {
+                            "state": "healthy",
+                            "started_at_configured": True,
+                            "counts": dict(zero),
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+def test_expired_attestations_allow_only_read_only_evidence_collection() -> None:
+    diagnostics = _expired_attestation_diagnostics()
+    assert htr10_export._runtime_supports_read_only_attestation_refresh(diagnostics)
+    assert htr10_export._runtime_supports_read_only_repair_audit(diagnostics)
+    assert diagnostics["ready"] is False
+    assert (
+        diagnostics["deployment_readiness"]["dimensions"]["service_account_recovery"][
+            "state"
+        ]
+        == "blocked"
+    )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "unsafe_reads",
+        "not_started",
+        "no_ingest",
+        "observation_off",
+        "writes",
+        "startup_error",
+        "topology",
+        "provider_bindings",
+        "openclaw",
+        "bridges",
+        "unknown_dimension",
+        "missing_dimension",
+        "contradictory_blockers",
+        "pipeline",
+        "projection",
+        "unknown_capability",
+        "source_failed",
+        "source_stale",
+        "source_revision",
+        "source_error",
+        "source_pending",
+        "provider_called_true",
+        "provider_called_unknown",
+        "suppressed_false_or_unknown",
+        "missing_terminal",
+    ],
+)
+def test_attestation_refresh_refuses_operational_or_effect_failures(
+    defect: str,
+) -> None:
+    diagnostics = _expired_attestation_diagnostics()
+    readiness = diagnostics["deployment_readiness"]
+    source = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+    if defect in {"unsafe_reads", "not_started", "no_ingest", "observation_off"}:
+        field = {
+            "unsafe_reads": "safe_reads",
+            "not_started": "service_ready",
+            "no_ingest": "event_ingest_ready",
+            "observation_off": "observation_active",
+        }[defect]
+        diagnostics[field] = False
+    elif defect == "writes":
+        diagnostics["write_admission"] = "governed_per_request"
+    elif defect == "startup_error":
+        diagnostics["startup_error"] = "fixture_error"
+    elif defect in {"topology", "provider_bindings", "openclaw", "bridges"}:
+        readiness["dimensions"][defect]["state"] = "blocked"
+    elif defect == "unknown_dimension":
+        readiness["dimensions"]["unknown"] = {"required": True, "state": "blocked"}
+        readiness["blocking_dimensions"].append("unknown")
+    elif defect == "missing_dimension":
+        readiness["dimensions"].pop("topology")
+    elif defect == "contradictory_blockers":
+        readiness["blocking_dimensions"].pop()
+    elif defect in {"pipeline", "projection"}:
+        diagnostics["capabilities"][f"{defect}:fixture"]["state"] = "degraded"
+    elif defect == "unknown_capability":
+        diagnostics["capabilities"]["unknown"] = {"state": "unknown"}
+    elif defect == "source_failed":
+        source["state"] = "degraded"
+    elif defect == "source_stale":
+        source["freshness"]["state"] = "stale"
+    elif defect == "source_revision":
+        source["freshness"]["revision_current"] = False
+    elif defect == "source_error":
+        source["freshness"]["refresh_error_type"] = "fixture_error"
+    elif defect == "source_pending":
+        source["counts"]["pending"] = 1
+    else:
+        source["provider_effects"]["observation_window"]["counts"][defect] = 1
+    assert not htr10_export._runtime_supports_read_only_attestation_refresh(diagnostics)
