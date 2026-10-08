@@ -1864,6 +1864,12 @@ async function run() {
     boundedServer = await startServer(basePort + 3, true, true, true, true);
     for (const width of [1440, 390]) {
       const boundedBrowser = await newContext(browser, identities.principal, { width, height: 1000 });
+      if (width === 1440) {
+        const seeded = await boundedBrowser.page.request.post(`${boundedServer.baseUrl}/__gate7/seed-attention-sources`);
+        record("Current-policy source fixtures are retained without enabling extraction", seeded.ok());
+        const settled = await boundedBrowser.page.request.post(`${boundedServer.baseUrl}/__gate7/settle`);
+        record("Current-policy source fixtures settle", settled.ok());
+      }
       await boundedBrowser.page.goto(`${boundedServer.baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
       await boundedBrowser.page.getByRole("heading", { name: "Choose what needs you." }).waitFor();
       const sampleNotice = boundedBrowser.page.getByText(/^Bounded test sample: 2 selected messages/);
@@ -1873,8 +1879,16 @@ async function run() {
       record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).isVisible());
       record(`Member-forwarded intake is explained at ${width}`, (await boundedBrowser.page.locator(".candidate-policy-intro").textContent()).includes("You are the gate: forward selected email"));
       const passiveCard = boundedBrowser.page.locator(".source-attention-card").filter({ has: sampleNotice });
-      const passiveChoice = passiveCard.getByRole("combobox", { name: "What should reach me?", exact: true });
-      record(`Passive obligation extraction cannot be enabled in Settings at ${width}`, await passiveChoice.isDisabled() && await passiveChoice.inputValue() === "manual" && await passiveCard.getByRole("button", { name: "Preview recent effect", exact: true }).count() === 0);
+      record(`Noneditable source offers no extraction controls at ${width}`, await passiveCard.locator("select, button").count() === 0 && (await passiveCard.textContent()).includes("It does not turn on obligation extraction"));
+      const sourceResponse = await boundedBrowser.page.request.get(`${boundedServer.baseUrl}/api/member/v1/surfaces/settings`);
+      const sourceSettings = await sourceResponse.json();
+      const editablePassive = sourceSettings.control.source_policy_v2.sources.filter((source) => source.configurable && source.explicit_submission_required);
+      record(`Current-policy fixture includes editable personal sources at ${width}`, sourceResponse.ok() && editablePassive.length > 0);
+      for (const source of editablePassive) {
+        const sourceCard = boundedBrowser.page.locator(`[data-source-policy-key="${source.policy_key}"]`);
+        const passiveChoice = sourceCard.locator('select[name="attention_mode"]');
+        record(`Passive extraction remains disabled for ${source.policy_key} at ${width}`, await passiveChoice.isDisabled() && await passiveChoice.inputValue() === "manual" && await sourceCard.locator(".source-purpose-settings, .source-similar-rule").count() === 0 && await sourceCard.getByRole("button", { name: "Preview recent effect", exact: true }).count() === 0);
+      }
       record(`Member-forwarded controls fit at ${width}`, await boundedBrowser.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await auditAccessibility(boundedBrowser.page, `bounded sample ${width}`);
       await screenshot(boundedBrowser.page, `bounded-sample-${width}.png`);
