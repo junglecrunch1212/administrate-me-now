@@ -133,6 +133,15 @@ def _journal_value(
     predecessor = paths.app_dir / "releases" / PREDECESSOR_COMMIT
     candidate = paths.app_dir / "releases" / CANDIDATE_COMMIT
     candidate.mkdir(mode=0o700, exist_ok=True)
+    # Recovery validates both immutable releases' shared-log policy support
+    # before restoring a selector. These fixtures stand for real compatible
+    # releases, including when the controller runs in production mode.
+    versions = (
+        Path(__file__).resolve().parents[3] / "bootstrap" / "versions.json"
+    ).read_bytes()
+    for release in (predecessor, candidate):
+        (release / "bootstrap").mkdir(exist_ok=True)
+        (release / "bootstrap" / "versions.json").write_bytes(versions)
     if operation == "rollback":
         pointer = {
             "path": str(candidate),
