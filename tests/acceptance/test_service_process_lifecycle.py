@@ -9,6 +9,7 @@ No installed service, credential, provider, or fixed application port is used.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -23,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from adminme.events.log import EventLog
+from adminme.lib.instance_config import load_instance_config
 import bootstrap.services as services_module
 from bootstrap.activation_transaction import ActivationJournal
 from bootstrap.contracts import (
@@ -31,6 +34,7 @@ from bootstrap.contracts import (
     RUNTIME_LABEL,
     atomic_write,
 )
+from bootstrap.secrets import secret_store
 from bootstrap.services import SERVICE_STOP_TIMEOUT_SECONDS, ServiceManager
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from bootstrap.wizard import install_launch_agents
@@ -345,6 +349,30 @@ def test_interrupted_recovery_preserves_controls_until_real_stop_and_supported_r
     services, host = lifecycle
     paths = host.paths
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    # Recovery's policy check reads genuine encrypted state before and after
+    # quiescence. Keep that guard intact while only the OS service boundary is
+    # synthetic in this process-lifecycle proof.
+    atomic_write(
+        paths.instance_dir / "config" / "instance.yaml",
+        b"tenant_id: fixture-service-lifecycle\ntimezone: Etc/UTC\n",
+    )
+    fixture_key = b"l" * 32
+    reference = secret_store(paths, test_mode=True).put("event-log", fixture_key)
+    atomic_write(
+        paths.instance_dir / "config" / "secret-references.json",
+        json.dumps({"references": {"event_log": reference}}).encode(),
+    )
+
+    async def initialize_log() -> None:
+        log = EventLog(load_instance_config(paths.instance_dir), fixture_key)
+        try:
+            assert await log.count() == 0
+        finally:
+            await log.close()
+
+    asyncio.run(initialize_log())
+    event_log_path = paths.instance_dir / "events" / "events.db"
+    encrypted_log_before = event_log_path.read_bytes()
     monkeypatch.setattr(services_module, "SERVICE_STOP_TIMEOUT_SECONDS", 2)
     host.wait_for_bootout = False
     host.shutdown_delays[OPENCLAW_LABEL] = 4.2
@@ -491,3 +519,4 @@ def test_interrupted_recovery_preserves_controls_until_real_stop_and_supported_r
     assert not owner.path.exists()
     assert json.loads(Path(result["history"]).read_text())["phase"] == "recovered"
     assert len(host.processes) == 4
+    assert event_log_path.read_bytes() == encrypted_log_before

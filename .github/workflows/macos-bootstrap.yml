@@ -86,6 +86,11 @@ jobs:
           tests/acceptance/test_readiness_audit_export.py
           tests/unit/bootstrap/test_htr10_export.py
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_phase5_operations.py
+          tests/unit/bootstrap/test_deployment_failure.py
+          tests/acceptance/test_disposable_dataset_continuity.py
+          tests/acceptance/test_service_process_lifecycle.py::test_interrupted_recovery_preserves_controls_until_real_stop_and_supported_retry
           tests/unit/bootstrap/test_candidate_readiness.py
           tests/unit/test_observation_readiness_window.py
           tests/unit/test_member_device_check_coverage.py

@@ -61,6 +61,11 @@ jobs:
           tests/unit/test_event_log.py
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/bootstrap/test_activation_transaction.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_phase5_operations.py
+          tests/unit/bootstrap/test_deployment_failure.py
+          tests/acceptance/test_disposable_dataset_continuity.py
+          tests/acceptance/test_service_process_lifecycle.py::test_interrupted_recovery_preserves_controls_until_real_stop_and_supported_retry
           tests/unit/adapters/messaging/test_gmail_forwarded_intake.py
 
       - name: Validate historical review and recovery
