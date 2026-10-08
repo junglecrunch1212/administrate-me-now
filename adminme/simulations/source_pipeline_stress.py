@@ -84,6 +84,7 @@ def _settings(instance_dir: Path, repository_root: Path) -> RuntimeSettings:
         },
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER_ID,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

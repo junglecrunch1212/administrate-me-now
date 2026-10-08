@@ -34,7 +34,6 @@ from adminme.events.log import IdempotencyConflict
 from adminme.extensions import ExtensionError
 from adminme.lib.adapters.contacts_base import normalize_identifier
 from adminme.events.schemas.triage import (
-    TriageFeatureCandidateV1,
     TriageRouteV1,
     TriageSourceSurface,
     TriageTargetKind,
@@ -66,17 +65,6 @@ from adminme.messages_reply import (
     participant_ids,
     reply_control_for,
     validate_exact_body,
-)
-from adminme.lib.skill_runner import (
-    OpenClawResponseMalformed,
-    OpenClawTimeout,
-    OpenClawUnreachable,
-    SkillContext,
-    SkillHandlerError,
-    SkillInputInvalid,
-    SkillOutputInvalid,
-    SkillScopeInsufficient,
-    SkillSensitivityRefused,
 )
 from adminme.member_chat import MemberChatError
 from adminme.products.auth import require_principal, session_from_request
@@ -168,12 +156,6 @@ from adminme.temporary_surfaces import (
     CreateTemporarySurface,
     TemporarySurfaceError,
     TemporarySurfaceSpec,
-)
-from adminme.triage_intent import (
-    IntentCandidate,
-    extract_grounded_nlp_candidates,
-    extract_intent_candidates,
-    merge_intent_candidates,
 )
 from adminme.triage_contract import candidate_update_fields, triage_destination
 from adminme.triage_context import add_triage_source_context
@@ -830,7 +812,7 @@ class TriageIntentRequest(BaseModel):
     """Zero-tax exact text capture; everything else is optional."""
 
     model_config = {"extra": "forbid"}
-    text: str = Field(min_length=1, max_length=2000)
+    text: str = Field(min_length=1, max_length=32_000)
     source_surface: TriageSourceSurface
     kind_hint: TriageTargetKind | None = None
     source_event_id: str | None = Field(default=None, min_length=1, max_length=240)
@@ -2741,59 +2723,6 @@ async def configure_reminder_cue(
     return {"accepted": True, "event_id": event_id, "cue_id": body.cue_id}
 
 
-def _recorded_intent_candidates(
-    feature_payload: dict[str, Any],
-    *,
-    deterministic_candidates: list[IntentCandidate],
-) -> list[IntentCandidate]:
-    """Rehydrate the one durable interpretation without invoking NLP again."""
-
-    deterministic_by_key = {
-        candidate.candidate_key: candidate for candidate in deterministic_candidates
-    }
-    recorded: list[IntentCandidate] = []
-    for raw_candidate in feature_payload.get("candidates") or []:
-        candidate = TriageFeatureCandidateV1.model_validate(raw_candidate)
-        reasons = list(candidate.reasons)
-        eligibility_rule_ids: list[str] = []
-        deterministic = deterministic_by_key.get(candidate.candidate_key)
-        if (
-            deterministic is not None
-            and deterministic.target_kind == candidate.target_kind
-        ):
-            eligibility_rule_ids.extend(deterministic.eligibility_rule_ids)
-        if "exact_source_quote_grounded_v1" in reasons:
-            eligibility_rule_ids.extend(
-                [
-                    "explicit_member_intent_v2",
-                    "exact_source_quote_grounded_v1",
-                    f"candidate_fields_{candidate.target_kind}_v1",
-                ]
-            )
-        if not eligibility_rule_ids:
-            eligibility_rule_ids.extend(
-                [
-                    "recorded_member_intent_feature_v1",
-                    f"candidate_fields_{candidate.target_kind}_v1",
-                ]
-            )
-        recorded.append(
-            IntentCandidate(
-                candidate_key=candidate.candidate_key,
-                target_kind=candidate.target_kind,
-                title=candidate.title,
-                fields=dict(candidate.fields),
-                evidence_spans=[
-                    span.model_dump(mode="json") for span in candidate.evidence_spans
-                ],
-                confidence=candidate.confidence,
-                reasons=reasons,
-                eligibility_rule_ids=list(dict.fromkeys(eligibility_rule_ids))[:20],
-            )
-        )
-    return recorded
-
-
 @router.post("/api/member/v1/triage/intents", status_code=202)
 async def submit_triage_intent(
     body: TriageIntentRequest, request: Request, session: SessionDep
@@ -2870,6 +2799,10 @@ async def _submit_triage_intent_locked(
             "source_event_id": body.source_event_id,
             "submitted_at": submitted_at.isoformat(),
             "client_request_id": body.client_request_id,
+            "submission_kind": "manual",
+            "evidence_complete": True,
+            "evidence_issues": [],
+            "intake_channel": "member",
         }
         await _guard_triage_write(
             runtime, session, "triage.intent.submitted", intent_payload
@@ -2879,7 +2812,7 @@ async def _submit_triage_intent_locked(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=session.tenant_id,
                 type="triage.intent.submitted",
-                schema_version=1,
+                schema_version=2,
                 occurred_at=submitted_at.isoformat(),
                 source_adapter=f"member-{body.source_surface}",
                 source_account_id=session.auth_member_id,
@@ -2897,272 +2830,13 @@ async def _submit_triage_intent_locked(
         # The holding state exists before any extraction result is recorded.
         await runtime.wait_for_projection("triage", intent_event_id)
 
-    deterministic_candidates = extract_intent_candidates(
-        body.text,
-        submitted_at=submitted_at,
-        kind_hint=body.kind_hint,
+    intent_event = await runtime.event_log.get(intent_event_id)
+    if intent_event is None or runtime.submission_interpreter is None:
+        raise HTTPException(503, "submission interpretation is unavailable")
+    result = await runtime.submission_interpreter.interpret(
+        intent_event, session=session
     )
-    feature_key = f"triage-intent-features:{intent_event_id}:member-intent-hybrid-v2"
-    prior_feature = await runtime.event_log.get_by_idempotency(
-        session.tenant_id, feature_key
-    )
-    if prior_feature is not None:
-        feature_event_id = str(prior_feature["event_id"])
-        feature_payload = dict(prior_feature["payload"])
-    else:
-        language_state = "complete"
-        language_reason = "bounded_language_assessment_completed"
-        skill_call_event_id: str | None = None
-        grounded_candidates = []
-        try:
-            skill_result = await runtime.run_skill_fn(
-                "skill:extract_note_semantics",
-                {
-                    "title": None,
-                    "body_text": body.text,
-                    "body_format": "plain",
-                    "source_kind": "member_intent",
-                    "content_sha256": hashlib.sha256(body.text.encode()).hexdigest(),
-                },
-                SkillContext(
-                    session=session,
-                    correlation_id=session.correlation_id,
-                    triggering_event_id=intent_event_id,
-                    invocation_idempotency_key=f"triage-intent:v2:{intent_event_id}",
-                    owner_scope=f"private:{session.auth_member_id}",
-                    visibility_scope=f"private:{session.auth_member_id}",
-                    sensitivity=sensitivity,
-                ),
-                input_sensitivities={"body_text": sensitivity},
-            )
-            raw_output = getattr(skill_result, "output", skill_result)
-            if isinstance(raw_output, dict):
-                grounded_candidates = extract_grounded_nlp_candidates(
-                    body.text,
-                    raw_output.get("candidates"),
-                    source_rule_id="explicit_member_intent_v2",
-                )
-        except (
-            RuntimeError,
-            SkillInputInvalid,
-            SkillOutputInvalid,
-            SkillSensitivityRefused,
-            SkillScopeInsufficient,
-            SkillHandlerError,
-            OpenClawTimeout,
-            OpenClawUnreachable,
-            OpenClawResponseMalformed,
-        ) as exc:
-            language_state = "defensive_default"
-            language_reason = f"language_seam_{type(exc).__name__}"
-        if body.kind_hint is not None:
-            grounded_candidates = [
-                candidate
-                for candidate in grounded_candidates
-                if candidate.target_kind == body.kind_hint
-            ]
-        extracted_candidates = merge_intent_candidates(
-            deterministic_candidates,
-            grounded_candidates,
-        )
-        related_skill_events = await runtime.event_log.get_by_causation(intent_event_id)
-        skill_call = next(
-            (
-                event
-                for event in reversed(related_skill_events)
-                if event.get("type") == "skill.call.recorded"
-                and (event.get("payload") or {}).get("skill_name")
-                == "skill:extract_note_semantics"
-            ),
-            None,
-        )
-        if skill_call is not None:
-            skill_call_event_id = str(skill_call["event_id"])
-        extracted_at = EventEnvelope.now_utc_iso()
-        feature_payload = {
-            "intent_id": intent_id,
-            "source_event_id": intent_event_id,
-            "skill_call_event_id": skill_call_event_id,
-            "extractor_id": "member-intent-hybrid-v2",
-            "language": "en",
-            "candidates": [
-                candidate.feature_payload() for candidate in extracted_candidates
-            ],
-            # The deterministic assessor completed even when it could not derive
-            # a typed candidate. The exact text remains in the Triage holding
-            # state for human interpretation; this is not a model failure.
-            "extraction_state": language_state,
-            "extracted_at": extracted_at,
-            "assessment_outcome": (
-                "eligible_candidates"
-                if extracted_candidates
-                else "failed"
-                if language_state != "complete"
-                else "no_candidate"
-            ),
-            "reason_codes": [
-                "member_kind_or_text_rule_matched"
-                if deterministic_candidates
-                else "bounded_language_candidate_found"
-                if grounded_candidates
-                else "member_text_requires_human_interpretation",
-                language_reason,
-            ],
-        }
-        feature_fingerprint = hashlib.sha256(
-            json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        feature_event_id = await runtime.events.write(
-            EventEnvelope(
-                event_at_ms=int(time.time() * 1000),
-                tenant_id=session.tenant_id,
-                type="triage.intent.features_extracted",
-                schema_version=3,
-                occurred_at=extracted_at,
-                source_adapter="member-intent-hybrid-v2",
-                source_account_id=session.auth_member_id,
-                owner_scope=f"private:{session.auth_member_id}",
-                visibility_scope=f"private:{session.auth_member_id}",
-                sensitivity=sensitivity,
-                correlation_id=session.correlation_id,
-                causation_id=intent_event_id,
-                actor_identity="pipeline:member-intent-hybrid-v2",
-                idempotency_key=feature_key,
-                raw_ref=f"features-sha256:{feature_fingerprint}",
-                payload=feature_payload,
-            )
-        )
-
-    extracted_at = str(feature_payload.get("extracted_at") or submitted_at.isoformat())
-    candidates = _recorded_intent_candidates(
-        feature_payload,
-        deterministic_candidates=deterministic_candidates,
-    )
-
-    proposal_ids: list[str] = []
-    proposal_event_by_id: dict[str, str] = {}
-    missing_proposals: list[tuple[str, dict[str, Any], EventEnvelope]] = []
-    for candidate in candidates:
-        candidate_values = candidate.feature_payload()
-        candidate_fingerprint = hashlib.sha256(
-            json.dumps(candidate_values, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        proposal_seed = (
-            f"{session.tenant_id}|{intent_id}|{candidate.candidate_key}|"
-            f"{candidate.target_kind}|{candidate_fingerprint}"
-        )
-        proposal_id = (
-            "proposal_" + hashlib.sha256(proposal_seed.encode()).hexdigest()[:28]
-        )
-        proposal_ids.append(proposal_id)
-        proposal_payload = {
-            "proposal_id": proposal_id,
-            "target_kind": candidate.target_kind,
-            "owner_member_id": session.auth_member_id,
-            "title": candidate.title,
-            "candidate": candidate.fields,
-            "route": {"member_id": session.auth_member_id},
-            "source_event_id": intent_event_id,
-            "confidence": candidate.confidence,
-            "reasons": candidate.reasons,
-            "parent_intent_id": intent_id,
-            "candidate_key": candidate.candidate_key,
-            "extraction_event_id": feature_event_id,
-            "eligibility_rule_ids": candidate.eligibility_rule_ids,
-        }
-        proposal_key = f"triage-intent-proposal:{proposal_id}"
-        prior_proposal = await runtime.event_log.get_by_idempotency(
-            session.tenant_id, proposal_key
-        )
-        if prior_proposal is not None:
-            proposal_event_by_id[proposal_id] = str(prior_proposal["event_id"])
-            continue
-        missing_proposals.append(
-            (
-                proposal_id,
-                proposal_payload,
-                EventEnvelope(
-                    event_at_ms=int(time.time() * 1000),
-                    tenant_id=session.tenant_id,
-                    type="triage.item.proposed",
-                    schema_version=2,
-                    occurred_at=extracted_at,
-                    source_adapter="member-intent-hybrid-v2",
-                    source_account_id=session.auth_member_id,
-                    owner_scope=f"private:{session.auth_member_id}",
-                    visibility_scope=f"private:{session.auth_member_id}",
-                    sensitivity=sensitivity,
-                    correlation_id=session.correlation_id,
-                    causation_id=feature_event_id,
-                    actor_identity="pipeline:member-intent-hybrid-v2",
-                    idempotency_key=proposal_key,
-                    raw_ref=f"candidate-sha256:{candidate_fingerprint}",
-                    payload=proposal_payload,
-                ),
-            )
-        )
-
-    # Preflight the complete recorded family before appending any child. A
-    # denial must not leave a partial family after the first projected child
-    # has dismissed the durable member-intent holding row.
-    try:
-        for _proposal_id, proposal_payload, _envelope in missing_proposals:
-            await _guard_triage_write(
-                runtime, session, "triage.item.proposed", proposal_payload
-            )
-    except HTTPException as exc:
-        detail = exc.detail
-        reason = (
-            detail
-            if isinstance(detail, str)
-            else str(detail.get("reason") or detail.get("code") or "write denied")
-        )
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail={
-                "code": "triage_intent_post_capture",
-                "capture_state": "intent_and_features_recorded",
-                "reason": reason,
-                "recovery": {
-                    "intent_id": intent_id,
-                    "href": (
-                        f"/member/triage?view=needs_interpretation&item={intent_id}"
-                    ),
-                },
-            },
-            headers=exc.headers,
-        ) from exc
-
-    if missing_proposals:
-        appended_ids = await runtime.events.write_batch(
-            [envelope for _proposal_id, _payload, envelope in missing_proposals]
-        )
-        proposal_event_by_id.update(
-            {
-                proposal_id: event_id
-                for (proposal_id, _payload, _envelope), event_id in zip(
-                    missing_proposals, appended_ids, strict=True
-                )
-            }
-        )
-    proposal_event_ids = [
-        proposal_event_by_id[proposal_id] for proposal_id in proposal_ids
-    ]
-    if proposal_event_ids:
-        await runtime.wait_for_projection("triage", proposal_event_ids[-1])
-    else:
-        await runtime.wait_for_projection("triage", feature_event_id)
-    return {
-        "accepted": True,
-        "duplicate": duplicate,
-        "intent_id": intent_id,
-        "intent_event_id": intent_event_id,
-        "feature_event_id": feature_event_id,
-        "proposal_ids": proposal_ids,
-        "proposal_event_ids": proposal_event_ids,
-        "state": "pending_review" if proposal_ids else "pending_interpretation",
-        "canonical_event_ids": [],
-    }
+    return {**result, "duplicate": duplicate}
 
 
 def _require_self_triage_policy(session: Session) -> None:

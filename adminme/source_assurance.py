@@ -19,6 +19,12 @@ from typing import Any, Iterable
 import yaml
 
 from adminme.events.log import EventLog
+from adminme.communication_intake_policy import (
+    RETIRED_COMMAND_TYPE,
+    SKIPPED_EVENT_TYPE,
+    command_retirement,
+    source_skip_valid,
+)
 from adminme.lib.pack_registry.models import SourceAssuranceRule
 from adminme.source_assessment_recovery import (
     assessment_outcome,
@@ -408,6 +414,8 @@ async def audit_source_assurance(
             "triage.currentness.features_extracted",
             "external_sync.legacy_effect_reconciled",
             "skill.call.failed",
+            SKIPPED_EVENT_TYPE,
+            RETIRED_COMMAND_TYPE,
         }
     )
     payload_types = {
@@ -427,6 +435,8 @@ async def audit_source_assurance(
             "external_sync.legacy_effect_reconciled",
             "messaging.source_observed",
             "skill.call.failed",
+            SKIPPED_EVENT_TYPE,
+            RETIRED_COMMAND_TYPE,
         }
     )
     watermark_event_id = through_event_id
@@ -444,6 +454,8 @@ async def audit_source_assurance(
     recovery_requests: dict[str, dict[str, Any]] = {}
     recovery_assessments: dict[str, dict[str, Any]] = {}
     recovery_refusals: set[str] = set()
+    skipped_sources: dict[str, dict[str, Any]] = {}
+    retired_commands: set[str] = set()
     messaging_cycles: list[dict[str, Any]] = []
     async for event in event_log.read_metadata_since(
         # An empty log has a null public watermark; the impossible empty
@@ -454,6 +466,24 @@ async def audit_source_assurance(
         include_payload_for=sorted(payload_types),
     ):
         payload = event.get("payload") or {}
+        if event.get("type") == SKIPPED_EVENT_TYPE:
+            source_id = str(payload.get("source_event_id") or "")
+            source = await event_log.get(source_id) if source_id else None
+            receipt = await event_log.get(str(event["event_id"]))
+            if (
+                source is not None
+                and receipt is not None
+                and source_skip_valid(source, receipt)
+            ):
+                skipped_sources[source_id] = receipt
+        elif event.get("type") == RETIRED_COMMAND_TYPE:
+            command_id = str(payload.get("command_event_id") or "")
+            command = await event_log.get(command_id) if command_id else None
+            if (
+                command is not None
+                and await command_retirement(event_log, command) is not None
+            ):
+                retired_commands.add(command_id)
         if event.get("type") in {
             "triage.intent.features_extracted",
             "triage.currentness.features_extracted",
@@ -493,6 +523,7 @@ async def audit_source_assurance(
         "missing": 0,
         "eligible_candidates": 0,
         "no_candidate": 0,
+        "not_selected": 0,
         "quarantined": 0,
         "failed": 0,
     }
@@ -518,7 +549,13 @@ async def audit_source_assurance(
             counts["obligations"] += 1
             status = "accounted"
             detail = obligation.mode
-            if obligation.mode == "candidate_assessment":
+            if (
+                obligation.mode == "candidate_assessment"
+                and event_id in skipped_sources
+            ):
+                counts["not_selected"] += 1
+                detail = "explicit_member_submission_required"
+            elif obligation.mode == "candidate_assessment":
                 assessment = assessments.get(event_id)
                 if assessment is not None:
                     assessment_id = str(assessment["event_id"])
@@ -671,7 +708,10 @@ async def audit_source_assurance(
                 recovery_counts["failed"] += 1
             else:
                 recovery_counts["succeeded"] += 1
-        elif request_event_id in recovery_refusals:
+        elif (
+            request_event_id in recovery_refusals
+            or request_event_id in retired_commands
+        ):
             recovery_counts["refused"] += 1
         else:
             recovery_counts["pending"] += 1

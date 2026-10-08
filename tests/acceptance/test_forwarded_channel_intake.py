@@ -1,0 +1,366 @@
+"""Production-root proofs for reviewed Gmail and OpenClaw CoS submissions."""
+
+from __future__ import annotations
+
+import base64
+import copy
+from dataclasses import replace
+import hashlib
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+from fastapi.testclient import TestClient
+
+from adminme.events.envelope import EventEnvelope
+from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
+from adminme.runtime.application import RuntimeSettings, create_application
+from adminme.service_identities import (
+    COS_SERVICE_PRINCIPAL_ID,
+    DEFAULT_SERVICE_IDENTITY_CONFIG,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+MEMBER_A = "member-fixture-forward-a"
+MEMBER_B = "member-fixture-forward-b"
+ACCOUNT = "cos-messages-fixture"
+EMAIL_ACCOUNT = "cos-service@example.invalid"
+SECRET = "forwarded-channel-credential-free-test-secret"
+AUTH = {"Authorization": f"Bearer {SECRET}"}
+MEMBER_HEADERS = {"Tailscale-User-Login": "forward-a.ts.net"}
+OTHER_HEADERS = {"Tailscale-User-Login": "forward-b.ts.net"}
+TEXT = "[fixture:triage-kind=task] Submit the form by 2031-01-02."
+
+
+def _settings(path: Path, *, intake_mode: str = "member_submission") -> RuntimeSettings:
+    services = copy.deepcopy(DEFAULT_SERVICE_IDENTITY_CONFIG)
+    services["channels"] = [
+        {
+            "channel_id": "channel:chief-of-staff:apple-imessage",
+            "display_name": "CoS Messages fixture",
+            "provider": "apple_imessage",
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            "provider_account_reference": "provider-account:"
+            + hashlib.sha256(ACCOUNT.encode()).hexdigest(),
+            "state": "observation",
+            "enrolled": True,
+            "observation_active": True,
+            "sending_enabled": False,
+            "routes": [],
+            "intake_mode": intake_mode,
+        },
+        {
+            "channel_id": "channel:chief-of-staff:gmail",
+            "display_name": "CoS Gmail fixture",
+            "provider": "gmail",
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            "provider_account_reference": "provider-account:"
+            + hashlib.sha256(EMAIL_ACCOUNT.encode()).hexdigest(),
+            "state": "observation",
+            "enrolled": True,
+            "observation_active": True,
+            "sending_enabled": False,
+            "routes": [
+                {
+                    "route_key": "route:" + "1" * 64,
+                    "scope": "member_private",
+                    "target_id": MEMBER_A,
+                }
+            ],
+        },
+    ]
+    return RuntimeSettings.credential_free(
+        path,
+        encryption_key=b"f" * 32,
+        repository_root=ROOT,
+        member_identities={"forward-a.ts.net": MEMBER_A, "forward-b.ts.net": MEMBER_B},
+        member_roles={MEMBER_A: "principal", MEMBER_B: "principal"},
+        fixture_member_id=MEMBER_A,
+        deterministic_openclaw_fixture=True,
+        openclaw_enabled=True,
+        openclaw_shared_secret=SECRET,
+        openclaw_actor_identities={
+            f"imessage|{ACCOUNT}|actor-forward-a": MEMBER_A,
+            f"imessage|{ACCOUNT}|actor-forward-b": MEMBER_B,
+            "imessage|personal-account|actor-forward-a": MEMBER_A,
+        },
+        adapter_config={
+            "adapter_supervisor_port": 0,
+            "service_identities": services,
+            "adapters": [],
+        },
+    )
+
+
+def _provenance(
+    *, actor: str = "actor-forward-a", account: str = ACCOUNT
+) -> dict[str, Any]:
+    return {
+        "actor_id": actor,
+        "channel_id": "imessage",
+        "account_id": account,
+        "message_id": "native-forward-receipt",
+        "correlation_id": "forward:fixture",
+        "call_kind": "bridge",
+        "openclaw_version": OPENCLAW_VERSION,
+        "openclaw_commit": OPENCLAW_COMMIT,
+    }
+
+
+def _grant(client: TestClient) -> None:
+    for headers, key in [
+        (MEMBER_HEADERS, "forward-grant-a"),
+        (OTHER_HEADERS, "forward-grant-b"),
+    ]:
+        response = client.post(
+            "/api/member/v1/cos/delegations",
+            headers=headers,
+            json={
+                "request_id": key,
+                "context_scope": "member_private",
+                "permissions": ["read_context", "create_internal_work"],
+            },
+        )
+        assert response.status_code in {200, 201}, response.text
+
+
+async def _events(runtime: Any, kind: str) -> list[dict[str, Any]]:
+    return [event async for event in runtime.event_log.read_since(types=[kind])]
+
+
+def _settle(client: TestClient, intent_event_id: str) -> list[dict[str, Any]]:
+    runtime = client.app.state.runtime
+    client.portal.call(
+        runtime.wait_for_subscriber,
+        "member-submissions:interpretation",
+        intent_event_id,
+    )
+    proposals = client.portal.call(_events, runtime, "triage.item.proposed")
+    if proposals:
+        client.portal.call(
+            runtime.wait_for_projection, "triage", proposals[-1]["event_id"]
+        )
+    return proposals
+
+
+def test_channel_submission_extracts_privately_and_deduplicates_after_restart(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path / "channel-forward")
+    body = {
+        "provenance": _provenance(),
+        "request_id": "forward-request-1",
+        "text": TEXT,
+        "consent": True,
+        "submission_gesture": "dedicated_intake",
+    }
+    with TestClient(create_application(settings)) as client:
+        _grant(client)
+        response = client.post(
+            "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["provider_effect_permitted"] is False
+        proposals = _settle(client, result["intent_event_id"])
+        assert any(row["payload"]["target_kind"] == "task" for row in proposals)
+        assert all(row["owner_scope"] == f"private:{MEMBER_A}" for row in proposals)
+        own = client.get(
+            "/api/member/v1/surfaces/triage", headers=MEMBER_HEADERS
+        ).json()
+        other = client.get(
+            "/api/member/v1/surfaces/triage", headers=OTHER_HEADERS
+        ).json()
+        assert any(item.get("title") == TEXT for item in own["items"])
+        assert not any(item.get("title") == TEXT for item in other["items"])
+        intent = client.portal.call(
+            client.app.state.runtime.event_log.get, result["intent_event_id"]
+        )
+        assert intent["actor_identity"] == MEMBER_A
+        assert intent["payload"]["submission_kind"] == "member_forwarded"
+        assert intent["payload"]["intake_channel"] == "apple_imessage"
+        assert (
+            client.portal.call(
+                _events, client.app.state.runtime, "external_sync.write_requested"
+            )
+            == []
+        )
+    with TestClient(create_application(settings)) as client:
+        body["request_id"] = "different-http-request-same-receipt"
+        body["provenance"]["correlation_id"] = "forward:retry"
+        retry = client.post(
+            "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["duplicate"] is True
+        assert retry.json()["intent_event_id"] == result["intent_event_id"]
+        assert (
+            len(
+                client.portal.call(
+                    _events, client.app.state.runtime, "triage.intent.submitted"
+                )
+            )
+            == 1
+        )
+        body["text"] = "Changed content for the same receipt"
+        conflict = client.post(
+            "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+        )
+        assert conflict.status_code == 409
+    remapped = replace(
+        settings,
+        openclaw_actor_identities={
+            **settings.openclaw_actor_identities,
+            f"imessage|{ACCOUNT}|actor-forward-a": MEMBER_B,
+        },
+    )
+    with TestClient(create_application(remapped)) as client:
+        body["text"] = TEXT
+        moved = client.post(
+            "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+        )
+        assert moved.status_code == 403
+        assert (
+            len(
+                client.portal.call(
+                    _events, client.app.state.runtime, "triage.intent.submitted"
+                )
+            )
+            == 1
+        )
+
+
+def test_channel_binding_purpose_and_missing_evidence_fail_closed(
+    tmp_path: Path,
+) -> None:
+    with TestClient(
+        create_application(_settings(tmp_path / "closed", intake_mode="conversation"))
+    ) as client:
+        _grant(client)
+        body = {
+            "provenance": _provenance(),
+            "request_id": "forward-request-2",
+            "text": TEXT,
+            "consent": True,
+            "submission_gesture": "dedicated_intake",
+        }
+        assert (
+            client.post(
+                "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+            ).status_code
+            == 403
+        )
+        body["submission_gesture"] = "explicit"
+        body["provenance"] = _provenance(account="personal-account")
+        assert (
+            client.post(
+                "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+            ).status_code
+            == 403
+        )
+        body["provenance"] = _provenance(actor="unmapped-actor")
+        assert (
+            client.post(
+                "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+            ).status_code
+            == 403
+        )
+        body["provenance"] = _provenance()
+        body["provenance"]["call_kind"] = "tool"
+        assert (
+            client.post(
+                "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+            ).status_code
+            == 403
+        )
+        body["provenance"] = _provenance()
+        body["unsupported_attachment_count"] = 1
+        response = client.post(
+            "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+        )
+        assert response.status_code == 200, response.text
+        assert _settle(client, response.json()["intent_event_id"]) == []
+        intent = client.portal.call(
+            client.app.state.runtime.event_log.get, response.json()["intent_event_id"]
+        )
+        assert intent["payload"]["evidence_complete"] is False
+        assert intent["payload"]["evidence_issues"] == [
+            "unsupported_channel_attachment"
+        ]
+
+
+def test_real_gmail_producer_route_reaches_durable_member_interpreter(
+    tmp_path: Path,
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "gmail_composed_intake", ROOT / "packs/adapters/messaging/gmail/adapter.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    adapter = module.GmailAdapter(
+        config={
+            "user_email": EMAIL_ACCOUNT,
+            "provider_account_id": EMAIL_ACCOUNT,
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            "workspace": "service",
+            "channel_id": "channel:chief-of-staff:gmail",
+            "trusted_sender_routes": [
+                {
+                    "exact_from_identifier": "member-a@example.invalid",
+                    "route_key": "route:" + "1" * 64,
+                    "authentication_policy": "receiver_aligned_sender",
+                }
+            ],
+        }
+    )
+    message = {
+        "id": "gmail-native-forward",
+        "internalDate": "1925035200000",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {
+                    "name": "Received",
+                    "value": "from sender.invalid by mx.google.com with ESMTPS id fixture",
+                },
+                {
+                    "name": "Authentication-Results",
+                    "value": "mx.google.com; dkim=pass header.i=@example.invalid; dmarc=pass header.from=example.invalid",
+                },
+                {"name": "From", "value": "member-a@example.invalid"},
+                {"name": "To", "value": EMAIL_ACCOUNT},
+            ],
+            "body": {"data": base64.urlsafe_b64encode(TEXT.encode()).decode()},
+        },
+    }
+    payload, version, occurred_at = adapter._received_observation(message)
+    with TestClient(create_application(_settings(tmp_path / "gmail"))) as client:
+        runtime = client.app.state.runtime
+        source_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1925035200000,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="messaging.received",
+                schema_version=version,
+                occurred_at=occurred_at,
+                source_adapter="messaging-gmail-api:fixture-cos",
+                source_account_id=EMAIL_ACCOUNT,
+                owner_scope=f"service-private:{COS_SERVICE_PRINCIPAL_ID}",
+                visibility_scope=f"service-private:{COS_SERVICE_PRINCIPAL_ID}",
+                payload=payload,
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber, "direct-intake:routing", source_id
+        )
+        intents = client.portal.call(_events, runtime, "triage.intent.submitted")
+        assert len(intents) == 1
+        assert intents[0]["payload"]["source_event_id"] == source_id
+        assert intents[0]["payload"]["text"] == TEXT
+        proposals = _settle(client, intents[0]["event_id"])
+        assert any(row["payload"]["title"] == TEXT for row in proposals)
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )

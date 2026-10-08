@@ -7,6 +7,7 @@ const DEFAULTS: PluginConfig = {
   bridgeEnabled: false,
   bridgeChannels: [],
   bridgeEventKinds: [...BRIDGE_EVENT_KINDS],
+  forwardIntakeAccounts: [],
   modelSessionPrefix: "adminme:",
   dmScope: "per_account_channel_peer",
   memberAgentIds: [],
@@ -41,6 +42,23 @@ export function isLoopbackBaseUrl(value: string): boolean {
 
 export function readPluginConfig(value: Record<string, unknown> | undefined): PluginConfig {
   const raw = value ?? {};
+  const intakeAccounts = raw.forwardIntakeAccounts ?? [];
+  if (!Array.isArray(intakeAccounts) || intakeAccounts.length > 20) {
+    throw new Error("AdministrateMe forwardIntakeAccounts must be a bounded reviewed list");
+  }
+  const forwardIntakeAccounts: PluginConfig["forwardIntakeAccounts"] = intakeAccounts.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object") throw new Error("Invalid CoS intake account binding");
+    const row = entry as Record<string, unknown>;
+    if ((row.channelId !== "imessage" && row.channelId !== "bluebubbles") ||
+        typeof row.accountId !== "string" || !row.accountId.trim() || row.accountId.length > 200 ||
+        Object.keys(row).some((key) => key !== "channelId" && key !== "accountId")) {
+      throw new Error("CoS intake requires an exact supported channel and account");
+    }
+    return { channelId: row.channelId, accountId: row.accountId };
+  });
+  if (new Set(forwardIntakeAccounts.map((entry) => JSON.stringify(entry))).size !== forwardIntakeAccounts.length) {
+    throw new Error("Duplicate CoS intake account binding");
+  }
   const baseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl : DEFAULTS.baseUrl;
   if (!isLoopbackBaseUrl(baseUrl)) {
     throw new Error("AdministrateMe baseUrl must be an unauthenticated loopback HTTP origin");
@@ -90,6 +108,7 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
     bridgeEnabled: raw.bridgeEnabled === true,
     bridgeChannels: stringArray(raw.bridgeChannels),
     bridgeEventKinds,
+    forwardIntakeAccounts,
     modelSessionPrefix:
       typeof raw.modelSessionPrefix === "string" && raw.modelSessionPrefix
         ? raw.modelSessionPrefix

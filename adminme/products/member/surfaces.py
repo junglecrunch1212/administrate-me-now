@@ -738,6 +738,12 @@ def build_surface(
         "mode": experience_mode(runtime, session),
         "state": "ready",
         "semantics": experience_semantics(runtime, session),
+        "communication_intake": {
+            "mode": "historical_compatibility"
+            if runtime.settings.legacy_personal_obligation_compatibility
+            else "member_forwarded",
+            "member_selection_required": not runtime.settings.legacy_personal_obligation_compatibility,
+        },
         "observation": {
             "active": bool(runtime._observation_active),
             "writes_execute": not bool(runtime._observation_active),

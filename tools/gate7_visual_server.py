@@ -27,6 +27,7 @@ INSTANCE = Path(os.environ["ADMINME_GATE7_VISUAL_INSTANCE"]).resolve()
 PORT = int(os.environ.get("ADMINME_GATE7_VISUAL_PORT", "3347"))
 MODEL_CONFIGURED = os.environ.get("ADMINME_GATE7_VISUAL_MODEL", "1") == "1"
 ATTENTION_ENABLED = os.environ.get("ADMINME_GATE7_ATTENTION_ENABLED", "0") == "1"
+EXPLICIT_SUBMISSIONS = os.environ.get("ADMINME_GATE7_EXPLICIT_SUBMISSIONS", "0") == "1"
 BOUNDED_SAMPLE = os.environ.get("ADMINME_GATE7_BOUNDED_SAMPLE", "0") == "1"
 FIXED_NOW = datetime.fromisoformat(
     os.environ.get("ADMINME_GATE7_VISUAL_NOW", "2026-08-13T14:00:00Z").replace(
@@ -176,6 +177,7 @@ def build_app():
             DEVICE: "device",
         },
         deterministic_openclaw_fixture=True,
+        legacy_personal_obligation_compatibility=not EXPLICIT_SUBMISSIONS,
         fixture_member_id=PRINCIPAL,
         openclaw_enabled=True,
         openclaw_shared_secret="gate7-visual-secret-never-rendered",

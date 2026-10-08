@@ -872,6 +872,7 @@ def test_g11_encrypted_backup_restore_preserves_reply_authority(
         },
         household_mapping=mapping,
         bridge_enrollments={login: record},
+        legacy_personal_obligation_compatibility=True,
     )
     event_id: str
     with TestClient(create_application(settings)) as client:

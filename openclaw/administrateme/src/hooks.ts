@@ -5,10 +5,12 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookModelCallEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createHash } from "node:crypto";
 import { PLUGIN_ID, SIDE_EFFECT_TOOL_NAMES, type BridgeEventKind } from "./contract.js";
 import { provenanceFromMessage } from "./provenance.js";
 import { prepareApproval } from "./approval.js";
 import type { PluginRuntime } from "./runtime.js";
+import { TransportError } from "./transport.js";
 
 type BridgeMarker = {
   consent?: unknown;
@@ -46,21 +48,59 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
     "message_received",
     async (event: PluginHookMessageReceivedEvent, context: PluginHookMessageContext) => {
       const config = runtime.transport.config;
-      if (!config.bridgeEnabled || !config.bridgeChannels.includes(context.channelId)) return;
       const marker = event.metadata?.administrateme as BridgeMarker | undefined;
-      if (marker?.consent !== true || typeof marker.eventKind !== "string") return;
-      if (!config.bridgeEventKinds.includes(marker.eventKind as BridgeEventKind)) return;
-      if (marker.sensitivity !== "normal" && marker.sensitivity !== "sensitive") return;
+      const dedicatedIntake = config.forwardIntakeAccounts.some((binding) =>
+        binding.channelId === context.channelId && binding.accountId === context.accountId,
+      );
+      const explicitBridge = config.bridgeEnabled && config.bridgeChannels.includes(context.channelId) &&
+        marker?.consent === true && typeof marker.eventKind === "string" &&
+        config.bridgeEventKinds.includes(marker.eventKind as BridgeEventKind) &&
+        (marker.sensitivity === "normal" || marker.sensitivity === "sensitive");
+      if (!dedicatedIntake && !explicitBridge) return;
+      const submission = dedicatedIntake || marker?.eventKind === "member_submission";
       try {
         const provenance = provenanceFromMessage(event, context);
+        if (submission) {
+          if (!provenance.message_id || !event.content.trim() || event.content.length > 32_000) {
+            throw new Error("CoS intake requires a bounded text selection and native message identity");
+          }
+          const attachments = event.metadata?.attachments;
+          const attachmentCount = Array.isArray(attachments) ? attachments.length :
+            (typeof event.metadata?.attachmentCount === "number" ? event.metadata.attachmentCount : 0);
+          const request = {
+            provenance,
+            request_id: createHash("sha256").update(JSON.stringify([
+              provenance.channel_id, provenance.account_id, provenance.actor_id, provenance.message_id,
+            ])).digest("hex"),
+            text: event.content,
+            consent: true,
+            submission_gesture: dedicatedIntake ? "dedicated_intake" : "explicit",
+            unsupported_attachment_count: attachmentCount,
+            sensitivity: marker?.sensitivity === "sensitive" ? "sensitive" : "normal",
+          };
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              await runtime.transport.request("/api/openclaw/v1/submissions/forward", request);
+              break;
+            } catch (error) {
+              if (attempt >= 2 || !(error instanceof TransportError) ||
+                  (error.status !== undefined && error.status < 500)) throw error;
+            }
+          }
+          return;
+        }
         await runtime.transport.request("/api/openclaw/v1/bridge/events", {
           provenance,
-          event_kind: marker.eventKind,
+          event_kind: marker?.eventKind,
           content: event.content,
           consent: true,
-          sensitivity: marker.sensitivity,
+          sensitivity: marker?.sensitivity,
         });
-      } catch {
+      } catch (error) {
+        if (submission) {
+          api.logger.error("AdministrateMe forward was not acknowledged; retry the same source receipt after restoring intake.");
+          throw error;
+        }
         // Observation hooks must not break normal OpenClaw message delivery.
       }
     },

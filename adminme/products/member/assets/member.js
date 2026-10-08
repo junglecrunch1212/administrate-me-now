@@ -874,9 +874,17 @@ function triageDetail(item, data, readOnly = false) {
     section.append(reason);
   }
   section.append(triageSourceContext(item));
+  const submission = item.candidate?.submission_status;
+  if (!readOnly && item.candidate?.evidence_complete === false) section.append(text("p", "Some forwarded material could not be read completely. Add the missing text or attachment details before confirming an item.", "review-state"));
+  if (!readOnly && submission) {
+    const statusCopy = { failed: "Extraction could not finish. Your submission is saved for review.", quarantined: "This submission needs clarification before it can become an item.", publication_held: "Your submission is saved. Review is paused until the required authorization is available." };
+    const explanation = statusCopy[submission.extraction_state] || statusCopy[submission.assessment_outcome];
+    if (explanation) section.append(text("p", explanation, "review-state"));
+  }
   if (readOnly) {
     const eligibilityChanged = item.resolution_reason === "eligibility_rule_replaced";
-    const outcome = eligibilityChanged ? "Retired after context or eligibility changed" : item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
+    const outcomeLabels = { explicit_member_submission_required: "Retired when member forwarding became required", provider_observed_matched: "Verified on your platform", provider_observed_drifted: "Your platform now differs from the approved item", provider_observed_missing: "The item is no longer present on your platform", provider_observed_incomplete: "The platform returned too little detail to verify every approved field", provider_completed_awaiting_observation: "Sent; waiting to verify on your platform" };
+    const outcome = eligibilityChanged ? "Retired after context or eligibility changed" : outcomeLabels[item.resolution_reason] || (item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state));
     section.append(text("p", `${outcome}${item.resolved_at ? ` on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, `review-state ${item.state === "failed" ? "" : "ready"}`.trim()));
     if (eligibilityChanged) section.append(text("p", "This untouched candidate was replaced after its source context or eligibility changed. It is historical lifecycle evidence, not a sender-wide rule created by this dismissal.", "state-note"));
     if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
@@ -1300,6 +1308,7 @@ function triageSurface(data, { preserveView = false } = {}) {
   const attentionCount = viewCounts.ready?.candidates ?? pending.filter((item) => triageCandidateMatches(item, "ready")).length;
   const overview = document.createElement("section"); overview.className = "card triage-overview";
   overview.append(text("p", "TRIAGE", "eyebrow"));
+  if (data.communication_intake?.member_selection_required) overview.append(text("p", "Forward selected obligations to your CoS or use Add for review. Your CoS extracts proposed items here for your decision. Personal inbox messages do not automatically become obligations.", "state-note"));
   if (data.human_triage_management?.active) overview.append(text("p", "Focus contains admitted obligations only. Alerts and searchable context remain separate, and promotion, spam, routine updates, receipts, and context-only material do not become ordinary work.", "state-note"));
   if (attentionCount) {
     overview.append(text("h2", `${attentionCount} decision${attentionCount === 1 ? "" : "s"} need${attentionCount === 1 ? "s" : ""} your attention.`), text("p", "Start with the clearest security, date, money, promise, priority, and recurring-issue signals. Other suggestions stay available without crowding this queue."));
@@ -3940,6 +3949,7 @@ function candidatePolicyCard(source, data) {
   const copy = document.createElement("div"); copy.append(text("p", `${source.projection} · ${source.channel_type}`, "eyebrow"), text("h3", source.label));
   const status = source.availability === "planned" ? "Planned" : source.availability === "configured" || source.availability === "available" ? "Available" : "Not configured";
   head.append(copy, text("span", status, `pill state-label state-${source.availability === "planned" ? "unknown" : source.availability === "available_not_configured" ? "degraded" : "healthy"}`)); form.append(head);
+  if (source.explicit_submission_required) { form.append(text("p", "Forward selected material to your CoS or use Add for review. Automatic obligation extraction from this personal source is off. Existing source history remains available.", "state-note")); return form; }
   const signals = document.createElement("div"); signals.className = "candidate-policy-signals";
   for (const value of source.signals || []) signals.append(text("span", value, "pill pill-lavender"));
   form.append(signals);
@@ -4269,6 +4279,7 @@ function sourceLearningRulesCard(canMutate, sourceMatrix = null) {
 
 function sourcePolicyV2Card(source, matrix) {
   const policy = source.policy || {};
+  const explicitOnly = Boolean(source.explicit_submission_required);
   const editable = Boolean(source.configurable && source.coordinate && !source.direct_authenticated_intent);
   const active = Boolean(matrix.admission_active || matrix.active);
   const form = document.createElement("form"); form.className = "card candidate-policy-card source-attention-card";
@@ -4289,6 +4300,7 @@ function sourcePolicyV2Card(source, matrix) {
     const history = text("a", "Review retained candidates", "link-button"); history.href = "/member/triage?view=all_candidates"; form.append(history);
   }
   if (source.direct_authenticated_intent) { form.append(text("p", "Requests you explicitly add for review always remain eligible. Passive-source settings cannot hide them.", "state-note")); return form; }
+  if (explicitOnly) form.append(text("p", "You select what becomes work by forwarding it to your CoS or using Add for review. Automatic obligation extraction is off for this personal source. Source access, context, and alerts keep their separate settings.", "state-note"));
   if (!editable) {
     form.append(text("p", lifecycle === "not_connected" ? "This source can use the same obligation, purpose, and learning controls after a reviewed connection supplies its exact account. A preference does not connect or authorize it." : "Retained evidence stays available. An exact authorized account and connection are required before a future rule can be saved.", "state-note"));
     return form;
@@ -4300,6 +4312,7 @@ function sourcePolicyV2Card(source, matrix) {
     { value: "manual", label: "Only when I ask" },
   ], policy.attention_mode || (policy.triage_mode === "manual_only" ? "manual" : policy.preset === "review_everything" ? "possibilities" : "obligations"), "");
   attention.name = "attention_mode";
+  if (explicitOnly) { attention.value = "manual"; attention.disabled = true; }
   form.append(field("What should reach me?", attention), text("small", "This attention choice preserves your source access, permitted context, alerts, and candidate types.", "state-note"));
   const purposes = document.createElement("details"); purposes.className = "source-purpose-settings";
   purposes.append(text("summary", "Fine-tune by message purpose"), text("p", "A message can contain several purposes. Keeping its receipt or survey as reference still preserves an independent booking, required form, or unpaid bill.", "state-note"));
@@ -4310,16 +4323,18 @@ function sourcePolicyV2Card(source, matrix) {
     route.dataset.messagePurpose = item.value; purposeControls.set(item.value, route);
     const row = field(item.label, route); row.classList.add("source-purpose-row"); if (item.description) row.append(text("small", item.description)); purposes.append(row);
   }
-  form.append(purposes);
+  if (!explicitOnly) form.append(purposes);
   const advanced = document.createElement("details"); advanced.className = "settings-technical"; advanced.append(text("summary", "Source access, context, and alerts"));
   const acquisition = selectControl([{ value: "active", label: "Active source assessment" }, { value: "paused", label: "Pause source assessment" }], policy.acquisition_state || "active", "");
   const alert = selectControl([{ value: "none", label: "No alerts" }, { value: "security_only", label: "Security alerts" }, { value: "financial_and_security", label: "Financial and security alerts" }, { value: "actionable_and_critical", label: "Actionable and critical alerts" }], policy.alert_mode || "financial_and_security", "");
   const context = selectControl([{ value: "none", label: "No context" }, { value: "metadata_only", label: "Metadata only" }, { value: "typed_facts", label: "Typed facts" }, { value: "typed_facts_safe_snippet", label: "Typed facts and permitted excerpts" }, { value: "content_on_explicit_authorized_demand", label: "Content only when I explicitly ask" }], policy.context_mode || "typed_facts", "");
   const advancedTriage = selectControl([{ value: "review", label: "Use attention and purpose settings" }, { value: "manual_only", label: "Only when I ask" }, { value: "alert_only", label: "Alerts only" }, { value: "context_only", label: "Reference only" }, { value: "ignore", label: "Provenance only" }], policy.triage_mode || "review", "");
+  if (explicitOnly) { advancedTriage.value = "manual_only"; advancedTriage.disabled = true; }
   const planes = document.createElement("div"); planes.className = "preference-grid"; planes.append(field("Source assessment", acquisition), field("Permitted context", context), field("Alerts", alert), field("Advanced attention override", advancedTriage)); advanced.append(planes);
   const kinds = document.createElement("fieldset"); kinds.className = "candidate-kind-grid"; kinds.append(text("legend", "Candidate types"));
   for (const value of matrix.candidate_kinds || []) { const label = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.value = value; input.checked = (policy.candidate_kinds || []).includes(value); label.append(input, document.createTextNode(` ${titleCase(value)}`)); kinds.append(label); }
-  advanced.append(kinds, text("p", "Provider permissions and notification timing are managed separately in Connections and CoS fine-tuning. These controls never grant calendar, message, or other provider writes.", "state-note")); form.append(advanced);
+  if (!explicitOnly) advanced.append(kinds);
+  advanced.append(text("p", "Provider permissions and notification timing are managed separately in Connections and CoS fine-tuning. These controls never grant calendar, message, or other provider writes.", "state-note")); form.append(advanced);
   const preview = document.createElement("section"); preview.className = "source-policy-preview"; preview.setAttribute("aria-live", "polite");
   let generation = 0;
   function invalidatePreview() { if (sourcePreferenceInteractionLocked()) return; generation += 1; preview.replaceChildren(); }
@@ -4327,6 +4342,7 @@ function sourcePolicyV2Card(source, matrix) {
   advancedTriage.addEventListener("change", () => { if (advancedTriage.value === "manual_only") attention.value = "manual"; else if (attention.value === "manual") attention.value = "obligations"; });
   form.addEventListener("change", invalidatePreview);
   function selectedPolicy() {
+    if (explicitOnly) return { ...policy, preset: "custom", acquisition_state: acquisition.value, alert_mode: alert.value, context_mode: context.value, scope_widening: false, credential_creation: false, provider_write_authority: false, admission_active: false };
     return { ...policy, preset: "custom", attention_mode: attention.value, purpose_routes: [...purposeControls].filter(([, control]) => control.value).map(([purpose, control]) => ({ purpose, route: control.value, preserve_independent_obligations: true })), acquisition_state: acquisition.value, triage_mode: advancedTriage.value, alert_mode: alert.value, context_mode: context.value, candidate_kinds: [...kinds.querySelectorAll("input:checked")].map((input) => input.value), scope_widening: false, credential_creation: false, provider_write_authority: false, admission_active: false };
   }
   const actions = document.createElement("div"); actions.className = "button-row";
@@ -4365,7 +4381,9 @@ function sourcePolicyV2Card(source, matrix) {
     const body = { expected_revision: matrix.revision, request_id: crypto.randomUUID(), coordinate: source.coordinate, action: "set", preset: "custom", policy: selected };
     runSourcePreferenceMutation(() => api(`/api/member/v1/settings/source-policies-v2/${encodeURIComponent(source.policy_key)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) }), active ? `${source.label} preferences saved. Source history and provider permissions are unchanged.` : `${source.label} preview preferences saved. Live admission is unchanged.`);
   });
-  actions.append(previewButton, reset, save); form.append(actions, preview);
+  if (!explicitOnly) actions.append(previewButton, reset);
+  actions.append(save); form.append(actions, preview);
+  if (explicitOnly) return form;
   const rules = document.createElement("details"); rules.className = "source-similar-rule"; rules.append(text("summary", "Create a narrower rule with exceptions"));
   const coordinate = source.coordinate;
   const hasNativeContainer = coordinate.native_container_kind && coordinate.native_container_kind !== "source" && coordinate.native_container_id;
@@ -4380,13 +4398,13 @@ function candidateIdentificationSettings(data) {
   const legacy = data.control.candidate_identification || { sources: [], non_configurable: [] };
   const active = Boolean(matrix.admission_active || matrix.active);
   const intro = document.createElement("section"); intro.className = "hero-card candidate-policy-intro";
-  intro.append(text("p", active ? "YOUR SOURCES" : "YOUR SOURCES · PREVIEW MODE", "eyebrow"), text("h2", "Choose what needs you."), text("p", "Tune each account, conversation, and message purpose. Email, iMessage, and future reviewed sources use the same obligation and learning controls. Disconnected sources keep their existing evidence and candidates."));
+  intro.append(text("p", active ? "YOUR SOURCES" : "YOUR SOURCES · PREVIEW MODE", "eyebrow"), text("h2", "Choose what needs you."), text("p", matrix.explicit_communication_submissions ? "You are the gate: forward selected email, messages, or calendar material to your CoS, or use Add for review. The CoS proposes items in Triage, and you choose what is pushed to your platforms. Personal inboxes are not scanned for obligations." : "Tune each account, conversation, and message purpose. Email, iMessage, and future reviewed sources use the same obligation and learning controls. Disconnected sources keep their existing evidence and candidates."));
   if (!active) intro.append(text("p", "Source preferences are available for preview. Live admission remains on its current policy until this behavior is activated.", "state-note"));
   fragment.append(intro);
   if (!matrix.owner_visible) { const privateState = document.createElement("section"); privateState.className = "state-card"; privateState.append(text("strong", "These policies are owner-private."), text("p", "Return to your own member context to inspect or change source preferences.")); fragment.append(privateState); return fragment; }
   const presets = document.createElement("section"); presets.className = "settings-summary-grid";
   for (const [label, description] of [["Focus on obligations", "Requests, promises, appointments, and open work supported by source evidence."], ["Include possible opportunities", "Also review optional possibilities that may matter to you."], ["Only when I ask", "Keep passive suggestions out of your task queue. Explicit requests remain available."]]) { const card = document.createElement("article"); card.className = "card settings-summary-card"; card.append(text("strong", label), text("small", description)); presets.append(card); }
-  fragment.append(presets);
+  if (!matrix.explicit_communication_submissions) fragment.append(presets);
   if ((matrix.migrations || []).length) { const migration = document.createElement("section"); migration.className = "state-card"; migration.append(text("strong", "Some older preferences need an exact account choice."), text("p", `${matrix.migrations.length} source-family preference${matrix.migrations.length === 1 ? "" : "s"} remain retained. They were not copied across every account.`)); fragment.append(migration); }
   const sources = matrix.sources || [];
   const groups = [

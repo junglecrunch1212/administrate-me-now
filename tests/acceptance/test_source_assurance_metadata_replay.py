@@ -138,6 +138,7 @@ def test_large_source_metadata_replay_preserves_readiness_and_private_accounting
         member_roles={MEMBER: "principal", OTHER: "principal"},
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER,
+        legacy_personal_obligation_compatibility=True,
     )
     first_id, other_id = asyncio.run(_preload(settings))
     metadata_sources: dict[str, str | None] = {}

@@ -1,5 +1,16 @@
 # Release acceptance contract
 
+CO-031 amendment (2026-10-08): the production default requires explicit member
+submission for communication-derived obligations. The process tests and rollout
+boundaries in [CO-031](CHANGE-ORDER-031-MEMBER-FORWARDED-OBLIGATIONS.md) are
+required in addition to existing protected checks. Legacy source-policy tests
+run only with an explicit credential-free compatibility switch; they do not
+prove current admission. Queue retirement, late publication, startup replay,
+forwarded route isolation, complete/incomplete evidence, durable extraction,
+governed delivery and independent provider observation require current-default
+proofs. Activation must have a policy-aware rollback target; an old release that
+ignores the cutover event is not a valid rollback plan.
+
 The [bounded test reset contract](BOUNDED-TEST-RESET-CONTRACT.md) adds exact
 manifest, offline-state reversal, bounded acquisition, unchanged restart, and
 source-grounded triage gates for explicitly disposable test datasets. Both

@@ -41,6 +41,16 @@ jobs:
       - name: Install locked dependencies
         run: poetry sync --with dev
 
+      - name: Validate member-forwarded intake and delivery
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra
+          tests/acceptance/test_explicit_communication_intake_policy.py
+          tests/acceptance/test_forwarded_channel_intake.py
+          tests/acceptance/test_forwarded_submission_extraction.py
+          tests/unit/test_communication_intake_policy.py
+          tests/unit/test_provider_write_reconciliation.py
+          tests/unit/adapters/messaging/test_gmail_forwarded_intake.py
+
       - name: Validate architecture, style, and types
         run: |
           poetry run ruff check .

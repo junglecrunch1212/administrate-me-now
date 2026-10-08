@@ -137,7 +137,7 @@ describe("native OpenClaw contract fixture", () => {
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
     expect([...runtime.tools]).toHaveLength(22);
-    expect([...runtime.commands]).toHaveLength(8);
+    expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(14);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
@@ -608,6 +608,53 @@ describe("native OpenClaw contract fixture", () => {
       consent: true,
       sensitivity: "sensitive",
     });
+  });
+
+  it("captures a native forward only on a reviewed dedicated CoS endpoint", async () => {
+    const runtime = fakeApi({
+      forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }],
+    });
+    const hook = runtime.hooks.get("message_received")?.[0]?.handler;
+    const inbound = { from: "actor-a", senderId: "actor-a", messageId: "native-forward-1", content: "Forwarded obligation: submit the form by Friday." };
+    await hook?.(inbound, { channelId: "imessage", accountId: "conversation-fixture", senderId: "actor-a" });
+    await hook?.(inbound, { channelId: "discord", accountId: "cos-fixture", senderId: "actor-a" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const context = { channelId: "imessage", accountId: "cos-fixture", senderId: "actor-a" };
+    await hook?.(inbound, context);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/submissions/forward");
+    const first = requestBody(fetchMock);
+    expect(first).toMatchObject({
+      text: inbound.content, consent: true, submission_gesture: "dedicated_intake",
+      unsupported_attachment_count: 0,
+      provenance: { channel_id: "imessage", account_id: "cos-fixture", actor_id: "actor-a", message_id: "native-forward-1", call_kind: "bridge" },
+    });
+    await hook?.(inbound, context);
+    expect(requestBody(fetchMock, 1).request_id).toBe(first.request_id);
+    await hook?.({ ...inbound, messageId: "native-attachment", metadata: { attachments: [{ mimeType: "image/png" }] } }, context);
+    expect(requestBody(fetchMock, 2).unsupported_attachment_count).toBe(1);
+  });
+
+  it("does not silently accept lost, oversized, or unidentified dedicated submissions", async () => {
+    const runtime = fakeApi({ forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }] });
+    const hook = runtime.hooks.get("message_received")?.[0]?.handler;
+    const context = { channelId: "imessage", accountId: "cos-fixture", senderId: "actor-a" };
+    await expect(hook?.({ from: "actor-a", content: "missing native receipt" }, context)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(hook?.({ from: "actor-a", messageId: "native-large", content: "x".repeat(32_001) }, context)).rejects.toThrow();
+    fetchMock.mockRejectedValue(new TypeError("unavailable"));
+    await expect(hook?.({ from: "actor-a", senderId: "actor-a", messageId: "native-failed", content: "selected obligation" }, context)).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(runtime.api.logger.error).toHaveBeenCalledWith(expect.stringContaining("not acknowledged"));
+  });
+
+  it("requires explicit authorization for the optional forward slash command", async () => {
+    const runtime = fakeApi();
+    const command = runtime.commands.get("adminme-forward");
+    const context = { channel: "imessage", accountId: "cos-fixture", senderId: "actor-a", isAuthorizedSender: false, commandBody: "/adminme-forward selected text", args: "selected text" };
+    await command?.handler(context);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await command?.handler({ ...context, isAuthorizedSender: true });
+    expect(requestBody(fetchMock)).toMatchObject({ text: "selected text", consent: true, provenance: { actor_id: "actor-a", call_kind: "slash_command" } });
   });
 
   it("records model metadata only for a tracked AdministrateMe session", async () => {

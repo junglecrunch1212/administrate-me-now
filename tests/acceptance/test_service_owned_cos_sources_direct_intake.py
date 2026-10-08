@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,12 @@ def _fixture_config() -> dict[str, Any]:
 
 def _settings(instance_dir: Path) -> RuntimeSettings:
     fixture = _fixture_config()
+    for channel in fixture["service_identities"]["channels"]:
+        if channel["provider"] == "gmail":
+            channel["provider_account_reference"] = (
+                "provider-account:"
+                + hashlib.sha256(b"cos-service@example.invalid").hexdigest()
+            )
     return RuntimeSettings.credential_free(
         instance_dir,
         encryption_key=TEST_KEY,
@@ -71,6 +78,7 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
             "service_identities": fixture["service_identities"],
             "adapters": [],
         },
+        deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER_A,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
@@ -91,7 +99,7 @@ def _service_message(
         event_at_ms=event_at_ms,
         tenant_id=runtime.settings.instance.tenant_id,
         type="messaging.received",
-        schema_version=6,
+        schema_version=8,
         occurred_at="2031-01-01T12:00:00Z",
         source_adapter="messaging-gmail-api:cos-gmail-read",
         source_account_id="cos-service@example.invalid",
@@ -135,6 +143,15 @@ def _service_message(
             "channel_id": CHANNEL_ID,
             "trusted_route_key": trusted_route_key,
             "route_source": "exact_authenticated_metadata",
+            "authenticated_member_route": trusted_route_key is not None,
+            "route_assurance": "receiver_aligned_sender"
+            if trusted_route_key
+            else "unverified",
+            "submission_evidence": {
+                "text": subject + "\n\n" + body,
+                "complete": True,
+                "issues": [],
+            },
         },
     )
 
@@ -388,6 +405,10 @@ def test_g05_direct_routes_isolate_members_fail_closed_and_replay(
 
         latest_source = source_ids["shared"]
         client.portal.call(runtime.wait_for_projection, "interactions", latest_source)
+        for cue_id in (cue_a, cue_b):
+            client.portal.call(
+                runtime.wait_for_subscriber, "member-submissions:interpretation", cue_id
+            )
         first_rows = client.portal.call(_projection_rows, runtime)
         assert len(first_rows["service"]) == 5
         assert all(
@@ -408,7 +429,8 @@ def test_g05_direct_routes_isolate_members_fail_closed_and_replay(
         assert readiness["gmail"]["sending_enabled"] is False
         assert readiness["apple_calendar"]["state"] == "planned_not_enrolled"
         assert readiness["apple_reminders"]["state"] == "planned_not_enrolled"
-        assert readiness["imessage"]["state"] == "planned_not_enrolled"
+        assert readiness["imessage"]["state"] == "supported_not_enrolled"
+        assert readiness["imessage"]["production_adapter"] is True
         assert readiness["sms"]["state"] == "not_provisioned"
         assert readiness["phone_voicemail_transcripts"]["state"] == ("not_provisioned")
         assert (

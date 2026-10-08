@@ -260,6 +260,7 @@ def test_active_replay_replaces_same_source_old_contract_and_preserves_member_re
         fixture_member_id=MEMBER,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
     source_id, prior_id, receipt_id, member_id, fingerprint = asyncio.run(
         _preload(settings, actionable=actionable, member_action=member_action)

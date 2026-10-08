@@ -54,6 +54,7 @@ def _settings(instance_dir: Path, *, active: bool) -> RuntimeSettings:
         fixture_member_id=TENANT_MEMBER_A,
         reconciliation_admission_enabled=active,
         human_triage_management_enabled=active,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

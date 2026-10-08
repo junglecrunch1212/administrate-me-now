@@ -50,6 +50,7 @@ def _settings(instance_dir: Path, *, admission: bool) -> RuntimeSettings:
         },
         adapter_config={"adapter_supervisor_port": 0, "adapters": []},
         reconciliation_admission_enabled=admission,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

@@ -106,6 +106,14 @@ async def test_real_google_producers_emit_service_owned_current_facts(
                     "mimeType": "text/plain",
                     "headers": [
                         {
+                            "name": "Received",
+                            "value": "from sender.invalid by mx.google.com with ESMTPS id fixture",
+                        },
+                        {
+                            "name": "Authentication-Results",
+                            "value": "mx.google.com; dkim=pass header.i=@example.invalid; dmarc=pass header.from=example.invalid",
+                        },
+                        {
                             "name": "From",
                             "value": "Fixture A <member-a@example.invalid>",
                         },
@@ -145,7 +153,7 @@ async def test_real_google_producers_emit_service_owned_current_facts(
         )
         events = [event async for event in log.read_since()]
         assert [(event["type"], event["schema_version"]) for event in events] == [
-            ("messaging.received", 6),
+            ("messaging.received", 8),
             ("calendar.event_added", 3),
             ("list_item.added", 4),
         ]
@@ -161,6 +169,7 @@ async def test_real_google_producers_emit_service_owned_current_facts(
             assert event["payload"]["workspace"] == "service"
         assert events[0]["payload"]["trusted_route_key"] == "route:" + "1" * 64
         assert events[0]["payload"]["routing_scope"] == "unresolved"
+        assert events[0]["payload"]["route_assurance"] == "receiver_aligned_sender"
     finally:
         await bus.stop()
         await log.close()

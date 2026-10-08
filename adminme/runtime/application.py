@@ -44,6 +44,9 @@ from adminme.adapters.fixture_delegated_actions import FixtureDelegatedActionAda
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
+from adminme.communication_intake_retirement import retire_passive_obligation_candidates
+from adminme.submission_interpreter import SubmissionInterpreter
+from adminme.provider_write_reconciliation import ProviderWriteReconciler
 from adminme.direct_intake import (
     DirectIntakeProcessor,
     public_direct_channel_readiness,
@@ -185,6 +188,8 @@ class RuntimeSettings:
     test_dataset_marker: dict[str, Any] = field(default_factory=dict, init=False)
     reconciliation_admission_enabled: bool = False
     human_triage_management_enabled: bool = False
+    legacy_personal_obligation_compatibility: bool = False
+    _credential_free_fixture: bool = field(default=False, repr=False)
     provider_bindings: tuple[ProviderBinding, ...] = field(
         default_factory=tuple, init=False
     )
@@ -196,6 +201,13 @@ class RuntimeSettings:
     )
 
     def __post_init__(self) -> None:
+        if (
+            self.legacy_personal_obligation_compatibility
+            and not self._credential_free_fixture
+        ):
+            raise ValueError(
+                "legacy obligation extraction is limited to credential-free fixtures"
+            )
         if len(self.encryption_key) != 32:
             raise ValueError("runtime encryption_key must be exactly 32 bytes")
         root = self.repository_root.resolve()
@@ -660,6 +672,7 @@ class RuntimeSettings:
         deployment_evidence_required: bool = False,
         reconciliation_admission_enabled: bool = False,
         human_triage_management_enabled: bool = False,
+        legacy_personal_obligation_compatibility: bool = False,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -693,6 +706,8 @@ class RuntimeSettings:
             deployment_evidence_required=deployment_evidence_required,
             reconciliation_admission_enabled=reconciliation_admission_enabled,
             human_triage_management_enabled=human_triage_management_enabled,
+            legacy_personal_obligation_compatibility=legacy_personal_obligation_compatibility,
+            _credential_free_fixture=True,
         )
 
 
@@ -747,6 +762,8 @@ class AdministrateMeRuntime:
             GoogleTasksExecutionReconciler | None
         ) = None
         self.direct_intake: DirectIntakeProcessor | None = None
+        self.submission_interpreter: SubmissionInterpreter | None = None
+        self.provider_write_reconciler: ProviderWriteReconciler | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
@@ -819,8 +836,19 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            if not self.settings.legacy_personal_obligation_compatibility:
+                await retire_passive_obligation_candidates(
+                    event_log=self.event_log,
+                    event_sink=self.events,
+                    tenant_id=self.settings.instance.tenant_id,
+                )
+            self.submission_interpreter = SubmissionInterpreter(self)
+            self.provider_write_reconciler = ProviderWriteReconciler(
+                self.event_log, self.events
+            )
             self.direct_intake = DirectIntakeProcessor(
                 event_sink=self.events,
+                event_log=self.event_log,
                 channels=self.settings.service_channel_accounts,
             )
             self.messages_reply_reconciler = MessagesReplyReconciler(
@@ -946,6 +974,7 @@ class AdministrateMeRuntime:
                 profile_loader=self.extensions.profile_for,
                 persona_loader=self.extensions.active_persona,
                 candidate_policy_fn=self.settings_control.effective_candidate_policy,
+                legacy_personal_obligation_compatibility=self.settings.legacy_personal_obligation_compatibility,
                 source_revision_authority_fn=lambda command: (
                     currentness_revision.execution_policy(
                         command,
@@ -1030,6 +1059,33 @@ class AdministrateMeRuntime:
                 "external-sync:central-providers",
                 ["external_sync.write_requested"],
                 self._dispatch_external_write,
+            )
+            self.bus.subscribe(
+                "member-submissions:interpretation",
+                ["triage.intent.submitted"],
+                self.submission_interpreter.handle,
+                consumer_version=self.submission_interpreter.CONSUMER_VERSION,
+                replay_on_version_change=True,
+            )
+            self.bus.subscribe(
+                "provider-writes:reconciliation",
+                [
+                    "external_sync.write_completed",
+                    "calendar.event_added",
+                    "calendar.event_updated",
+                    "calendar.event_deleted",
+                    "list_item.added",
+                    "list_item.updated",
+                    "list_item.completed",
+                    "list_item.uncompleted",
+                    "list_item.deleted",
+                    "list.created",
+                    "list.updated",
+                    "list.deleted",
+                ],
+                self.provider_write_reconciler.handle,
+                consumer_version=self.provider_write_reconciler.CONSUMER_VERSION,
+                replay_on_version_change=True,
             )
             self.bus.subscribe(
                 "direct-intake:routing",
@@ -1471,6 +1527,44 @@ class AdministrateMeRuntime:
         """Execute central-hosted provider commands; Apple commands wait for bridges."""
 
         payload = event["payload"]
+        is_v2 = int(event.get("schema_version") or 1) >= 2
+        if self.event_log is not None:
+            terminal = await self.event_log.get_by_idempotency(
+                str(event["tenant_id"]),
+                f"external-sync-result:{payload['command_id']}",
+            )
+            if terminal is not None:
+                terminal_payload = terminal.get("payload") or {}
+                if is_v2:
+                    valid_terminal = (
+                        int(terminal.get("schema_version") or 1) >= 2
+                        and terminal.get("type")
+                        in {"external_sync.write_completed", "external_sync.write_failed"}
+                        and terminal.get("causation_id") == event["event_id"]
+                        and terminal_payload.get("command_event_id") == event["event_id"]
+                        and all(
+                            terminal.get(field) == event.get(field)
+                            for field in ("tenant_id", "owner_scope", "visibility_scope")
+                        )
+                        and all(
+                            terminal_payload.get(field) == payload.get(field)
+                            for field in (
+                                "command_id", "member_id", "provider",
+                                "provider_account_id", "operation", "request_fingerprint",
+                                "domain_approval_event_id", "openclaw_approval_event_id",
+                                "origin_proposal_id",
+                            )
+                        )
+                    )
+                else:
+                    valid_terminal = terminal_payload.get("command_event_id") in {
+                        None, event["event_id"]
+                    }
+                if not valid_terminal:
+                    raise RuntimeError(
+                        "provider command identity conflicts with its terminal"
+                    )
+                return
         communication_providers = {
             "gmail",
             "microsoft_graph",
@@ -1506,7 +1600,7 @@ class AdministrateMeRuntime:
         b03_contact_event_id: str | None = None
         b03_provider_result_event_id: str | None = None
         b03_binding: ProviderBinding | None = None
-        is_v2 = int(event.get("schema_version") or 1) >= 2
+        creation_attempted = False
         content_fingerprint = str(
             payload.get("request_fingerprint")
             or hashlib.sha256(
@@ -1966,6 +2060,67 @@ class AdministrateMeRuntime:
                     "state": communication_result.get("state") or {},
                 }
             else:
+                if (
+                    not b03
+                    and is_v2
+                    and provider in {"google_calendar", "google_tasks"}
+                    and payload.get("operation") in {"create_event", "create_task"}
+                ):
+                    assert self.event_log is not None
+                    attempt_key = f"external-sync-attempt:{payload['command_id']}"
+                    prior_attempt = await self.event_log.get_by_idempotency(
+                        str(event["tenant_id"]), attempt_key
+                    )
+                    creation_attempted = True
+                    if prior_attempt is not None:
+                        attempt_payload = prior_attempt.get("payload") or {}
+                        if (
+                            prior_attempt.get("type") != "external_sync.write_attempted"
+                            or prior_attempt.get("causation_id") != event["event_id"]
+                            or attempt_payload.get("command_event_id") != event["event_id"]
+                            or any(
+                                prior_attempt.get(field) != event.get(field)
+                                for field in ("tenant_id", "owner_scope", "visibility_scope")
+                            )
+                            or any(
+                                attempt_payload.get(field) != payload.get(field)
+                                for field in (
+                                    "command_id", "member_id", "provider",
+                                    "provider_account_id", "operation", "request_fingerprint",
+                                )
+                            )
+                        ):
+                            raise ValueError("provider command identity conflicts with its attempt")
+                        provider_called = True
+                        raise RuntimeError(
+                            "ambiguous_after_possible_contact: automatic creation retry refused"
+                        )
+                    await self._require_events().write(
+                        EventEnvelope(
+                            event_at_ms=int(time.time() * 1000),
+                            tenant_id=event["tenant_id"],
+                            type="external_sync.write_attempted",
+                            schema_version=1,
+                            occurred_at=now,
+                            source_adapter="external-sync-central-dispatcher",
+                            source_account_id=str(payload["provider_account_id"]),
+                            owner_scope=event["owner_scope"],
+                            visibility_scope=event["visibility_scope"],
+                            sensitivity=event["sensitivity"],
+                            causation_id=event["event_id"],
+                            idempotency_key=attempt_key,
+                            payload={
+                                "command_id": payload["command_id"],
+                                "command_event_id": event["event_id"],
+                                "member_id": payload["member_id"],
+                                "provider": provider,
+                                "provider_account_id": payload["provider_account_id"],
+                                "operation": payload["operation"],
+                                "request_fingerprint": content_fingerprint,
+                                "attempted_at": now,
+                            },
+                        )
+                    )
                 provider_called = True
                 result = await self.adapters.dispatch_write(
                     provider=str(payload["provider"]),
@@ -2026,7 +2181,8 @@ class AdministrateMeRuntime:
                 "retryable": not isinstance(
                     exc, (DeploymentReadinessBlocked, LookupError, ValueError)
                 )
-                and not b03,
+                and not b03
+                and not creation_attempted,
                 "failed_at": now,
             }
         finally:

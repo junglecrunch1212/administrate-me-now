@@ -1,5 +1,14 @@
 # UX behavior contract
 
+CO-031 amendment (2026-10-08): communication obligations require member
+submission to the CoS. Triage explains Forward/Add for review → Extraction →
+Triage → approved platform delivery. Incomplete evidence and extraction failures
+remain visible for clarification. Personal-source automatic obligation controls
+are superseded; source access, context and alerts retain separate controls.
+Untouched automatic candidates retire to audited history while member decisions
+remain intact. Provider acceptance and independent observed verification have
+distinct labels. See [CO-031](CHANGE-ORDER-031-MEMBER-FORWARDED-OBLIGATIONS.md).
+
 CO-030 amendment (2026-09-08): source-aware Triage separates grounded
 responsibility from the member's attention preference. With human management
 active, **Needs you**, **Alerts**, **History**, and **All candidates** are the

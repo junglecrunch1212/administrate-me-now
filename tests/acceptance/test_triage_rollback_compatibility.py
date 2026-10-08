@@ -247,6 +247,7 @@ def test_protected_predecessor_starts_and_serves_member_after_current_v4_superse
         fixture_member_id=MEMBER,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
     proposal_event_id = asyncio.run(_preload(settings))
     with TestClient(create_application(settings)) as client:
@@ -358,6 +359,7 @@ def test_predecessor_applied_and_refused_member_edits_survive_current_upgrade(
         fixture_member_id=MEMBER,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
     if interrupted_replay:
         original_apply = TriageProjection.apply

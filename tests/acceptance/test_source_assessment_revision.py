@@ -1024,10 +1024,9 @@ def test_protected_predecessor_still_serves_after_explicit_revision_without_recl
     retained_consumer = retained["consumers"][subscriber]
     current_consumer = current["consumers"][subscriber]
     predecessor_consumer = rolled_back["consumers"][subscriber]
-    assert {
-        state["consumer_version"]
-        for state in (retained_consumer, current_consumer, predecessor_consumer)
-    } == {"23.0.0"}
+    assert retained_consumer["consumer_version"] == "23.0.0"
+    assert current_consumer["consumer_version"] == "24.0.0"
+    assert predecessor_consumer["consumer_version"] == "23.0.0"
     assert (
         retained_consumer["checkpoint_event_id"]
         <= current_consumer["checkpoint_event_id"]

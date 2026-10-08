@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
 from adminme.events.writer import EventSink
+from adminme.communication_intake_policy import POLICY_EVENT_KEY, command_retirement
 from adminme.lib.governance import GuardedWrite
 from adminme.lib.instance_config import InstanceConfig
 from adminme.lib.observation import ObservationManager, outbound
@@ -111,6 +112,7 @@ class PipelineRunner:
         profile_loader: Callable[[str], dict[str, Any] | None] | None = None,
         persona_loader: Callable[[], dict[str, Any] | None] | None = None,
         candidate_policy_fn: Callable[[str, str], dict[str, Any]] | None = None,
+        legacy_personal_obligation_compatibility: bool = False,
         source_revision_authority_fn: Callable[
             [dict[str, Any]], DisposableTestAcquisition
         ]
@@ -127,6 +129,9 @@ class PipelineRunner:
         self._profile_loader = profile_loader
         self._persona_loader = persona_loader
         self._candidate_policy_fn = candidate_policy_fn
+        self._legacy_personal_obligation_compatibility = (
+            legacy_personal_obligation_compatibility
+        )
         self._source_revision_authority_fn = source_revision_authority_fn
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
@@ -212,6 +217,18 @@ class PipelineRunner:
         before ``bus.start()`` per [§1.10]."""
         if self._started:
             return
+        if (
+            self._legacy_personal_obligation_compatibility
+            and (
+                await self._log.get_by_idempotency(
+                    self._config.tenant_id, POLICY_EVENT_KEY
+                )
+            )
+            is not None
+        ):
+            raise ValueError(
+                "legacy obligation fixture cannot reopen a cutover instance"
+            )
         self._started = True
         for pack in self._packs.values():
             events = pack.triggers.get("events") if pack.triggers else None
@@ -290,6 +307,8 @@ class PipelineRunner:
         return len(pending)
 
     async def _recovery_terminal(self, request: dict[str, Any]) -> bool:
+        if await command_retirement(self._log, request) is not None:
+            return True
         if request.get("type") == CURRENTNESS_REQUEST_TYPE:
             return bool(
                 (await currentness_command_status(self._log, request))["terminal"]
@@ -403,6 +422,11 @@ class PipelineRunner:
                     ):
                         terminal = True
                         break
+                if (
+                    not terminal
+                    and await command_retirement(self._log, plan) is not None
+                ):
+                    terminal = True
                 if not terminal:
                     pending.append(plan_id)
                     if len(pending) > max_pending:
@@ -415,6 +439,8 @@ class PipelineRunner:
             pending_plan = await self._log.get(plan_id)
             if pending_plan is None:
                 raise RuntimeError("publication plan disappeared from append-only log")
+            if await command_retirement(self._log, pending_plan) is not None:
+                continue
             await callback(pending_plan)
             if not await self._publication_terminal(pending_plan):
                 raise RuntimeError("source-publication plan remained non-terminal")
@@ -433,6 +459,8 @@ class PipelineRunner:
         return headers
 
     async def _publication_terminal(self, plan: dict[str, Any]) -> bool:
+        if await command_retirement(self._log, plan) is not None:
+            return True
         completion = await self._log.get_by_idempotency(
             self._config.tenant_id, publication_completion_key(str(plan["event_id"]))
         )
@@ -500,6 +528,9 @@ class PipelineRunner:
                 correlation_id=correlation,
                 parties_conn_factory=self._parties_conn_factory,
                 candidate_policy_fn=self._candidate_policy_fn,
+                legacy_personal_obligation_compatibility=(
+                    self._legacy_personal_obligation_compatibility
+                ),
                 source_revision_authority_fn=self._source_revision_authority_fn,
             )
             await pack.instance.handle(event, ctx)

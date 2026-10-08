@@ -236,6 +236,17 @@ class AddForReviewRequest(ContextRequest):
     ) = None
 
 
+class ForwardForReviewRequest(ContextRequest):
+    """Explicit channel submission; model-selected ordinary chat is excluded."""
+
+    request_id: str = Field(min_length=8, max_length=120)
+    text: str = Field(min_length=1, max_length=32_000)
+    consent: Literal[True]
+    submission_gesture: Literal["explicit", "dedicated_intake"] = "explicit"
+    unsupported_attachment_count: int = Field(default=0, ge=0, le=1000)
+    sensitivity: Literal["normal", "sensitive"] = "normal"
+
+
 class ReviewRequest(ContextRequest):
     request_id: str = Field(min_length=1, max_length=120)
     action: Literal["inspect", "approve", "dismiss", "edit"]
@@ -3205,6 +3216,176 @@ async def add_for_review(body: AddForReviewRequest, request: Request) -> dict[st
         ],
     )
     return result
+
+
+@router.post("/submissions/forward")
+async def forward_for_review(
+    body: ForwardForReviewRequest, request: Request
+) -> dict[str, Any]:
+    """Persist a deliberate text forward from an enrolled CoS channel.
+
+    OpenClaw retains ownership of the transport and conversation. Exact account,
+    actor and channel bindings independently resolve service and member identity.
+    Forwarding grants interpretation only; provider actions still need review.
+    """
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    provenance = body.provenance
+    if provenance.call_kind not in {"slash_command", "bridge"}:
+        raise HTTPException(
+            403, "forwarding requires an explicit member submission gesture"
+        )
+    if provenance.call_kind == "bridge" and not provenance.message_id:
+        raise HTTPException(
+            422, "channel submission requires its native receipt identity"
+        )
+    provider_by_transport = {
+        "imessage": "apple_imessage",
+        "bluebubbles": "apple_imessage",
+    }
+    provider = provider_by_transport.get(provenance.channel_id)
+    if provider is None or not provenance.account_id:
+        raise HTTPException(403, "this channel is not a supported CoS forward endpoint")
+    runtime = _runtime(request)
+    account_reference = (
+        "provider-account:" + hashlib.sha256(provenance.account_id.encode()).hexdigest()
+    )
+    channels = [
+        channel
+        for channel in runtime.settings.service_channel_accounts
+        if channel.provider in {provider, "imessage"}
+        and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+        and channel.provider_account_reference == account_reference
+        and channel.enrolled
+        and channel.observation_active
+        and channel.state in {"observation", "healthy", "degraded"}
+    ]
+    if len(channels) != 1:
+        raise HTTPException(
+            403, "exact enrolled service channel binding is unavailable"
+        )
+    channel = channels[0]
+    if (
+        body.submission_gesture == "dedicated_intake"
+        and channel.intake_mode != "member_submission"
+    ):
+        raise HTTPException(403, "this service channel is configured for conversation")
+    identity = [
+        channel.channel_id,
+        provenance.channel_id,
+        provenance.account_id,
+        provenance.actor_id,
+        provenance.message_id if provenance.call_kind == "bridge" else body.request_id,
+    ]
+    identity_digest = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":")).encode()
+    ).hexdigest()
+    key = f"openclaw-forward:{identity_digest}"
+    fingerprint = _fingerprint(
+        {
+            "text": body.text,
+            "sensitivity": body.sensitivity,
+            "unsupported_attachment_count": body.unsupported_attachment_count,
+            "submission_gesture": body.submission_gesture,
+        }
+    )
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    duplicate = prior is not None
+    if prior is not None:
+        if (
+            prior.get("owner_scope") != f"private:{session.auth_member_id}"
+            or prior.get("payload", {}).get("member_id") != session.auth_member_id
+        ):
+            raise HTTPException(
+                403,
+                "native submission receipt belongs to a different reviewed member binding",
+            )
+        if prior.get("raw_ref") != f"request-sha256:{fingerprint}":
+            raise HTTPException(
+                409, "native submission receipt conflicts with prior content"
+            )
+        event_id = str(prior["event_id"])
+        intent_id = str(prior["payload"]["intent_id"])
+    else:
+        issues = []
+        if body.unsupported_attachment_count:
+            issues.append("unsupported_channel_attachment")
+        now = EventEnvelope.now_utc_iso()
+        intent_id = "forward_" + identity_digest[:48]
+        payload = {
+            "intent_id": intent_id,
+            "member_id": session.auth_member_id,
+            "text": body.text,
+            "source_surface": "openclaw",
+            "kind_hint": None,
+            "source_event_id": None,
+            "submitted_at": now,
+            "client_request_id": identity_digest,
+            "submission_kind": "member_forwarded",
+            "evidence_complete": not issues,
+            "evidence_issues": issues,
+            "intake_channel": channel.provider,
+        }
+        await _guard(runtime, session, "triage.intent.submitted", payload)
+        envelope = EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="triage.intent.submitted",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="openclaw-submission",
+            source_account_id=provenance.account_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=body.sensitivity,
+            # This fact records the authenticated human's explicit submission,
+            # not an action by the represented CoS service principal.
+            actor_identity=session.auth_member_id,
+            correlation_id=provenance.correlation_id,
+            idempotency_key=key,
+            raw_ref=f"request-sha256:{fingerprint}",
+            payload=payload,
+        )
+        try:
+            event_id = await runtime.events.write(envelope)
+        except IdempotencyConflict:
+            concurrent = await runtime.event_log.get_by_idempotency(
+                session.tenant_id, key
+            )
+            if (
+                concurrent is not None
+                and concurrent.get("owner_scope") != f"private:{session.auth_member_id}"
+            ):
+                raise HTTPException(
+                    403,
+                    "native submission receipt belongs to a different reviewed member binding",
+                ) from None
+            if (
+                concurrent is None
+                or concurrent.get("raw_ref") != f"request-sha256:{fingerprint}"
+            ):
+                raise HTTPException(
+                    409, "native submission receipt conflicts with prior content"
+                ) from None
+            event_id = str(concurrent["event_id"])
+            duplicate = True
+    await runtime.wait_for_projection("triage", event_id)
+    await _record_tool_call(
+        request,
+        session,
+        provenance,
+        operation="submissions.forward",
+        result_event_ids=[event_id],
+    )
+    return {
+        "accepted": True,
+        "intent_id": intent_id,
+        "intent_event_id": event_id,
+        "duplicate": duplicate,
+        "state": "captured_for_review",
+        "provider_effect_permitted": False,
+    }
 
 
 @router.post("/tools/review")

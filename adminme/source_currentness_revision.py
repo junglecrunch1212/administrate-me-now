@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from adminme.adapters.disposable_test_acquisition import DisposableTestAcquisition
 from adminme.events.envelope import EventEnvelope
+from adminme.communication_intake_policy import POLICY_REASON, command_retirement
 from adminme.events.log import EventLog
 from adminme.source_assessment_revision import (
     REVISION as CLOSED_REVISION,
@@ -157,6 +158,7 @@ async def command_status(
     manifest = CurrentnessManifest.model_validate(request["payload"]["manifest"])
     from adminme.source_assessment_revision import refusal_key
 
+    policy_retirement = await command_retirement(event_log, request)
     targets = []
     for target in manifest.targets:
         terminal = await event_log.get_by_idempotency(
@@ -172,13 +174,19 @@ async def command_status(
                 "state": "assessed"
                 if terminal
                 else "refused"
-                if refusal
+                if refusal or policy_retirement
                 else "pending",
                 "assessment_event_id": terminal["event_id"] if terminal else None,
                 "outcome": terminal["payload"]["assessment_outcome"]
                 if terminal
                 else None,
-                "refusal_reason": refusal["payload"]["reason"] if refusal else None,
+                "refusal_reason": (
+                    refusal["payload"]["reason"]
+                    if refusal
+                    else POLICY_REASON
+                    if policy_retirement
+                    else None
+                ),
             }
         )
     return {

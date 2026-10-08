@@ -678,6 +678,7 @@ def test_gmail_sent_multipart_quote_boundary_survives_production_mapping(
         member_roles={MEMBER: "principal"},
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER,
+        legacy_personal_obligation_compatibility=True,
     )
     source_id = asyncio.run(_preload_gmail_sent_quote_fixture(settings))
 
@@ -724,6 +725,7 @@ def test_exact_context_correction_round_trip_through_production_composition(
         openclaw_enabled=False,
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER,
+        legacy_personal_obligation_compatibility=True,
     )
     app = create_application(settings)
     with TestClient(app) as client:
@@ -1022,6 +1024,7 @@ def test_stale_system_supersession_cannot_override_member_action(
         member_identities={"context-correctness.ts.net": MEMBER},
         member_roles={MEMBER: "principal"},
         openclaw_enabled=False,
+        legacy_personal_obligation_compatibility=True,
     )
     app = create_application(settings)
     with TestClient(app) as client:
@@ -1326,6 +1329,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         member_roles={MEMBER: "principal"},
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER,
+        legacy_personal_obligation_compatibility=True,
     )
     (
         first_id,

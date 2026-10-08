@@ -39,6 +39,7 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
         },
         deterministic_openclaw_fixture=True,
         fixture_member_id=FIXTURE_MEMBER_ID,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

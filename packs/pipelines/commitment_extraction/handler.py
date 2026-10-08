@@ -62,6 +62,10 @@ from adminme.pipelines.base import (
 )
 from adminme.projections.parties.queries import find_party_by_identifier
 from adminme.triage_intent import extract_intent_candidates
+from adminme.communication_intake_policy import (
+    passive_obligations_disabled,
+    record_passive_source_skipped,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -148,7 +152,7 @@ def _thresholds_for_member(
 
 class CommitmentExtractionPipeline:
     pack_id: str = "pipeline:commitment_extraction"
-    version: str = "4.2.0"
+    version: str = "4.3.0"
     triggers: Triggers = {"events": ["messaging.received", "messaging.sent"]}
 
     # `_PACK_ROOT` is set at module import for the in-pack default config
@@ -162,6 +166,9 @@ class CommitmentExtractionPipeline:
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in ("messaging.received", "messaging.sent"):
+            return
+        if passive_obligations_disabled(event, ctx):
+            await record_passive_source_skipped(event, ctx)
             return
 
         config = self._config_override or _load_config(self._PACK_ROOT)

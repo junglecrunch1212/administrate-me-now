@@ -744,7 +744,7 @@ def test_newer_restore_controller_proves_selected_predecessor_in_its_real_proces
         in (release / "packs/pipelines/noise_filtering/pipeline.yaml").read_text()
     )
     assert (
-        "version: 23.0.0"
+        "version: 24.0.0"
         in (REPO_ROOT / "packs/pipelines/noise_filtering/pipeline.yaml").read_text()
     )
     python = release / ".venv" / "bin" / "python"

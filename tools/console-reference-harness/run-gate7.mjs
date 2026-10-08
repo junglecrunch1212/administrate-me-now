@@ -158,7 +158,7 @@ async function waitForServer(baseUrl) {
   throw new Error(`Gate 7 fixture server did not become ready at ${baseUrl}`);
 }
 
-async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false) {
+async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
@@ -175,6 +175,7 @@ async function startServer(port, modelConfigured, attentionEnabled = false, boun
         ADMINME_GATE7_VISUAL_NOW: fixedNow,
         ADMINME_GATE7_ATTENTION_ENABLED: attentionEnabled ? "1" : "0",
         ADMINME_GATE7_BOUNDED_SAMPLE: boundedSample ? "1" : "0",
+        ADMINME_GATE7_EXPLICIT_SUBMISSIONS: explicitSubmissions ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1860,7 +1861,7 @@ async function run() {
     await auditTriageSourceControls({ page: attentionBrowser.page, baseUrl: attentionServer.baseUrl, record, screenshot, auditAccessibility });
     await closePageContext(attentionBrowser);
 
-    boundedServer = await startServer(basePort + 3, true, true, true);
+    boundedServer = await startServer(basePort + 3, true, true, true, true);
     for (const width of [1440, 390]) {
       const boundedBrowser = await newContext(browser, identities.principal, { width, height: 1000 });
       await boundedBrowser.page.goto(`${boundedServer.baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
@@ -1870,8 +1871,18 @@ async function run() {
       const copy = await sampleNotice.textContent();
       record(`Bounded sample scope is visible at ${width}`, await sampleNotice.isVisible() && copy.includes("lifetime limit of 200") && copy.includes("including Sent and thread context") && copy.includes("does not cover the whole mailbox"), copy);
       record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).isVisible());
+      record(`Member-forwarded intake is explained at ${width}`, (await boundedBrowser.page.locator(".candidate-policy-intro").textContent()).includes("You are the gate: forward selected email"));
+      const passiveCard = boundedBrowser.page.locator(".source-attention-card").filter({ has: sampleNotice });
+      const passiveChoice = passiveCard.getByRole("combobox", { name: "What should reach me?", exact: true });
+      record(`Passive obligation extraction cannot be enabled in Settings at ${width}`, await passiveChoice.isDisabled() && await passiveChoice.inputValue() === "manual" && await passiveCard.getByRole("button", { name: "Preview recent effect", exact: true }).count() === 0);
+      record(`Member-forwarded controls fit at ${width}`, await boundedBrowser.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await auditAccessibility(boundedBrowser.page, `bounded sample ${width}`);
       await screenshot(boundedBrowser.page, `bounded-sample-${width}.png`);
+      await boundedBrowser.page.goto(`${boundedServer.baseUrl}/member/triage`, { waitUntil: "networkidle" });
+      await boundedBrowser.page.locator(".triage-overview").waitFor();
+      record(`Triage explains forwarding before review at ${width}`, (await boundedBrowser.page.locator(".triage-overview").textContent()).includes("Forward selected obligations to your CoS"));
+      await auditAccessibility(boundedBrowser.page, `forwarded triage ${width}`);
+      await screenshot(boundedBrowser.page, `forwarded-triage-${width}.png`);
       await closePageContext(boundedBrowser);
     }
     const otherBounded = await newContext(browser, identities.adult, { width: 390, height: 844 });

@@ -79,6 +79,13 @@ def settings(instance: Path, root: Path, *, selected=None, dataset="a" * 32):
     )
     return application.RuntimeSettings.credential_free(
         instance,
+        # Explicit legacy-only mode when this additive fixture seam exists.
+        **(
+            {"legacy_personal_obligation_compatibility": True}
+            if "legacy_personal_obligation_compatibility"
+            in application.RuntimeSettings.__dataclass_fields__
+            else {}
+        ),
         encryption_key=KEY,
         repository_root=root,
         member_identities={

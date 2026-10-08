@@ -184,7 +184,7 @@ CANDIDATE_CHANNELS: tuple[CandidateChannel, ...] = (
         "member_intent",
         ("triage.intent.submitted",),
         ("triage",),
-        "inline:member-intent",
+        "durable:member-submissions:interpretation",
         _ALL_TRIAGE_TARGETS,
         "supported",
         "Exact member text is durably held before deterministic rules and bounded exact-evidence language extraction; all results remain human-gated.",
@@ -194,7 +194,7 @@ CANDIDATE_CHANNELS: tuple[CandidateChannel, ...] = (
         "member_intent",
         ("triage.intent.submitted",),
         ("triage",),
-        "inline:member-intent",
+        "durable:member-submissions:interpretation",
         _ALL_TRIAGE_TARGETS,
         "supported",
         "The typed OpenClaw tool records the same exact member-intent fact; generic chat remains non-canonical.",
@@ -204,30 +204,40 @@ CANDIDATE_CHANNELS: tuple[CandidateChannel, ...] = (
         "service_direct_intake",
         ("messaging.received", "direct_intake.routed"),
         ("triage",),
-        "inline:direct-intake-exact-route",
+        "durable:member-submissions:interpretation",
         _ALL_TRIAGE_TARGETS,
         "supported",
-        "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+        "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
+    ),
+    CandidateChannel(
+        "cos_direct_imessage",
+        "service_direct_intake",
+        ("triage.intent.submitted",),
+        ("triage",),
+        "durable:member-submissions:interpretation",
+        _ALL_TRIAGE_TARGETS,
+        "supported",
+        "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
     ),
     CandidateChannel(
         "gmail_message",
         "communications",
         ("messaging.received", "messaging.sent"),
         ("comms", "triage"),
-        "pipeline:noise_filtering",
-        _MESSAGE_TARGETS,
-        "supported",
-        "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+        "policy:explicit-member-submission-v1",
+        (),
+        "not_applicable",
+        "Personal communication remains Comms evidence; forwarding or Add for review is required before obligation extraction. Historical replay fixtures retain the old extraction contract only.",
     ),
     CandidateChannel(
         "sms_message",
         "communications",
         ("telephony.sms_received",),
         ("comms", "triage"),
-        "pipeline:noise_filtering",
-        _MESSAGE_TARGETS,
-        "optional_not_configured",
-        "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+        "policy:explicit-member-submission-v1",
+        (),
+        "not_applicable",
+        "Personal SMS observations do not generate obligations; a member must submit selected material to the CoS.",
     ),
     CandidateChannel(
         "member_note",
@@ -326,8 +336,12 @@ _SUPPORTED_CHANNEL_TESTS = {
         "test_openclaw_add_for_review_reaches_every_triage_target"
     ),
     "cos_direct_gmail": (
-        "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::"
-        "test_g05_direct_routes_isolate_members_fail_closed_and_replay"
+        "tests/acceptance/test_forwarded_channel_intake.py::"
+        "test_real_gmail_producer_route_reaches_durable_member_interpreter"
+    ),
+    "cos_direct_imessage": (
+        "tests/acceptance/test_forwarded_channel_intake.py::"
+        "test_channel_submission_extracts_privately_and_deduplicates_after_restart"
     ),
     "gmail_message": (
         "tests/acceptance/test_event_lifecycle_matrix.py::"
@@ -1734,6 +1748,7 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("action.", "automation"),
     ("notification.", "notification"),
     ("external_sync.", "external_write"),
+    ("communication_intake.", "triage"),
     ("member.provider_action.", "external_write"),
     ("external.", "external_write"),
     ("observation.", "governance"),
@@ -1752,6 +1767,7 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("coordination.", "coordination"),
     ("operating_agreement.", "operating_agreement"),
     ("direct_intake.", "source_routing"),
+    ("communication_intake.", "source_routing"),
     ("temporary_surface.", "temporary_surface"),
     ("xlsx.", "workbook_runtime"),
     ("runtime.", "runtime"),

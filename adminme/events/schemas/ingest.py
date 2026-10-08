@@ -179,6 +179,44 @@ class MessagingReceivedV6(MessagingReceivedV5):
         return self
 
 
+class SubmittedEvidencePartV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    mime_type: str = Field(min_length=1, max_length=240)
+    filename: str = Field(default="", max_length=500)
+    role: Literal["outer", "forwarded", "calendar"]
+    text: str = Field(max_length=262_144)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SubmittedEvidenceV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    text: str = Field(max_length=32_000)
+    complete: bool
+    issues: list[str] = Field(default_factory=list, max_length=20)
+    parts: list[SubmittedEvidencePartV1] = Field(default_factory=list, max_length=64)
+
+
+class MessagingReceivedV8(MessagingReceivedV6):
+    """Receiver-reviewed service intake with bounded, loss-aware evidence."""
+
+    authenticated_member_route: bool
+    route_assurance: Literal[
+        "unverified", "receiver_aligned_sender", "exact_dkim_identity"
+    ]
+    submission_evidence: SubmittedEvidenceV1
+
+    @model_validator(mode="after")
+    def _validate_route_assurance(self) -> "MessagingReceivedV8":
+        verified = self.route_assurance != "unverified"
+        if verified != self.authenticated_member_route or verified != bool(
+            self.trusted_route_key
+        ):
+            raise ValueError("intake route proof contradicts the route key")
+        if self.submission_evidence.complete == bool(self.submission_evidence.issues):
+            raise ValueError("submission completeness contradicts its evidence issues")
+        return self
+
+
 class MessagingReceivedV7(MessagingReceivedV5):
     """Read-only member-bridge observation from the reviewed Messages source."""
 
@@ -758,6 +796,7 @@ registry.register("messaging.received", 4, MessagingReceivedV4)
 registry.register("messaging.received", 5, MessagingReceivedV5)
 registry.register("messaging.received", 6, MessagingReceivedV6)
 registry.register("messaging.received", 7, MessagingReceivedV7)
+registry.register("messaging.received", 8, MessagingReceivedV8)
 registry.register(
     "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
 )

@@ -97,7 +97,13 @@ async def test_identity_resolution_retains_endpoint_for_unknown_sender(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    runner = PipelineRunner(
+        bus,
+        log,
+        EventWriter(log, bus),
+        config,
+        legacy_personal_obligation_compatibility=True,
+    )
     pack = load_pipeline_pack(IDENTITY_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -142,7 +148,13 @@ async def test_identity_resolution_retains_messaging_sent_endpoint(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    runner = PipelineRunner(
+        bus,
+        log,
+        EventWriter(log, bus),
+        config,
+        legacy_personal_obligation_compatibility=True,
+    )
     pack = load_pipeline_pack(IDENTITY_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -204,7 +216,13 @@ async def test_identity_resolution_accepts_repeated_messages_from_same_endpoint(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    runner = PipelineRunner(
+        bus,
+        log,
+        EventWriter(log, bus),
+        config,
+        legacy_personal_obligation_compatibility=True,
+    )
     runner.register(load_pipeline_pack(IDENTITY_PACK_ROOT))
     await runner.start()
 
@@ -272,7 +290,13 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    runner = PipelineRunner(
+        bus,
+        log,
+        EventWriter(log, bus),
+        config,
+        legacy_personal_obligation_compatibility=True,
+    )
     pack = load_pipeline_pack(NOISE_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -337,7 +361,13 @@ async def test_noise_filtering_skill_failure_lands_defensive_default(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    runner = PipelineRunner(
+        bus,
+        log,
+        EventWriter(log, bus),
+        config,
+        legacy_personal_obligation_compatibility=True,
+    )
     pack = load_pipeline_pack(NOISE_PACK_ROOT)
     runner.register(pack)
     await runner.start()

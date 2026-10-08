@@ -82,6 +82,7 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
             "administrateme-portal|member-portal|actor-triage": MEMBER
         },
         deterministic_openclaw_fixture=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

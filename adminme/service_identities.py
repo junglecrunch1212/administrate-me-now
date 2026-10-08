@@ -280,6 +280,7 @@ class ServiceChannelAccount:
     sending_enabled: bool
     required_for_activation: bool
     routes: tuple[ChannelRoute, ...]
+    intake_mode: Literal["conversation", "member_submission"] = "conversation"
 
 
 def service_private_scope(service_principal_id: str) -> str:
@@ -437,6 +438,9 @@ def validate_service_identity_config(
             )
 
         routes: list[ChannelRoute] = []
+        intake_mode = row.get("intake_mode", "conversation")
+        if intake_mode not in {"conversation", "member_submission"}:
+            raise ValueError("service channel intake_mode is invalid")
         route_keys: set[str] = set()
         raw_routes = row.get("routes") or []
         if not isinstance(raw_routes, list):
@@ -494,6 +498,7 @@ def validate_service_identity_config(
                 sending_enabled=sending_enabled,
                 required_for_activation=row.get("required_for_activation") is True,
                 routes=tuple(routes),
+                intake_mode=intake_mode,
             )
         )
     return tuple(principals), tuple(channels)
@@ -552,6 +557,7 @@ def public_service_identity_inventory(
                 "sending_enabled": channel.sending_enabled,
                 "required_for_activation": channel.required_for_activation,
                 "route_count": len(channel.routes),
+                "intake_mode": channel.intake_mode,
                 "content_exposed": False,
             }
             for channel in channels

@@ -37,6 +37,7 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
         member_identities={"source-principal.ts.net": MEMBER},
         member_roles={MEMBER: "principal"},
         deterministic_openclaw_fixture=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

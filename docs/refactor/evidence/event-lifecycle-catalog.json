@@ -1,7 +1,7 @@
 {
   "candidate_channels": [
     {
-      "assessment_owner": "inline:member-intent",
+      "assessment_owner": "durable:member-submissions:interpretation",
       "candidate_targets": [
         "task",
         "commitment",
@@ -27,7 +27,7 @@
       "source_family": "member_intent"
     },
     {
-      "assessment_owner": "inline:member-intent",
+      "assessment_owner": "durable:member-submissions:interpretation",
       "candidate_targets": [
         "task",
         "commitment",
@@ -53,7 +53,7 @@
       "source_family": "member_intent"
     },
     {
-      "assessment_owner": "inline:direct-intake-exact-route",
+      "assessment_owner": "durable:member-submissions:interpretation",
       "candidate_targets": [
         "task",
         "commitment",
@@ -76,11 +76,11 @@
         "messaging.received",
         "direct_intake.routed"
       ],
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "source_family": "service_direct_intake"
     },
     {
-      "assessment_owner": "pipeline:noise_filtering",
+      "assessment_owner": "durable:member-submissions:interpretation",
       "candidate_targets": [
         "task",
         "commitment",
@@ -94,8 +94,22 @@
         "party_relationship",
         "relationship_fact"
       ],
-      "channel_id": "gmail_message",
+      "channel_id": "cos_direct_imessage",
       "coverage": "supported",
+      "first_surfaces": [
+        "triage"
+      ],
+      "input_event_types": [
+        "triage.intent.submitted"
+      ],
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "source_family": "service_direct_intake"
+    },
+    {
+      "assessment_owner": "policy:explicit-member-submission-v1",
+      "candidate_targets": [],
+      "channel_id": "gmail_message",
+      "coverage": "not_applicable",
       "first_surfaces": [
         "comms",
         "triage"
@@ -104,26 +118,14 @@
         "messaging.received",
         "messaging.sent"
       ],
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "reason": "Personal communication remains Comms evidence; forwarding or Add for review is required before obligation extraction. Historical replay fixtures retain the old extraction contract only.",
       "source_family": "communications"
     },
     {
-      "assessment_owner": "pipeline:noise_filtering",
-      "candidate_targets": [
-        "task",
-        "commitment",
-        "calendar_event",
-        "reminder",
-        "list",
-        "list_item",
-        "recurrence",
-        "party_identifier",
-        "party_candidate",
-        "party_relationship",
-        "relationship_fact"
-      ],
+      "assessment_owner": "policy:explicit-member-submission-v1",
+      "candidate_targets": [],
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "first_surfaces": [
         "comms",
         "triage"
@@ -131,7 +133,7 @@
       "input_event_types": [
         "telephony.sms_received"
       ],
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "Personal SMS observations do not generate obligations; a member must submit selected material to the CoS.",
       "source_family": "communications"
     },
     {
@@ -3007,232 +3009,309 @@
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "task"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "commitment"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "calendar_event"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "reminder"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "list"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "list_item"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "recurrence"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "party_identifier"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "party_candidate"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
       "target_kind": "party_relationship"
     },
     {
       "channel_id": "cos_direct_gmail",
       "coverage": "supported",
-      "process_test": "tests/acceptance/test_service_owned_cos_sources_direct_intake.py::test_g05_direct_routes_isolate_members_fail_closed_and_replay",
-      "reason": "An exact reviewed authenticated-metadata route may create one member-private primary intent cue; its text remains incomplete semantics and every derived target remains human-gated.",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_real_gmail_producer_route_reaches_durable_member_interpreter",
+      "reason": "A reviewed receiver-verified route creates a bounded member-private forwarded submission; durable extraction preserves evidence completeness and human confirmation.",
+      "target_kind": "relationship_fact"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "task"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "commitment"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "calendar_event"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "reminder"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "list"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "list_item"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "recurrence"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "party_identifier"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "party_candidate"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
+      "target_kind": "party_relationship"
+    },
+    {
+      "channel_id": "cos_direct_imessage",
+      "coverage": "supported",
+      "process_test": "tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart",
+      "reason": "A signed OpenClaw actor binding and enrolled CoS intake endpoint establish explicit submission; native forwards and explicit capture share durable extraction, without reading personal message history.",
       "target_kind": "relationship_fact"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "task"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "commitment"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "calendar_event"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "reminder"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "list"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "list_item"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "recurrence"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "party_identifier"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "party_candidate"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "party_relationship"
     },
     {
       "channel_id": "gmail_message",
-      "coverage": "supported",
-      "process_test": "tests/acceptance/test_event_lifecycle_matrix.py::test_message_and_note_sources_reach_every_triage_target",
-      "reason": "The bounded message skill exposes all reviewed Triage target kinds; fixed code still requires exact evidence, allowlisted fields, private scope, and human confirmation.",
+      "coverage": "not_applicable",
+      "process_test": null,
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "relationship_fact"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "task"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "commitment"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "calendar_event"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "reminder"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "list"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "list_item"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "recurrence"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "party_identifier"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "party_candidate"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "party_relationship"
     },
     {
       "channel_id": "sms_message",
-      "coverage": "optional_not_configured",
+      "coverage": "not_applicable",
       "process_test": null,
-      "reason": "The shared pipeline exists, but the family bridge/provider is not live-proven.",
+      "reason": "This channel records canonical provider/context truth; automatic derivation of this target would duplicate authority or lacks grounded semantics.",
       "target_kind": "relationship_fact"
     },
     {
@@ -3777,14 +3856,14 @@
   ],
   "summary": {
     "ambiguous_lifecycle_transitions": [],
-    "candidate_channels": 12,
+    "candidate_channels": 13,
     "life_patterns": 15,
     "missing_lifecycle_transitions": [],
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
-    "source_candidate_cells": 132,
-    "technical_event_schemas": 336,
-    "technical_event_types": 270,
+    "source_candidate_cells": 143,
+    "technical_event_schemas": 345,
+    "technical_event_types": 276,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -8000,6 +8079,142 @@
         "operation",
         "changed_at",
         "expected_last_event_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "communication_intake.command_retired",
+      "family": "triage",
+      "properties": {
+        "candidate_count": {
+          "const": 0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "command_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Event Id",
+          "type": "string"
+        },
+        "command_type": {
+          "enum": [
+            "source.assessment.recovery_requested",
+            "source.assessment.revision_requested",
+            "source.currentness.revision_requested",
+            "triage.source_publication.planned",
+            "triage.source_revision_publication.planned",
+            "triage.currentness_publication.planned"
+          ],
+          "title": "Command Type",
+          "type": "string"
+        },
+        "language_called": {
+          "const": false,
+          "title": "Language Called",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "explicit-member-submission-v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "reason": {
+          "const": "explicit_member_submission_required",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id",
+        "command_event_id",
+        "command_type",
+        "reason",
+        "language_called",
+        "candidate_count"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "communication_intake.policy_applied",
+      "family": "triage",
+      "properties": {
+        "automatic_personal_obligations_enabled": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Personal Obligations Enabled",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "explicit-member-submission-v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "previous_source_watermark": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Source Watermark"
+        }
+      },
+      "required": [
+        "policy_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "communication_intake.source_skipped",
+      "family": "triage",
+      "properties": {
+        "candidate_count": {
+          "const": 0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "disposition": {
+          "const": "not_selected",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "language_called": {
+          "const": false,
+          "title": "Language Called",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "explicit-member-submission-v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "reason": {
+          "const": "explicit_member_submission_required",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id",
+        "source_event_id",
+        "reason",
+        "disposition",
+        "language_called",
+        "candidate_count"
       ],
       "schema_version": 1
     },
@@ -13371,6 +13586,80 @@
     },
     {
       "additional_properties": false,
+      "event_type": "external_sync.write_attempted",
+      "family": "external_write",
+      "properties": {
+        "attempted_at": {
+          "format": "date-time",
+          "title": "Attempted At",
+          "type": "string"
+        },
+        "automatic_retry": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry",
+          "type": "boolean"
+        },
+        "command_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Event Id",
+          "type": "string"
+        },
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "create_event",
+            "create_task"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "google_calendar",
+            "google_tasks"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "command_event_id",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "operation",
+        "request_fingerprint",
+        "attempted_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "external_sync.write_completed",
       "family": "external_write",
       "properties": {
@@ -13812,6 +14101,142 @@
         "provider_called"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "external_sync.write_reconciled",
+      "family": "external_write",
+      "properties": {
+        "command_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Event Id",
+          "type": "string"
+        },
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "compared_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40,
+          "title": "Compared Fields",
+          "type": "array"
+        },
+        "desired_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Desired State Sha256",
+          "type": "string"
+        },
+        "differing_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40,
+          "title": "Differing Fields",
+          "type": "array"
+        },
+        "external_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "External Id",
+          "type": "string"
+        },
+        "independent_source_observation": {
+          "const": true,
+          "default": true,
+          "title": "Independent Source Observation",
+          "type": "boolean"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "observation_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Observation Event Id",
+          "type": "string"
+        },
+        "observed_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observed State Sha256",
+          "type": "string"
+        },
+        "origin_proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Origin Proposal Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "matched",
+            "drifted",
+            "missing",
+            "incomplete"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "google_calendar",
+            "apple_calendar",
+            "google_tasks",
+            "apple_reminders"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "reconciled_at": {
+          "format": "date-time",
+          "title": "Reconciled At",
+          "type": "string"
+        },
+        "terminal_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Terminal Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "command_event_id",
+        "terminal_event_id",
+        "observation_event_id",
+        "origin_proposal_id",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "external_id",
+        "outcome",
+        "compared_fields",
+        "differing_fields",
+        "desired_state_sha256",
+        "observed_state_sha256",
+        "reconciled_at"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
@@ -23803,6 +24228,331 @@
     },
     {
       "additional_properties": false,
+      "event_type": "messaging.received",
+      "family": "communication",
+      "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "authenticated_member_route": {
+          "title": "Authenticated Member Route",
+          "type": "boolean"
+        },
+        "bcc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Bcc Identifiers",
+          "type": "array"
+        },
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "cc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Cc Identifiers",
+          "type": "array"
+        },
+        "channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "from_identifier": {
+          "minLength": 1,
+          "title": "From Identifier",
+          "type": "string"
+        },
+        "important": {
+          "default": false,
+          "title": "Important",
+          "type": "boolean"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "member_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Id"
+        },
+        "native_message_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Native Message Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_labels": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Provider Labels",
+          "type": "array"
+        },
+        "received_at": {
+          "minLength": 1,
+          "title": "Received At",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "reply_to_identifier": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reply To Identifier"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "route_assurance": {
+          "enum": [
+            "unverified",
+            "receiver_aligned_sender",
+            "exact_dkim_identity"
+          ],
+          "title": "Route Assurance",
+          "type": "string"
+        },
+        "route_source": {
+          "const": "exact_authenticated_metadata",
+          "title": "Route Source",
+          "type": "string"
+        },
+        "routing_scope": {
+          "enum": [
+            "member_private",
+            "household_shared",
+            "external_contact",
+            "unresolved"
+          ],
+          "title": "Routing Scope",
+          "type": "string"
+        },
+        "routing_target_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Routing Target Id"
+        },
+        "service_principal_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Principal Id"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "starred": {
+          "default": false,
+          "title": "Starred",
+          "type": "boolean"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "submission_evidence": {
+          "$ref": "#/$defs/SubmittedEvidenceV1"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "to_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "To Identifiers",
+          "type": "array"
+        },
+        "trusted_route_key": {
+          "anyOf": [
+            {
+              "pattern": "^route:[0-9a-f]{32,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trusted Route Key"
+        },
+        "unread": {
+          "default": true,
+          "title": "Unread",
+          "type": "boolean"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work",
+            "service"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "from_identifier",
+        "to_identifier",
+        "received_at",
+        "native_message_id",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "routing_scope",
+        "channel_id",
+        "route_source",
+        "authenticated_member_route",
+        "route_assurance",
+        "submission_evidence"
+      ],
+      "schema_version": 8
+    },
+    {
+      "additional_properties": false,
       "event_type": "messaging.reply.canceled",
       "family": "communication",
       "properties": {
@@ -31981,7 +32731,8 @@
             "failed_assessment_not_current",
             "assessment_not_failed",
             "failure_reason_changed",
-            "failure_not_retryable"
+            "failure_not_retryable",
+            "explicit_member_submission_required"
           ],
           "title": "Reason",
           "type": "string"
@@ -35665,6 +36416,50 @@
     },
     {
       "additional_properties": false,
+      "event_type": "triage.intent.publication_held",
+      "family": "triage",
+      "properties": {
+        "feature_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Feature Event Id",
+          "type": "string"
+        },
+        "held_at": {
+          "format": "date-time",
+          "title": "Held At",
+          "type": "string"
+        },
+        "intent_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "source_event_id",
+        "feature_event_id",
+        "reason",
+        "held_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "triage.intent.submitted",
       "family": "triage",
       "properties": {
@@ -35763,6 +36558,143 @@
         "client_request_id"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.intent.submitted",
+      "family": "triage",
+      "properties": {
+        "client_request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Client Request Id",
+          "type": "string"
+        },
+        "evidence_complete": {
+          "default": true,
+          "title": "Evidence Complete",
+          "type": "boolean"
+        },
+        "evidence_issues": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Evidence Issues",
+          "type": "array"
+        },
+        "intake_channel": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intake Channel"
+        },
+        "intent_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "kind_hint": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "commitment",
+                "calendar_event",
+                "reminder",
+                "list",
+                "list_item",
+                "recurrence",
+                "party_identifier",
+                "party_candidate",
+                "party_relationship",
+                "relationship_fact"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind Hint"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Event Id"
+        },
+        "source_surface": {
+          "enum": [
+            "today",
+            "triage",
+            "comms",
+            "reminders",
+            "calendar",
+            "people",
+            "notes",
+            "finance",
+            "scoreboard",
+            "settings",
+            "openclaw"
+          ],
+          "title": "Source Surface",
+          "type": "string"
+        },
+        "submission_kind": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "member_forwarded"
+          ],
+          "title": "Submission Kind",
+          "type": "string"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 32000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "member_id",
+        "text",
+        "source_surface",
+        "submitted_at",
+        "client_request_id"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -37156,6 +38088,69 @@
         "expected_content_revision_event_id"
       ],
       "schema_version": 4
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.item.superseded",
+      "family": "triage",
+      "properties": {
+        "expected_content_revision_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Expected Content Revision Event Id",
+          "type": "string"
+        },
+        "expected_last_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Last Event Id"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "source_changed",
+            "source_deleted",
+            "source_privileged",
+            "eligibility_rule_replaced",
+            "explicit_member_submission_required"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "replacement_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Replacement Source Event Id",
+          "type": "string"
+        },
+        "superseded_at": {
+          "minLength": 1,
+          "title": "Superseded At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "superseded_at",
+        "replacement_source_event_id",
+        "expected_content_revision_event_id",
+        "reason"
+      ],
+      "schema_version": 5
     },
     {
       "additional_properties": false,
