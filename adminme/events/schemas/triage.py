@@ -411,7 +411,16 @@ class TriageIntentInterpretationRefusedV1(BaseModel):
 
     model_config = {"extra": "forbid"}
     source_event_id: str = Field(min_length=1, max_length=240)
-    reason: Literal["member_principal_not_active", "submission_identity_invalid"]
+    reason: Literal[
+        "member_principal_not_active",
+        "submission_identity_invalid",
+        "retained_receipt_identity_invalid",
+        "member_decision_preserved",
+        "legacy_submission_evidence_incomplete",
+    ]
+    conflicting_receipt_event_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
     consumer_version: str = Field(min_length=1, max_length=120)
     refused_at: datetime
 

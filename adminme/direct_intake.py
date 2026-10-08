@@ -233,8 +233,7 @@ class DirectIntakeProcessor:
             receipt_seed = json.dumps(
                 [
                     envelope["tenant_id"],
-                    service_id,
-                    channel_id,
+                    provider,
                     account,
                     native_message_id,
                 ],

@@ -49,6 +49,7 @@ def _settings(path: Path, *, intake_mode: str = "member_submission") -> RuntimeS
             "sending_enabled": False,
             "routes": [],
             "intake_mode": intake_mode,
+            "openclaw_channel_id": "imessage",
         },
         {
             "channel_id": "channel:chief-of-staff:gmail",
@@ -105,6 +106,7 @@ def test_shared_cos_intake_keeps_exact_member_actor_bindings(
     settings = _settings(tmp_path / "shared-cos-identity")
     config = copy.deepcopy(settings.adapter_config)
     config["service_identities"]["channels"][0]["provider"] = provider
+    config["service_identities"]["channels"][0]["openclaw_channel_id"] = transport
     identities = {
         key.replace("imessage|", transport + "|", 1): member
         for key, member in settings.openclaw_actor_identities.items()
@@ -133,6 +135,8 @@ def test_shared_cos_intake_keeps_exact_member_actor_bindings(
         "different_account_case",
         "other_provider",
         "duplicate_service_account",
+        "missing_transport",
+        "wrong_transport",
     ],
 )
 def test_shared_endpoint_exception_cannot_be_used_for_member_accounts(
@@ -159,6 +163,10 @@ def test_shared_endpoint_exception_cannot_be_used_for_member_accounts(
         config["service_identities"]["channels"].append(
             {**channel, "channel_id": "channel:duplicate"}
         )
+    elif invalid == "missing_transport":
+        del channel["openclaw_channel_id"]
+    elif invalid == "wrong_transport":
+        channel["openclaw_channel_id"] = "bluebubbles"
     with pytest.raises(ValueError, match="OpenClaw channel account cannot be shared"):
         replace(settings, adapter_config=config, openclaw_actor_identities=identities)
     with pytest.raises(ValueError, match="OpenClaw channel account cannot be shared"):
@@ -172,11 +180,14 @@ def test_shared_endpoint_exception_cannot_be_used_for_member_accounts(
 
 
 def _provenance(
-    *, actor: str = "actor-forward-a", account: str = ACCOUNT
+    *,
+    actor: str = "actor-forward-a",
+    account: str = ACCOUNT,
+    channel: str = "imessage",
 ) -> dict[str, Any]:
     return {
         "actor_id": actor,
-        "channel_id": "imessage",
+        "channel_id": channel,
         "account_id": account,
         "message_id": "native-forward-receipt",
         "correlation_id": "forward:fixture",
@@ -307,6 +318,67 @@ def test_channel_submission_extracts_privately_and_deduplicates_after_restart(
             )
             == 1
         )
+    renamed_config = copy.deepcopy(remapped.adapter_config)
+    renamed_config["service_identities"]["channels"][0]["channel_id"] = (
+        "channel:renamed-cos-intake"
+    )
+    renamed = replace(remapped, adapter_config=renamed_config)
+    with TestClient(create_application(renamed)) as client:
+        moved = client.post(
+            "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body
+        )
+        assert moved.status_code == 403
+        assert (
+            len(
+                client.portal.call(
+                    _events, client.app.state.runtime, "triage.intent.submitted"
+                )
+            )
+            == 1
+        )
+
+
+@pytest.mark.parametrize("reviewed_transport", ["imessage", "bluebubbles"])
+def test_authenticated_actor_on_other_transport_cannot_use_cos_account(
+    tmp_path: Path, reviewed_transport: str
+) -> None:
+    other_transport = "bluebubbles" if reviewed_transport == "imessage" else "imessage"
+    settings = _settings(tmp_path / "exact-transport")
+    config = copy.deepcopy(settings.adapter_config)
+    config["service_identities"]["channels"][0]["openclaw_channel_id"] = (
+        reviewed_transport
+    )
+    identities = {
+        key.replace("imessage|", reviewed_transport + "|", 1): member
+        for key, member in settings.openclaw_actor_identities.items()
+    }
+    # This actor has a valid member mapping in the other transport. That cannot
+    # grant the unrelated endpoint the reviewed service account's intake purpose.
+    identities[f"{other_transport}|{ACCOUNT}|actor-forward-a"] = MEMBER_A
+    settings = replace(
+        settings, adapter_config=config, openclaw_actor_identities=identities
+    )
+    with TestClient(create_application(settings)) as client:
+        _grant(client)
+        for gesture in ("dedicated_intake", "explicit"):
+            response = client.post(
+                "/api/openclaw/v1/submissions/forward",
+                headers=AUTH,
+                json={
+                    "provenance": _provenance(channel=other_transport),
+                    "request_id": "wrong-transport-" + gesture,
+                    "text": TEXT,
+                    "consent": True,
+                    "submission_gesture": gesture,
+                },
+            )
+            assert response.status_code == 403, response.text
+        assert (
+            client.portal.call(
+                _events, client.app.state.runtime, "triage.intent.submitted"
+            )
+            == []
+        )
 
 
 def test_channel_binding_purpose_and_missing_evidence_fail_closed(
@@ -353,6 +425,19 @@ def test_channel_binding_purpose_and_missing_evidence_fail_closed(
             == 403
         )
         body["provenance"] = _provenance()
+        for sensitivity in ("privileged", "unknown"):
+            rejected = client.post(
+                "/api/openclaw/v1/submissions/forward",
+                headers=AUTH,
+                json={**body, "sensitivity": sensitivity},
+            )
+            assert rejected.status_code == 422
+        assert (
+            client.portal.call(
+                _events, client.app.state.runtime, "triage.intent.submitted"
+            )
+            == []
+        )
         body["unsupported_attachment_count"] = 1
         response = client.post(
             "/api/openclaw/v1/submissions/forward", headers=AUTH, json=body

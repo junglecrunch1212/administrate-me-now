@@ -1,0 +1,42 @@
+# Phase A fixture/example only; never the active provider inventory.
+# This shows the backend settings after separate reviewed enrollment. Copying
+# this file does not enroll an Apple account, grant permissions, or enable writes.
+# The account ID is the synthetic, case-sensitive string "cos-service-fixture".
+# Its reference below is SHA-256 of exactly that string, with no normalization.
+#
+# In the separate AdministrateMe OpenClaw plugin configuration, use:
+# forwardIntakeAccounts:
+#   - channelId: imessage
+#     accountId: cos-service-fixture
+#
+# For BlueBubbles, change ALL three transport coordinates together:
+# the plugin channelId, backend openclaw_channel_id, and actor mapping prefixes.
+# Do not use a shared transport/account for unrelated ordinary conversation:
+# every member message sent to this dedicated endpoint is submitted for review.
+service_identities:
+  principals:
+    - service_principal_id: service-principal:chief-of-staff
+      kind: chief_of_staff
+      party_id: service-party:chief-of-staff
+      display_name: Household Chief of Staff
+      private_scope: service-private:service-principal:chief-of-staff
+  channels:
+    - channel_id: channel:chief-of-staff:messages
+      display_name: CoS Messages intake fixture
+      provider: apple_imessage
+      openclaw_channel_id: imessage
+      service_principal_id: service-principal:chief-of-staff
+      provider_account_reference: provider-account:4e4b131fccaa1560430d844e0e1e557be03ef26d77d2d6bafbcec1b838f9c8b4
+      state: observation
+      enrolled: true
+      observation_active: true
+      sending_enabled: false
+      required_for_activation: false
+      intake_mode: member_submission
+      routes: []
+
+# Replace synthetic members/actors with separately reviewed enrolled identities.
+# The account belongs to the CoS; these mappings identify individual senders.
+openclaw_actor_identities:
+  imessage|cos-service-fixture|actor-fixture-a: member-fixture-a
+  imessage|cos-service-fixture|actor-fixture-b: member-fixture-b

@@ -709,8 +709,12 @@ def test_native_provider_observation_reconciles_exact_receipt_and_replays(
         )
 
 
+@pytest.mark.parametrize(
+    "rebind", ["route", "channel", "service", "channel_and_service"]
+)
 def test_route_reassignment_cannot_recopy_original_private_submission(
     tmp_path: Path,
+    rebind: str,
 ) -> None:
     instance = tmp_path / "route-reassignment"
     instance.mkdir()
@@ -722,6 +726,14 @@ def test_route_reassignment_cannot_recopy_original_private_submission(
         channel = runtime.direct_intake._channels[CHANNEL_ID]
         reassigned = replace(
             channel,
+            channel_id=(
+                "channel:renamed-intake" if "channel" in rebind else channel.channel_id
+            ),
+            service_principal_id=(
+                "service-principal:replacement-fixture"
+                if "service" in rebind
+                else channel.service_principal_id
+            ),
             routes=tuple(
                 replace(route, target_id="member_other_principal")
                 for route in channel.routes
@@ -735,7 +747,7 @@ def test_route_reassignment_cannot_recopy_original_private_submission(
         # Exact-source replay consults the immutable decision before current config.
         client.portal.call(processor.handle, original)
         assert len(client.portal.call(_events, runtime, "triage.intent.submitted")) == 1
-        runtime.direct_intake._channels[CHANNEL_ID] = reassigned
+        runtime.direct_intake._channels = {reassigned.channel_id: reassigned}
         revised = _service_message(
             runtime,
             key="route-revised",
@@ -746,6 +758,10 @@ def test_route_reassignment_cannot_recopy_original_private_submission(
             event_at_ms=int(time.time() * 1000),
         )
         revised.payload["native_message_id"] = original["payload"]["native_message_id"]
+        revised.payload["channel_id"] = reassigned.channel_id
+        revised.payload["service_principal_id"] = reassigned.service_principal_id
+        revised.owner_scope = f"service-private:{reassigned.service_principal_id}"
+        revised.visibility_scope = revised.owner_scope
         revision_id = client.portal.call(runtime.events.write, revised)
         route = _route_result(client, revision_id)
         assert route["payload"]["routing_scope"] == "unresolved"
@@ -1071,3 +1087,280 @@ def test_refused_retained_submission_does_not_block_later_valid_capture(
             "missing": 0,
         }
         assert audit["counts"]["quarantined"] >= 2
+
+
+def _pending_submission(client: TestClient, key: str, *, legacy: bool = False) -> str:
+    runtime = client.app.state.runtime
+    payload = {
+        "intent_id": key,
+        "member_id": MEMBER,
+        "text": "Call the office",
+        "source_surface": "triage",
+        "submitted_at": "2031-01-01T12:00:00Z",
+        "client_request_id": key,
+    }
+    if not legacy:
+        payload.update(
+            {
+                "submission_kind": "manual",
+                "evidence_complete": True,
+                "evidence_issues": [],
+            }
+        )
+    source_id = client.portal.call(
+        runtime.events.write,
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=runtime.settings.instance.tenant_id,
+            type="triage.intent.submitted",
+            schema_version=1 if legacy else 2,
+            occurred_at="2031-01-01T12:00:00Z",
+            source_adapter="direct-intake" if legacy else "member-triage",
+            source_account_id=MEMBER,
+            actor_identity=None if legacy else MEMBER,
+            owner_scope=f"private:{MEMBER}",
+            visibility_scope=f"private:{MEMBER}",
+            sensitivity="normal",
+            payload=payload,
+        ),
+    )
+    client.portal.call(runtime.wait_for_projection, "triage", source_id)
+    return source_id
+
+
+@pytest.mark.parametrize(
+    "forgery", ["feature_scope", "feature_lineage", "held_scope", "refusal_scope"]
+)
+def test_mismatched_retained_submission_receipt_is_audited_without_reuse(
+    tmp_path: Path, forgery: str
+) -> None:
+    instance = tmp_path / "receipt-integrity"
+    instance.mkdir()
+    settings = _settings(instance)
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        runtime.bus._subscribers["member-submissions:interpretation"].degraded = True
+        source_id = _pending_submission(client, "fixture-integrity-submission")
+        feature_payload = {
+            "intent_id": "fixture-integrity-submission",
+            "source_event_id": source_id,
+            "skill_call_event_id": None,
+            "extractor_id": "member-intent-hybrid-v2",
+            "language": "en",
+            "candidates": [
+                {
+                    "candidate_key": "candidate-1",
+                    "target_kind": "task",
+                    "title": "Call the office",
+                    "fields": {"description": "Call the office"},
+                    "evidence_spans": [{"field": "title", "start": 0, "end": 15}],
+                    "confidence": None,
+                    "reasons": ["explicit_action_verb_v1"],
+                }
+            ],
+            "extraction_state": "complete",
+            "extracted_at": "2031-01-01T12:00:00Z",
+            "assessment_outcome": "eligible_candidates",
+            "reason_codes": ["fixture-receipt"],
+        }
+        if forgery == "feature_lineage":
+            feature_payload["source_event_id"] = "fixture-unrelated-submission"
+        feature_id = None
+        if forgery != "refusal_scope":
+            scope = (
+                "private:fixture-other-member"
+                if forgery == "feature_scope"
+                else f"private:{MEMBER}"
+            )
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    feature_payload, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            feature_id = client.portal.call(
+                runtime.events.write,
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=settings.instance.tenant_id,
+                    type="triage.intent.features_extracted",
+                    schema_version=3,
+                    occurred_at="2031-01-01T12:00:00Z",
+                    source_adapter="member-intent-hybrid-v2",
+                    source_account_id=MEMBER,
+                    actor_identity="pipeline:member-intent-hybrid-v2",
+                    owner_scope=scope,
+                    visibility_scope=scope,
+                    sensitivity="normal",
+                    causation_id=source_id,
+                    idempotency_key=f"triage-intent-features:{source_id}:member-intent-hybrid-v2",
+                    raw_ref=f"features-sha256:{fingerprint}",
+                    payload=feature_payload,
+                ),
+            )
+        if forgery in {"held_scope", "refusal_scope"}:
+            held = forgery == "held_scope"
+            receipt_payload = (
+                {
+                    "intent_id": "fixture-integrity-submission",
+                    "source_event_id": source_id,
+                    "feature_event_id": feature_id,
+                    "reason": "fixture-hold",
+                    "held_at": "2031-01-01T12:00:00Z",
+                }
+                if held
+                else {
+                    "source_event_id": source_id,
+                    "reason": "member_principal_not_active",
+                    "consumer_version": "member-submission-interpreter-v2",
+                    "refused_at": "2031-01-01T12:00:00Z",
+                }
+            )
+            client.portal.call(
+                runtime.events.write,
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=settings.instance.tenant_id,
+                    type="triage.intent.publication_held"
+                    if held
+                    else "triage.intent.interpretation_refused",
+                    schema_version=1,
+                    occurred_at="2031-01-01T12:00:00Z",
+                    source_adapter="member-intent-hybrid-v2"
+                    if held
+                    else "submission-interpreter",
+                    source_account_id=MEMBER if held else "system",
+                    actor_identity="pipeline:member-intent-hybrid-v2"
+                    if held
+                    else "system:submission-interpreter",
+                    owner_scope="private:fixture-other-member",
+                    visibility_scope="private:fixture-other-member",
+                    sensitivity="normal",
+                    causation_id=feature_id if held else source_id,
+                    idempotency_key=f"triage-intent-{'held' if held else 'refused'}:{source_id}",
+                    payload=receipt_payload,
+                ),
+            )
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        client.portal.call(
+            runtime.wait_for_subscriber, "member-submissions:interpretation", source_id
+        )
+        assert (
+            client.portal.call(
+                _events, runtime, "skill.call.recorded", "triage.item.proposed"
+            )
+            == []
+        )
+        receipts = [
+            row
+            for row in client.portal.call(
+                _events, runtime, "triage.intent.interpretation_refused"
+            )
+            if row["owner_scope"] == f"private:{MEMBER}"
+        ]
+        assert len(receipts) == 1
+        assert receipts[0]["payload"]["reason"] == "retained_receipt_identity_invalid"
+        assert receipts[0]["payload"]["source_event_id"] == source_id
+        if forgery == "refusal_scope":
+            assert receipts[0]["payload"]["conflicting_receipt_event_id"]
+        source = client.portal.call(runtime.event_log.get, source_id)
+        client.portal.call(runtime.submission_interpreter.handle, source)
+        with pytest.raises(HTTPException) as refusal:
+            client.portal.call(runtime.submission_interpreter.interpret, source)
+        assert refusal.value.status_code == 403
+        state = client.portal.call(
+            runtime.bus.subscriber_status, "member-submissions:interpretation"
+        )
+        assert state["degraded"] is False
+        audit = client.portal.call(
+            lambda: audit_source_assurance(
+                runtime.event_log,
+                repository_root=settings.repository_root,
+                capabilities={},
+            )
+        )
+        assert audit["by_event_type"]["triage.intent.submitted"]["accounted"] == 1
+        assert audit["by_event_type"]["triage.intent.submitted"]["missing"] == 0
+        assert audit["counts"]["quarantined"] == 1
+
+
+@pytest.mark.parametrize("scenario", ["member_dismissed", "legacy_partial_cue"])
+def test_deliberately_uninterpreted_submission_is_terminal_and_preserves_parent(
+    tmp_path: Path, scenario: str
+) -> None:
+    instance = tmp_path / "uninterpreted-terminal"
+    instance.mkdir()
+    settings = _settings(instance)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        runtime.bus._subscribers["member-submissions:interpretation"].degraded = True
+        source_id = _pending_submission(
+            client,
+            "fixture-deliberate-no-interpretation",
+            legacy=scenario == "legacy_partial_cue",
+        )
+        if scenario == "member_dismissed":
+            response = client.post(
+                "/api/member/v1/triage/fixture-deliberate-no-interpretation/dismiss",
+                headers=AUTH,
+                json={
+                    "request_id": "fixture-dismiss-before-worker",
+                    "expected_last_event_id": source_id,
+                    "reason": "No longer needed",
+                },
+            )
+            assert response.status_code == 200, response.text
+        before = tuple(
+            runtime.projections.connection("triage")
+            .execute(
+                "SELECT state, last_event_id, candidate_json FROM triage_items WHERE proposal_id=?",
+                ("fixture-deliberate-no-interpretation",),
+            )
+            .fetchone()
+        )
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        client.portal.call(
+            runtime.wait_for_subscriber, "member-submissions:interpretation", source_id
+        )
+        assert (
+            client.portal.call(
+                _events,
+                runtime,
+                "skill.call.recorded",
+                "triage.intent.features_extracted",
+                "triage.item.proposed",
+            )
+            == []
+        )
+        [receipt] = client.portal.call(
+            _events, runtime, "triage.intent.interpretation_refused"
+        )
+        assert receipt["payload"]["reason"] == (
+            "member_decision_preserved"
+            if scenario == "member_dismissed"
+            else "legacy_submission_evidence_incomplete"
+        )
+        after = tuple(
+            runtime.projections.connection("triage")
+            .execute(
+                "SELECT state, last_event_id, candidate_json FROM triage_items WHERE proposal_id=?",
+                ("fixture-deliberate-no-interpretation",),
+            )
+            .fetchone()
+        )
+        assert before == after
+        audit = client.portal.call(
+            lambda: audit_source_assurance(
+                runtime.event_log,
+                repository_root=settings.repository_root,
+                capabilities={},
+            )
+        )
+        assert audit["by_event_type"]["triage.intent.submitted"] == {
+            "source_facts": 1,
+            "accounted": 1,
+            "pending": 0,
+            "missing": 0,
+        }

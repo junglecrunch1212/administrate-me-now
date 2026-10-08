@@ -61,6 +61,10 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
       try {
         const provenance = provenanceFromMessage(event, context);
         if (submission) {
+          const sensitivityDeclarations = [marker?.sensitivity, event.metadata?.sensitivity];
+          if (sensitivityDeclarations.some((value) => value !== undefined && value !== "normal" && value !== "sensitive")) {
+            throw new Error("CoS intake cannot accept privileged or unknown sensitivity");
+          }
           if (!provenance.message_id || !event.content.trim() || event.content.length > 32_000) {
             throw new Error("CoS intake requires a bounded text selection and native message identity");
           }
@@ -76,7 +80,7 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
             consent: true,
             submission_gesture: dedicatedIntake ? "dedicated_intake" : "explicit",
             unsupported_attachment_count: attachmentCount,
-            sensitivity: marker?.sensitivity === "sensitive" ? "sensitive" : "normal",
+            sensitivity: sensitivityDeclarations.includes("sensitive") ? "sensitive" : "normal",
           };
           for (let attempt = 0; ; attempt += 1) {
             try {

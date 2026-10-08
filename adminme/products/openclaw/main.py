@@ -3258,7 +3258,6 @@ async def forward_for_review(
     ):
         raise HTTPException(403, "this service channel is configured for conversation")
     identity = [
-        channel.channel_id,
         provenance.channel_id,
         provenance.account_id,
         provenance.actor_id,

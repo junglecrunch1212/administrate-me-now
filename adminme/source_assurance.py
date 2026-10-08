@@ -34,6 +34,7 @@ from adminme.source_assessment_recovery import (
     legacy_required_language_failure_candidate,
     resolved_assessment_disposition,
 )
+from adminme.submission_receipts import submission_refusal_valid
 
 
 @dataclass(frozen=True)
@@ -477,24 +478,7 @@ async def audit_source_assurance(
             if (
                 source is not None
                 and receipt is not None
-                and source.get("type") == "triage.intent.submitted"
-                and receipt.get("source_adapter") == "submission-interpreter"
-                and receipt.get("actor_identity") == "system:submission-interpreter"
-                and receipt.get("source_account_id") == "system"
-                and receipt.get("causation_id") == source_id
-                and receipt.get("idempotency_key")
-                == f"triage-intent-refused:{source_id}"
-                and all(
-                    receipt.get(key) == source.get(key)
-                    for key in (
-                        "tenant_id",
-                        "owner_scope",
-                        "visibility_scope",
-                        "sensitivity",
-                    )
-                )
-                and payload.get("reason")
-                in {"member_principal_not_active", "submission_identity_invalid"}
+                and submission_refusal_valid(source, receipt)
             ):
                 refused_submissions.add(source_id)
         if event.get("type") == SKIPPED_EVENT_TYPE:

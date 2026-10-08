@@ -634,6 +634,22 @@ describe("native OpenClaw contract fixture", () => {
     expect(requestBody(fetchMock, 2).unsupported_attachment_count).toBe(1);
   });
 
+  it("never downgrades declared sensitivity on a dedicated intake endpoint", async () => {
+    const runtime = fakeApi({ forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }] });
+    const hook = runtime.hooks.get("message_received")?.[0]?.handler;
+    const context = { channelId: "imessage", accountId: "cos-fixture", senderId: "actor-a" };
+    const inbound = { from: "actor-a", senderId: "actor-a", messageId: "native-sensitive", content: "Selected material" };
+    for (const value of ["privileged", "unknown", null, 1]) {
+      await expect(hook?.({ ...inbound, metadata: { administrateme: { sensitivity: value } } }, context)).rejects.toThrow("sensitivity");
+      await expect(hook?.({ ...inbound, metadata: { sensitivity: value, administrateme: { sensitivity: "normal" } } }, context)).rejects.toThrow("sensitivity");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    await hook?.({ ...inbound, metadata: { sensitivity: "sensitive", administrateme: { sensitivity: "normal" } } }, context);
+    expect(requestBody(fetchMock).sensitivity).toBe("sensitive");
+    await hook?.({ ...inbound, metadata: { administrateme: { sensitivity: "sensitive" } } }, context);
+    expect(requestBody(fetchMock, 1).sensitivity).toBe("sensitive");
+  });
+
   it("does not silently accept lost, oversized, or unidentified dedicated submissions", async () => {
     const runtime = fakeApi({ forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }] });
     const hook = runtime.hooks.get("message_received")?.[0]?.handler;

@@ -282,6 +282,7 @@ class ServiceChannelAccount:
     required_for_activation: bool
     routes: tuple[ChannelRoute, ...]
     intake_mode: Literal["conversation", "member_submission"] = "conversation"
+    openclaw_channel_id: Literal["imessage", "bluebubbles"] | None = None
 
 
 def cos_message_channel_for_account(
@@ -292,7 +293,8 @@ def cos_message_channel_for_account(
 ) -> ServiceChannelAccount | None:
     """Resolve one enrolled CoS endpoint from exact OpenClaw coordinates.
 
-    Provider aliases normalize only the transport kind. Account IDs are opaque
+    The reviewed OpenClaw transport namespace must match exactly; an account
+    name in another transport is not the same endpoint. Account IDs are opaque
     case-sensitive coordinates and their fingerprint is never normalized.
     """
 
@@ -303,6 +305,7 @@ def cos_message_channel_for_account(
         channel
         for channel in channels
         if channel.provider in {"apple_imessage", "imessage"}
+        and channel.openclaw_channel_id == transport_channel_id
         and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
         and channel.provider_account_reference == reference
         and channel.enrolled
@@ -470,6 +473,9 @@ def validate_service_identity_config(
         intake_mode = row.get("intake_mode", "conversation")
         if intake_mode not in {"conversation", "member_submission"}:
             raise ValueError("service channel intake_mode is invalid")
+        openclaw_channel_id = row.get("openclaw_channel_id")
+        if openclaw_channel_id not in (None, "imessage", "bluebubbles"):
+            raise ValueError("service channel openclaw_channel_id is invalid")
         route_keys: set[str] = set()
         raw_routes = row.get("routes") or []
         if not isinstance(raw_routes, list):
@@ -528,6 +534,7 @@ def validate_service_identity_config(
                 required_for_activation=row.get("required_for_activation") is True,
                 routes=tuple(routes),
                 intake_mode=intake_mode,
+                openclaw_channel_id=openclaw_channel_id,
             )
         )
     return tuple(principals), tuple(channels)

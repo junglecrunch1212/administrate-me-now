@@ -54,8 +54,9 @@ a fixture cannot reopen legacy extraction on a policy-cutover instance.
 ## Forwarded evidence and durable extraction
 
 `triage.intent.submitted@2` stores a member-private evidence snapshot, submission
-kind, channel/source links, bounded full text, evidence parts and completeness
-issues. The 2,000-character title/display field is not the extraction input.
+kind, channel/source links, bounded full text and completeness issues. MIME parts
+and bounded attachment bytes remain in the encrypted service-private source
+event. The 2,000-character title/display field is not the extraction input.
 The shared `member-submissions:interpretation` subscriber serves manual capture,
 CoS Gmail and OpenClaw submissions through the existing pinned `llm-task` seam.
 It persists interpretation before proposals; replay reuses the recorded result.
@@ -90,12 +91,22 @@ active service-owned account binding. Attachment metadata alone does not count
 as decoded attachment content. Software support does not enroll an Apple
 account, grant macOS permissions, or prove live channel delivery.
 
-Transport IDs `imessage` and `bluebubbles` map to the CoS messaging service.
+Each CoS messaging service channel must name its reviewed transport in
+`openclaw_channel_id`, exactly `imessage` or `bluebubbles`. It must equal the
+plugin's `forwardIntakeAccounts[].channelId` and the transport in each reviewed
+`channel|account|actor` member mapping. There is no fallback between these two
+transport namespaces, even when they have the same account ID. Planned records
+may omit the field, but cannot resolve as an active intake endpoint.
+
 The configured provider account reference is `provider-account:` followed by
-SHA-256 of the **exact, case-sensitive OpenClaw account ID**. Only that uniquely
-enrolled dedicated intake account may serve multiple reviewed member actors;
-ordinary member accounts still cannot be shared. Per-member agent bindings
-retain exact direct-peer matching and per-account/channel/peer session isolation.
+SHA-256 of the **exact, case-sensitive OpenClaw account ID**, with no trimming or
+lowercasing. The plugin's `forwardIntakeAccounts[].accountId` and member mapping
+must use that exact account string. Only that uniquely enrolled dedicated intake
+account may serve multiple reviewed member actors; ordinary member accounts
+still cannot be shared. Per-member agent bindings retain exact direct-peer
+matching and per-account/channel/peer session isolation. The inert
+[`cos-imessage-intake.example.yaml`](../../config/cos-imessage-intake.example.yaml)
+shows the matching backend and plugin coordinates; it is not live enrollment.
 
 ## Triage, destinations and verification
 

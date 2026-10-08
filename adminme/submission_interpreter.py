@@ -40,6 +40,13 @@ from adminme.triage_intent import (
     extract_intent_candidates,
     merge_intent_candidates,
 )
+from adminme.submission_receipts import (
+    feature_receipt_valid,
+    held_receipt_valid,
+    refusal_key,
+    same_source_scope,
+    submission_refusal_valid,
+)
 
 
 class IncompleteSubmission(Exception):
@@ -157,49 +164,38 @@ def _recorded_intent_candidates(
 
 
 class SubmissionInterpreter:
-    CONSUMER_VERSION = "member-submission-interpreter-v2"
+    CONSUMER_VERSION = "member-submission-interpreter-v3"
 
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
-
-    async def handle(self, event: dict[str, Any]) -> None:
-        if (
-            event.get("type") != "triage.intent.submitted"
-            or event.get("tenant_id") != self.runtime.settings.instance.tenant_id
-        ):
-            return
-        # The historical direct-intake cue discarded evidence after 2,000
-        # characters. Never silently treat that old partial cue as a full forward.
-        if (
-            event.get("source_adapter") == "direct-intake"
-            and int(event.get("schema_version") or 1) < 2
-        ):
-            return
-        # An in-flight member request owns its original caller's authorization.
-        # Let it finish before the durable callback attempts recovery.
-        payload = event["payload"]
-        request_key = f"{event['tenant_id']}:{payload['member_id']}:{payload['client_request_id']}"
-        request_lock = self.runtime.triage_intent_command_locks.get(request_key)
-        if request_lock is not None:
-            async with request_lock:
-                pass
-        held = await self.runtime.event_log.get_by_idempotency(
-            str(event["tenant_id"]), f"triage-intent-held:{event['event_id']}"
+        self._receipt_locks: WeakValueDictionary[str, asyncio.Lock] = (
+            WeakValueDictionary()
         )
-        if held is not None:
-            return
-        refused_key = f"triage-intent-refused:{event['event_id']}"
-        if (
-            await self.runtime.event_log.get_by_idempotency(
-                str(event["tenant_id"]), refused_key
-            )
-            is not None
+
+    async def _terminal_receipt(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        for receipt in await self.runtime.event_log.get_by_causation(
+            str(event["event_id"])
         ):
-            return
-        try:
-            await self.interpret(event)
-        except SubmissionContextRefused as exc:
+            if submission_refusal_valid(event, receipt):
+                return receipt
+        return None
+
+    async def _record_terminal(self, event: dict[str, Any], reason: str) -> None:
+        """A key collision cannot force reuse or prevent a private terminal audit."""
+        lock = self._receipt_locks.setdefault(str(event["event_id"]), asyncio.Lock())
+        async with lock:
+            if await self._terminal_receipt(event) is not None:
+                return
+            conflicting_id = None
+            key = refusal_key(str(event["event_id"]))
+            while (
+                prior := await self.runtime.event_log.get_by_idempotency(
+                    str(event["tenant_id"]), key
+                )
+            ) is not None:
+                conflicting_id = str(prior["event_id"])
+                key = refusal_key(str(event["event_id"]), conflicting_id)
             await self.runtime.events.write(
                 EventEnvelope(
                     event_at_ms=int(time.time() * 1000),
@@ -215,23 +211,78 @@ class SubmissionInterpreter:
                     actor_identity="system:submission-interpreter",
                     correlation_id=event.get("correlation_id"),
                     causation_id=str(event["event_id"]),
-                    idempotency_key=refused_key,
+                    idempotency_key=key,
                     payload={
                         "source_event_id": str(event["event_id"]),
-                        "reason": exc.reason,
+                        "reason": reason,
                         "consumer_version": self.CONSUMER_VERSION,
                         "refused_at": EventEnvelope.now_utc_iso(),
+                        "conflicting_receipt_event_id": conflicting_id,
                     },
                 )
             )
+
+    async def handle(self, event: dict[str, Any]) -> None:
+        if (
+            event.get("type") != "triage.intent.submitted"
+            or event.get("tenant_id") != self.runtime.settings.instance.tenant_id
+        ):
+            return
+        if await self._terminal_receipt(event) is not None:
+            return
+        prior_refusal = await self.runtime.event_log.get_by_idempotency(
+            str(event["tenant_id"]), refusal_key(str(event["event_id"]))
+        )
+        if prior_refusal is not None:
+            await self._record_terminal(event, "retained_receipt_identity_invalid")
+            return
+        # The historical direct-intake cue discarded evidence after 2,000
+        # characters. Never silently treat that old partial cue as a full forward.
+        if (
+            event.get("source_adapter") == "direct-intake"
+            and int(event.get("schema_version") or 1) < 2
+        ):
+            await self._record_terminal(event, "legacy_submission_evidence_incomplete")
+            return
+        # An in-flight member request owns its original caller's authorization.
+        # Let it finish before the durable callback attempts recovery.
+        payload = event["payload"]
+        request_key = f"{event['tenant_id']}:{payload['member_id']}:{payload['client_request_id']}"
+        request_lock = self.runtime.triage_intent_command_locks.get(request_key)
+        if request_lock is not None:
+            async with request_lock:
+                pass
+        held = await self.runtime.event_log.get_by_idempotency(
+            str(event["tenant_id"]), f"triage-intent-held:{event['event_id']}"
+        )
+        if held is not None:
+            feature = await self.runtime.event_log.get(
+                str((held.get("payload") or {}).get("feature_event_id") or "")
+            )
+            if not held_receipt_valid(event, held, feature):
+                await self._record_terminal(event, "retained_receipt_identity_invalid")
+            return
+        try:
+            await self.interpret(event)
+        except SubmissionContextRefused as exc:
+            await self._record_terminal(event, exc.reason)
         except HTTPException:
             # A recorded governance refusal is terminal for background delivery.
             # The owner may explicitly retry after the condition is resolved.
             held = await self.runtime.event_log.get_by_idempotency(
                 str(event["tenant_id"]), f"triage-intent-held:{event['event_id']}"
             )
+            feature = (
+                None
+                if held is None
+                else await self.runtime.event_log.get(
+                    str((held.get("payload") or {}).get("feature_event_id") or "")
+                )
+            )
             if held is None:
                 raise
+            if not held_receipt_valid(event, held, feature):
+                await self._record_terminal(event, "retained_receipt_identity_invalid")
 
     async def interpret(
         self, event: dict[str, Any], *, session: Session | None = None
@@ -268,6 +319,24 @@ class SubmissionInterpreter:
             or session.view_member_id != member_id
         ):
             raise SubmissionContextRefused("submission_identity_invalid")
+        retained_refusal = await runtime.event_log.get_by_idempotency(
+            str(event["tenant_id"]), refusal_key(str(event["event_id"]))
+        )
+        if retained_refusal is not None and not submission_refusal_valid(
+            event, retained_refusal
+        ):
+            await self._record_terminal(event, "retained_receipt_identity_invalid")
+            raise SubmissionContextRefused("retained_receipt_identity_invalid")
+        retained_hold = await runtime.event_log.get_by_idempotency(
+            str(event["tenant_id"]), f"triage-intent-held:{event['event_id']}"
+        )
+        if retained_hold is not None:
+            retained_feature = await runtime.event_log.get(
+                str((retained_hold.get("payload") or {}).get("feature_event_id") or "")
+            )
+            if not held_receipt_valid(event, retained_hold, retained_feature):
+                await self._record_terminal(event, "retained_receipt_identity_invalid")
+                raise SubmissionContextRefused("retained_receipt_identity_invalid")
         session = session or build_internal_session(
             "submission_interpreter",
             "device",
@@ -298,6 +367,9 @@ class SubmissionInterpreter:
         ):
             if (
                 decision.get("tenant_id") == tenant_id
+                and decision.get("visibility_scope") == f"private:{member_id}"
+                and decision.get("actor_identity") == member_id
+                and str(decision.get("event_id") or "") > intent_event_id
                 and (decision.get("payload") or {}).get("proposal_id") == intent_id
             ):
                 return {
@@ -330,6 +402,7 @@ class SubmissionInterpreter:
         sensitivity = cast(Sensitivity, event.get("sensitivity") or "normal")
         member_decision = await self._member_decision_outcome(event)
         if member_decision is not None:
+            await self._record_terminal(event, "member_decision_preserved")
             return member_decision
         evidence_issues = list(payload.get("evidence_issues") or [])
         evidence_complete = bool(payload.get("evidence_complete", True))
@@ -351,6 +424,12 @@ class SubmissionInterpreter:
             tenant_id, feature_key
         )
         if prior_feature is not None:
+            if not feature_receipt_valid(event, prior_feature) or (
+                not evidence_complete
+                and (prior_feature.get("payload") or {}).get("candidates")
+            ):
+                await self._record_terminal(event, "retained_receipt_identity_invalid")
+                raise SubmissionContextRefused("retained_receipt_identity_invalid")
             feature_event_id = str(prior_feature["event_id"])
             feature_payload = dict(prior_feature["payload"])
         else:
@@ -567,6 +646,24 @@ class SubmissionInterpreter:
                 tenant_id, proposal_key
             )
             if prior_proposal is not None:
+                if not (
+                    prior_proposal.get("type") == "triage.item.proposed"
+                    and prior_proposal.get("schema_version") == 2
+                    and same_source_scope(event, prior_proposal)
+                    and prior_proposal.get("source_adapter")
+                    == "member-intent-hybrid-v2"
+                    and prior_proposal.get("source_account_id") == member_id
+                    and prior_proposal.get("actor_identity")
+                    == "pipeline:member-intent-hybrid-v2"
+                    and prior_proposal.get("causation_id") == feature_event_id
+                    and prior_proposal.get("raw_ref")
+                    == f"candidate-sha256:{candidate_fingerprint}"
+                    and prior_proposal.get("payload") == proposal_payload
+                ):
+                    await self._record_terminal(
+                        event, "retained_receipt_identity_invalid"
+                    )
+                    raise SubmissionContextRefused("retained_receipt_identity_invalid")
                 proposal_event_by_id[proposal_id] = str(prior_proposal["event_id"])
                 continue
             missing_proposals.append(
@@ -658,6 +755,7 @@ class SubmissionInterpreter:
         # independently rejects late children ordered after a member decision.
         member_decision = await self._member_decision_outcome(event)
         if member_decision is not None:
+            await self._record_terminal(event, "member_decision_preserved")
             return member_decision
         if missing_proposals:
             appended_ids = await runtime.events.write_batch(

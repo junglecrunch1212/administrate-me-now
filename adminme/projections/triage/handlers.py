@@ -935,11 +935,15 @@ def _apply_triage_proposed(
                       content_revision_event_id, proposal_event_id
                  FROM triage_items
                 WHERE tenant_id=? AND proposal_id=? AND source_kind='member_intent'
-                  AND owner_member_id=?""",
+                  AND owner_member_id=? AND source_event_id=?
+                  AND owner_scope=? AND visibility_scope=?""",
             (
                 envelope["tenant_id"],
                 payload["parent_intent_id"],
                 payload["owner_member_id"],
+                payload["source_event_id"],
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
             ),
         ).fetchone()
         if parent is None or parent[3] != parent[4]:

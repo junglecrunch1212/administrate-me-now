@@ -363,6 +363,7 @@ def test_openclaw_reconciliation_accepts_only_reviewed_shared_cos_intake(
             + hashlib.sha256(account.encode()).hexdigest(),
             "sending_enabled": False,
             "intake_mode": "member_submission",
+            "openclaw_channel_id": transport,
             "routes": [],
         }
     ]
@@ -389,7 +390,18 @@ def test_openclaw_reconciliation_accepts_only_reviewed_shared_cos_intake(
     }
     assert all(row["match"]["peer"]["kind"] == "direct" for row in stored["bindings"])
     assert len({row["agentId"] for row in stored["bindings"]}) == 2
-    services["channels"][0]["intake_mode"] = "conversation"
+    channel = services["channels"][0]
+    for rejected_transport in (
+        None,
+        "bluebubbles" if transport == "imessage" else "imessage",
+    ):
+        channel["openclaw_channel_id"] = rejected_transport
+        source.write_text(json.dumps(adapters), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="shared across members"):
+            reconcile_member_topology(paths)
+        assert json.loads(target.read_text("utf-8")) == stored
+    channel["openclaw_channel_id"] = transport
+    channel["intake_mode"] = "conversation"
     source.write_text(json.dumps(adapters), encoding="utf-8")
     with pytest.raises(RuntimeError, match="shared across members"):
         reconcile_member_topology(paths)

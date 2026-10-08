@@ -111,6 +111,18 @@ when its tools, model, retention, or organization policy must differ—not just
 to render a work filter. Provider account credentials and OpenClaw agent
 credentials remain separately revocable.
 
+For CO031's dedicated member-submission endpoint, multiple reviewed members may
+share only an enrolled, active CoS service account. Its service channel must
+declare `intake_mode: member_submission`, the exact `openclaw_channel_id`
+(`imessage` or `bluebubbles`), and `provider-account:` plus SHA-256 of the exact,
+case-sensitive OpenClaw account ID. The transport and account must match both
+the plugin's `forwardIntakeAccounts` entry and each actor mapping. Neither a
+missing transport binding nor the same account name under another transport
+grants this exception. Bootstrap preserves distinct member agents and exact
+direct-peer bindings; ordinary member-owned accounts cannot be shared. See
+[`cos-imessage-intake.example.yaml`](../../config/cos-imessage-intake.example.yaml)
+for an inert configuration recipe. This does not change Gmail account matching.
+
 The CoS may eventually send only as its own reviewed service identity through
 allowlist → domain governance → rate limit → final privacy/content guard →
 observation → independent OpenClaw and domain approval → terminal audit. It

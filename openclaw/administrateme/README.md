@@ -31,12 +31,26 @@ bound to the command, envelope, account, pre-existing task list, content
 fingerprint, expiry, and effect ceiling; AdministrateMe independently rechecks
 the domain approval and consumes a scoped observation admission.
 
-The bridge ignores every ordinary conversation turn. It forwards content only
-when the configured channel is allowlisted and host metadata includes an
-explicit `{administrateme: {consent: true, eventKind, sensitivity}}` marker.
-Privileged sensitivity is not accepted. Model hooks record only provider/model
+The bridge forwards selected content from a reviewed dedicated
+`forwardIntakeAccounts` endpoint, `/adminme-forward`, or an allowlisted channel
+with an explicit host `{administrateme: {consent: true, eventKind, sensitivity}}`
+marker. A dedicated intake endpoint treats all messages sent there as selected
+material because the transport cannot reliably distinguish a native forward
+from another message. Other ordinary conversation turns are ignored. Privileged
+or unknown sensitivity is not accepted. Model hooks record only provider/model
 metadata for tracked `adminme:` sessions and never subscribe to `llm_input` or
 `llm_output`.
+
+The backend service channel's `openclaw_channel_id` must exactly match the
+reviewed plugin entry's `channelId` (`imessage` or `bluebubbles`). Its account
+reference must be `provider-account:` plus SHA-256 of the entry's exact,
+case-sensitive `accountId`; no trimming or lowercasing is applied. A same-named
+account on the other transport is a different endpoint. Each member still
+requires an exact transport/account/actor mapping and isolated direct-peer
+agent binding. The inert
+[`cos-imessage-intake.example.yaml`](../../config/cos-imessage-intake.example.yaml)
+shows the matching coordinates; enabling a real provider remains a separate
+reviewed enrollment step.
 
 ## Build and fixture test
 

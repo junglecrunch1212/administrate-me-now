@@ -36419,6 +36419,20 @@
       "event_type": "triage.intent.interpretation_refused",
       "family": "triage",
       "properties": {
+        "conflicting_receipt_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conflicting Receipt Event Id"
+        },
         "consumer_version": {
           "maxLength": 120,
           "minLength": 1,
@@ -36428,7 +36442,10 @@
         "reason": {
           "enum": [
             "member_principal_not_active",
-            "submission_identity_invalid"
+            "submission_identity_invalid",
+            "retained_receipt_identity_invalid",
+            "member_decision_preserved",
+            "legacy_submission_evidence_incomplete"
           ],
           "title": "Reason",
           "type": "string"
