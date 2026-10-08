@@ -1,5 +1,13 @@
 # Bootstrap and topology contract
 
+CO-031 adds an enforced communication-intake compatibility fence to immutable
+release validation, rollback and interrupted-update recovery. A candidate that
+activates member-forwarded obligations requires a rollback release that honors
+the same policy epoch; old passive-extraction releases are refused. Before the
+separately authorized cutover, use the read-only retirement preview, retain
+observation mode, and verify backup and rollback evidence. See
+[CO-031](CHANGE-ORDER-031-MEMBER-FORWARDED-OBLIGATIONS.md).
+
 Explicit owner-designated disposable datasets may use the narrowly scoped
 [bounded test reset contract](BOUNDED-TEST-RESET-CONTRACT.md). That operation
 retains failed history offline, proves a fresh bounded dataset, and reports

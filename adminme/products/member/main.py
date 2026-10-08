@@ -2790,7 +2790,7 @@ async def _submit_triage_intent_locked(
         )
         intent_id = "intent_" + hashlib.sha256(intent_seed.encode()).hexdigest()[:28]
         submitted_at = datetime.now(timezone.utc)
-        intent_payload = {
+        intent_payload: dict[str, Any] = {
             "intent_id": intent_id,
             "member_id": session.auth_member_id,
             "text": body.text,
