@@ -102,6 +102,8 @@ def test_actual_failed_assessment_persists_trigger_and_retains_prior_doctor(
     fixture_services.start()
     settings = RuntimeSettings.credential_free(
         tmp_path / "runtime",
+        # Preserve this isolated historical passive-extraction contract.
+        legacy_personal_obligation_compatibility=True,
         encryption_key=b"s" * 32,
         repository_root=REPO_ROOT,
         member_identities={"settlement-owner.ts.net": MEMBER},  # fixture:tenant_data:ok

@@ -35,6 +35,8 @@ API = "/api/member/v1/triage-learning/v2"
 def _settings(path: Path, *, active: bool = True) -> RuntimeSettings:
     return RuntimeSettings.credential_free(
         path,
+        # Preserve this isolated historical passive-extraction contract.
+        legacy_personal_obligation_compatibility=True,
         encryption_key=b"a" * 32,
         repository_root=ROOT,
         member_identities={"attention-a.ts.net": MEMBER, "attention-b.ts.net": OTHER},

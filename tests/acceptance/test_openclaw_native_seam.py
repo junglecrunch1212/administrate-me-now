@@ -11,7 +11,13 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from adminme.demo import FIXTURE_MEMBER_ID
+from adminme.demo import (
+    FIXTURE_MEMBER_EMAIL,
+    FIXTURE_MEMBER_ID,
+    FIXTURE_SENDER_EMAIL,
+    FIXTURE_SENDER_ID,
+    canonical_seed_events,
+)
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.openclaw_topology import binding_fingerprints, member_agent_id
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
@@ -173,18 +179,89 @@ def _allow_once(
 
 
 def _seed_slice(client: TestClient, request_id: str) -> dict[str, Any]:
-    response = client.post(
-        "/api/comms/v1/demo/canonical-message",
+    """Submit selected work through the member API under the production policy."""
+    runtime = client.app.state.runtime
+    assert client.portal is not None
+    assert runtime.settings.legacy_personal_obligation_compatibility is False
+
+    async def observe_message() -> str:
+        seed_ids = await runtime.events.write_batch(
+            canonical_seed_events(runtime.settings.instance.tenant_id)
+        )
+        await runtime.wait_for_projection("parties", seed_ids[5])
+        await runtime.wait_for_projection("tasks", seed_ids[-1])
+        source_id = await runtime.fixture_adapter.emit_canonical_message(
+            native_message_id=f"native-{request_id}",
+            sender=FIXTURE_SENDER_EMAIL,
+            recipient=FIXTURE_MEMBER_EMAIL,
+            body="Could you reply today with the fixture household update?",
+            received_at="2026-07-30T12:05:00Z",
+        )
+        for pipeline in (
+            "identity_resolution",
+            "commitment_extraction",
+            "noise_filtering",
+            "thank_you_detection",
+        ):
+            await runtime.wait_for_subscriber(
+                f"pipeline:pipeline:{pipeline}", source_id
+            )
+        related = await runtime.event_log.get_by_causation(source_id)
+        interaction_ids = [
+            row["event_id"]
+            for row in related
+            if row["type"] == "interaction.participant_resolved"
+        ]
+        await runtime.wait_for_projection(
+            "interactions", max([source_id, *interaction_ids])
+        )
+        assert (
+            await _events(
+                runtime,
+                "triage.item.proposed",
+                "commitment.proposed",
+                "skill.call.recorded",
+                "skill.call.failed",
+            )
+            == []
+        )
+        return source_id
+
+    source_id = client.portal.call(observe_message)
+    submitted = client.post(
+        "/api/member/v1/triage/intents",
         headers=DEMO_HEADERS,
         json={
-            "request_id": request_id,
-            "native_message_id": f"native-{request_id}",
-            "body": "Could you reply today with the fixture household update?",
-            "received_at": "2026-07-30T12:05:00Z",
+            "client_request_id": f"{request_id}:submission",
+            "source_surface": "triage",
+            "source_event_id": source_id,
+            "text": "I promised to send the household update today",
         },
     )
-    assert response.status_code == 200, response.text
-    return response.json()["output"]
+    assert submitted.status_code == 202, submitted.text
+    [proposal_id] = submitted.json()["proposal_ids"]
+    triage = client.get("/api/member/v1/surfaces/triage", headers=DEMO_HEADERS)
+    assert triage.status_code == 200, triage.text
+    item = next(
+        row for row in triage.json()["items"] if row["proposal_id"] == proposal_id
+    )
+    assert item["target_kind"] == "commitment"
+    enriched = client.post(
+        f"/api/member/v1/triage/{proposal_id}/enrich",
+        headers=DEMO_HEADERS,
+        json={
+            "request_id": f"{request_id}:enrichment",
+            "expected_last_event_id": item["last_event_id"],
+            "candidate_updates": {"owed_to_party_id": FIXTURE_SENDER_ID},
+        },
+    )
+    assert enriched.status_code == 200, enriched.text
+    return {
+        "source_event_id": source_id,
+        "interaction_id": f"ix_{source_id}",
+        "proposal_id": proposal_id,
+        "last_event_id": enriched.json()["triage"]["last_event_id"],
+    }
 
 
 async def _events(runtime: Any, *types: str) -> list[dict[str, Any]]:
@@ -494,43 +571,88 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
         assert completed_retry["duplicate"] is True
         assert rerank_calls == 1
 
-        commitment_row = (
-            runtime.projections.connection("commitments")
-            .execute(
-                "SELECT * FROM commitments WHERE tenant_id=? AND commitment_id=?",
-                (runtime.settings.instance.tenant_id, output["commitment_id"]),
-            )
-            .fetchone()
+        confirmation_body = {
+            "request_id": "approve-member-submission",
+            "expected_last_event_id": output["last_event_id"],
+        }
+        confirmation_path = f"/api/member/v1/triage/{output['proposal_id']}/approve"
+        confirmed = client.post(
+            confirmation_path, headers=DEMO_HEADERS, json=confirmation_body
         )
-        review_params = {
-            "request_id": "approve-through-openclaw",
-            "action": "approve",
-            "commitment_id": output["commitment_id"],
-            "expected_last_event_id": commitment_row["last_event_id"],
-            "send_acknowledgement": True,
+        assert confirmed.status_code == 200, confirmed.text
+        confirmation_retry = client.post(
+            confirmation_path, headers=DEMO_HEADERS, json=confirmation_body
+        )
+        assert confirmation_retry.status_code == 200, confirmation_retry.text
+        assert confirmation_retry.json()["duplicate"] is True
+        assert confirmation_retry.json()["event_id"] == confirmed.json()["event_id"]
+
+        interactions = client.get("/api/comms/v1/interactions", headers=DEMO_HEADERS)
+        assert interactions.status_code == 200, interactions.text
+        interaction = next(
+            row
+            for row in interactions.json()["items"]
+            if row["interaction_id"] == output["interaction_id"]
+        )
+        command_id = "gate4-approved-acknowledgement"
+        acknowledgement = client.post(
+            f"/api/member/v1/comms/{output['interaction_id']}/commands",
+            headers=DEMO_HEADERS,
+            json={
+                "request_id": command_id,
+                "operation": "reply",
+                "expected_last_event_id": interaction["last_event_id"],
+                "body": "Acknowledgement approved by the fixture member.",
+            },
+        )
+        assert acknowledgement.status_code == 200, acknowledgement.text
+        execution_params = {
+            "domain_approval_event_id": acknowledgement.json()[
+                "domain_approval_event_id"
+            ],
         }
         receipt_id = _allow_once(
             client,
-            receipt_id="ocapr-gate4-review",
-            tool_name="administrateme_review",
-            params=review_params,
+            receipt_id="ocapr-gate4-provider-action",
+            tool_name="administrateme_execute_pending_provider_action",
+            params=execution_params,
         )
-        review_body = {
+        execution_body = {
             "provenance": _provenance("approval-once"),
-            **review_params,
+            **execution_params,
             "openclaw_approval_receipt_id": receipt_id,
         }
-        approved = _post(client, "/api/openclaw/v1/tools/review", review_body)
-        review_retry_body = {
-            **review_body,
+        approved = _post(
+            client,
+            "/api/openclaw/v1/tools/execute-pending-provider-action",
+            execution_body,
+        )
+        execution_retry_body = {
+            **execution_body,
             "provenance": _provenance("approval-retry"),
         }
         approved_retry = _post(
-            client, "/api/openclaw/v1/tools/review", review_retry_body
+            client,
+            "/api/openclaw/v1/tools/execute-pending-provider-action",
+            execution_retry_body,
         )
         assert approved["duplicate"] is False
         assert approved_retry["duplicate"] is True
         assert approved_retry["event_id"] == approved["event_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            terminal = client.portal.call(
+                runtime.event_log.get_by_idempotency,
+                runtime.settings.instance.tenant_id,
+                f"external-sync-result:{command_id}",
+            )
+            if terminal is not None:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError(
+                "approved provider action did not reach a terminal result"
+            )
 
         rows = client.portal.call(
             _events,
@@ -554,7 +676,7 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
             row
             for row in rows
             if row["type"] == "openclaw.tool_call.recorded"
-            and row["payload"]["operation"] == "tools.review.approve"
+            and row["payload"]["operation"] == "tools.execute-pending-provider-action"
         ]
         assert len(lifecycle_audits) == 2
         assert len(approval_audits) == 2

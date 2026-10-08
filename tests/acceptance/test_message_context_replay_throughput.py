@@ -121,6 +121,8 @@ def test_long_thread_replay_and_new_source_preserve_production_context(
 ) -> None:
     settings = RuntimeSettings.credential_free(
         tmp_path / "instance",
+        # Preserve this isolated historical passive-extraction contract.
+        legacy_personal_obligation_compatibility=True,
         encryption_key=b"t" * 32,
         repository_root=REPO_ROOT,
         member_identities={AUTH["Tailscale-User-Login"]: MEMBER},

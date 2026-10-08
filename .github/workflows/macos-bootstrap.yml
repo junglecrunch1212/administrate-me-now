@@ -148,11 +148,21 @@ jobs:
           npm test --prefix openclaw/administrateme
 
       - name: Validate member browser behavior
+        env:
+          ADMINME_GATE7_EVIDENCE_DIR: ${{ runner.temp }}/adminme-gate7-early
         run: |
           npm ci --prefix tools/console-reference-harness --ignore-scripts
           ADMINME_GATE7_PYTHON="$(poetry env info --executable)" \
-          ADMINME_GATE7_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adminme-gate7-early.XXXXXX")" \
           npm run test:gate7 --prefix tools/console-reference-harness
+
+      - name: Retain credential-free browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: credential-free-member-browser
+          path: ${{ runner.temp }}/adminme-gate7-early
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build and verify the exact reviewed OpenClaw source
         run: bash scripts/acceptance/openclaw-source-install.sh
