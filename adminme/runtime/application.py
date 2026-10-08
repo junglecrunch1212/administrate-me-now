@@ -45,6 +45,11 @@ from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.communication_intake_retirement import retire_passive_obligation_candidates
+from adminme.communication_intake_policy import read_policy_epoch
+from adminme.runtime.communication_intake import (
+    CommunicationIntakeRelease,
+    load_communication_intake_release,
+)
 from adminme.submission_interpreter import SubmissionInterpreter
 from adminme.provider_write_reconciliation import ProviderWriteReconciler
 from adminme.direct_intake import (
@@ -191,6 +196,7 @@ class RuntimeSettings:
     human_triage_management_enabled: bool = False
     legacy_personal_obligation_compatibility: bool = False
     _credential_free_fixture: bool = field(default=False, repr=False)
+    communication_intake_release: CommunicationIntakeRelease = field(init=False)
     provider_bindings: tuple[ProviderBinding, ...] = field(
         default_factory=tuple, init=False
     )
@@ -214,6 +220,11 @@ class RuntimeSettings:
         root = self.repository_root.resolve()
         if not (root / "packs" / "pipelines").is_dir():
             raise ValueError(f"pipeline pack root missing under {root}")
+        object.__setattr__(
+            self,
+            "communication_intake_release",
+            load_communication_intake_release(root),
+        )
         adapters = self.adapter_config.get("adapters", [])
         if not isinstance(adapters, list):
             raise ValueError("adapter_config.adapters must be a list")
@@ -854,11 +865,18 @@ class AdministrateMeRuntime:
             )
             self.events = EventWriter(self.event_log, self.bus)
             if not self.settings.legacy_personal_obligation_compatibility:
-                await retire_passive_obligation_candidates(
-                    event_log=self.event_log,
-                    event_sink=self.events,
-                    tenant_id=self.settings.instance.tenant_id,
+                epoch = await read_policy_epoch(
+                    self.event_log, self.settings.instance.tenant_id
                 )
+                if (
+                    self.settings.communication_intake_release.activates_cutover
+                    or epoch is not None
+                ):
+                    await retire_passive_obligation_candidates(
+                        event_log=self.event_log,
+                        event_sink=self.events,
+                        tenant_id=self.settings.instance.tenant_id,
+                    )
             self.submission_interpreter = SubmissionInterpreter(self)
             self.provider_write_reconciler = ProviderWriteReconciler(
                 self.event_log, self.events

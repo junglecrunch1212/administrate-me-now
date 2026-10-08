@@ -32,6 +32,10 @@ from bootstrap.candidate_readiness import (
     capture_deployment_snapshot,
     load_pending_attestation_for_activation,
 )
+from bootstrap.communication_intake import (
+    CommunicationIntakeInspectionError,
+    required_instance_policies,
+)
 from bootstrap.contracts import (
     PROJECTION_NAMES,
     DeploymentPaths,
@@ -140,7 +144,10 @@ def _is_lower_hex(value: object, length: int) -> bool:
 
 
 def _require_communication_intake_compatibility(
-    active: dict[str, Any], incoming: dict[str, Any]
+    active: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    required_policies: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Both releases must enforce every policy either can append to shared state.
 
@@ -149,10 +156,14 @@ def _require_communication_intake_compatibility(
     service, release pointer, or event-log mutation; rolling back cannot restore
     retired mining merely because an immutable old runtime ignores its epoch.
     """
-    required: set[str] = set()
+    required: set[str] = set(required_policies)
+    if any(not isinstance(policy, str) or not policy for policy in required):
+        raise UpgradeError("required communication intake policies are invalid")
     supported: dict[str, set[str]] = {}
     for label, versions in (("active/rollback", active), ("target", incoming)):
         application = versions.get("administrateme", {})
+        if not isinstance(application, dict):
+            raise UpgradeError(f"{label} communication intake capability is invalid")
         policies = application.get("supported_communication_intake_policies", [])
         default = application.get("default_communication_intake_policy")
         if (
@@ -181,6 +192,7 @@ def validate_candidate(
     active_root: Path | None = None,
     approve_runtime_migration: bool = False,
     allow_openclaw_rollback: bool = False,
+    required_communication_intake_policies: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Fail before any service or active-release mutation on incompatibility."""
     candidate = candidate.resolve()
@@ -247,7 +259,9 @@ def validate_candidate(
             "the clean migration rehearsal and explicit --approve-runtime-migration"
         )
     communication_intake_policies = _require_communication_intake_compatibility(
-        active, incoming
+        active,
+        incoming,
+        required_policies=required_communication_intake_policies,
     )
     return {
         "compatible": True,
@@ -1387,6 +1401,37 @@ class UpgradeManager:
         )
         self._fsync_directory(readiness_path.parent)
 
+    def _required_intake_policies(self) -> frozenset[str]:
+        try:
+            return required_instance_policies(self.paths, test_mode=self.test_mode)
+        except CommunicationIntakeInspectionError as exc:
+            raise UpgradeError(str(exc)) from exc
+
+    def _validate_instance_candidate(
+        self,
+        candidate: Path,
+        *,
+        active_root: Path,
+        approve_runtime_migration: bool = False,
+        allow_openclaw_rollback: bool = False,
+    ) -> dict[str, Any]:
+        return validate_candidate(
+            candidate,
+            active_root=active_root,
+            approve_runtime_migration=approve_runtime_migration,
+            allow_openclaw_rollback=allow_openclaw_rollback,
+            required_communication_intake_policies=self._required_intake_policies(),
+        )
+
+    def _require_instance_intake_compatibility(
+        self, active: Path, incoming: Path
+    ) -> None:
+        _require_communication_intake_compatibility(
+            load_versions(active),
+            load_versions(incoming),
+            required_policies=self._required_intake_policies(),
+        )
+
     def _preflight_keychain_access(self, candidate: Path) -> None:
         """Fail before preparation or service mutation when macOS ACLs would prompt."""
 
@@ -1614,6 +1659,9 @@ class UpgradeManager:
             raise UpgradeError("activation transaction journal is invalid") from exc
         if journal is None:
             return None
+        # Even terminal archival must not treat unreadable or contradictory
+        # encrypted state as evidence that no irreversible policy exists.
+        self._required_intake_policies()
         if journal["phase"] in {"committed", "recovered"}:
             try:
                 history = self.activation_journal.finish(journal)
@@ -1653,10 +1701,8 @@ class UpgradeManager:
             for release in (target, predecessor)
         )
         if manifests_available:
-            _require_communication_intake_compatibility(
-                load_versions(target), load_versions(predecessor)
-            )
-        elif not self.test_mode:
+            self._require_instance_intake_compatibility(target, predecessor)
+        else:
             raise UpgradeError(
                 "activation recovery intake-policy manifests are unavailable"
             )
@@ -1713,6 +1759,7 @@ class UpgradeManager:
                     "interrupted activation recovery did not converge: "
                     "service quiescence is unproven; control files were not restored"
                 ) from exc
+            self._require_instance_intake_compatibility(target, predecessor)
             for operation in (
                 lambda: self._install_reviewed_openclaw(predecessor),
                 lambda: self._restore_journal_control_files(recovery_journal),
@@ -1819,7 +1866,7 @@ class UpgradeManager:
             )
         except SourceIdentityError as exc:
             raise UpgradeError("retained predecessor source is invalid") from exc
-        compatibility = validate_candidate(
+        compatibility = self._validate_instance_candidate(
             predecessor_release,
             active_root=candidate_release,
             approve_runtime_migration=True,
@@ -1937,7 +1984,7 @@ class UpgradeManager:
             if repair_policy is not None
             else None
         )
-        compatibility = validate_candidate(
+        compatibility = self._validate_instance_candidate(
             candidate,
             active_root=active_root,
             approve_runtime_migration=self.approve_runtime_migration,
@@ -2189,6 +2236,7 @@ class UpgradeManager:
                     "services_quiescing_for_repair",
                 )
                 self.services.stop(require_openclaw_live_before_stop=True)
+                self._require_instance_intake_compatibility(active_root, release)
                 assert repair_diagnostics is not None
                 source_repair_evidence = offline_validate_repair_baseline(
                     self.paths,
@@ -2230,6 +2278,7 @@ class UpgradeManager:
                         journal,
                         "services_quiesced",
                     )
+                self._require_instance_intake_compatibility(active_root, release)
                 # Graceful stop can consume time; reserve admission must still
                 # hold at the first selector mutation. This does not reset the
                 # already established candidate settlement deadline.
@@ -2492,7 +2541,7 @@ class UpgradeManager:
             if repair_policy is not None
             else None
         )
-        evidence = validate_candidate(
+        evidence = self._validate_instance_candidate(
             candidate,
             active_root=active_root,
             approve_runtime_migration=self.approve_runtime_migration,
@@ -2540,6 +2589,7 @@ class UpgradeManager:
                 # stopped event watermark and durable consumer state below.
                 repair_diagnostics = self._validate_source_repair_online(repair_policy)
                 self.services.stop(require_openclaw_live_before_stop=True)
+                self._require_instance_intake_compatibility(active_root, release)
                 assert repair_diagnostics is not None
                 source_repair_evidence = offline_validate_repair_baseline(
                     self.paths,
@@ -2558,6 +2608,7 @@ class UpgradeManager:
                 self._require_activation_capacity()
                 if repair_policy is None:
                     self.services.stop()
+                self._require_instance_intake_compatibility(active_root, release)
                 self._require_activation_capacity()
                 self._install_reviewed_openclaw(release)
                 openclaw_switched = True
@@ -2608,6 +2659,8 @@ class UpgradeManager:
                     f"candidate failed ({candidate_error}); previous-release "
                     "restoration stopped because service quiescence is unproven"
                 ) from exc
+            if previous_release is not None:
+                self._require_instance_intake_compatibility(release, previous_release)
             if previous and pointer_switched:
                 assert previous_release is not None
                 try:
@@ -2746,7 +2799,7 @@ class UpgradeManager:
             raise UpgradeError("rollback release coordinate is invalid")
         ensure_within(release, self.paths.app_dir / "releases")
         self._require_bounded_target(release)
-        validate_candidate(
+        self._validate_instance_candidate(
             release,
             active_root=current_release,
             approve_runtime_migration=True,
@@ -2926,6 +2979,7 @@ class UpgradeManager:
                 "services_quiescing",
             )
             self.services.stop()
+            self._require_instance_intake_compatibility(current_release, release)
             journal = self.activation_journal.transition(
                 journal,
                 "services_quiesced",
@@ -3107,7 +3161,7 @@ class UpgradeManager:
         release = Path(previous["path"])
         ensure_within(release, self.paths.app_dir / "releases")
         self._require_bounded_target(release)
-        validate_candidate(
+        self._validate_instance_candidate(
             release,
             active_root=current_release,
             approve_runtime_migration=True,
@@ -3117,6 +3171,7 @@ class UpgradeManager:
         self._require_activation_capacity()
         try:
             self.services.stop()
+            self._require_instance_intake_compatibility(current_release, release)
             self._require_activation_capacity()
             self._install_reviewed_openclaw(release)
             reconcile_administrateme_plugin(
@@ -3145,6 +3200,7 @@ class UpgradeManager:
                     f"rollback failed ({rollback_candidate_error}); current-release "
                     "restoration stopped because service quiescence is unproven"
                 ) from exc
+            self._require_instance_intake_compatibility(release, current_release)
             try:
                 atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
             except Exception as exc:
@@ -4072,7 +4128,7 @@ class UpgradeManager:
             repository=candidate,
             commit=commit,
         )
-        validate_candidate(
+        self._validate_instance_candidate(
             release,
             active_root=active_root,
             approve_runtime_migration=self.approve_runtime_migration,
@@ -4177,7 +4233,7 @@ class UpgradeManager:
                 raise UpgradeError(
                     "candidate preparation worker remained active after its command"
                 ) from exc
-            validate_candidate(
+            self._validate_instance_candidate(
                 release,
                 active_root=active_root,
                 approve_runtime_migration=self.approve_runtime_migration,
@@ -4217,6 +4273,9 @@ class UpgradeManager:
         commit: str,
         release: Path,
     ) -> int:
+        self._require_instance_intake_compatibility(
+            self._active_release_root(), release
+        )
         releases = self.paths.app_dir / "releases"
         (
             lock_descriptor,
@@ -4294,6 +4353,11 @@ class UpgradeManager:
     def _publish_release(self, candidate: Path, commit: str) -> Path:
         """Publish fixed source, then prepare only at its stable final coordinate."""
 
+        self._validate_instance_candidate(
+            candidate,
+            active_root=self._active_release_root(),
+            approve_runtime_migration=self.approve_runtime_migration,
+        )
         self._ensure_private_directory(self.paths.root)
         self._ensure_private_directory(self.paths.app_dir, parent=self.paths.root)
         releases = self.paths.app_dir / "releases"
@@ -4367,7 +4431,7 @@ class UpgradeManager:
                 self._assert_directory_coordinate(
                     releases, releases_descriptor, releases_metadata
                 )
-                validate_candidate(
+                self._validate_instance_candidate(
                     stage,
                     active_root=active_root,
                     approve_runtime_migration=self.approve_runtime_migration,

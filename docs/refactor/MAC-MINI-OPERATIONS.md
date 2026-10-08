@@ -368,6 +368,22 @@ state is automatically put back.
 
 ## Upgrade and rollback
 
+For first member-forwarded intake activation, follow the two-release procedure
+in [CO-032](CHANGE-ORDER-032-FORWARDED-INTAKE-DEPLOYMENT-READINESS.md). Activate
+the immutable `rollback-prerequisite` merge first, with its own pending
+attestation and fresh backup/rehearsal. Then activate the later `cutover` merge,
+retaining the prerequisite for rollback. Both use the normal guarded updater;
+there is no environment switch or installed-manifest edit. After cutover, the
+encrypted epoch also prevents a chained rollback to an older unaware release.
+
+An observation window's original start does not expire; its fresh audit and
+review evidence do. Preserve that start when preparing new evidence. If the
+owner explicitly omits a configured member's device check, the pending writer's
+repeatable `--skip-member-device-check <member-id>` records that exact omission
+separately from tested member IDs. At least one member must actually be tested.
+Report the omitted coverage and retain every identity/privacy/isolation check.
+Physical recovery evidence must remain genuine and recent.
+
 An upgrade is not topology repair. Before invoking it, require the Central
 Host to be a tagged non-member infrastructure node, the runtime user to be a
 dedicated Standard account with a separately tested recovery administrator,

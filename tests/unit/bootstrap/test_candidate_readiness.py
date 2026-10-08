@@ -130,13 +130,15 @@ def _deployment(root: Path) -> DeploymentPaths:
     return paths
 
 
-def _htr10(paths: DeploymentPaths) -> Path:
+def _htr10(paths: DeploymentPaths, *, window_age_days: int = 2) -> Path:
     value: dict[str, Any] = {
         "contract": "htr-10-review-v1",
         "schema_version": 1,
         "status": "healthy",
         "observed_at": (NOW - timedelta(hours=1)).isoformat(),
-        "provider_effect_window_started_at": (NOW - timedelta(days=2)).isoformat(),
+        "provider_effect_window_started_at": (
+            NOW - timedelta(days=window_age_days)
+        ).isoformat(),
         "event_watermark_sha256": "1" * 64,
         "historical_attribution_sha256": "2" * 64,
         "source_assurance_sha256": "3" * 64,
@@ -327,8 +329,13 @@ def test_htr03_member_set_excludes_deferred_household_records(tmp_path: Path) ->
     ]
 
 
+@pytest.mark.parametrize("window_age_days", [2, 400])
+@pytest.mark.parametrize("skip_device_check", [False, True])
 def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    window_age_days: int,
+    skip_device_check: bool,
 ) -> None:
     class FixtureClock(datetime):
         @classmethod
@@ -341,6 +348,8 @@ def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
     paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
         _arguments(tmp_path, monkeypatch)
     )
+    htr10 = _htr10(paths, window_age_days=window_age_days)
+    original_window = (NOW - timedelta(days=window_age_days)).isoformat()
     attestation_id = "8" * 32
     result = record_pending_attestation(
         paths,
@@ -351,6 +360,7 @@ def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
         htr10_review=htr10,
         confirmations=confirmations,
         observed_at=observed,
+        skipped_member_device_checks=("member_fixture_b",) if skip_device_check else (),
         now=NOW,
         attestation_id=attestation_id,
     )
@@ -377,6 +387,29 @@ def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
         for name, value in snapshot.public().items()
     )
     assert active["contract"] == "deployment-readiness-v1"
+    assert pending["pre_switch_state"]["provider_effect_window_started_at"] == (
+        original_window
+    )
+    assert active["provider_effect_window"]["started_at"] == original_window
+    assert active["identity_acceptance"]["member_ids"] == (
+        ["member_fixture_a"]
+        if skip_device_check
+        else ["member_fixture_a", "member_fixture_b"]
+    )
+    if skip_device_check:
+        expected_exception = {
+            "member_ids": ["member_fixture_b"],
+            "owner_requested": True,
+            "reason": "owner_requested_device_check_omission",
+        }
+        assert pending["human_evidence"]["htr_03"]["device_check_exceptions"] == (
+            expected_exception
+        )
+        assert active["identity_acceptance"]["device_check_exceptions"] == (
+            expected_exception
+        )
+    else:
+        assert "device_check_exceptions" not in active["identity_acceptance"]
     assert active["deployment_binding"]["release_commit"] == commit
     assert active["backup_rollback"]["automatic_rollback_eligible"] is True
     assert active["activation_evidence"] == {
@@ -391,6 +424,106 @@ def test_updater_loads_exact_pending_artifact_and_builds_active_v1(
         "post_switch_acceptance": "pending_post_switch",
         "content_exposed": False,
     }
+
+
+@pytest.mark.parametrize(
+    "skipped",
+    [
+        ("member_fixture_unknown",),
+        ("member_fixture_b", "member_fixture_b"),
+        ("member_fixture_a", "member_fixture_b"),
+        ("",),
+    ],
+)
+def test_member_device_check_exceptions_require_unique_known_partial_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, skipped: tuple[str, ...]
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    with pytest.raises(CandidateReadinessError, match="device-check exceptions"):
+        build_pending_attestation(
+            paths,
+            candidate=candidate,
+            expected_candidate_commit=commit,
+            rehearsal_receipt=receipt,
+            backup_artifact=artifact,
+            htr10_review=htr10,
+            confirmations=confirmations,
+            observed_at=observed,
+            skipped_member_device_checks=skipped,
+            now=NOW,
+        )
+
+
+def test_pending_device_check_exception_does_not_accept_stale_or_malformed_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    value, _snapshot = build_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=htr10,
+        confirmations=confirmations,
+        observed_at=observed,
+        skipped_member_device_checks=("member_fixture_b",),
+        now=NOW,
+    )
+    row = value["human_evidence"]["htr_03"]
+    valid_row = json.loads(json.dumps(row))
+    row["device_check_exceptions"]["owner_requested"] = False
+    with pytest.raises(CandidateReadinessError, match="device-check exception"):
+        validate_pending_attestation(value, now=NOW)
+    value["human_evidence"]["htr_03"] = valid_row
+    valid_row["observed_at"] = (NOW - timedelta(days=32)).isoformat()
+    with pytest.raises(CandidateReadinessError, match="older than 31 days"):
+        validate_pending_attestation(value, now=NOW)
+
+
+def test_pending_device_check_exception_still_binds_exact_configured_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    result = record_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=htr10,
+        confirmations=confirmations,
+        observed_at=observed,
+        skipped_member_device_checks=("member_fixture_b",),
+        now=NOW,
+    )
+    pending_path = (
+        paths.app_dir
+        / "readiness"
+        / "candidate-pending"
+        / f"{result['attestation_id']}.json"
+    )
+    value = json.loads(pending_path.read_bytes())
+    value["human_evidence"]["htr_03"]["device_check_exceptions"]["member_ids"] = [
+        "member_fixture_unknown"
+    ]
+    _private_write(pending_path, json.dumps(value).encode())
+    with pytest.raises(
+        CandidateReadinessError, match="member identity binding drifted"
+    ):
+        load_pending_attestation_for_activation(
+            paths,
+            attestation_id=result["attestation_id"],
+            candidate=candidate,
+            candidate_commit=commit,
+            now=NOW,
+        )
 
 
 def test_pending_attestation_refuses_receipt_drift_and_expired_human_evidence(
@@ -491,11 +624,9 @@ def test_active_loader_rejects_a_pending_contract(
         load_deployment_evidence(paths)
 
 
-def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
-    tmp_path: Path,
-) -> None:
-    paths = _deployment(tmp_path)
-    window = (NOW - timedelta(days=2)).isoformat()
+def _htr10_audits(
+    paths: DeploymentPaths, *, window: str
+) -> tuple[Path, Path, dict[str, Any]]:
     _private_write(
         paths.instance_dir / "config" / "deployment-readiness.json",
         json.dumps(
@@ -559,6 +690,18 @@ def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
         "provider_binding_transition_sha256": None,
     }
     _private_write(source, json.dumps(source_value).encode())
+    return historical, source, source_value
+
+
+@pytest.mark.parametrize("window_age_days", [2, 400])
+def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
+    tmp_path: Path, window_age_days: int
+) -> None:
+    paths = _deployment(tmp_path)
+    window = (NOW - timedelta(days=window_age_days)).isoformat()
+    historical, source, source_value = _htr10_audits(paths, window=window)
+    active_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    active_before = (active_path.read_bytes(), active_path.stat().st_ino)
 
     value = build_htr10_review(
         paths,
@@ -578,11 +721,13 @@ def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
     receipt = paths.backup_dir / f"htr-10-review-{'7' * 32}.json"
     assert result["provider_effect_integrity"] == "healthy"
     assert value["event_watermark_sha256"] != "event-watermark-fixture"
+    assert value["provider_effect_window_started_at"] == window
+    assert (active_path.read_bytes(), active_path.stat().st_ino) == active_before
     assert "event-watermark-fixture" not in receipt.read_text("utf-8")
     assert stat.S_IMODE(receipt.stat().st_mode) == 0o600
 
     source_value["provider_effects"]["observation_window"]["counts"] = {
-        **zero_counts,
+        **source_value["provider_effects"]["observation_window"]["counts"],
         "provider_called_true": 1,
     }
     _private_write(source, json.dumps(source_value).encode())
@@ -594,6 +739,77 @@ def test_htr10_reducer_requires_matching_healthy_zero_effect_metadata(
             observed_at=(NOW - timedelta(hours=1)).isoformat(),
             now=NOW,
         )
+
+
+@pytest.mark.parametrize(
+    ("window", "observed_at", "message"),
+    [
+        ("not-a-time", NOW.isoformat(), "timestamp is invalid"),
+        ("2026-08-26T15:00:00", NOW.isoformat(), "timezone-aware"),
+        (
+            (NOW + timedelta(minutes=6)).isoformat(),
+            NOW.isoformat(),
+            "timestamp is in the future",
+        ),
+        (
+            (NOW - timedelta(minutes=30)).isoformat(),
+            (NOW - timedelta(hours=1)).isoformat(),
+            "starts after HTR-10 review",
+        ),
+        (
+            (NOW - timedelta(days=400)).isoformat(),
+            (NOW - timedelta(days=32)).isoformat(),
+            "older than 31 days",
+        ),
+    ],
+)
+def test_htr10_history_does_not_relax_timestamp_or_review_freshness(
+    tmp_path: Path, window: str, observed_at: str, message: str
+) -> None:
+    paths = _deployment(tmp_path)
+    historical, source, _source_value = _htr10_audits(paths, window=window)
+    with pytest.raises(CandidateReadinessError, match=message):
+        build_htr10_review(
+            paths,
+            historical_attribution=historical,
+            source_assurance=source,
+            observed_at=observed_at,
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("window", "message"),
+    [
+        ("not-a-time", "timestamp is invalid"),
+        ("2026-08-26T15:00:00", "timezone-aware"),
+        ((NOW + timedelta(minutes=6)).isoformat(), "timestamp is in the future"),
+        (
+            (NOW - timedelta(minutes=30)).isoformat(),
+            "starts after HTR-10 review",
+        ),
+    ],
+)
+def test_pending_history_rejects_invalid_or_post_review_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window: str, message: str
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    value, _snapshot = build_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=htr10,
+        confirmations=confirmations,
+        observed_at=observed,
+        now=NOW,
+    )
+    value["pre_switch_state"]["provider_effect_window_started_at"] = window
+    with pytest.raises(CandidateReadinessError, match=message):
+        validate_pending_attestation(value, now=NOW)
 
 
 def test_pending_schema_and_private_inputs_fail_closed(

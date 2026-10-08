@@ -35,6 +35,69 @@ PASSIVE_CONTROL_TYPES = frozenset(
 )
 
 
+def validate_policy_epoch(event: Mapping[str, Any], tenant_id: str) -> None:
+    """Validate the complete authority of the irreversible household cutover."""
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        raise RuntimeError("communication intake policy epoch is invalid")
+    cutoff = payload.get("previous_source_watermark")
+    if (
+        event.get("type") != POLICY_EVENT_TYPE
+        or event.get("schema_version") != 1
+        or event.get("tenant_id") != tenant_id
+        or not isinstance(event.get("event_id"), str)
+        or not event.get("event_id")
+        or event.get("idempotency_key") != POLICY_EVENT_KEY
+        or event.get("source_adapter") != "communication-intake-policy"
+        or event.get("source_account_id") != "system"
+        or event.get("actor_identity") != "system:communication-intake-policy"
+        or event.get("owner_scope") != "shared:household"
+        or event.get("visibility_scope") != "shared:household"
+        or event.get("sensitivity") != "normal"
+        or event.get("causation_id") is not None
+        or set(payload)
+        != {
+            "policy_id",
+            "previous_source_watermark",
+            "automatic_personal_obligations_enabled",
+        }
+        or payload.get("policy_id") != POLICY_ID
+        or payload.get("automatic_personal_obligations_enabled") is not False
+        or (
+            cutoff is not None
+            and (not isinstance(cutoff, str) or not cutoff or len(cutoff) > 240)
+        )
+    ):
+        raise RuntimeError("communication intake policy epoch is invalid")
+
+
+async def read_policy_epoch(event_log: Any, tenant_id: str) -> dict[str, Any] | None:
+    """Fail closed on a forged key or a mis-keyed/contradictory epoch fact.
+
+    This function performs only reads and can also be used by the guarded
+    updater with a read-only encrypted log. A source-specific skipped receipt
+    is deliberately not a household cutover epoch.
+    """
+    epoch = await event_log.get_by_idempotency(tenant_id, POLICY_EVENT_KEY)
+    if epoch is not None:
+        validate_policy_epoch(epoch, tenant_id)
+    async for event in event_log.read_since(types=[POLICY_EVENT_TYPE]):
+        if event.get("tenant_id") != tenant_id:
+            continue
+        validate_policy_epoch(event, tenant_id)
+        if epoch is None or event["event_id"] != epoch["event_id"]:
+            raise RuntimeError("communication intake policy epoch is inconsistent")
+    if epoch is not None and epoch["payload"]["previous_source_watermark"] is not None:
+        cutoff = await event_log.get(epoch["payload"]["previous_source_watermark"])
+        if (
+            cutoff is None
+            or cutoff.get("tenant_id") != tenant_id
+            or cutoff.get("event_id") == epoch["event_id"]
+        ):
+            raise RuntimeError("communication intake policy epoch watermark is invalid")
+    return cast("dict[str, Any] | None", epoch)
+
+
 def passive_obligation_source(event: Mapping[str, Any]) -> bool:
     """A provider communication is never an explicit member submission."""
     return event.get("type") in PASSIVE_COMMUNICATION_TYPES

@@ -3,6 +3,11 @@
 Date: 2026-10-08. Scope: source implementation and credential-free acceptance.
 Activation requires a separate owner deployment request.
 
+[CO-032](CHANGE-ORDER-032-FORWARDED-INTAKE-DEPLOYMENT-READINESS.md) supplies the
+staged, runnable rollback prerequisite and durable-policy downgrade guard. Its
+prerequisite release withholds historical queue cutover until the later cutover
+release; the forwarding product decision below remains unchanged.
+
 ## Product decision
 
 Refactor the existing platform. The production flow is **Member → Forward to

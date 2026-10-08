@@ -45,6 +45,7 @@ from bootstrap.deployment_budget import (
     deployment_clock,
 )
 from bootstrap.upgrade import UpgradeError, UpgradeManager
+from tests.unit.bootstrap.intake_fixture import stub_uninitialized_intake
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1530,6 +1531,7 @@ def test_complete_preparation_rebuilds_after_backup_failure(
     repository, commit = _upgrade_repository(tmp_path)
     (repository / ".env").unlink()
     paths = DeploymentPaths.from_root(tmp_path / "deployment-backup-retry")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     prepare_calls = 0
     backup_calls = 0
@@ -1583,6 +1585,7 @@ def test_activation_consumes_preparation_before_first_selector_and_refuses_retry
     repository, commit = _upgrade_repository(tmp_path)
     (repository / ".env").unlink()
     paths = DeploymentPaths.from_root(tmp_path / "deployment-consumed-order")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     state_path = release.parent / f".release-state-{commit}.json"

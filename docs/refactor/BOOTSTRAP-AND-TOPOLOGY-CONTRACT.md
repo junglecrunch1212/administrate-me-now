@@ -1,5 +1,11 @@
 # Bootstrap and topology contract
 
+[CO-032](CHANGE-ORDER-032-FORWARDED-INTAKE-DEPLOYMENT-READINESS.md) completes the
+staged intake prerequisite and requires the encrypted policy epoch to constrain
+activation, rollback and recovery. It also distinguishes historical observation
+boundaries from fresh verification and permits explicitly recorded owner device
+coverage exceptions without changing authentication or privacy.
+
 CO-031 adds an enforced communication-intake compatibility fence to immutable
 release validation, rollback and interrupted-update recovery. A candidate that
 activates member-forwarded obligations requires a rollback release that honors

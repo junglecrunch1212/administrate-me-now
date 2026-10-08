@@ -22,8 +22,10 @@ from adminme.communication_intake_policy import (
     command_retirement,
     passive_proposal_producer,
     personal_communication_source,
+    read_policy_epoch,
     record_passive_source_skipped,
     retire_passive_command,
+    validate_policy_epoch,
 )
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import EventLog
@@ -128,7 +130,7 @@ async def retire_passive_obligation_candidates(
         raise ValueError(
             "applying communication intake retirement requires an event sink"
         )
-    epoch = await event_log.get_by_idempotency(tenant_id, POLICY_EVENT_KEY)
+    epoch = await read_policy_epoch(event_log, tenant_id)
     source_watermark = await event_log.latest_event_id()
     if epoch is None and not dry_run:
         assert event_sink is not None
@@ -157,15 +159,8 @@ async def retire_passive_obligation_candidates(
         epoch = await event_log.get(epoch_id)
     if epoch is None and not dry_run:
         raise RuntimeError("communication intake policy epoch was not recorded")
-    if epoch is not None and (
-        epoch.get("type") != POLICY_EVENT_TYPE
-        or epoch.get("tenant_id") != tenant_id
-        or epoch.get("source_adapter") != "communication-intake-policy"
-        or epoch.get("payload", {}).get("policy_id") != POLICY_ID
-        or epoch.get("owner_scope") != "shared:household"
-        or epoch.get("visibility_scope") != "shared:household"
-    ):
-        raise RuntimeError("communication intake policy epoch is invalid")
+    if epoch is not None:
+        validate_policy_epoch(epoch, tenant_id)
     cutoff = (
         epoch["payload"].get("previous_source_watermark")
         if epoch is not None

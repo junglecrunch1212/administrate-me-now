@@ -819,6 +819,7 @@ async def audit_source_assurance(
             "observation_window": {
                 "state": window_state,
                 "started_at_configured": window_start is not None,
+                "started_at": window_start.isoformat() if window_start else None,
                 "counts": window_counts,
                 "content_exposed": False,
             },
