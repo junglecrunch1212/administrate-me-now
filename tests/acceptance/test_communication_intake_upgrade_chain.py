@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from adminme.communication_intake_policy import POLICY_ID, POLICY_REASON
 from adminme.runtime.application import create_application
+from adminme.settings_control import SettingsControlStore
 from bootstrap.activation_transaction import ActivationJournal
 from bootstrap.communication_intake import required_instance_policies
 from bootstrap.contracts import DeploymentPaths, atomic_write
@@ -59,7 +60,10 @@ def test_runtime_cutover_allows_precursor_rollback_but_refuses_second_rollback_a
         paths.instance_dir / "config" / "secret-references.json",
         json.dumps({"references": {"event_log": reference}}).encode(),
     )
-    atomic_write(paths.instance_dir / "config" / "settings-control.json", b"{}")
+    settings_path = paths.instance_dir / "config" / "settings-control.json"
+    atomic_write(
+        settings_path, json.dumps(SettingsControlStore(settings_path).read()).encode()
+    )
     atomic_write(paths.instance_dir / "config" / "adapters.json", b'{"adapters":[]}')
     asyncio.run(_preload(before))
     manager = UpgradeManager(paths, root=ROOT, test_mode=True)

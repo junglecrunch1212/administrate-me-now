@@ -213,6 +213,13 @@ def _write_htr10_fixture(
                     "observation_window": {
                         "state": "healthy",
                         "started_at_configured": True,
+                        "started_at": json.loads(
+                            (
+                                paths.instance_dir
+                                / "config"
+                                / "deployment-readiness.json"
+                            ).read_text("utf-8")
+                        )["provider_effect_window"]["started_at"],
                         "counts": zero_counts,
                         "content_exposed": False,
                     },

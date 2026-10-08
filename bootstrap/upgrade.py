@@ -33,6 +33,7 @@ from bootstrap.candidate_readiness import (
     load_pending_attestation_for_activation,
 )
 from bootstrap.communication_intake import (
+    INSPECTION_MAX_SECONDS,
     CommunicationIntakeInspectionError,
     required_instance_policies,
 )
@@ -50,6 +51,7 @@ from bootstrap.deployment_failure import (
     persist_failure,
 )
 from bootstrap.deployment_budget import (
+    FINALIZATION_RESERVE_SECONDS,
     DeploymentBudget,
     DeploymentBudgetError,
     deployment_clock,
@@ -1402,6 +1404,15 @@ class UpgradeManager:
         self._fsync_directory(readiness_path.parent)
 
     def _required_intake_policies(self) -> frozenset[str]:
+        budget = self._begin_deployment_budget()
+        deadline = budget.deadline - FINALIZATION_RESERVE_SECONDS
+        if self._settlement_deadline is not None:
+            deadline = min(deadline, self._settlement_deadline)
+        if deployment_clock() + INSPECTION_MAX_SECONDS > deadline:
+            raise UpgradeError(
+                "communication intake inspection cannot fit the remaining "
+                "deployment or recovery budget; release mutation refused"
+            )
         try:
             return required_instance_policies(self.paths, test_mode=self.test_mode)
         except CommunicationIntakeInspectionError as exc:
@@ -1659,6 +1670,9 @@ class UpgradeManager:
             raise UpgradeError("activation transaction journal is invalid") from exc
         if journal is None:
             return None
+        # Recovery has its own fixed reserve; an expired candidate deadline
+        # cannot prevent bounded verification of the safe recovery target.
+        self._begin_recovery_settlement()
         # Even terminal archival must not treat unreadable or contradictory
         # encrypted state as evidence that no irreversible policy exists.
         self._required_intake_policies()
@@ -1677,7 +1691,6 @@ class UpgradeManager:
             }
 
         predecessor_commit = journal["predecessor_commit"]
-        self._begin_recovery_settlement()
         predecessor = Path(journal["predecessor_path"])
         expected = self.paths.app_dir / "releases" / predecessor_commit
         if predecessor != expected:

@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,7 @@ from adminme.communication_intake_policy import POLICY_EVENT_KEY, POLICY_EVENT_T
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from bootstrap import communication_intake as intake_inspection
 from bootstrap.activation_transaction import ActivationJournal
 from bootstrap.communication_intake import (
     CommunicationIntakeInspectionError,
@@ -201,7 +205,9 @@ def test_encrypted_epoch_survives_a_manifest_without_default_and_blocks_old_rele
     )
 
 
-@pytest.mark.parametrize("failure", ["missing_log", "bad_key", "invalid_epoch"])
+@pytest.mark.parametrize(
+    "failure", ["missing_log", "bad_key", "invalid_epoch", "tenant_drift"]
+)
 def test_unverifiable_epoch_refuses_before_candidate_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -211,8 +217,14 @@ def test_unverifiable_epoch_refuses_before_candidate_publication(
         (paths.instance_dir / "events" / "events.db").unlink()
     elif failure == "bad_key":
         secret_store(paths, test_mode=True).put("event-log", b"x" * 32)
-    else:
+    elif failure == "invalid_epoch":
         _append_epoch(paths, actor="fixture-imposter")
+    else:
+        _append_epoch(paths)
+        atomic_write(
+            paths.instance_dir / "config" / "instance.yaml",
+            b"tenant_id: fixture-drifted-tenant\ntimezone: Etc/UTC\n",
+        )
     release = _release(tmp_path / "precursor", supports=True, activates=False)
     manager = UpgradeManager(paths, root=release, test_mode=True)
     monkeypatch.setattr(manager, "_active_release_root", lambda: release)
@@ -272,3 +284,113 @@ def test_recovery_rechecks_epoch_after_quiescence_before_restoring_old_selector(
     with pytest.raises(UpgradeError, match="policy-aware rollback baseline"):
         manager._recover_interrupted_transaction()
     assert stops == ["quiesced"]
+
+
+@pytest.mark.parametrize(
+    "exit_code,expected", [(10, frozenset()), (11, frozenset({POLICY}))]
+)
+def test_production_inspection_uses_bounded_value_free_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exit_code: int,
+    expected: frozenset[str],
+) -> None:
+    paths = _paths(tmp_path)
+    original_popen = subprocess.Popen
+    children: list[subprocess.Popen[bytes]] = []
+
+    def fixture_child(
+        arguments: list[str], **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        assert arguments[1:3] == ["-m", "bootstrap.communication_intake"]
+        assert kwargs["start_new_session"] is True
+        assert all(
+            kwargs[stream] == subprocess.DEVNULL
+            for stream in ("stdin", "stdout", "stderr")
+        )
+        assert "ADMINME_TEST_MODE" not in kwargs["env"]
+        process = original_popen(
+            [
+                sys.executable,
+                "-c",
+                "from bootstrap.communication_intake import _worker_deadline\n"
+                "with _worker_deadline():\n    pass\n"
+                f"raise SystemExit({exit_code})",
+            ],
+            **kwargs,
+        )
+        children.append(process)
+        return process
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("controller must not resolve Keychain material")
+
+    monkeypatch.setattr(intake_inspection.subprocess, "Popen", fixture_child)
+    monkeypatch.setattr(intake_inspection, "_read_instance_policies", forbidden)
+    assert required_instance_policies(paths) == expected
+    assert len(children) == 1
+    assert children[0].poll() == exit_code
+    assert not intake_inspection._group_exists(children[0].pid)
+
+
+def test_stalled_inspection_is_killed_reaped_and_never_returns_private_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _paths(tmp_path)
+    original_popen = subprocess.Popen
+    children: list[subprocess.Popen[bytes]] = []
+
+    def fixture_child(
+        _arguments: list[str], **kwargs: object
+    ) -> subprocess.Popen[bytes]:
+        process = original_popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('fixture-private-output', flush=True); time.sleep(60)",
+            ],
+            **kwargs,
+        )
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(intake_inspection.subprocess, "Popen", fixture_child)
+    monkeypatch.setattr(intake_inspection, "_INSPECTION_SECONDS", 0.1)
+    started = time.monotonic()
+    with pytest.raises(
+        CommunicationIntakeInspectionError,
+        match="bounded communication intake inspection failed",
+    ):
+        required_instance_policies(paths)
+    assert time.monotonic() - started < 5
+    assert len(children) == 1
+    assert children[0].poll() is not None
+    assert not intake_inspection._group_exists(children[0].pid)
+    assert "fixture-private-output" not in capsys.readouterr().out
+
+
+def test_inspection_requires_room_in_existing_recovery_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ADMINME_UPDATE_SUPERVISED",
+        "ADMINME_CONTROLLER_STARTED_MONOTONIC",
+        "ADMINME_CONTROLLER_DEADLINE_MONOTONIC",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    clock = [1000.0]
+    monkeypatch.setattr("bootstrap.upgrade.deployment_clock", lambda: clock[0])
+    manager = UpgradeManager(_paths(tmp_path), root=tmp_path, test_mode=True)
+    manager._begin_recovery_settlement()
+    deadline = manager._settlement_deadline
+    assert deadline is not None
+    clock[0] = deadline - intake_inspection.INSPECTION_MAX_SECONDS + 0.1
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("no child may start after its reserved capacity is gone")
+
+    monkeypatch.setattr("bootstrap.upgrade.required_instance_policies", forbidden)
+    with pytest.raises(UpgradeError, match="cannot fit the remaining"):
+        manager._required_intake_policies()
+    assert manager._settlement_deadline == deadline

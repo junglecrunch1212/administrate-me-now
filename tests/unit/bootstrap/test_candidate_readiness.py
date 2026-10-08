@@ -125,12 +125,26 @@ def _deployment(root: Path) -> DeploymentPaths:
     )
     _private_write(
         paths.instance_dir / "config" / "deployment-readiness.json",
-        json.dumps({"contract": "deployment-readiness-v1", "sentinel": True}).encode(),
+        json.dumps(
+            {
+                "contract": "deployment-readiness-v1",
+                "sentinel": True,
+                "provider_effect_window": {
+                    "started_at": (NOW - timedelta(days=2)).isoformat()
+                },
+            }
+        ).encode(),
     )
     return paths
 
 
 def _htr10(paths: DeploymentPaths, *, window_age_days: int = 2) -> Path:
+    active_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    active = json.loads(active_path.read_bytes())
+    active["provider_effect_window"]["started_at"] = (
+        NOW - timedelta(days=window_age_days)
+    ).isoformat()
+    _private_write(active_path, json.dumps(active).encode())
     value: dict[str, Any] = {
         "contract": "htr-10-review-v1",
         "schema_version": 1,
@@ -681,6 +695,7 @@ def _htr10_audits(
             "observation_window": {
                 "state": "healthy",
                 "started_at_configured": True,
+                "started_at": window,
                 "counts": zero_counts,
                 "content_exposed": False,
             },
@@ -776,6 +791,94 @@ def test_htr10_history_does_not_relax_timestamp_or_review_freshness(
             observed_at=observed_at,
             now=NOW,
         )
+
+
+@pytest.mark.parametrize("boundary", ["missing", "mismatched", "equivalent_timezone"])
+def test_htr10_requires_audit_to_cover_the_exact_original_window(
+    tmp_path: Path, boundary: str
+) -> None:
+    paths = _deployment(tmp_path)
+    original = NOW - timedelta(days=400)
+    historical, source, source_value = _htr10_audits(paths, window=original.isoformat())
+    audit = source_value["provider_effects"]["observation_window"]
+    if boundary == "missing":
+        audit.pop("started_at")
+    elif boundary == "mismatched":
+        audit["started_at"] = (original + timedelta(days=1)).isoformat()
+    else:
+        audit["started_at"] = original.astimezone(
+            timezone(timedelta(hours=-4))
+        ).isoformat()
+    _private_write(source, json.dumps(source_value).encode())
+    arguments = {
+        "historical_attribution": historical,
+        "source_assurance": source,
+        "observed_at": (NOW - timedelta(hours=1)).isoformat(),
+        "now": NOW,
+    }
+    if boundary == "equivalent_timezone":
+        value = build_htr10_review(paths, **arguments)
+        assert value["provider_effect_window_started_at"] == original.isoformat()
+    else:
+        with pytest.raises(
+            CandidateReadinessError,
+            match="timestamp is invalid|does not cover the original",
+        ):
+            build_htr10_review(paths, **arguments)
+
+
+@pytest.mark.parametrize("stage", ["record", "load"])
+@pytest.mark.parametrize("drift", ["missing", "changed", "equivalent_timezone"])
+def test_pending_window_remains_bound_to_current_active_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, drift: str
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    arguments = {
+        "candidate": candidate,
+        "expected_candidate_commit": commit,
+        "rehearsal_receipt": receipt,
+        "backup_artifact": artifact,
+        "htr10_review": htr10,
+        "confirmations": confirmations,
+        "observed_at": observed,
+        "now": NOW,
+    }
+    result = record_pending_attestation(paths, **arguments) if stage == "load" else None
+    active_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    active = json.loads(active_path.read_bytes())
+    if drift == "missing":
+        active.pop("provider_effect_window")
+    elif drift == "changed":
+        active["provider_effect_window"]["started_at"] = (
+            NOW - timedelta(days=1)
+        ).isoformat()
+    else:
+        active["provider_effect_window"]["started_at"] = (
+            (NOW - timedelta(days=2))
+            .astimezone(timezone(timedelta(hours=-4)))
+            .isoformat()
+        )
+    _private_write(active_path, json.dumps(active).encode())
+
+    def invoke() -> None:
+        if result is not None:
+            load_pending_attestation_for_activation(
+                paths,
+                attestation_id=result["attestation_id"],
+                candidate=candidate,
+                candidate_commit=commit,
+                now=NOW,
+            )
+        else:
+            record_pending_attestation(paths, **arguments)
+
+    if drift == "equivalent_timezone":
+        invoke()
+    else:
+        with pytest.raises(CandidateReadinessError, match="provider-effect window"):
+            invoke()
 
 
 @pytest.mark.parametrize(

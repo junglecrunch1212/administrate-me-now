@@ -266,7 +266,11 @@ def evaluate_deployment_readiness(
         and all(isinstance(member, str) and member for member in accepted_list)
         and len(accepted_list) == len(set(accepted_list))
     )
-    accepted = set(accepted_list) if accepted_valid else set()
+    accepted = (
+        set(accepted_list)
+        if isinstance(accepted_list, list) and accepted_valid
+        else set()
+    )
     exception_present = "device_check_exceptions" in identity
     exceptions = (
         device_check_exception_members(identity["device_check_exceptions"])

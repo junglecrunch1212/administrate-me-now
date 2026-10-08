@@ -474,6 +474,21 @@ def _validate_htr10(
     return value, hashlib.sha256(payload).hexdigest(), observed
 
 
+def _active_provider_effect_window(
+    paths: DeploymentPaths, *, now: datetime
+) -> datetime:
+    payload, _metadata = _read_private_file(
+        paths.instance_dir / "config" / "deployment-readiness.json"
+    )
+    active = _json_no_duplicates(payload, label="active deployment readiness")
+    window = active.get("provider_effect_window")
+    if active.get("contract") != ACTIVE_CONTRACT or not isinstance(window, dict):
+        raise CandidateReadinessError("active provider-effect window is unavailable")
+    return _parse_timestamp(
+        window.get("started_at"), label="provider-effect window", now=now
+    )
+
+
 def build_htr10_review(
     paths: DeploymentPaths,
     *,
@@ -573,6 +588,15 @@ def build_htr10_review(
     ):
         raise CandidateReadinessError(
             "HTR-10 metadata audits are incomplete, unhealthy, or inconsistent"
+        )
+    audited_window = _parse_timestamp(
+        observation.get("started_at"),
+        label="audited provider-effect window",
+        now=current_time,
+    )
+    if audited_window != window:
+        raise CandidateReadinessError(
+            "HTR-10 audit does not cover the original provider-effect window"
         )
     value: dict[str, Any] = {
         "contract": HTR10_CONTRACT,
@@ -926,6 +950,12 @@ def build_pending_attestation(
     htr10, htr10_sha256, htr10_observed = _validate_htr10(
         paths, htr10_review, now=current_time
     )
+    if _parse_timestamp(
+        htr10["provider_effect_window_started_at"],
+        label="reviewed provider-effect window",
+        now=current_time,
+    ) != _active_provider_effect_window(paths, now=current_time):
+        raise CandidateReadinessError("reviewed provider-effect window changed")
     if htr10.get("provider_binding_transition_sha256") != transition_sha256:
         raise CandidateReadinessError(
             "HTR-10 review does not bind the prepared provider configuration"
@@ -1240,6 +1270,13 @@ def load_pending_attestation_for_activation(
         _json_no_duplicates(payload, label="candidate-pending readiness"),
         now=now,
     )
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if _parse_timestamp(
+        value["pre_switch_state"]["provider_effect_window_started_at"],
+        label="pending provider-effect window",
+        now=current_time,
+    ) != _active_provider_effect_window(paths, now=current_time):
+        raise CandidateReadinessError("pending provider-effect window changed")
     if value["attestation_id"] != attestation_id:
         raise CandidateReadinessError("pending attestation path does not match payload")
     binding = value["deployment_binding"]
