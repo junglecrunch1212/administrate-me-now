@@ -57,6 +57,13 @@ jobs:
           tests/unit/bootstrap/test_activation_transaction.py
           tests/unit/adapters/messaging/test_gmail_forwarded_intake.py
 
+      - name: Validate historical review and reply recovery
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5
+          tests/acceptance/test_apple_messages_governed_reply.py
+          tests/acceptance/test_source_assessment_revision.py
+          tests/acceptance/test_source_currentness_revision.py
+
       - name: Validate architecture, style, and types
         if: ${{ !cancelled() }}
         run: |

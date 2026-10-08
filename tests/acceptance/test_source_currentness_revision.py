@@ -1,7 +1,8 @@
 """Finite currentness authority through real encrypted production composition.
 
 Only the external llm-task transport returns synthetic fixtures. These tests
-prove durability and scope, not actual-model semantic accuracy.
+prove durability and scope, not actual-model semantic accuracy. Historical
+rollback here is restricted to explicit legacy mode with no intake-policy epoch.
 """
 
 from __future__ import annotations
@@ -45,6 +46,12 @@ ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "e12156545c02bd6ed0673ce7b5c1dc3f69313903"
 ROLLBACK_PREDECESSOR = "fa77d3a7105d3fdd655edea4b3e0da1b673e282a"
 API = "/api/system/source-currentness-revisions"
+
+
+@pytest.fixture(autouse=True)
+def retain_historical_passive_consumer(monkeypatch):
+    # These explicit legacy fixtures never cross the production intake cutover.
+    legacy._retain_historical_passive_consumer(monkeypatch)
 
 
 def _historical_output(candidates):
@@ -127,14 +134,19 @@ def _predecessor_case(
         timeout=120,
     )
     assert process.returncode == 0, process.stdout + process.stderr
-    return json.loads(result.read_text())
+    captured = json.loads(result.read_text())
+    legacy._assert_pre_cutover_history(captured["events"])
+    return captured
 
 
 def _history(client):
-    return client.portal.call(events, client.app.state.runtime)
+    history = client.portal.call(events, client.app.state.runtime)
+    legacy._assert_pre_cutover_history(history)
+    return history
 
 
 def _stable(history):
+    legacy._assert_pre_cutover_history(history)
     return [event for event in history if event["type"] != "runtime.started"]
 
 
@@ -702,6 +714,7 @@ def test_currentness_preserves_closed_receipts_and_exact_predecessor(
                 )
                 == event
             )
+    legacy._assert_pre_cutover_history(revised["events"])
     [new_assessment] = legacy._of_type(revised["events"], currentness.ASSESSMENT_TYPE)
     rolled_back = _predecessor_case(
         tmp_path,
@@ -776,4 +789,4 @@ def test_currentness_preserves_closed_receipts_and_exact_predecessor(
         for state in (retained, rolled_back):
             assert state["consumers"][subscriber]["consumer_version"] == "23.0.0"
         for state in (revised, snapshot(client)):
-            assert state["consumers"][subscriber]["consumer_version"] == "24.0.0"
+            assert state["consumers"][subscriber]["consumer_version"] == "23.0.0"

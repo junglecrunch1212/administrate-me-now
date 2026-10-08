@@ -861,6 +861,8 @@ def test_g11_encrypted_backup_restore_preserves_reply_authority(
             "reply_permission_evidence_sha256": REPLY_PERMISSION_EVIDENCE,
         }
     )
+    # The bootstrap already applies the production intake policy. Reply controls
+    # and their backup/restore authority must survive without passive extraction.
     settings = RuntimeSettings.credential_free(
         paths.instance_dir,
         encryption_key=event_key,
@@ -872,7 +874,6 @@ def test_g11_encrypted_backup_restore_preserves_reply_authority(
         },
         household_mapping=mapping,
         bridge_enrollments={login: record},
-        legacy_personal_obligation_compatibility=True,
     )
     event_id: str
     with TestClient(create_application(settings)) as client:
