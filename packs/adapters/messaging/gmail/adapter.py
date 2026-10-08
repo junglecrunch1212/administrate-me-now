@@ -54,6 +54,7 @@ from adminme.adapters.base import (
     SensitivityFloor,
 )
 from adminme.adapters.gmail_backfill import GmailInitialBackfillPolicy
+from adminme.adapters.gmail_submission import verified_sender_route
 from adminme.adapters.disposable_test_acquisition import (
     MAX_MESSAGES,
     policy_from_adapter_config,
@@ -66,6 +67,15 @@ from adminme.adapters.credentials import (
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
 from adminme.events.registry import EventValidationError, ensure_autoloaded, registry
+from adminme.forwarded_evidence import (
+    MAX_ATTACHMENT_BYTES,
+    MAX_EVIDENCE_BYTES,
+    MAX_EVIDENCE_PARTS,
+    SUPPORTED_MIME,
+    decode_part_data,
+    evidence_mime,
+    submission_evidence,
+)
 from adminme.lib.adapters import (
     CommunicationAdapter,
     InboundEnvelope,
@@ -1632,7 +1642,61 @@ class GmailAdapter(CommunicationAdapter):
         )
         if self._test_policy is not None and message.get("id") != msg_id:
             raise ValueError("Gmail response is outside the disposable test selection")
+        if self._config.get("service_principal_id"):
+            self._fetch_submission_attachments(message)
         return message
+
+    def _fetch_submission_attachments(self, message: dict[str, Any]) -> None:
+        """Fetch bounded reviewed MIME evidence only for service-owned intake."""
+
+        queue = [message.get("payload") or {}]
+        remaining = MAX_EVIDENCE_BYTES
+        visited = 0
+        while queue:
+            part = queue.pop(0)
+            visited += 1
+            if visited > MAX_EVIDENCE_PARTS:
+                part["_adminme_attachment_issue"] = "mime_complexity_limit"
+                continue
+            queue.extend(
+                child for child in part.get("parts") or [] if isinstance(child, dict)
+            )
+            body = part.get("body") or {}
+            attachment_id = body.get("attachmentId")
+            if not attachment_id or body.get("data"):
+                continue
+            if evidence_mime(part) not in SUPPORTED_MIME:
+                part["_adminme_attachment_issue"] = "unsupported_attachment"
+                continue
+            try:
+                size = int(body.get("size") or 0)
+            except (ValueError, TypeError):
+                size = -1
+            if size < 0 or size > min(MAX_ATTACHMENT_BYTES, remaining):
+                part["_adminme_attachment_issue"] = "attachment_size_limit"
+                continue
+            try:
+                response = (
+                    self._service.users()
+                    .messages()
+                    .attachments()
+                    .get(
+                        userId="me", messageId=str(message["id"]), id=str(attachment_id)
+                    )
+                    .execute()
+                )
+                content = decode_part_data(response.get("data"))
+                if content is None or len(content) > min(
+                    MAX_ATTACHMENT_BYTES, remaining
+                ):
+                    part["_adminme_attachment_issue"] = "attachment_size_limit"
+                    continue
+                remaining -= len(content)
+                body["data"] = response["data"]
+            except Exception:
+                # A missing attachment is a durable clarification, never an
+                # apparently successful interpretation of a truncated prefix.
+                part["_adminme_attachment_issue"] = "attachment_fetch_failed"
 
     # ------------------------------------------------------------------
     # Body / header decoding
@@ -1706,14 +1770,28 @@ class GmailAdapter(CommunicationAdapter):
         return out
 
     @classmethod
-    def _attachment_metadata(cls, part: dict[str, Any]) -> list[dict[str, Any]]:
-        """Collect safe Gmail attachment metadata without fetching content."""
+    def _attachment_metadata(
+        cls,
+        part: dict[str, Any],
+        *,
+        include_content: bool = False,
+        content_budget: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retain bounded supported content only in encrypted service evidence."""
 
         result: list[dict[str, Any]] = []
+        budget = content_budget if content_budget is not None else [MAX_EVIDENCE_BYTES]
         body = part.get("body") or {}
         attachment_id = body.get("attachmentId")
         filename = part.get("filename")
-        if attachment_id or filename:
+        if (
+            attachment_id
+            or filename
+            or (
+                include_content
+                and evidence_mime(part) in {"message/rfc822", "text/calendar"}
+            )
+        ):
             result.append(
                 {
                     "provider_attachment_id": str(attachment_id or ""),
@@ -1725,9 +1803,26 @@ class GmailAdapter(CommunicationAdapter):
                     "content_available": False,
                 }
             )
+            if include_content and evidence_mime(part) in SUPPORTED_MIME:
+                content = decode_part_data(body.get("data"))
+                if content is not None and len(content) <= min(
+                    MAX_ATTACHMENT_BYTES, budget[0]
+                ):
+                    budget[0] -= len(content)
+                    result[-1].update(
+                        {
+                            "content_available": True,
+                            "content_base64url": str(body["data"]),
+                            "content_sha256": hashlib.sha256(content).hexdigest(),
+                        }
+                    )
         for child in part.get("parts") or []:
             if isinstance(child, dict):
-                result.extend(cls._attachment_metadata(child))
+                result.extend(
+                    cls._attachment_metadata(
+                        child, include_content=include_content, content_budget=budget
+                    )
+                )
         return result
 
     # ------------------------------------------------------------------
@@ -1797,8 +1892,10 @@ class GmailAdapter(CommunicationAdapter):
         service_owned = isinstance(service_principal_id, str) and bool(
             service_principal_id
         )
-        trusted_route_key = (
-            self._trusted_route_key(headers.get("from")) if service_owned else None
+        trusted_route_key, route_assurance = (
+            verified_sender_route(payload_dict.get("headers") or [], self._config)
+            if service_owned
+            else (None, "unverified")
         )
         event_payload: dict[str, Any] = {
             "source_channel": "gmail",
@@ -1809,7 +1906,9 @@ class GmailAdapter(CommunicationAdapter):
             "body_text": body_text,
             "body_html": body_html,
             "received_at": received_iso,
-            "attachments": self._attachment_metadata(payload_dict),
+            "attachments": self._attachment_metadata(
+                payload_dict, include_content=service_owned
+            ),
             "native_message_id": str(message.get("id") or "unknown"),
             "member_id": self._config.get("member_id"),
             "provider": "gmail",
@@ -1837,28 +1936,18 @@ class GmailAdapter(CommunicationAdapter):
                     "channel_id": str(self._config["channel_id"]),
                     "trusted_route_key": trusted_route_key,
                     "route_source": "exact_authenticated_metadata",
+                    "authenticated_member_route": trusted_route_key is not None,
+                    "route_assurance": route_assurance,
+                    "submission_evidence": submission_evidence(
+                        payload_dict, subject=headers.get("subject") or ""
+                    ),
                 }
             )
-        return event_payload, 6 if service_owned else 4, received_iso
+        return event_payload, 8 if service_owned else 4, received_iso
 
     def _trusted_route_key(self, from_header: Any) -> str | None:
-        """Match only the exact normalized RFC sender address from Gmail metadata."""
-
-        if not isinstance(from_header, str):
-            return None
-        addresses = {
-            address.strip().casefold()
-            for _, address in getaddresses([from_header])
-            if address.strip()
-        }
-        matches = {
-            str(route.get("route_key"))
-            for route in self._config.get("trusted_sender_routes") or []
-            if isinstance(route, dict)
-            and isinstance(route.get("exact_from_identifier"), str)
-            and route["exact_from_identifier"].strip().casefold() in addresses
-        }
-        return next(iter(matches)) if len(matches) == 1 else None
+        """Legacy raw-From callers cannot authenticate a submission."""
+        return None
 
     async def _emit_message_observation(
         self,
@@ -2036,8 +2125,8 @@ class GmailAdapter(CommunicationAdapter):
         # Only account-bound historical schemas can prove the same owner,
         # provider and native ID. Never infer those coordinates from defaults.
         versions = (
-            {6}
-            if expected.schema_version == 6
+            {expected.schema_version}
+            if expected.schema_version in {6, 8}
             else ({3, 4} if expected.type == "messaging.received" else {2, 3, 4})
         )
         if event.get("schema_version") not in versions:

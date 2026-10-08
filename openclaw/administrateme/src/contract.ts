@@ -6,6 +6,7 @@ export const BRIDGE_EVENT_KINDS = [
   "commitment_candidate",
   "household_action",
   "delivery_outcome",
+  "member_submission",
 ] as const;
 
 export type BridgeEventKind = (typeof BRIDGE_EVENT_KINDS)[number];
@@ -33,6 +34,7 @@ export type PluginConfig = {
   bridgeEnabled: boolean;
   bridgeChannels: readonly string[];
   bridgeEventKinds: readonly BridgeEventKind[];
+  forwardIntakeAccounts: readonly { channelId: "imessage" | "bluebubbles"; accountId: string }[];
   modelSessionPrefix: string;
   dmScope: "per_account_channel_peer";
   memberAgentIds: readonly string[];

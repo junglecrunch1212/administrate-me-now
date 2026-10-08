@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.communication_intake_policy import POLICY_EVENT_KEY
 
 
 RECOVERY_POLICY = "source-assessment-recovery-v1"
@@ -64,6 +65,7 @@ RecoveryRefusalReason = Literal[
     "assessment_not_failed",
     "failure_reason_changed",
     "failure_not_retryable",
+    "explicit_member_submission_required",
 ]
 
 
@@ -451,6 +453,11 @@ async def validate_recovery_target(
         raise SourceAssessmentRecoveryRefused("source_privileged")
     if required_owner_scope is not None and owner_scope != required_owner_scope:
         raise SourceAssessmentRecoveryRefused("request_scope_mismatch")
+    if (
+        await event_log.get_by_idempotency(source_tenant_id, POLICY_EVENT_KEY)
+        is not None
+    ):
+        raise SourceAssessmentRecoveryRefused("explicit_member_submission_required")
     owner_member_id = owner_scope.removeprefix("private:")
     payload_member_id = (source.get("payload") or {}).get("member_id")
     if payload_member_id is not None and str(payload_member_id) != owner_member_id:

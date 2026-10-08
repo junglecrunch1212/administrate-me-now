@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+import hashlib
 import re
 from typing import Any, Literal
 
@@ -280,6 +281,38 @@ class ServiceChannelAccount:
     sending_enabled: bool
     required_for_activation: bool
     routes: tuple[ChannelRoute, ...]
+    intake_mode: Literal["conversation", "member_submission"] = "conversation"
+    openclaw_channel_id: Literal["imessage", "bluebubbles"] | None = None
+
+
+def cos_message_channel_for_account(
+    channels: tuple[ServiceChannelAccount, ...],
+    *,
+    transport_channel_id: str,
+    account_id: str,
+) -> ServiceChannelAccount | None:
+    """Resolve one enrolled CoS endpoint from exact OpenClaw coordinates.
+
+    The reviewed OpenClaw transport namespace must match exactly; an account
+    name in another transport is not the same endpoint. Account IDs are opaque
+    case-sensitive coordinates and their fingerprint is never normalized.
+    """
+
+    if transport_channel_id not in {"imessage", "bluebubbles"} or not account_id:
+        return None
+    reference = "provider-account:" + hashlib.sha256(account_id.encode()).hexdigest()
+    matches = [
+        channel
+        for channel in channels
+        if channel.provider in {"apple_imessage", "imessage"}
+        and channel.openclaw_channel_id == transport_channel_id
+        and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+        and channel.provider_account_reference == reference
+        and channel.enrolled
+        and channel.observation_active
+        and channel.state in {"observation", "healthy", "degraded"}
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def service_private_scope(service_principal_id: str) -> str:
@@ -437,6 +470,12 @@ def validate_service_identity_config(
             )
 
         routes: list[ChannelRoute] = []
+        intake_mode = row.get("intake_mode", "conversation")
+        if intake_mode not in {"conversation", "member_submission"}:
+            raise ValueError("service channel intake_mode is invalid")
+        openclaw_channel_id = row.get("openclaw_channel_id")
+        if openclaw_channel_id not in (None, "imessage", "bluebubbles"):
+            raise ValueError("service channel openclaw_channel_id is invalid")
         route_keys: set[str] = set()
         raw_routes = row.get("routes") or []
         if not isinstance(raw_routes, list):
@@ -494,6 +533,8 @@ def validate_service_identity_config(
                 sending_enabled=sending_enabled,
                 required_for_activation=row.get("required_for_activation") is True,
                 routes=tuple(routes),
+                intake_mode=intake_mode,
+                openclaw_channel_id=openclaw_channel_id,
             )
         )
     return tuple(principals), tuple(channels)
@@ -552,6 +593,7 @@ def public_service_identity_inventory(
                 "sending_enabled": channel.sending_enabled,
                 "required_for_activation": channel.required_for_activation,
                 "route_count": len(channel.routes),
+                "intake_mode": channel.intake_mode,
                 "content_exposed": False,
             }
             for channel in channels
@@ -574,6 +616,7 @@ __all__ = [
     "ServiceContextScope",
     "ServicePrincipal",
     "ServiceRequestContext",
+    "cos_message_channel_for_account",
     "public_service_identity_inventory",
     "resolve_service_channel_route",
     "service_private_scope",

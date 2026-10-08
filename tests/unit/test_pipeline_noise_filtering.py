@@ -336,6 +336,7 @@ def _make_ctx(
         triggering_event_id="trigger-eid-001",
         correlation_id="corr-001",
         candidate_policy_fn=candidate_policy_fn,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

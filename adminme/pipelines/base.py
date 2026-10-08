@@ -88,6 +88,8 @@ class PipelineContext:
     correlation_id: str | None
     parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
     candidate_policy_fn: Callable[[str, str], dict[str, Any]] | None = None
+    # Explicitly selected only by isolated historical-contract fixtures.
+    legacy_personal_obligation_compatibility: bool = False
     source_revision_authority_fn: (
         Callable[[dict[str, Any]], "DisposableTestAcquisition"] | None
     ) = None

@@ -209,3 +209,8 @@ CREATE TABLE IF NOT EXISTS triage_context_session_sources (
 );
 -- parent_intent_id is additive for deployed projection databases. Its index is
 -- created by TriageProjection.migrate_schema() after that column exists.
+-- Durable event-derived cutover barrier; resetting/rebuilding replays its epoch.
+CREATE TABLE IF NOT EXISTS triage_communication_intake_policy (
+    tenant_id TEXT PRIMARY KEY,
+    policy_event_id TEXT NOT NULL
+);

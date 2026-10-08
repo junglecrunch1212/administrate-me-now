@@ -372,6 +372,59 @@ class TriageIntentSubmittedV1(BaseModel):
     client_request_id: str = Field(min_length=8, max_length=120)
 
 
+class TriageIntentSubmittedV2(TriageIntentSubmittedV1):
+    """An authenticated submission with explicit evidence coverage.
+
+    The bounded member-private snapshot is the extraction source. Provider
+    originals remain immutable in their original scope; missing material must
+    remain visible as a clarification rather than a successful partial read.
+    """
+
+    text: str = Field(min_length=1, max_length=32_000)
+    submission_kind: Literal["manual", "member_forwarded"] = "manual"
+    evidence_complete: bool = True
+    evidence_issues: list[str] = Field(default_factory=list, max_length=20)
+    intake_channel: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def coverage_is_explicit(self) -> "TriageIntentSubmittedV2":
+        if self.evidence_issues and self.evidence_complete:
+            raise ValueError("evidence issues cannot be reported as complete")
+        if not self.evidence_complete and not self.evidence_issues:
+            raise ValueError("incomplete submission requires an evidence issue")
+        return self
+
+
+class TriageIntentPublicationHeldV1(BaseModel):
+    """The source and interpretation survive a proposal governance refusal."""
+
+    model_config = {"extra": "forbid"}
+    intent_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    feature_event_id: str = Field(min_length=1, max_length=240)
+    reason: str = Field(min_length=1, max_length=500)
+    held_at: datetime
+
+
+class TriageIntentInterpretationRefusedV1(BaseModel):
+    """Content-free terminal evidence when a retained source lacks authority."""
+
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1, max_length=240)
+    reason: Literal[
+        "member_principal_not_active",
+        "submission_identity_invalid",
+        "retained_receipt_identity_invalid",
+        "member_decision_preserved",
+        "legacy_submission_evidence_incomplete",
+    ]
+    conflicting_receipt_event_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
+    consumer_version: str = Field(min_length=1, max_length=120)
+    refused_at: datetime
+
+
 class TriageEvidenceSpanV1(BaseModel):
     model_config = {"extra": "forbid"}
     field: str = Field(min_length=1, max_length=120)
@@ -584,6 +637,26 @@ class TriageItemSupersededV4(TriageItemSupersededV2):
     )
 
 
+class TriageItemSupersededV5(BaseModel):
+    """A policy cutover retires only unchanged passive interpretations."""
+
+    model_config = {"extra": "forbid"}
+    proposal_id: str = Field(min_length=1, max_length=240)
+    superseded_at: str = Field(min_length=1)
+    replacement_source_event_id: str = Field(min_length=1, max_length=240)
+    expected_content_revision_event_id: str = Field(min_length=1, max_length=240)
+    expected_last_event_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
+    reason: Literal[
+        "source_changed",
+        "source_deleted",
+        "source_privileged",
+        "eligibility_rule_replaced",
+        "explicit_member_submission_required",
+    ]
+
+
 registry.register(
     "triage.source_publication.planned", 1, TriageSourcePublicationPlannedV1
 )
@@ -596,6 +669,11 @@ registry.register("triage.item.proposed", 3, TriageItemProposedV3)
 registry.register("triage.item.proposed", 4, TriageItemProposedV4)
 registry.register("triage.item.proposed", 5, TriageItemProposedV5)
 registry.register("triage.intent.submitted", 1, TriageIntentSubmittedV1)
+registry.register("triage.intent.submitted", 2, TriageIntentSubmittedV2)
+registry.register("triage.intent.publication_held", 1, TriageIntentPublicationHeldV1)
+registry.register(
+    "triage.intent.interpretation_refused", 1, TriageIntentInterpretationRefusedV1
+)
 registry.register(
     "triage.intent.features_extracted", 1, TriageIntentFeaturesExtractedV1
 )
@@ -628,6 +706,7 @@ registry.register("triage.item.superseded", 1, TriageItemSupersededV1)
 registry.register("triage.item.superseded", 2, TriageItemSupersededV2)
 registry.register("triage.item.superseded", 3, TriageItemSupersededV3)
 registry.register("triage.item.superseded", 4, TriageItemSupersededV4)
+registry.register("triage.item.superseded", 5, TriageItemSupersededV5)
 
 
 __all__ = [
@@ -645,10 +724,13 @@ __all__ = [
     "TriageItemSupersededV2",
     "TriageItemSupersededV3",
     "TriageItemSupersededV4",
+    "TriageItemSupersededV5",
     "TriageRouteV1",
     "TriageTargetKind",
     "TriageSourceSurface",
     "TriageIntentSubmittedV1",
+    "TriageIntentSubmittedV2",
+    "TriageIntentInterpretationRefusedV1",
     "TriageIntentFeaturesExtractedV1",
     "TriageIntentFeaturesExtractedV2",
     "TriageIntentFeaturesExtractedV3",

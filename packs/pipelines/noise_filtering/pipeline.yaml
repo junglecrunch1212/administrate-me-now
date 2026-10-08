@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 23.0.0
+  version: 24.0.0
   kind: pipeline
 runtime:
   language: python
@@ -20,10 +20,9 @@ triggers:
     - source.currentness.revision_requested
     - triage.currentness_publication.planned
 replay:
-  # v23 deliberately reassesses retained immutable message facts after a
-  # guarded v21 attempt appended partial history. Non-anchor sources receive
-  # deterministic terminal deferral; only the latest thread anchor invokes
-  # the language seam and owns candidate reconciliation.
+  # v24 records explicit not-selected receipts for retained communications.
+  # Historical language contracts run only in explicitly selected fixtures.
+  # Production replay never invokes the old obligation classifier.
   on_version_change: full
 delivery:
   # The handler is idempotent; EventBus checkpoints only the ordered success
@@ -42,6 +41,8 @@ depends_on:
     - classify_message_nature@^8.0.0
   projections: []
 events_emitted:
+  - communication_intake.source_skipped
+  - communication_intake.command_retired
   - messaging.classified
   - messaging.semantic_features_extracted
   - triage.intent.features_extracted

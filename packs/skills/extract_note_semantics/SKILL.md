@@ -1,8 +1,8 @@
 ---
 name: extract_note_semantics
 namespace: adminme
-version: 2.0.0
-description: Extract grounded, typed, human-gated household candidates from one member note.
+version: 2.1.0
+description: Extract grounded, typed, human-gated household candidates from a member note or explicit submission.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
 provider_preferences:
@@ -32,3 +32,8 @@ scope, fields, and confidence before anything can enter Triage.
 The skill never chooses a member, existing party, provider, account, calendar,
 reminder list, identity resolution, or authorization decision. It never writes
 household or provider state.
+
+For `member_submission`, the caller supplies the complete bounded selected
+evidence (at most 32,000 characters). Quoted originals and calendar material
+remain evidence, not identity or write authority. Incomplete evidence and
+uncertain cancellation, update, or date semantics require member clarification.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import copy
+import hashlib
 import stat
 from pathlib import Path
 
@@ -10,6 +12,10 @@ import pytest
 
 from adminme.deployment_readiness import CENTRAL_HOST_TAG, REQUIRED_DM_SCOPE
 from adminme.openclaw_topology import binding_fingerprints, member_agent_id
+from adminme.service_identities import (
+    COS_SERVICE_PRINCIPAL_ID,
+    DEFAULT_SERVICE_IDENTITY_CONFIG,
+)
 from bootstrap.attest_deployment_readiness import (
     ReadinessAttestationError,
     build_attestation,
@@ -330,6 +336,76 @@ def test_openclaw_reconciliation_rejects_a_shared_channel_account_before_write(
     with pytest.raises(RuntimeError, match="shared across members"):
         reconcile_member_topology(paths)
     assert json.loads(target.read_text("utf-8")) == original
+
+
+@pytest.mark.parametrize("transport", ["imessage", "bluebubbles"])
+def test_openclaw_reconciliation_accepts_only_reviewed_shared_cos_intake(
+    tmp_path: Path,
+    transport: str,
+) -> None:
+    paths = _paths(tmp_path)
+    config_dir = paths.instance_dir / "config"
+    runtime_dir = paths.instance_dir / "openclaw" / "runtime"
+    config_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    account = "cos-service-fixture"
+    services = copy.deepcopy(DEFAULT_SERVICE_IDENTITY_CONFIG)
+    services["channels"] = [
+        {
+            "channel_id": "channel:chief-of-staff:messages",
+            "display_name": "CoS fixture",
+            "provider": "apple_imessage",
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            "state": "observation",
+            "enrolled": True,
+            "observation_active": True,
+            "provider_account_reference": "provider-account:"
+            + hashlib.sha256(account.encode()).hexdigest(),
+            "sending_enabled": False,
+            "intake_mode": "member_submission",
+            "openclaw_channel_id": transport,
+            "routes": [],
+        }
+    ]
+    adapters = {
+        "openclaw_actor_identities": {
+            f"{transport}|{account}|actor-a": "member-a",
+            f"{transport}|{account}|actor-b": "member-b",
+        },
+        "member_chat_enabled_members": [],
+        "service_identities": services,
+    }
+    source = config_dir / "adapters.json"
+    source.write_text(json.dumps(adapters), encoding="utf-8")
+    target = runtime_dir / "openclaw.json"
+    original = {"agents": {"list": []}, "bindings": []}
+    target.write_text(json.dumps(original), encoding="utf-8")
+    result = reconcile_member_topology(paths)
+    assert result["member_agent_count"] == 2
+    assert result["binding_count"] == 2
+    stored = json.loads(target.read_text("utf-8"))
+    assert {row["match"]["peer"]["id"] for row in stored["bindings"]} == {
+        "actor-a",
+        "actor-b",
+    }
+    assert all(row["match"]["peer"]["kind"] == "direct" for row in stored["bindings"])
+    assert len({row["agentId"] for row in stored["bindings"]}) == 2
+    channel = services["channels"][0]
+    for rejected_transport in (
+        None,
+        "bluebubbles" if transport == "imessage" else "imessage",
+    ):
+        channel["openclaw_channel_id"] = rejected_transport
+        source.write_text(json.dumps(adapters), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="shared across members"):
+            reconcile_member_topology(paths)
+        assert json.loads(target.read_text("utf-8")) == stored
+    channel["openclaw_channel_id"] = transport
+    channel["intake_mode"] = "conversation"
+    source.write_text(json.dumps(adapters), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="shared across members"):
+        reconcile_member_topology(paths)
+    assert json.loads(target.read_text("utf-8")) == stored
 
 
 def test_preflight_rejects_an_admin_service_account(tmp_path: Path) -> None:

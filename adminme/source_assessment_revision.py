@@ -21,6 +21,7 @@ from adminme.adapters.disposable_test_acquisition import (
     restrict_adapter_config,
 )
 from adminme.events.envelope import EventEnvelope
+from adminme.communication_intake_policy import POLICY_REASON, command_retirement
 from adminme.events.log import EventLog
 from adminme.message_context import build_message_context_pack
 from adminme.source_assessment_recovery import latest_source_assessment
@@ -301,6 +302,7 @@ async def command_status(
     event_log: EventLog, request: dict[str, Any]
 ) -> dict[str, Any]:
     manifest = RevisionManifest.model_validate(request["payload"]["manifest"])
+    policy_retirement = await command_retirement(event_log, request)
     targets = []
     for target in manifest.targets:
         terminal = await event_log.get_by_idempotency(
@@ -316,13 +318,19 @@ async def command_status(
                 "state": "assessed"
                 if terminal
                 else "refused"
-                if refusal
+                if refusal or policy_retirement
                 else "pending",
                 "assessment_event_id": terminal["event_id"] if terminal else None,
                 "outcome": terminal["payload"]["assessment_outcome"]
                 if terminal
                 else None,
-                "refusal_reason": refusal["payload"]["reason"] if refusal else None,
+                "refusal_reason": (
+                    refusal["payload"]["reason"]
+                    if refusal
+                    else POLICY_REASON
+                    if policy_retirement
+                    else None
+                ),
             }
         )
     return {

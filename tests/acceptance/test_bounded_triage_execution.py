@@ -51,6 +51,7 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
         fixture_member_id=MEMBER,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 
@@ -737,6 +738,7 @@ async def _simulate_predecessor_checkpoint_past_plan(settings, plan_id):
                     observation_manager=None,
                     triggering_event_id=event["event_id"],
                     correlation_id=None,
+                    legacy_personal_obligation_compatibility=True,
                 ),
             )
 

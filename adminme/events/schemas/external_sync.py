@@ -158,6 +158,46 @@ class LegacyProviderEffectReconciledV1(BaseModel):
         return self
 
 
+class ExternalWriteAttemptedV1(BaseModel):
+    """Durable boundary before a non-idempotent central provider creation."""
+
+    model_config = {"extra": "forbid"}
+    command_id: str = Field(min_length=1, max_length=240)
+    command_event_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: Literal["google_calendar", "google_tasks"]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    operation: Literal["create_event", "create_task"]
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    attempted_at: datetime
+    automatic_retry: Literal[False] = False
+
+
+class ExternalWriteReconciledV1(BaseModel):
+    """An independent source observation of an exact approved provider effect."""
+
+    model_config = {"extra": "forbid"}
+    command_id: str = Field(min_length=1, max_length=240)
+    command_event_id: str = Field(min_length=1, max_length=240)
+    terminal_event_id: str = Field(min_length=1, max_length=240)
+    observation_event_id: str = Field(min_length=1, max_length=240)
+    origin_proposal_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: Literal[
+        "google_calendar", "apple_calendar", "google_tasks", "apple_reminders"
+    ]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    external_id: str = Field(min_length=1, max_length=1000)
+    outcome: Literal["matched", "drifted", "missing", "incomplete"]
+    compared_fields: list[str] = Field(max_length=40)
+    differing_fields: list[str] = Field(max_length=40)
+    desired_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    independent_source_observation: Literal[True] = True
+    provider_effect_count: Literal[0] = 0
+    reconciled_at: datetime
+
+
 registry.register("external_sync.write_requested", 1, ExternalWriteRequestedV1)
 registry.register("external_sync.write_requested", 2, ExternalWriteRequestedV2)
 registry.register("external_sync.write_completed", 1, ExternalWriteCompletedV1)
@@ -170,6 +210,8 @@ registry.register(
 registry.register(
     "member.provider_action.confirmed", 1, MemberProviderActionConfirmedV1
 )
+registry.register("external_sync.write_reconciled", 1, ExternalWriteReconciledV1)
+registry.register("external_sync.write_attempted", 1, ExternalWriteAttemptedV1)
 
 
 __all__ = [

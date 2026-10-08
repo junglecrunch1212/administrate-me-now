@@ -1,5 +1,13 @@
 # Bootstrap and topology contract
 
+CO-031 adds an enforced communication-intake compatibility fence to immutable
+release validation, rollback and interrupted-update recovery. A candidate that
+activates member-forwarded obligations requires a rollback release that honors
+the same policy epoch; old passive-extraction releases are refused. Before the
+separately authorized cutover, use the read-only retirement preview, retain
+observation mode, and verify backup and rollback evidence. See
+[CO-031](CHANGE-ORDER-031-MEMBER-FORWARDED-OBLIGATIONS.md).
+
 Explicit owner-designated disposable datasets may use the narrowly scoped
 [bounded test reset contract](BOUNDED-TEST-RESET-CONTRACT.md). That operation
 retains failed history offline, proves a fresh bounded dataset, and reports
@@ -102,6 +110,18 @@ work agent for the same member is created only
 when its tools, model, retention, or organization policy must differ—not just
 to render a work filter. Provider account credentials and OpenClaw agent
 credentials remain separately revocable.
+
+For CO031's dedicated member-submission endpoint, multiple reviewed members may
+share only an enrolled, active CoS service account. Its service channel must
+declare `intake_mode: member_submission`, the exact `openclaw_channel_id`
+(`imessage` or `bluebubbles`), and `provider-account:` plus SHA-256 of the exact,
+case-sensitive OpenClaw account ID. The transport and account must match both
+the plugin's `forwardIntakeAccounts` entry and each actor mapping. Neither a
+missing transport binding nor the same account name under another transport
+grants this exception. Bootstrap preserves distinct member agents and exact
+direct-peer bindings; ordinary member-owned accounts cannot be shared. See
+[`cos-imessage-intake.example.yaml`](../../config/cos-imessage-intake.example.yaml)
+for an inert configuration recipe. This does not change Gmail account matching.
 
 The CoS may eventually send only as its own reviewed service identity through
 allowlist → domain governance → rate limit → final privacy/content guard →

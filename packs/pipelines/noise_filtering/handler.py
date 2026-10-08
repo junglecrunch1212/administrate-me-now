@@ -31,6 +31,12 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
+from adminme.communication_intake_policy import (
+    PASSIVE_CONTROL_TYPES,
+    passive_obligations_disabled,
+    record_passive_source_skipped,
+    retire_passive_command,
+)
 from adminme.candidate_policy import (
     default_policy,
     filter_candidates,
@@ -320,7 +326,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "23.0.0"
+    version: str = "24.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -482,6 +488,9 @@ class NoiseFilteringPipeline:
     async def _handle_recovery_request(
         self, event: dict[str, Any], ctx: PipelineContext
     ) -> None:
+        if not ctx.legacy_personal_obligation_compatibility:
+            await retire_passive_command(event, ctx)
+            return
         payload = event.get("payload") or {}
         source_event_id = str(payload.get("source_event_id") or "")
         lock_key = f"{event.get('tenant_id')}:{source_event_id}"
@@ -625,6 +634,9 @@ class NoiseFilteringPipeline:
             raise AssertionError("unreachable transient recovery state")
 
     async def _handle_revision_request(self, event, ctx) -> None:
+        if not ctx.legacy_personal_obligation_compatibility:
+            await retire_passive_command(event, ctx)
+            return
         payload = event.get("payload") or {}
         manifest = manifest_for_request(event)
         owner = str(event.get("owner_scope") or "")
@@ -720,6 +732,14 @@ class NoiseFilteringPipeline:
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
+        if passive_obligations_disabled(event, ctx):
+            await record_passive_source_skipped(event, ctx)
+            return
+        if event_type in PASSIVE_CONTROL_TYPES and not (
+            ctx.legacy_personal_obligation_compatibility
+        ):
+            await retire_passive_command(event, ctx)
+            return
         if event_type in {
             "triage.source_publication.planned",
             REVISION_PLAN_TYPE,
@@ -763,6 +783,10 @@ class NoiseFilteringPipeline:
             await self._handle_source(event, ctx)
 
     async def _handle_source(self, event: dict[str, Any], ctx: PipelineContext) -> None:
+        # This precedes cached assessment/publication recovery as well as LLM work.
+        if passive_obligations_disabled(event, ctx):
+            await record_passive_source_skipped(event, ctx)
+            return
         event_type = event.get("type", "")
         source_event_id = str(event.get("event_id") or "")
         recovery = event.get("_assessment_recovery")
@@ -2214,6 +2238,11 @@ class NoiseFilteringPipeline:
         *,
         expected_plan: dict[str, Any] | None = None,
     ) -> bool:
+        if passive_obligations_disabled(source, ctx):
+            await record_passive_source_skipped(source, ctx)
+            if expected_plan is not None:
+                await retire_passive_command(expected_plan, ctx)
+            return True
         key = str(assessment.get("idempotency_key") or "")
         plan = await ctx.event_log.get_by_idempotency(
             source["tenant_id"], self._publication_plan_key(key)
@@ -2380,6 +2409,10 @@ class NoiseFilteringPipeline:
             "member_decided_count": 0,
             "superseded_count": 0,
         }
+        if passive_obligations_disabled(source, ctx):
+            await record_passive_source_skipped(source, ctx)
+            counts["superseded_count"] = len(drafts)
+            return counts
         for index, draft in enumerate(drafts):
             latest = await latest_source_assessment(ctx.event_log, source_id)
             if latest is not None and latest["event_id"] != assessment["event_id"]:

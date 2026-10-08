@@ -331,6 +331,8 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     )["evidence"]
     assert proof["external_side_effects"] == 0
     assert proof["review_suppressed_by_observation"] is True
+    assert proof["explicit_member_submission"] is True
+    assert proof["passive_obligation_candidates"] == 0
     plugin_skills = paths.instance_dir / "openclaw" / "runtime" / "plugin-skills"
     plugin_skills.mkdir(parents=True, exist_ok=True)
     (plugin_skills / "generated-skill").symlink_to(REPO_ROOT / "packs" / "skills")
@@ -744,7 +746,7 @@ def test_newer_restore_controller_proves_selected_predecessor_in_its_real_proces
         in (release / "packs/pipelines/noise_filtering/pipeline.yaml").read_text()
     )
     assert (
-        "version: 23.0.0"
+        "version: 24.0.0"
         in (REPO_ROOT / "packs/pipelines/noise_filtering/pipeline.yaml").read_text()
     )
     python = release / ".venv" / "bin" / "python"

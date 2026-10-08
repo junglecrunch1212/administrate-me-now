@@ -105,6 +105,7 @@ def _settings(instance_dir: Path, *, model_configured: bool = True) -> RuntimeSe
         member_chat_enabled_members=frozenset({PRINCIPAL, ADULT, CHILD}),
         child_chat_enabled_members=frozenset({CHILD}),
         deterministic_member_chat_fixture=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

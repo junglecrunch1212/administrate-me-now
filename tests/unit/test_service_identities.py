@@ -179,6 +179,7 @@ def test_default_cos_apple_identity_is_planned_without_claiming_an_account() -> 
             "sending_enabled": False,
             "required_for_activation": False,
             "route_count": 0,
+            "intake_mode": "conversation",
             "content_exposed": False,
         }
     ]

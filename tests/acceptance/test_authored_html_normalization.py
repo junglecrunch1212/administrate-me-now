@@ -41,6 +41,7 @@ def _settings(instance: Path) -> RuntimeSettings:
         deterministic_openclaw_fixture=True,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

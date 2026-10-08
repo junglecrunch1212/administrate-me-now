@@ -19,6 +19,10 @@ from adminme.openclaw_topology import (
     member_workspace_path,
 )
 from adminme.deployment_readiness import REQUIRED_DM_SCOPE
+from adminme.service_identities import (
+    cos_message_channel_for_account,
+    validate_service_identity_config,
+)
 
 from bootstrap.contracts import (
     DeploymentPaths,
@@ -67,6 +71,24 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
     ):
         raise RuntimeError("OpenClaw actor identity map is invalid")
     members = sorted(set(actor_identities.values()) | set(chat_members))
+    # Actor topology needs service ownership/enrollment, not source-routing
+    # scope. The runtime separately validates the full routes against household
+    # Parties; never infer household Parties here from arbitrary route targets.
+    service_config = adapter_config.get("service_identities")
+    if isinstance(service_config, dict):
+        service_config = {
+            **service_config,
+            "channels": [
+                {**row, "routes": []} if isinstance(row, dict) else row
+                for row in service_config.get("channels") or []
+            ],
+        }
+    try:
+        _, service_channels = validate_service_identity_config(
+            service_config, member_ids=set(members), household_party_ids=set()
+        )
+    except ValueError as exc:
+        raise RuntimeError("OpenClaw service channel identity is invalid") from exc
     config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
     config = json.loads(config_path.read_text("utf-8")) if config_path.is_file() else {}
     if not isinstance(config, dict):
@@ -118,16 +140,28 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
     ]
     member_bindings: list[dict[str, Any]] = []
     account_owners: dict[tuple[str, str], str] = {}
+    account_routes: dict[tuple[str, str], tuple[str, str]] = {}
     for route, member in sorted(actor_identities.items()):
         parts = route.split("|", 2)
         if len(parts) != 3 or not all(parts):
             raise RuntimeError("OpenClaw actor route must be channel|account|actor")
         channel, account, actor = parts
-        owner = account_owners.setdefault(
-            (channel.casefold(), account.casefold()), member
-        )
+        account_key = (channel.casefold(), account.casefold())
+        original_account = account_routes.setdefault(account_key, (channel, account))
+        owner = account_owners.setdefault(account_key, member)
+        if original_account != (channel, account):
+            raise RuntimeError(
+                "OpenClaw channel account is shared across members with ambiguous casing"
+            )
         if owner != member:
-            raise RuntimeError("OpenClaw channel account is shared across members")
+            service_channel = cos_message_channel_for_account(
+                service_channels, transport_channel_id=channel, account_id=account
+            )
+            if (
+                service_channel is None
+                or service_channel.intake_mode != "member_submission"
+            ):
+                raise RuntimeError("OpenClaw channel account is shared across members")
         member_bindings.append(
             {
                 "agentId": member_agent_id(member),

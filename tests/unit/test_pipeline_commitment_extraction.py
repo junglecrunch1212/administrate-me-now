@@ -182,6 +182,7 @@ def _make_ctx(
         triggering_event_id="trigger-eid-001",
         correlation_id="corr-001",
         parties_conn_factory=parties_factory,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

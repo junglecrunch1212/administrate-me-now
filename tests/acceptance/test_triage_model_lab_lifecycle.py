@@ -228,6 +228,8 @@ def test_lab_completes_actual_g12_task_through_exact_duplicate_and_retains_singu
     calls = _model(monkeypatch, cases)
     config = application.RuntimeSettings.credential_free(
         tmp_path / "instance",
+        # Preserve this isolated historical passive-extraction contract.
+        legacy_personal_obligation_compatibility=True,
         encryption_key=b"g" * 32,
         repository_root=ROOT,
         member_identities={HEADERS["Tailscale-User-Login"]: MEMBER},

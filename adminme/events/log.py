@@ -119,10 +119,18 @@ class _EventIdGenerator:
     the embedded timestamp — the resulting ID is still sortable and unique.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, last_native_id: str | None = None) -> None:
         self._lock = threading.Lock()
         self._last_ms = 0
         self._counter = 0
+        if last_native_id is not None:
+            # The log supplies only the exact native Crockford shape. Opaque
+            # historical/UUID IDs remain readable without being reinterpreted.
+            encoded = last_native_id.removeprefix(EVENT_ID_PREFIX)
+            for character in encoded[:_MS_CHARS]:
+                self._last_ms = self._last_ms * 32 + _CROCKFORD.index(character)
+            for character in encoded[_MS_CHARS:]:
+                self._counter = self._counter * 32 + _CROCKFORD.index(character)
 
     def mint(self, now_ms: int) -> tuple[str, int]:
         with self._lock:
@@ -200,13 +208,15 @@ class EventLog:
         try:
             self._conn = self._executor.submit(self._open_connection).result()
             self._lock = asyncio.Lock()
-            self._id_gen = _EventIdGenerator()
             self._closed = False
             self._tenant_id_hint = (
                 db_path.tenant_id if isinstance(db_path, _InstanceConfig) else None
             )
             if not self._read_only:
                 self._executor.submit(self._migrate).result()
+            self._id_gen = _EventIdGenerator(
+                self._executor.submit(self._latest_native_event_id).result()
+            )
             self._metadata_index_hint = self._executor.submit(
                 self._metadata_index_hint_for_schema
             ).result()
@@ -222,6 +232,16 @@ class EventLog:
                     )
             self._executor.shutdown(wait=True, cancel_futures=True)
             raise
+
+    def _latest_native_event_id(self) -> str | None:
+        """Restore append ordering across restart and a backwards/future clock."""
+        native_shape = EVENT_ID_PREFIX + f"[{_CROCKFORD}]" * (_MS_CHARS + _CTR_CHARS)
+        row = self._conn.execute(
+            "SELECT event_id FROM events WHERE event_id GLOB ? "
+            "ORDER BY event_id DESC LIMIT 1",
+            (native_shape,),
+        ).fetchone()
+        return str(row[0]) if row is not None else None
 
     # ------------------------------------------------------------------
     # connection management

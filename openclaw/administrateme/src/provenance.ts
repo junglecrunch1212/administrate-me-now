@@ -106,6 +106,12 @@ export function provenanceFromMessage(
   event: PluginHookMessageReceivedEvent,
   context: PluginHookMessageContext,
 ): Provenance {
+  if (event.senderId && context.senderId && event.senderId !== context.senderId) {
+    throw new Error("AdministrateMe message sender provenance is contradictory");
+  }
+  if (event.messageId && context.messageId && event.messageId !== context.messageId) {
+    throw new Error("AdministrateMe native message provenance is contradictory");
+  }
   const result = base("bridge", required(event.senderId ?? context.senderId, "message sender"), context.channelId);
   result.correlation_id = event.runId ?? context.runId ?? randomUUID();
   const sessionKey = event.sessionKey ?? context.sessionKey;

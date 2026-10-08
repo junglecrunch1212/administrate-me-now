@@ -13,7 +13,8 @@
       "adminme-defer",
       "adminme-snooze",
       "adminme-block",
-      "adminme-unblock"
+      "adminme-unblock",
+      "adminme-forward"
     ]
   },
   "commandAliases": [
@@ -24,7 +25,8 @@
     { "name": "adminme-defer", "kind": "runtime-slash" },
     { "name": "adminme-snooze", "kind": "runtime-slash" },
     { "name": "adminme-block", "kind": "runtime-slash" },
-    { "name": "adminme-unblock", "kind": "runtime-slash" }
+    { "name": "adminme-unblock", "kind": "runtime-slash" },
+    { "name": "adminme-forward", "kind": "runtime-slash" }
   ],
   "contracts": {
     "tools": [
@@ -188,6 +190,33 @@
         "pattern": "^[A-Z][A-Z0-9_]{2,80}$"
       },
       "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 30000 },
+      "forwardIntakeAccounts": {
+        "type": "array",
+        "maxItems": 20,
+        "default": [],
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "channelId",
+            "accountId"
+          ],
+          "properties": {
+            "channelId": {
+              "enum": [
+                "imessage",
+                "bluebubbles"
+              ]
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        "description": "Reviewed dedicated CoS intake endpoints. Every member message arriving at this exact channel/account is submitted for review; other conversation channels remain unchanged. Domain service channel must independently allow member_submission intake."
+      },
       "bridgeEnabled": { "type": "boolean" },
       "bridgeChannels": {
         "type": "array",
@@ -198,7 +227,7 @@
         "type": "array",
         "maxItems": 3,
         "items": {
-          "enum": ["commitment_candidate", "household_action", "delivery_outcome"]
+          "enum": ["commitment_candidate", "household_action", "delivery_outcome", "member_submission"]
         }
       },
       "modelSessionPrefix": { "type": "string", "minLength": 1, "maxLength": 80 },

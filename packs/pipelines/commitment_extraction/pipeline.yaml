@@ -1,7 +1,7 @@
 pack:
   id: pipeline:commitment_extraction
   name: Commitment extraction
-  version: 4.2.0
+  version: 4.3.0
   kind: pipeline
 runtime:
   language: python
@@ -19,6 +19,7 @@ depends_on:
   projections:
     - parties              # for find_party_by_identifier
 events_emitted:
+  - communication_intake.source_skipped
   - commitment.proposed
   - commitment.suppressed
 config:

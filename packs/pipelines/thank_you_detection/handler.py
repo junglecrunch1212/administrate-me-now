@@ -70,6 +70,11 @@ them once a third pipeline needs them.
 
 from __future__ import annotations
 
+from adminme.communication_intake_policy import (
+    passive_obligations_disabled,
+    record_passive_source_skipped,
+)
+
 import hashlib
 import logging
 from pathlib import Path
@@ -177,7 +182,7 @@ def _thresholds_for_member(
 
 class ThankYouDetectionPipeline:
     pack_id: str = "pipeline:thank_you_detection"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     triggers: Triggers = {"events": ["messaging.received"]}
 
     # `_PACK_ROOT` is set at module import for the in-pack default config
@@ -199,6 +204,9 @@ class ThankYouDetectionPipeline:
         audit-trail noise (a suppressed event per outbound message)."""
         event_type = event.get("type", "")
         if event_type != "messaging.received":
+            return
+        if passive_obligations_disabled(event, ctx):
+            await record_passive_source_skipped(event, ctx)
             return
 
         config = self._config_override or _load_config(self._PACK_ROOT)

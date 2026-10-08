@@ -2,6 +2,8 @@
 
 The model transport returns fixed synthetic language results. These tests
 exercise authorization and durability, not actual-model semantic accuracy.
+These legacy-mode fixtures remain before the member-submission cutover; they do
+not claim that an old release may reopen current-policy data.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +32,7 @@ from adminme.adapters.loader import load_builtin_adapters
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import AppendValidationError, EventLog
 from adminme.events.writer import EventWriter
+from adminme.pipelines.runner import PipelineRunner
 from adminme.source_assessment_revision import (
     REFUSAL_TYPE,
     REQUEST_TYPE,
@@ -64,6 +68,35 @@ PREDECESSOR = "d54d2e4ce43cd78f317e9a7bb8d13ad3d644ce84"
 API = "/api/system/source-assessment-revisions"
 
 
+def _retain_historical_passive_consumer(monkeypatch):
+    """Keep the pre-cutover consumer generation for explicit legacy fixtures.
+
+    Production v24 disables passive extraction; these fixtures explicitly keep
+    the historical v23 behavior. Retain that consumer generation so an immutable
+    predecessor does not interpret this fixture as a policy-version downgrade
+    and replay completed sources. The real handler, pack-cache identity,
+    checkpoint/event contents, production manifest and archived code are intact.
+    """
+    register = PipelineRunner.register
+
+    def register_historical(runner, pack):
+        if (
+            runner._legacy_personal_obligation_compatibility
+            and pack.pack_id == "pipeline:noise_filtering"
+            and pack.version == "24.0.0"
+        ):
+            pack = replace(pack, version="23.0.0")
+        register(runner, pack)
+
+    monkeypatch.setattr(PipelineRunner, "register", register_historical)
+
+
+def _assert_pre_cutover_history(history):
+    assert not [
+        event for event in history if event["type"].startswith("communication_intake.")
+    ], "historical passive fixtures must never cross the intake-policy cutover"
+
+
 @pytest.fixture(scope="module")
 def reviewed_revision_repository(tmp_path_factory):
     """Run current code with the exact classifier authorized by the closed revision."""
@@ -94,6 +127,7 @@ def use_reviewed_revision_bundle(monkeypatch, reviewed_revision_repository):
     # Only synthetic runtime pack inputs change. Production authorization and
     # its closed classifier digest remain unmodified.
     monkeypatch.setattr(sys.modules[__name__], "ROOT", reviewed_revision_repository)
+    _retain_historical_passive_consumer(monkeypatch)
 
 
 def _model(monkeypatch):
@@ -973,7 +1007,9 @@ def _run_predecessor(root, instance, mode):
         timeout=120,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    return json.loads(result.read_text())
+    captured = json.loads(result.read_text())
+    _assert_pre_cutover_history(captured["events"])
+    return captured
 
 
 def test_protected_predecessor_still_serves_after_explicit_revision_without_reclassification(
@@ -1018,16 +1054,16 @@ def test_protected_predecessor_still_serves_after_explicit_revision_without_recl
         )
         assert len(_of_type(revised, REVISION_PLAN_TYPE)) == 1
         assert len(_of_type(revised, REVISION_COMPLETION_TYPE)) == 1
+    _assert_pre_cutover_history(revised)
     rolled_back = _run_predecessor(predecessor, instance, "verify")
     assert rolled_back["model_calls"] == []
     subscriber = "pipeline:pipeline:noise_filtering"
     retained_consumer = retained["consumers"][subscriber]
     current_consumer = current["consumers"][subscriber]
     predecessor_consumer = rolled_back["consumers"][subscriber]
-    assert {
-        state["consumer_version"]
-        for state in (retained_consumer, current_consumer, predecessor_consumer)
-    } == {"23.0.0"}
+    assert retained_consumer["consumer_version"] == "23.0.0"
+    assert current_consumer["consumer_version"] == "23.0.0"
+    assert predecessor_consumer["consumer_version"] == "23.0.0"
     assert (
         retained_consumer["checkpoint_event_id"]
         <= current_consumer["checkpoint_event_id"]

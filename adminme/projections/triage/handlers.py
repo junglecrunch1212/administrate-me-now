@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from adminme.provider_write_reconciliation import apply_triage_provider_reconciliation
+
 import json
 from datetime import datetime, timezone
 from typing import Any
 
 import sqlcipher3
+
+from adminme.communication_intake_policy import (
+    POLICY_EVENT_KEY,
+    POLICY_EVENT_TYPE,
+    POLICY_ID,
+    passive_proposal_producer,
+)
 
 from adminme.context_fabric import (
     evidence_state,
@@ -897,10 +906,54 @@ def _insert(
     )
 
 
+def _passive_proposal_blocked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> bool:
+    """A recorded epoch blocks late producers even across historical replay."""
+    if not passive_proposal_producer(envelope):
+        return False
+    return (
+        conn.execute(
+            "SELECT 1 FROM triage_communication_intake_policy WHERE tenant_id=?",
+            (envelope["tenant_id"],),
+        ).fetchone()
+        is not None
+    )
+
+
 def _apply_triage_proposed(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
+    if _passive_proposal_blocked(envelope, conn):
+        return
     payload = envelope["payload"]
+    if payload.get("parent_intent_id") and envelope.get("source_adapter") == (
+        "member-intent-hybrid-v2"
+    ):
+        parent = conn.execute(
+            """SELECT state, resolved_by, resolution_reason,
+                      content_revision_event_id, proposal_event_id
+                 FROM triage_items
+                WHERE tenant_id=? AND proposal_id=? AND source_kind='member_intent'
+                  AND owner_member_id=? AND source_event_id=?
+                  AND owner_scope=? AND visibility_scope=?""",
+            (
+                envelope["tenant_id"],
+                payload["parent_intent_id"],
+                payload["owner_member_id"],
+                payload["source_event_id"],
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
+            ),
+        ).fetchone()
+        if parent is None or parent[3] != parent[4]:
+            return
+        if parent[0] != "pending_interpretation" and not (
+            parent[0] == "dismissed"
+            and parent[1] == "system:deterministic-extractor"
+            and parent[2] == "candidates_extracted"
+        ):
+            return
     # Replay first appends a revision-bound supersession and then the current
     # replacement. If member action won the append race, compare-and-apply
     # leaves the predecessor at its member-owned revision. Do not project a
@@ -989,17 +1042,71 @@ def _apply_intent_submitted(
         source_kind="member_intent",
         target_kind=payload.get("kind_hint"),
         owner_member_id=payload["member_id"],
-        title=payload["text"],
+        title=payload["text"][:1000],
         candidate={
             "exact_text": payload["text"],
             "linked_source_event_id": payload.get("source_event_id"),
             "source_surface": payload["source_surface"],
+            "submission_kind": payload.get("submission_kind", "manual"),
+            "evidence_complete": payload.get("evidence_complete", True),
+            "evidence_issues": list(payload.get("evidence_issues") or []),
+            "intake_channel": payload.get("intake_channel"),
         },
         route={"member_id": payload["member_id"]},
         source_event_id=envelope["event_id"],
         confidence=None,
         reasons=["member_submitted_for_review"],
         state="pending_interpretation",
+    )
+
+
+def _apply_submission_features(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Expose interpretation coverage without acquiring member content authority."""
+    if envelope.get("source_adapter") != "member-intent-hybrid-v2":
+        return
+    payload = envelope["payload"]
+    held = envelope["type"] == "triage.intent.publication_held"
+    row = conn.execute(
+        """SELECT candidate_json FROM triage_items
+             WHERE tenant_id=? AND proposal_id=? AND source_kind='member_intent'
+               AND source_event_id=? AND owner_scope=? AND visibility_scope=?
+               AND state='pending_interpretation'
+               AND content_revision_event_id=proposal_event_id""",
+        (
+            envelope["tenant_id"],
+            payload["intent_id"],
+            payload["source_event_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+        ),
+    ).fetchone()
+    if row is None:
+        return
+    candidate = json.loads(row[0])
+    candidate["submission_status"] = {
+        "extraction_state": "publication_held" if held else payload["extraction_state"],
+        "assessment_outcome": "held_for_review"
+        if held
+        else payload.get("assessment_outcome"),
+        "reason_codes": [payload["reason"]]
+        if held
+        else list(payload.get("reason_codes") or []),
+    }
+    conn.execute(
+        """UPDATE triage_items SET candidate_json=?, extraction_event_id=?, last_event_id=?
+             WHERE tenant_id=? AND proposal_id=? AND last_event_id < ?
+               AND state='pending_interpretation'
+               AND content_revision_event_id=proposal_event_id""",
+        (
+            _json(candidate),
+            envelope["event_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["intent_id"],
+            envelope["event_id"],
+        ),
     )
 
 
@@ -1034,6 +1141,8 @@ def _apply_household_action(
 def _apply_commitment_proposed(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
+    if _passive_proposal_blocked(envelope, conn):
+        return
     payload = envelope["payload"]
     _insert(
         envelope,
@@ -1692,7 +1801,22 @@ def _index_canonical(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> N
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     event_type = envelope["type"]
     payload = envelope["payload"]
-    if event_type in _CANONICAL_EVENT_FIELDS:
+    if event_type == POLICY_EVENT_TYPE:
+        if (
+            envelope.get("source_adapter") == "communication-intake-policy"
+            and envelope.get("source_account_id") == "system"
+            and envelope.get("idempotency_key") == POLICY_EVENT_KEY
+            and envelope.get("owner_scope") == "shared:household"
+            and envelope.get("visibility_scope") == "shared:household"
+            and payload.get("policy_id") == POLICY_ID
+            and payload.get("automatic_personal_obligations_enabled") is False
+        ):
+            conn.execute(
+                "INSERT OR IGNORE INTO triage_communication_intake_policy "
+                "(tenant_id, policy_event_id) VALUES (?, ?)",
+                (envelope["tenant_id"], envelope["event_id"]),
+            )
+    elif event_type in _CANONICAL_EVENT_FIELDS:
         _index_canonical(envelope, conn)
     elif event_type == "triage.item.proposed":
         _apply_triage_proposed(envelope, conn)
@@ -1713,6 +1837,11 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _apply_reconciliation(envelope, conn)
     elif event_type == "triage.intent.submitted":
         _apply_intent_submitted(envelope, conn)
+    elif event_type in {
+        "triage.intent.features_extracted",
+        "triage.intent.publication_held",
+    }:
+        _apply_submission_features(envelope, conn)
     elif event_type == "household.action.proposed":
         _apply_household_action(envelope, conn)
     elif event_type == "identity.merge_suggested":
@@ -1843,6 +1972,8 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
                     envelope["event_id"],
                 ),
             )
+    elif event_type == "external_sync.write_reconciled":
+        apply_triage_provider_reconciliation(envelope, conn)
     elif event_type == "external_sync.write_failed":
         proposal_id = payload.get("origin_proposal_id")
         if proposal_id:

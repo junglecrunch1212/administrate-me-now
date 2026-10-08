@@ -52,9 +52,11 @@ adapters:
       ownership_attested: true
       channel_id: channel:chief-of-staff:gmail
       trusted_sender_routes:
-        - exact_from_identifier: member-a@example.invalid
+        - authentication_policy: receiver_aligned_sender
+          exact_from_identifier: member-a@example.invalid
           route_key: route:1111111111111111111111111111111111111111111111111111111111111111
-        - exact_from_identifier: member-b@example.invalid
+        - authentication_policy: receiver_aligned_sender
+          exact_from_identifier: member-b@example.invalid
           route_key: route:2222222222222222222222222222222222222222222222222222222222222222
 
   - id: cos-google-calendar-read

@@ -217,6 +217,7 @@ class SourceAssessmentRecoveryRefusedV1(BaseModel):
         "assessment_not_failed",
         "failure_reason_changed",
         "failure_not_retryable",
+        "explicit_member_submission_required",
     ]
     policy: Literal["source-assessment-recovery-v1"]
 

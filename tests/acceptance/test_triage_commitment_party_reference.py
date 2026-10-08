@@ -230,6 +230,8 @@ def test_recorded_g06_requires_explicit_visible_party_without_losing_the_promise
     calls = _recorded_transport(monkeypatch)
     config = application.RuntimeSettings.credential_free(
         tmp_path / "instance",
+        # Preserve this isolated historical passive-extraction contract.
+        legacy_personal_obligation_compatibility=True,
         encryption_key=b"p" * 32,
         repository_root=ROOT,
         member_identities={HEADERS["Tailscale-User-Login"]: MEMBER},

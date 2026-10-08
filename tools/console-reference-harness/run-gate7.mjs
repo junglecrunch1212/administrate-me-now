@@ -158,7 +158,7 @@ async function waitForServer(baseUrl) {
   throw new Error(`Gate 7 fixture server did not become ready at ${baseUrl}`);
 }
 
-async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false) {
+async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
@@ -175,6 +175,7 @@ async function startServer(port, modelConfigured, attentionEnabled = false, boun
         ADMINME_GATE7_VISUAL_NOW: fixedNow,
         ADMINME_GATE7_ATTENTION_ENABLED: attentionEnabled ? "1" : "0",
         ADMINME_GATE7_BOUNDED_SAMPLE: boundedSample ? "1" : "0",
+        ADMINME_GATE7_EXPLICIT_SUBMISSIONS: explicitSubmissions ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1860,18 +1861,51 @@ async function run() {
     await auditTriageSourceControls({ page: attentionBrowser.page, baseUrl: attentionServer.baseUrl, record, screenshot, auditAccessibility });
     await closePageContext(attentionBrowser);
 
-    boundedServer = await startServer(basePort + 3, true, true, true);
+    boundedServer = await startServer(basePort + 3, true, true, true, true);
     for (const width of [1440, 390]) {
       const boundedBrowser = await newContext(browser, identities.principal, { width, height: 1000 });
+      if (width === 1440) {
+        const seeded = await boundedBrowser.page.request.post(`${boundedServer.baseUrl}/__gate7/seed-attention-sources`);
+        record("Current-policy source fixtures are retained without enabling extraction", seeded.ok());
+        const settled = await boundedBrowser.page.request.post(`${boundedServer.baseUrl}/__gate7/settle`);
+        record("Current-policy source fixtures settle", settled.ok());
+      }
       await boundedBrowser.page.goto(`${boundedServer.baseUrl}/member/settings?section=source-context`, { waitUntil: "networkidle" });
       await boundedBrowser.page.getByRole("heading", { name: "Choose what needs you." }).waitFor();
       const sampleNotice = boundedBrowser.page.getByText(/^Bounded test sample: 2 selected messages/);
       await sampleNotice.waitFor();
       const copy = await sampleNotice.textContent();
       record(`Bounded sample scope is visible at ${width}`, await sampleNotice.isVisible() && copy.includes("lifetime limit of 200") && copy.includes("including Sent and thread context") && copy.includes("does not cover the whole mailbox"), copy);
-      record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).isVisible());
+      record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).first().isVisible());
+      record(`Member-forwarded intake is explained at ${width}`, (await boundedBrowser.page.locator(".candidate-policy-intro").textContent()).includes("You are the gate: forward selected email"));
+      const passiveCard = boundedBrowser.page.locator(".source-attention-card").filter({ has: sampleNotice });
+      record(`Noneditable source offers no extraction controls at ${width}`, await passiveCard.locator("select, button").count() === 0 && (await passiveCard.textContent()).includes("It does not turn on obligation extraction"));
+      const sourceResponse = await boundedBrowser.page.request.get(`${boundedServer.baseUrl}/api/member/v1/surfaces/settings`);
+      const sourceSettings = await sourceResponse.json();
+      const editablePassive = sourceSettings.control.source_policy_v2.sources.filter((source) => source.configurable && source.explicit_submission_required);
+      record(`Current-policy fixture includes editable personal sources at ${width}`, sourceResponse.ok() && editablePassive.length > 0);
+      for (const source of editablePassive) {
+        const sourceCard = boundedBrowser.page.locator(`[data-source-policy-key="${source.policy_key}"]`);
+        const passiveChoice = sourceCard.locator('select[name="attention_mode"]');
+        record(`Passive extraction remains disabled for ${source.policy_key} at ${width}`, await passiveChoice.isDisabled() && await passiveChoice.inputValue() === "manual" && await sourceCard.locator(".source-purpose-settings, .source-similar-rule").count() === 0 && await sourceCard.getByRole("button", { name: "Preview recent effect", exact: true }).count() === 0);
+      }
+      record(`Member-forwarded controls fit at ${width}`, await boundedBrowser.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await auditAccessibility(boundedBrowser.page, `bounded sample ${width}`);
       await screenshot(boundedBrowser.page, `bounded-sample-${width}.png`);
+      await boundedBrowser.page.goto(`${boundedServer.baseUrl}/member/triage`, { waitUntil: "networkidle" });
+      await boundedBrowser.page.locator(".triage-overview").waitFor();
+      record(`Triage explains forwarding before review at ${width}`, (await boundedBrowser.page.locator(".triage-overview").textContent()).includes("Forward selected obligations to your CoS"));
+      await auditAccessibility(boundedBrowser.page, `forwarded triage ${width}`);
+      await screenshot(boundedBrowser.page, `forwarded-triage-${width}.png`);
+      await boundedBrowser.page.locator("#add-for-review").click();
+      const forwardedText = boundedBrowser.page.getByLabel("Thought to hold");
+      const oversized = "Selected source text. ".repeat(1700);
+      await forwardedText.fill(oversized);
+      record(`Oversized capture preserves text for correction at ${width}`, await forwardedText.inputValue() === oversized && !(await forwardedText.evaluate((node) => node.checkValidity())));
+      const boundedText = oversized.slice(0, 31970) + "\nCall the fixture office.";
+      await forwardedText.fill(boundedText);
+      record(`Full bounded capture is available beyond old display limit at ${width}`, await forwardedText.inputValue() === boundedText && await forwardedText.evaluate((node) => node.checkValidity()));
+      await boundedBrowser.page.getByRole("button", { name: "Close action" }).click();
       await closePageContext(boundedBrowser);
     }
     const otherBounded = await newContext(browser, identities.adult, { width: 390, height: 844 });

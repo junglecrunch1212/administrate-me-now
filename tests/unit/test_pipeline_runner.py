@@ -387,11 +387,23 @@ async def test_startup_reconciliation_is_bounded_terminal_and_checkpoint_free(
                 types=["source.assessment.recovery_refused"]
             )
         ]
-        assert {event["payload"]["request_event_id"] for event in refusals_after} == {
+        assert refusals_after == refusals_before
+        retired = [
+            event
+            async for event in log.read_since(
+                types=["communication_intake.command_retired"]
+            )
+        ]
+        assert {event["payload"]["command_event_id"] for event in retired} == {
             first_id,
             second_id,
-            terminal_id,
         }
+        assert all(
+            event["payload"]["reason"] == "explicit_member_submission_required"
+            and event["payload"]["language_called"] is False
+            and event["payload"]["candidate_count"] == 0
+            for event in retired
+        )
         status = await bus.subscriber_status("pipeline:pipeline:noise_filtering")
         assert status["checkpoint_event_id"] is None
     finally:
@@ -502,7 +514,13 @@ async def test_publication_startup_uses_headers_for_completed_plans_and_bounds_p
         raise AssertionError("publication recovery must never call a language skill")
 
     runner = PipelineRunner(
-        bus, log, EventWriter(log, bus), config, run_skill_fn=forbidden_skill
+        bus,
+        log,
+        EventWriter(log, bus),
+        config,
+        run_skill_fn=forbidden_skill,
+        # This test replays historical passive publication plans.
+        legacy_personal_obligation_compatibility=True,
     )
     invalidate_cache()
     pack = load_pipeline_pack(NOISE_FILTERING_ROOT)

@@ -48,6 +48,21 @@ function command(definition: OpenClawPluginCommandDefinition): OpenClawPluginCom
 export function registerCommands(api: OpenClawPluginApi, runtime: PluginRuntime): void {
   api.registerCommand(
     command({
+      name: "adminme-forward",
+      description: "Submit selected text to the CoS for extraction and private Triage review.",
+      acceptsArgs: true,
+      async handler(context) {
+        const text = context.args ?? "";
+        if (!text.trim()) return { text: "Usage: /adminme-forward <selected message or obligation>" };
+        if (text.length > 32_000) return { text: "This submission is too large. Submit a smaller selection for review." };
+        return invoke(runtime, context, "/api/openclaw/v1/submissions/forward", {
+          request_id: randomUUID(), text, consent: true,
+        });
+      },
+    }),
+  );
+  api.registerCommand(
+    command({
       name: "adminme-now",
       description: "Show my authorized What Now ranking.",
       handler: (context) => invoke(runtime, context, "/api/openclaw/v1/tools/what-now"),

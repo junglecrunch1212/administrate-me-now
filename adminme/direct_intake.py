@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import re
+import json
 from typing import Any, cast
 
 from adminme.events.envelope import EventEnvelope, Sensitivity
@@ -40,8 +40,8 @@ DIRECT_CHANNEL_READINESS: tuple[dict[str, Any], ...] = (
     },
     {
         "channel": "imessage",
-        "state": "planned_not_enrolled",
-        "production_adapter": False,
+        "state": "supported_not_enrolled",
+        "production_adapter": True,
     },
     {
         "channel": "sms",
@@ -59,7 +59,12 @@ DIRECT_CHANNEL_READINESS: tuple[dict[str, Any], ...] = (
 def public_direct_channel_readiness(
     channels: tuple[ServiceChannelAccount, ...],
 ) -> dict[str, Any]:
-    configured = {channel.provider: channel for channel in channels}
+    configured = {
+        (
+            "imessage" if channel.provider == "apple_imessage" else channel.provider
+        ): channel
+        for channel in channels
+    }
     rows: list[dict[str, Any]] = []
     for base in DIRECT_CHANNEL_READINESS:
         row = dict(base)
@@ -92,25 +97,44 @@ def public_direct_channel_readiness(
 
 
 class DirectIntakeProcessor:
-    CONSUMER_VERSION = "direct-intake-v1"
+    CONSUMER_VERSION = "direct-intake-v2-authenticated-submissions"
 
     def __init__(
         self,
         *,
         event_sink: EventSink,
+        event_log: Any,
         channels: tuple[ServiceChannelAccount, ...],
     ) -> None:
         self._event_sink = event_sink
+        self._event_log = event_log
         self._channels = {channel.channel_id: channel for channel in channels}
 
     @staticmethod
-    def _bounded_text(payload: dict[str, Any]) -> str:
-        parts = [payload.get("subject"), payload.get("body_text")]
-        text = "\n\n".join(
-            value.strip() for value in parts if isinstance(value, str) and value.strip()
-        )
-        text = re.sub(r"\s+", " ", text).strip()
-        return text[:2000] or "Direct message received for review."
+    def _submission_evidence(payload: dict[str, Any]) -> tuple[str, bool, list[str]]:
+        evidence = payload.get("submission_evidence")
+        if not isinstance(evidence, dict) or not isinstance(evidence.get("text"), str):
+            return (
+                "Forward received; source evidence needs clarification.",
+                False,
+                ["submission_evidence_unavailable"],
+            )
+        text = evidence["text"]
+        issues = list(evidence.get("issues") or [])
+        complete = evidence.get("complete") is True
+        if len(text) > 32_000:
+            text = text[:32_000]
+            issues.append("submission_text_exceeds_limit")
+            complete = False
+        if not text.strip():
+            text = "Forward received; source evidence needs clarification."
+            issues.append("submission_text_unavailable")
+            complete = False
+        if issues:
+            complete = False
+        if not complete and not issues:
+            issues.append("submission_evidence_incomplete")
+        return text, complete, list(dict.fromkeys(issues))[:20]
 
     @staticmethod
     def _now(envelope: dict[str, Any]) -> tuple[str, int]:
@@ -125,7 +149,7 @@ class DirectIntakeProcessor:
     async def handle(self, envelope: dict[str, Any]) -> None:
         if (
             envelope.get("type") != "messaging.received"
-            or int(envelope.get("schema_version") or 0) < 6
+            or int(envelope.get("schema_version") or 0) < 8
         ):
             return
         payload = envelope.get("payload") or {}
@@ -139,15 +163,36 @@ class DirectIntakeProcessor:
         ):
             raise ValueError("service intake source scope contradicts its owner")
 
+        source_event_id = str(envelope["event_id"])
+        if (
+            await self._event_log.get_by_idempotency(
+                str(envelope["tenant_id"]), f"direct-intake-route:{source_event_id}"
+            )
+            is not None
+        ):
+            # The first durable routing decision freezes ownership. A later
+            # route-table change must never recopy historical private content.
+            return
+
         channel_id = str(payload.get("channel_id") or "")
         channel = self._channels.get(channel_id)
         route_key = payload.get("trusted_route_key")
         provider = str(payload.get("provider") or payload.get("source_channel") or "")
+        account = str(payload.get("provider_account_id") or "")
+        account_reference = (
+            "provider-account:" + hashlib.sha256(account.encode("utf-8")).hexdigest()
+        )
         if (
             channel is None
             or channel.service_principal_id != service_id
             or channel.provider != provider
             or not channel.observation_active
+            or not channel.enrolled
+            or channel.state not in {"observation", "healthy", "degraded"}
+            or not account
+            or envelope.get("source_account_id") != account
+            or channel.provider_account_reference != account_reference
+            or payload.get("authenticated_member_route") is not True
             or not isinstance(route_key, str)
         ):
             route = {
@@ -167,7 +212,6 @@ class DirectIntakeProcessor:
                 route["visibility_scope"] = expected_service_scope
 
         occurred_at, event_at_ms = self._now(envelope)
-        source_event_id = str(envelope["event_id"])
         route_scope = str(route["route_scope"])
         target_id = route.get("routing_target_id")
         raw_sensitivity = envelope.get("sensitivity") or "normal"
@@ -176,14 +220,63 @@ class DirectIntakeProcessor:
         sensitivity = cast(Sensitivity, raw_sensitivity)
         cue_envelope: EventEnvelope | None = None
         cue_event_id: str | None = None
+        receipt_key: str | None = None
+        if route_scope == "member_private" and isinstance(target_id, str):
+            # Provider label/read revisions may emit a new observation event,
+            # but one native delivery is still one member submission. Keep its
+            # original snapshot/decision; a later edit cannot reopen reviewed work.
+            native_message_id = str(payload.get("native_message_id") or "")
+            if not native_message_id:
+                raise ValueError(
+                    "authenticated forward requires a native message identity"
+                )
+            receipt_seed = json.dumps(
+                [
+                    envelope["tenant_id"],
+                    provider,
+                    account,
+                    native_message_id,
+                ],
+                separators=(",", ":"),
+            )
+            receipt_key = (
+                "direct-intake-receipt:"
+                + hashlib.sha256(receipt_seed.encode()).hexdigest()
+            )
+            prior_cue = await self._event_log.get_by_idempotency(
+                str(envelope["tenant_id"]), receipt_key
+            )
+            if prior_cue is not None and (
+                prior_cue.get("owner_scope") != f"private:{target_id}"
+                or prior_cue.get("visibility_scope") != f"private:{target_id}"
+            ):
+                # Native-message revisions retain their original recipient even
+                # after a reviewed route is reassigned. Do not expose its cue ID.
+                route = {
+                    "state": "unresolved",
+                    "route_scope": "unresolved",
+                    "routing_target_id": None,
+                    "owner_scope": expected_service_scope,
+                    "visibility_scope": expected_service_scope,
+                    "content_exposed": False,
+                }
+                route_scope = "unresolved"
+                target_id = None
+            else:
+                cue_event_id = (
+                    str(prior_cue["event_id"]) if prior_cue is not None else None
+                )
         if route_scope == "member_private" and isinstance(target_id, str):
             cue_intent_id = f"direct-intake-cue:{source_event_id}"
-            text = self._bounded_text(payload)
+            assert receipt_key is not None
+            text, evidence_complete, evidence_issues = self._submission_evidence(
+                payload
+            )
             cue_envelope = EventEnvelope(
                 event_at_ms=event_at_ms,
                 tenant_id=str(envelope["tenant_id"]),
                 type="triage.intent.submitted",
-                schema_version=1,
+                schema_version=2,
                 occurred_at=occurred_at,
                 source_adapter="direct-intake",
                 source_account_id=str(envelope.get("source_account_id") or channel_id),
@@ -192,11 +285,15 @@ class DirectIntakeProcessor:
                 sensitivity=sensitivity,
                 correlation_id=str(envelope.get("correlation_id") or source_event_id),
                 causation_id=source_event_id,
-                idempotency_key=cue_intent_id,
+                idempotency_key=receipt_key,
                 payload={
                     "intent_id": cue_intent_id,
                     "member_id": target_id,
                     "text": text,
+                    "submission_kind": "member_forwarded",
+                    "evidence_complete": evidence_complete,
+                    "evidence_issues": evidence_issues,
+                    "intake_channel": provider,
                     "source_surface": "openclaw",
                     "kind_hint": None,
                     "source_event_id": source_event_id,
@@ -206,11 +303,12 @@ class DirectIntakeProcessor:
                     ).hexdigest()[:32],
                 },
             )
-            cue_event_id = await self._event_sink.write(
-                cue_envelope,
-                correlation_id=cue_envelope.correlation_id,
-                causation_id=source_event_id,
-            )
+            if cue_event_id is None:
+                cue_event_id = await self._event_sink.write(
+                    cue_envelope,
+                    correlation_id=cue_envelope.correlation_id,
+                    causation_id=source_event_id,
+                )
 
         authority = (
             "proposal_only"

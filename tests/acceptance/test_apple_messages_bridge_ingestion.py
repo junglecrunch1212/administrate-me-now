@@ -164,6 +164,7 @@ def _settings(
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER_A,
         reconciliation_admission_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

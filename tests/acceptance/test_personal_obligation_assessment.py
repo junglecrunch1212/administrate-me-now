@@ -239,6 +239,7 @@ def _settings(instance: Path) -> RuntimeSettings:
         fixture_member_id=MEMBER,
         reconciliation_admission_enabled=True,
         human_triage_management_enabled=True,
+        legacy_personal_obligation_compatibility=True,
     )
 
 

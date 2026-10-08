@@ -200,6 +200,13 @@ def main() -> None:
     member = "fixture-rollback-adult"  # fixture:tenant_data:ok
     settings = application.RuntimeSettings.credential_free(
         instance,
+        # Explicit legacy-only mode when this additive fixture seam exists.
+        **(
+            {"legacy_personal_obligation_compatibility": True}
+            if "legacy_personal_obligation_compatibility"
+            in application.RuntimeSettings.__dataclass_fields__
+            else {}
+        ),
         encryption_key=b"r" * 32,
         repository_root=root,
         member_identities={"rollback.ts.net": member},

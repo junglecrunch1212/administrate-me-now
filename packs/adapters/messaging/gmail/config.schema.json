@@ -108,13 +108,54 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["exact_from_identifier", "route_key"],
+        "required": [
+          "exact_from_identifier",
+          "route_key"
+        ],
         "properties": {
-          "exact_from_identifier": { "type": "string", "format": "email" },
-          "route_key": { "type": "string", "pattern": "^route:[0-9a-f]{32,64}$" }
-        }
+          "exact_from_identifier": {
+            "type": "string",
+            "format": "email"
+          },
+          "route_key": {
+            "type": "string",
+            "pattern": "^route:[0-9a-f]{32,64}$"
+          },
+          "authentication_policy": {
+            "type": "string",
+            "enum": [
+              "receiver_aligned_sender",
+              "exact_dkim_identity"
+            ],
+            "description": "Explicit owner-reviewed receiver trust policy; both require Gmail receiver-added aligned DKIM and DMARC pass."
+          },
+          "exact_authenticated_identifier": {
+            "type": "string",
+            "format": "email",
+            "description": "For exact_dkim_identity, full signed mailbox identity required in DKIM header.i and equal to reviewed From."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "authentication_policy": {
+                  "const": "exact_dkim_identity"
+                }
+              },
+              "required": [
+                "authentication_policy"
+              ]
+            },
+            "then": {
+              "required": [
+                "exact_authenticated_identifier"
+              ]
+            }
+          }
+        ]
       },
-      "description": "Exact authenticated sender metadata to reviewed opaque route keys; content and display names are never consulted."
+      "description": "Reviewed exact sender routes. Missing authentication_policy fails closed. Receiver-aligned sender means authenticated sending domain plus reviewed From; it is not proof of a human identity. Source content grants no provider authority."
     },
     "initial_backfill_days": {
       "type": "integer",

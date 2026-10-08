@@ -847,6 +847,7 @@ def _context(
         observation_manager=observation or _Observation(),  # type: ignore[arg-type]
         triggering_event_id=request_id,
         correlation_id="fixture-recovery",
+        legacy_personal_obligation_compatibility=True,
     )
 
 

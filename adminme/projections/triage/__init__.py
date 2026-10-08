@@ -23,9 +23,10 @@ from adminme.triage_review import proposal_source_id, triage_review_state
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 12
+    version = 13
     replay_retained_events_on_version_change = True
     subscribes_to = [
+        "communication_intake.policy_applied",
         "triage.item.proposed",
         "triage.item.enriched",
         "triage.item.confirmed",
@@ -41,6 +42,7 @@ class TriageProjection(Projection):
         "triage.reconciliation.decided",
         "triage.intent.submitted",
         "triage.intent.features_extracted",
+        "triage.intent.publication_held",
         "household.action.proposed",
         "identity.merge_suggested",
         "commitment.proposed",
@@ -51,6 +53,7 @@ class TriageProjection(Projection):
         "external_sync.write_requested",
         "external_sync.write_completed",
         "external_sync.write_failed",
+        "external_sync.write_reconciled",
         "task.created",
         "recurrence.added",
         "calendar.event_added",
@@ -66,6 +69,7 @@ class TriageProjection(Projection):
     # by this projection; version/checkpoint metadata and the event log are not
     # part of the reset.
     replay_tables = (
+        "triage_communication_intake_policy",
         "triage_attention_observations",
         "triage_attention_rule_history",
         "triage_attention_feedback",
@@ -101,6 +105,10 @@ class TriageProjection(Projection):
         handlers.apply_event(envelope, conn)
 
     def migrate_schema(self, conn: Any) -> None:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS triage_communication_intake_policy "
+            "(tenant_id TEXT PRIMARY KEY, policy_event_id TEXT NOT NULL)"
+        )
         info = list(conn.execute("PRAGMA table_info(triage_items)"))
         columns = {row[1]: row for row in info}
         if "interpretation_json" not in columns:

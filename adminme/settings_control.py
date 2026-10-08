@@ -2317,6 +2317,12 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         and private_owner_visible
         and entry["config"].get("member_id") == view_id
     }
+    explicit_submissions = not runtime.settings.legacy_personal_obligation_compatibility
+    passive_source_ids = {
+        str(source["id"])
+        for source in SOURCE_CATALOG
+        if source["group"] == "Messages and conversations"
+    }
     candidate_sources: list[dict[str, Any]] = []
     for source in SOURCE_CATALOG:
         source_id = str(source["id"])
@@ -2337,6 +2343,8 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
                 **copy.deepcopy(source),
                 "availability": availability,
                 "policy": policy,
+                "explicit_submission_required": explicit_submissions
+                and source_id in passive_source_ids,
             }
         )
     source_policy_owner_visible = auth_id == view_id
@@ -2345,6 +2353,12 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         if source_policy_owner_visible
         else []
     )
+    for source in source_policy_sources:
+        source["explicit_submission_required"] = explicit_submissions and (
+            source.get("source_kind") in passive_source_ids
+            or (source.get("coordinate") or {}).get("source_class")
+            == "passive_communication"
+        )
     source_policy_migrations = (
         runtime.settings_control.source_policy_v2_migrations(auth_id, state=state)
         if source_policy_owner_visible
@@ -2500,6 +2514,7 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             ],
         },
         "source_policy_v2": {
+            "explicit_communication_submissions": explicit_submissions,
             "contract": "per-principal-per-source-policy-v2",
             "owner_only": True,
             "owner_visible": source_policy_owner_visible,

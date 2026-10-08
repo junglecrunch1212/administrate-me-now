@@ -240,6 +240,7 @@ async def test_commitment_extraction_emits_proposed_for_above_threshold(
         EventWriter(log, bus),
         config,
         parties_conn_factory=lambda: _open_parties_conn(parties_db),
+        legacy_personal_obligation_compatibility=True,
     )
     pack = load_pipeline_pack(COMMITMENT_PACK_ROOT)
     runner.register(pack)
@@ -310,6 +311,7 @@ async def test_commitment_extraction_emits_suppressed_for_below_threshold(
         EventWriter(log, bus),
         config,
         parties_conn_factory=lambda: _open_parties_conn(parties_db),
+        legacy_personal_obligation_compatibility=True,
     )
     pack = load_pipeline_pack(COMMITMENT_PACK_ROOT)
     runner.register(pack)
@@ -382,6 +384,7 @@ async def test_commitment_extraction_emits_suppressed_on_skill_timeout(
         EventWriter(log, bus),
         config,
         parties_conn_factory=lambda: _open_parties_conn(parties_db),
+        legacy_personal_obligation_compatibility=True,
     )
     pack = load_pipeline_pack(COMMITMENT_PACK_ROOT)
     runner.register(pack)

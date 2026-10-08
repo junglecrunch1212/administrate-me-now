@@ -20,7 +20,13 @@ import sqlcipher3
 import yaml
 from fastapi.testclient import TestClient
 
-from adminme.demo import FIXTURE_MEMBER_ID
+from adminme.demo import (
+    FIXTURE_MEMBER_EMAIL,
+    FIXTURE_MEMBER_ID,
+    FIXTURE_SENDER_EMAIL,
+    FIXTURE_SENDER_ID,
+    canonical_seed_events,
+)
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
@@ -125,7 +131,7 @@ def _required_reactive_pipeline_ids(root: Path) -> set[str]:
 
 
 def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
-    """Exercise message -> review -> workbook -> completion -> what-now."""
+    """Exercise member submission -> review -> workbook -> completion -> what-now."""
     repo = (root or repository_root()).resolve()
     with tempfile.TemporaryDirectory(prefix="adminme-doctor-proof-") as temp_dir:
         instance = Path(temp_dir) / "instance"
@@ -154,30 +160,111 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
         }
         with TestClient(app) as client:
             assert client.portal is not None
-            message = client.post(
-                "/api/comms/v1/demo/canonical-message",
+            runtime = app.state.runtime
+
+            async def observe_fixture_message() -> str:
+                seed_ids = await runtime.events.write_batch(
+                    canonical_seed_events(settings.instance.tenant_id)
+                )
+                await runtime.wait_for_projection("parties", seed_ids[5])
+                await runtime.wait_for_projection("tasks", seed_ids[-1])
+                source_id = await runtime.fixture_adapter.emit_canonical_message(
+                    native_message_id="doctor-native-001",
+                    sender=FIXTURE_SENDER_EMAIL,
+                    recipient=FIXTURE_MEMBER_EMAIL,
+                    body="Could you reply today with the fixture household update?",
+                    received_at="2026-07-30T12:05:00Z",
+                )
+                for pipeline in (
+                    "identity_resolution",
+                    "commitment_extraction",
+                    "noise_filtering",
+                    "thank_you_detection",
+                ):
+                    await runtime.wait_for_subscriber(
+                        f"pipeline:pipeline:{pipeline}", source_id
+                    )
+                derived = await runtime.event_log.get_by_causation(source_id)
+                interaction_events = [
+                    event["event_id"]
+                    for event in derived
+                    if event["type"] == "interaction.participant_resolved"
+                ]
+                await runtime.wait_for_projection(
+                    "interactions", max([source_id, *interaction_events])
+                )
+                passive_work = [
+                    event
+                    async for event in runtime.event_log.read_since(
+                        types=[
+                            "commitment.proposed",
+                            "triage.item.proposed",
+                            "skill.call.recorded",
+                            "skill.call.failed",
+                        ]
+                    )
+                ]
+                if passive_work:
+                    raise RuntimeError(
+                        "Doctor passive source unexpectedly started obligation work"
+                    )
+                return source_id
+
+            source_id = client.portal.call(observe_fixture_message)
+            captured = client.post(
+                "/api/member/v1/triage/intents",
                 headers=headers,
                 json={
-                    "request_id": "doctor-message",
-                    "native_message_id": "doctor-native-001",
-                    "body": "Could you reply today with the fixture household update?",
-                    "received_at": "2026-07-30T12:05:00Z",
+                    "client_request_id": "doctor-explicit-forward",
+                    "source_surface": "triage",
+                    "source_event_id": source_id,
+                    "text": "I promised to send the household update today",
                 },
             )
-            if message.status_code != 200:
-                raise RuntimeError("canonical message fixture failed")
-            commitment_id = message.json()["output"]["commitment_id"]
+            if (
+                captured.status_code != 202
+                or len(captured.json().get("proposal_ids", [])) != 1
+            ):
+                raise RuntimeError("canonical explicit submission fixture failed")
+            proposal_id = captured.json()["proposal_ids"][0]
             pending = client.get(
-                "/api/comms/v1/commitments/pending", headers=headers
+                "/api/member/v1/surfaces/triage", headers=headers
             ).json()["items"]
-            proposal = next(
-                row for row in pending if row["commitment_id"] == commitment_id
-            )
-            dashboard = client.get("/api/core/v1/triage", headers=headers).json()
-            dashboard_visible = any(
-                item.get("id") == commitment_id for item in dashboard["items"]
-            )
+            proposal = next(row for row in pending if row["proposal_id"] == proposal_id)
+            dashboard_visible = proposal["target_kind"] == "commitment"
             before = client.get("/api/core/v1/what-now", headers=headers).json()
+            enriched = client.post(
+                f"/api/member/v1/triage/{proposal_id}/enrich",
+                headers=headers,
+                json={
+                    "request_id": "doctor-complete-candidate",
+                    "expected_last_event_id": proposal["last_event_id"],
+                    "candidate_updates": {
+                        "owed_to_party_id": FIXTURE_SENDER_ID,
+                        "urgency": "today",
+                    },
+                },
+            )
+            if enriched.status_code != 200:
+                raise RuntimeError("canonical member enrichment fixture failed")
+            confirmed = client.post(
+                f"/api/member/v1/triage/{proposal_id}/approve",
+                headers=headers,
+                json={
+                    "request_id": "doctor-confirm-candidate",
+                    "expected_last_event_id": enriched.json()["triage"][
+                        "last_event_id"
+                    ],
+                },
+            )
+            if confirmed.status_code != 200:
+                raise RuntimeError("canonical member review fixture failed")
+            commitment_id = f"triage_commitment_{proposal_id}"
+            approved = {
+                "commitment": client.get(
+                    f"/api/core/v1/commitments/{commitment_id}", headers=headers
+                ).json()
+            }
             delegation = client.post(
                 "/api/member/v1/cos/delegations",
                 headers=headers,
@@ -189,12 +276,31 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             )
             if delegation.status_code != 201:
                 raise RuntimeError("canonical CoS delegation fixture failed")
+            interactions = client.get(
+                "/api/comms/v1/interactions", headers=headers
+            ).json()["items"]
+            interaction = next(
+                row
+                for row in interactions
+                if row["interaction_id"] == f"ix_{source_id}"
+            )
+            command_id = "doctor-acknowledgement"
+            acknowledgement = client.post(
+                f"/api/member/v1/comms/ix_{source_id}/commands",
+                headers=headers,
+                json={
+                    "request_id": command_id,
+                    "operation": "reply",
+                    "expected_last_event_id": interaction["last_event_id"],
+                    "body": "Acknowledgement approved by the fixture member.",
+                },
+            )
+            if acknowledgement.status_code != 200:
+                raise RuntimeError("canonical acknowledgement approval fixture failed")
             review_params = {
-                "request_id": "doctor-approve",
-                "action": "approve",
-                "commitment_id": commitment_id,
-                "expected_last_event_id": proposal["last_event_id"],
-                "send_acknowledgement": True,
+                "domain_approval_event_id": acknowledgement.json()[
+                    "domain_approval_event_id"
+                ]
             }
             request_fingerprint = hashlib.sha256(
                 json.dumps(
@@ -208,7 +314,7 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             signature = sign_approval_receipt(
                 shared_secret,
                 receipt_id=receipt_id,
-                tool_name="administrateme_review",
+                tool_name="administrateme_execute_pending_provider_action",
                 request_fingerprint=request_fingerprint,
                 issued_at_ms=issued_at_ms,
                 expires_at_ms=expires_at_ms,
@@ -221,7 +327,7 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
                 headers=openclaw_headers,
                 json={
                     "receipt_id": receipt_id,
-                    "tool_name": "administrateme_review",
+                    "tool_name": "administrateme_execute_pending_provider_action",
                     "request_fingerprint": request_fingerprint,
                     "issued_at_ms": issued_at_ms,
                     "expires_at_ms": expires_at_ms,
@@ -234,7 +340,7 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             if resolved_receipt.status_code != 200:
                 raise RuntimeError("OpenClaw approval receipt fixture failed")
             approved_response = client.post(
-                "/api/openclaw/v1/tools/review",
+                "/api/openclaw/v1/tools/execute-pending-provider-action",
                 headers=openclaw_headers,
                 json={
                     "provenance": {
@@ -257,8 +363,6 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             )
             if approved_response.status_code != 200:
                 raise RuntimeError("canonical review fixture failed")
-            approved = approved_response.json()
-            command_id = f"commitment-ack:{commitment_id}:doctor-approve"
             terminal = None
             for _ in range(100):
                 terminal = client.portal.call(
@@ -306,7 +410,9 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
                 "/api/member/v1/chat/status", headers=headers
             ).json()
             return {
-                "message_state": message.json()["output"]["state"],
+                "message_state": "proposal_only",
+                "explicit_member_submission": captured.json()["accepted"],
+                "passive_obligation_candidates": 0,
                 "dashboard_review_visible": dashboard_visible,
                 "review_suppressed_by_observation": bool(
                     terminal["payload"].get("suppressed")
@@ -918,6 +1024,8 @@ class Doctor:
                 proof = synthetic_round_trip(self.root)
                 proof_ok = (
                     proof["message_state"] == "proposal_only"
+                    and proof["explicit_member_submission"]
+                    and proof["passive_obligation_candidates"] == 0
                     and proof["dashboard_review_visible"]
                     and proof["review_suppressed_by_observation"]
                     and proof["completion_state"] == "done"
@@ -939,7 +1047,7 @@ class Doctor:
                 DoctorCheck(
                     "canonical_synthetic_round_trip",
                     proof_ok,
-                    "message, review, portal, chat seam, dashboard, workbook, completion, recalculation, and rebuild passed"
+                    "explicit submission, review, portal, chat seam, dashboard, workbook, completion, recalculation, and rebuild passed"
                     if proof_ok
                     else "canonical proof failed",
                     "Keep observation on and run the focused acceptance test.",
