@@ -31,7 +31,13 @@ def test_real_runtime_exports_fresh_audits_without_attesting_expired_recovery(
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
     paths.create()
-    settings = _strict_settings(paths.root)
+    # The base strict fixture enables chat without a provider. Supply its
+    # existing no-network transport so only readiness attestations are blocked.
+    settings = replace(
+        _strict_settings(paths.root),
+        openclaw_model_configured=True,
+        deterministic_member_chat_fixture=True,
+    )
     paths = replace(paths, instance_dir=settings.instance.instance_dir)
     original_window = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
     stale = (datetime.now(timezone.utc) - timedelta(days=32)).isoformat()
@@ -104,6 +110,13 @@ def test_real_runtime_exports_fresh_audits_without_attesting_expired_recovery(
             "observation_effects",
         }
         assert diagnostics["service_ready"] is True
+        assert diagnostics["capabilities"]["openclaw:member-chat"]["state"] == "healthy"
+        unexpected_capabilities = {
+            name: row["state"]
+            for name, row in diagnostics["capabilities"].items()
+            if row["state"] not in {"healthy", "observation_only", "disabled"}
+        }
+        assert unexpected_capabilities == {}
         count_before = client.portal.call(runtime.event_log.count)
         monkeypatch.setattr(
             ServiceManager, "runtime_diagnostics", lambda _self: diagnostics

@@ -36,7 +36,7 @@ def resolve_communication_intake_release(
     policies = application.get("supported_communication_intake_policies")
     default = application.get("default_communication_intake_policy")
     role = application.get("communication_intake_release_role")
-    if policies != [POLICY_ID]:
+    if not isinstance(policies, list) or policies != [POLICY_ID]:
         raise ValueError("communication intake release support is invalid")
     if default == POLICY_ID and role in (None, "cutover"):
         return CommunicationIntakeRelease("cutover", POLICY_ID, frozenset(policies))
