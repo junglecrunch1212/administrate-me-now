@@ -196,6 +196,7 @@ def _settings(tmp_path: Path, config: dict[str, Any]) -> RuntimeSettings:
     instance.mkdir(exist_ok=True)
     return RuntimeSettings.credential_free(
         instance,
+        legacy_personal_obligation_compatibility=True,
         encryption_key=b"s" * 32,
         repository_root=ROOT,
         member_identities={"bounded-a.ts.net": MEMBER, "bounded-b.ts.net": OTHER},

@@ -97,6 +97,7 @@ from adminme.service_identities import (
     COS_PARTY_ID,
     COS_SERVICE_PRINCIPAL_ID,
     DelegationPermission,
+    cos_message_channel_for_account,
 )
 
 router = APIRouter(prefix="/api/openclaw/v1", tags=["openclaw"])
@@ -3240,32 +3241,17 @@ async def forward_for_review(
         raise HTTPException(
             422, "channel submission requires its native receipt identity"
         )
-    provider_by_transport = {
-        "imessage": "apple_imessage",
-        "bluebubbles": "apple_imessage",
-    }
-    provider = provider_by_transport.get(provenance.channel_id)
-    if provider is None or not provenance.account_id:
-        raise HTTPException(403, "this channel is not a supported CoS forward endpoint")
     runtime = _runtime(request)
-    account_reference = (
-        "provider-account:" + hashlib.sha256(provenance.account_id.encode()).hexdigest()
+    channel = cos_message_channel_for_account(
+        runtime.settings.service_channel_accounts,
+        transport_channel_id=provenance.channel_id,
+        account_id=provenance.account_id or "",
     )
-    channels = [
-        channel
-        for channel in runtime.settings.service_channel_accounts
-        if channel.provider in {provider, "imessage"}
-        and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
-        and channel.provider_account_reference == account_reference
-        and channel.enrolled
-        and channel.observation_active
-        and channel.state in {"observation", "healthy", "degraded"}
-    ]
-    if len(channels) != 1:
+    if channel is None:
         raise HTTPException(
             403, "exact enrolled service channel binding is unavailable"
         )
-    channel = channels[0]
+    assert provenance.account_id is not None
     if (
         body.submission_gesture == "dedicated_intake"
         and channel.intake_mode != "member_submission"

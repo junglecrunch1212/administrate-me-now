@@ -1883,6 +1883,15 @@ async function run() {
       record(`Triage explains forwarding before review at ${width}`, (await boundedBrowser.page.locator(".triage-overview").textContent()).includes("Forward selected obligations to your CoS"));
       await auditAccessibility(boundedBrowser.page, `forwarded triage ${width}`);
       await screenshot(boundedBrowser.page, `forwarded-triage-${width}.png`);
+      await boundedBrowser.page.locator("#add-for-review").click();
+      const forwardedText = boundedBrowser.page.getByLabel("Thought to hold");
+      const oversized = "Selected source text. ".repeat(1700);
+      await forwardedText.fill(oversized);
+      record(`Oversized capture preserves text for correction at ${width}`, await forwardedText.inputValue() === oversized && !(await forwardedText.evaluate((node) => node.checkValidity())));
+      const boundedText = oversized.slice(0, 31970) + "\nCall the fixture office.";
+      await forwardedText.fill(boundedText);
+      record(`Full bounded capture is available beyond old display limit at ${width}`, await forwardedText.inputValue() === boundedText && await forwardedText.evaluate((node) => node.checkValidity()));
+      await boundedBrowser.page.getByRole("button", { name: "Close action" }).click();
       await closePageContext(boundedBrowser);
     }
     const otherBounded = await newContext(browser, identities.adult, { width: 390, height: 844 });

@@ -126,6 +126,36 @@ async def test_append_with_explicit_event_id(log: EventLog) -> None:
     assert got is not None and got["event_id"] == custom_id
 
 
+async def test_restart_restores_native_id_floor_despite_older_clock_and_opaque_ids(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "future-event-log.db"
+    original = EventLog(path, TEST_KEY)
+    future = 2_022_408_000_000
+    try:
+        first = await original.append(_event(1, event_at_ms=future))
+        second = await original.append(_event(2, event_at_ms=future))
+        # Neither lexically later opaque IDs nor lookalikes can seed the native
+        # generator; historical callers can still retrieve them unchanged.
+        for legacy in ("legacy-z", "ev_ZZZZZZZZZZZZZ!", "ev_short", "f" * 36):
+            await original.append(_event(3, event_id=legacy, event_at_ms=future))
+    finally:
+        await original.close()
+    restored = EventLog(path, TEST_KEY)
+    try:
+        third = await restored.append(_event(4, event_at_ms=future - 1_000_000))
+        fourth = await restored.append(_event(5, event_at_ms=future))
+        assert first < second < third < fourth
+        assert [
+            event["event_id"]
+            for event in await _collect(restored)
+            if event["payload"]["i"] in {1, 2, 4, 5}
+        ] == [first, second, third, fourth]
+        assert await restored.get("ev_ZZZZZZZZZZZZZ!") is not None
+    finally:
+        await restored.close()
+
+
 async def test_append_batch_atomic(log: EventLog) -> None:
     batch = [_event(i) for i in range(100)]
     ids = await log.append_batch(batch)

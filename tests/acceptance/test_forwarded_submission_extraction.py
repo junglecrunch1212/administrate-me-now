@@ -7,9 +7,12 @@ barrier run unchanged. No connected account or live member device is used.
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import time
+from threading import Event
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +22,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from adminme.events.envelope import EventEnvelope
+from adminme.direct_intake import DirectIntakeProcessor
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.runtime.application import create_application
 from tests.acceptance.test_service_owned_cos_sources_direct_intake import (
@@ -37,6 +41,7 @@ from tests.acceptance.test_triage_vertical_slice import (
     OPENCLAW_VERSION,
     SECRET,
     _events,
+    _grant_cos_private_context,
     _provenance,
     _settings as triage_settings,
 )
@@ -200,13 +205,14 @@ def test_full_forward_after_long_evidence_routes_only_after_both_approvals(
     app = create_application(_settings(instance))
     with TestClient(app) as client:
         runtime = app.state.runtime
+        _grant_cos_private_context(client, "forwarded-obligation-cos-context")
         calls: list[str] = []
         appointment = (
             "appointment on 2031-01-05T14:00:00+00:00 until 2031-01-05T15:00:00+00:00"
         )
         ending = "\nCall the school office; " + appointment
         background = "Preserved background details\n" * 1200
-        text = background[:32_000 - len(ending)] + ending
+        text = background[: 32_000 - len(ending)] + ending
 
         async def language(
             skill: str, inputs: dict[str, Any], *args: Any, **kwargs: Any
@@ -406,6 +412,33 @@ def test_incomplete_or_ambiguous_calendar_forward_requires_clarification(
                 if row["proposal_id"] == cue["payload"]["intent_id"]
             )["candidate"]["submission_status"]["assessment_outcome"]
             == "quarantined"
+        )
+
+
+def test_candidate_limit_retains_whole_forward_for_clarification(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "candidate-limit"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+
+        async def language(*args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(output={"candidates": []})
+
+        runtime.run_skill_fn = language
+        text = "; ".join(f"Call the office about form {index}" for index in range(21))
+        _, cue = _forward(client, "candidate-limit", text)
+        assert cue["payload"]["text"] == text
+        assert client.portal.call(_events, runtime, "triage.item.proposed") == []
+        [feature] = client.portal.call(
+            _events, runtime, "triage.intent.features_extracted"
+        )
+        assert feature["payload"]["assessment_outcome"] == "quarantined"
+        assert (
+            "submission_candidate_limit_requires_review"
+            in feature["payload"]["reason_codes"]
         )
 
 
@@ -659,4 +692,204 @@ def test_native_provider_observation_reconciles_exact_receipt_and_replays(
                 _events, runtime, "external_sync.write_attempted", "messaging.sent"
             )
             == []
+        )
+
+
+def test_route_reassignment_cannot_recopy_original_private_submission(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "route-reassignment"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        source_id, cue = _forward(client, "route-original", "Call the school office")
+        original = client.portal.call(runtime.event_log.get, source_id)
+        channel = runtime.direct_intake._channels[CHANNEL_ID]
+        reassigned = replace(
+            channel,
+            routes=tuple(
+                replace(route, target_id="member_other_principal")
+                for route in channel.routes
+            ),
+        )
+        processor = DirectIntakeProcessor(
+            event_log=runtime.event_log,
+            event_sink=runtime.events,
+            channels=(reassigned,),
+        )
+        # Exact-source replay consults the immutable decision before current config.
+        client.portal.call(processor.handle, original)
+        assert len(client.portal.call(_events, runtime, "triage.intent.submitted")) == 1
+        runtime.direct_intake._channels[CHANNEL_ID] = reassigned
+        revised = _service_message(
+            runtime,
+            key="route-revised",
+            trusted_route_key=ROUTE_A,
+            from_identifier="member-a@example.invalid",
+            subject="Forward revision",
+            body="Call the school office",
+            event_at_ms=int(time.time() * 1000),
+        )
+        revised.payload["native_message_id"] = original["payload"]["native_message_id"]
+        revision_id = client.portal.call(runtime.events.write, revised)
+        route = _route_result(client, revision_id)
+        assert route["payload"]["routing_scope"] == "unresolved"
+        assert route["payload"]["cue_event_id"] is None
+        [captured] = client.portal.call(_events, runtime, "triage.intent.submitted")
+        assert captured["event_id"] == cue["event_id"]
+        assert captured["owner_scope"] == f"private:{MEMBER}"
+
+
+def test_member_dismissal_during_extraction_prevents_late_children(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "decide-during-extraction"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        started, release = Event(), Event()
+
+        async def language(*args: Any, **kwargs: Any) -> Any:
+            started.set()
+            assert await asyncio.to_thread(release.wait, 10)
+            return SimpleNamespace(
+                output={
+                    "candidates": [
+                        {
+                            "target_kind": "task",
+                            "evidence_quote": "Call the school office",
+                            "candidate": {},
+                            "confidence": 0.9,
+                        }
+                    ]
+                }
+            )
+
+        runtime.run_skill_fn = language
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(
+                _forward, client, "during-extraction", "Call the school office"
+            )
+            try:
+                assert started.wait(10)
+                [holding] = [
+                    item
+                    for item in _items(client)
+                    if item["state"] == "pending_interpretation"
+                ]
+                response = client.post(
+                    f"/api/member/v1/triage/{holding['proposal_id']}/dismiss",
+                    headers=AUTH,
+                    json={
+                        "request_id": "forward-dismiss-during-extraction",
+                        "expected_last_event_id": holding["last_event_id"],
+                        "reason": "No longer needed",
+                    },
+                )
+                assert response.status_code == 200, response.text
+            finally:
+                release.set()
+            _, cue = pending.result(timeout=10)
+        assert client.portal.call(_events, runtime, "triage.item.proposed") == []
+        client.portal.call(runtime.projections.rebuild, "triage")
+        row = (
+            runtime.projections.connection("triage")
+            .execute(
+                "SELECT state FROM triage_items WHERE proposal_id=?",
+                (cue["payload"]["intent_id"],),
+            )
+            .fetchone()
+        )
+        assert row["state"] == "dismissed"
+        client.portal.call(runtime.submission_interpreter.handle, cue)
+        assert client.portal.call(_events, runtime, "triage.item.proposed") == []
+
+
+def test_possible_provider_contact_and_terminal_are_not_automatically_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Crash-recovery history is synthetic; the real dispatcher cannot contact a provider."""
+    instance = tmp_path / "provider-retry-boundary"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        runtime.bus._subscribers["external-sync:central-providers"].degraded = True
+        timestamp = "2031-01-01T12:00:00Z"
+        fields = {
+            "command_id": "forward-contact-recovery",
+            "member_id": MEMBER,
+            "provider": "google_tasks",
+            "provider_account_id": "fixture-google-task-account",
+            "operation": "create_task",
+            "request_fingerprint": "c" * 64,
+        }
+        command_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="external_sync.write_requested",
+                schema_version=2,
+                occurred_at=timestamp,
+                source_adapter="fixture-command-recovery",
+                source_account_id=fields["provider_account_id"],
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                payload={
+                    **fields,
+                    "domain_approval_event_id": "fixture-domain-approval",
+                    "openclaw_approval_event_id": "fixture-openclaw-approval",
+                    "privacy_guard_version": "fixture-history",
+                    "requested_at": timestamp,
+                    "payload": {
+                        "title": "Fixture original command",
+                        "tasklist_id": "fixture-list",
+                    },
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="external_sync.write_attempted",
+                schema_version=1,
+                occurred_at=timestamp,
+                source_adapter="external-sync-central-dispatcher",
+                source_account_id=fields["provider_account_id"],
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                causation_id=command_id,
+                idempotency_key=f"external-sync-attempt:{fields['command_id']}",
+                payload={
+                    **fields,
+                    "command_event_id": command_id,
+                    "attempted_at": timestamp,
+                },
+            ),
+        )
+
+        async def forbidden(**kwargs: Any) -> Any:
+            raise AssertionError("ambiguous provider creation cannot be retried")
+
+        monkeypatch.setattr(runtime.adapters, "dispatch_write", forbidden)
+        command = client.portal.call(runtime.event_log.get, command_id)
+        client.portal.call(runtime._dispatch_external_write, command)
+        [terminal] = client.portal.call(_events, runtime, "external_sync.write_failed")
+        assert "ambiguous_after_possible_contact" in terminal["payload"]["message"]
+        assert terminal["payload"]["retryable"] is False
+        assert terminal["payload"]["provider_called"] is True
+        client.portal.call(runtime._dispatch_external_write, command)
+        assert (
+            len(client.portal.call(_events, runtime, "external_sync.write_failed")) == 1
+        )
+        assert (
+            len(client.portal.call(_events, runtime, "external_sync.write_attempted"))
+            == 1
         )

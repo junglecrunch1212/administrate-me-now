@@ -139,6 +139,42 @@ def _is_lower_hex(value: object, length: int) -> bool:
     )
 
 
+def _require_communication_intake_compatibility(
+    active: dict[str, Any], incoming: dict[str, Any]
+) -> list[str]:
+    """Both releases must enforce every policy either can append to shared state.
+
+    A prior release may advertise epoch support before enabling the new default.
+    Activating the default against an older rollback image must fail before any
+    service, release pointer, or event-log mutation; rolling back cannot restore
+    retired mining merely because an immutable old runtime ignores its epoch.
+    """
+    required: set[str] = set()
+    supported: dict[str, set[str]] = {}
+    for label, versions in (("active/rollback", active), ("target", incoming)):
+        application = versions.get("administrateme", {})
+        policies = application.get("supported_communication_intake_policies", [])
+        default = application.get("default_communication_intake_policy")
+        if (
+            not isinstance(policies, list)
+            or any(not isinstance(policy, str) or not policy for policy in policies)
+            or (default is not None and (not isinstance(default, str) or not default))
+        ):
+            raise UpgradeError(f"{label} communication intake capability is invalid")
+        supported[label] = set(policies)
+        if default is not None:
+            required.add(default)
+    for label, policies in supported.items():
+        missing = sorted(required - policies)
+        if missing:
+            raise UpgradeError(
+                f"{label} release cannot enforce communication intake policy {missing}; "
+                "service replacement refused until a reviewed policy-aware rollback "
+                "baseline is available"
+            )
+    return sorted(required)
+
+
 def validate_candidate(
     candidate: Path,
     *,
@@ -159,6 +195,9 @@ def validate_candidate(
         raise UpgradeError(f"candidate is incomplete: {missing}")
     active = load_versions(active_root)
     incoming = load_versions(candidate)
+    communication_intake_policies = _require_communication_intake_compatibility(
+        active, incoming
+    )
     active_claw = active["openclaw"]
     incoming_claw = incoming["openclaw"]
     for key in ("version", "plugin_api"):
@@ -221,6 +260,7 @@ def validate_candidate(
         ),
         "lockfile": "poetry.lock",
         "runtime_migration": runtime_changes or None,
+        "communication_intake_policies": communication_intake_policies,
     }
 
 
@@ -1607,6 +1647,19 @@ class UpgradeManager:
             or metadata.st_mode & 0o022
         ):
             raise UpgradeError("activation predecessor coordinate is unsafe")
+        target = Path(journal["target_path"])
+        manifests_available = all(
+            (release / "bootstrap" / "versions.json").is_file()
+            for release in (target, predecessor)
+        )
+        if manifests_available:
+            _require_communication_intake_compatibility(
+                load_versions(target), load_versions(predecessor)
+            )
+        elif not self.test_mode:
+            raise UpgradeError(
+                "activation recovery intake-policy manifests are unavailable"
+            )
         if not self.test_mode:
             recovery_repository: Path | None = None
             repository_candidates = [

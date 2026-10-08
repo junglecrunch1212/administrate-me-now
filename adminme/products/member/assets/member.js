@@ -1325,7 +1325,7 @@ function triageSurface(data, { preserveView = false } = {}) {
   accounting.append(text("p", `${inventory.decision_candidates || 0} are independent decisions · ${inventory.duplicate_evidence || 0} are exact duplicate evidence · ${inventory.existing_object_evidence || 0} link to existing work.`, "state-note"));
   if (assurance?.counts) {
     const counts = assurance.counts;
-    const status = text("p", `${counts.accounted} of ${counts.obligations} source obligations accounted for · ${counts.eligible_candidates} produced candidates · ${counts.no_candidate} were explicitly assessed with none · ${counts.quarantined} safely quarantined${counts.pending ? ` · ${counts.pending} processing` : ""}.`, "state-note");
+    const status = text("p", `${counts.accounted} of ${counts.obligations} source observations accounted for · ${counts.eligible_candidates} produced candidates · ${counts.no_candidate} ${data.communication_intake?.member_selection_required ? "were not selected or produced no candidate" : "were explicitly assessed with none"} · ${counts.quarantined} safely quarantined${counts.pending ? ` · ${counts.pending} processing` : ""}.`, "state-note");
     status.setAttribute("data-source-assurance", assurance.state || "unknown"); accounting.append(status);
   }
   overview.append(accounting); fragment.append(overview);
@@ -2653,10 +2653,14 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
   form.className = "triage-review-form add-for-review-form";
   form.append(text("p", "This saves your thought in Triage. Nothing becomes a task, event, reminder, or provider change until you confirm it.", "state-note"));
   const input = document.createElement("textarea");
-  input.name = "text"; input.rows = 5; input.maxLength = 2000; input.required = true;
+  input.name = "text"; input.rows = 5; input.required = true;
   input.placeholder = "What just came up?";
-  input.value = exactText.slice(0, 2000);
+  input.value = exactText;
   form.append(field("Thought to hold", input));
+  const textLimit = text("small", "Up to 32,000 characters. Longer material stays in this form so you can split it without losing the original.", "state-note");
+  form.append(textLimit);
+  function validateSubmissionLength() { input.setCustomValidity(input.value.length > 32000 ? "Split this material into submissions of at most 32,000 characters. Your full text is still here." : ""); }
+  input.addEventListener("input", validateSubmissionLength); validateSubmissionLength();
   const hints = [
     { value: "", label: "Let Triage identify possible types" },
     { value: "task", label: "Do — a task" },
@@ -2682,6 +2686,7 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
     event.preventDefault();
     const submittedText = input.value.trim();
     if (!submittedText) return;
+    validateSubmissionLength(); if (!input.reportValidity()) return;
     const submittedHint = hint.value || null;
     const triageActive = currentSurface() === "triage";
     const addOperationToken = beginAddForReviewOperation();
@@ -4302,7 +4307,7 @@ function sourcePolicyV2Card(source, matrix) {
   if (source.direct_authenticated_intent) { form.append(text("p", "Requests you explicitly add for review always remain eligible. Passive-source settings cannot hide them.", "state-note")); return form; }
   if (explicitOnly) form.append(text("p", "You select what becomes work by forwarding it to your CoS or using Add for review. Automatic obligation extraction is off for this personal source. Source access, context, and alerts keep their separate settings.", "state-note"));
   if (!editable) {
-    form.append(text("p", lifecycle === "not_connected" ? "This source can use the same obligation, purpose, and learning controls after a reviewed connection supplies its exact account. A preference does not connect or authorize it." : "Retained evidence stays available. An exact authorized account and connection are required before a future rule can be saved.", "state-note"));
+    form.append(text("p", explicitOnly ? "Connecting this source may make authorized history available. It does not turn on obligation extraction; submit selected material to your CoS for review." : lifecycle === "not_connected" ? "This source can use the same obligation, purpose, and learning controls after a reviewed connection supplies its exact account. A preference does not connect or authorize it." : "Retained evidence stays available. An exact authorized account and connection are required before a future rule can be saved.", "state-note"));
     return form;
   }
   if (source.migration_state === "migration_needed") form.append(text("p", "An older source-family preference is retained. This selection applies only to the account and conversation shown here.", "review-state"));

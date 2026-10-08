@@ -232,23 +232,15 @@ class SubmissionInterpreter:
         async with lock:
             return await self._interpret_locked(event, session)
 
-    async def _interpret_locked(
-        self, event: dict[str, Any], session: Session
-    ) -> dict[str, Any]:
-        runtime = self.runtime
+    async def _member_decision_outcome(
+        self, event: dict[str, Any]
+    ) -> dict[str, Any] | None:
         payload = event["payload"]
         member_id = str(payload["member_id"])
         tenant_id = str(event["tenant_id"])
-        correlation_id = event.get("correlation_id")
-        text = str(payload["text"])
-        kind_hint = payload.get("kind_hint")
         intent_event_id = str(event["event_id"])
         intent_id = str(payload["intent_id"])
-        submitted_at = datetime.fromisoformat(
-            str(payload["submitted_at"]).replace("Z", "+00:00")
-        )
-        sensitivity = cast(Sensitivity, event.get("sensitivity") or "normal")
-        async for decision in runtime.event_log.read_since(
+        async for decision in self.runtime.event_log.read_since(
             owner_scope=f"private:{member_id}",
             types=[
                 "triage.item.enriched",
@@ -271,6 +263,27 @@ class SubmissionInterpreter:
                     "canonical_event_ids": [],
                     "state": "member_decision_preserved",
                 }
+        return None
+
+    async def _interpret_locked(
+        self, event: dict[str, Any], session: Session
+    ) -> dict[str, Any]:
+        runtime = self.runtime
+        payload = event["payload"]
+        member_id = str(payload["member_id"])
+        tenant_id = str(event["tenant_id"])
+        correlation_id = event.get("correlation_id")
+        text = str(payload["text"])
+        kind_hint = payload.get("kind_hint")
+        intent_event_id = str(event["event_id"])
+        intent_id = str(payload["intent_id"])
+        submitted_at = datetime.fromisoformat(
+            str(payload["submitted_at"]).replace("Z", "+00:00")
+        )
+        sensitivity = cast(Sensitivity, event.get("sensitivity") or "normal")
+        member_decision = await self._member_decision_outcome(event)
+        if member_decision is not None:
+            return member_decision
         evidence_issues = list(payload.get("evidence_issues") or [])
         evidence_complete = bool(payload.get("evidence_complete", True))
         if payload.get("submission_kind") == "member_forwarded":
@@ -372,6 +385,14 @@ class SubmissionInterpreter:
                 deterministic_candidates,
                 grounded_candidates,
             )
+            if (
+                payload.get("submission_kind") == "member_forwarded"
+                and len(extracted_candidates) >= 20
+            ):
+                evidence_complete = False
+                evidence_issues.append("submission_candidate_limit_requires_review")
+                language_state = "unavailable"
+                language_reason = "submission_requires_clarification"
             if payload.get("submission_kind") == "member_forwarded" and (
                 not evidence_complete or language_state != "complete"
             ):
@@ -585,6 +606,12 @@ class SubmissionInterpreter:
                 headers=exc.headers,
             ) from exc
 
+        # A member can decide the holding item while the model is running.
+        # Recheck immutable decisions immediately before append; the projection
+        # independently rejects late children ordered after a member decision.
+        member_decision = await self._member_decision_outcome(event)
+        if member_decision is not None:
+            return member_decision
         if missing_proposals:
             appended_ids = await runtime.events.write_batch(
                 [envelope for _proposal_id, _payload, envelope in missing_proposals]

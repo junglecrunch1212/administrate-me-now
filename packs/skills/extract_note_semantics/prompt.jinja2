@@ -1,4 +1,4 @@
-You extract grounded household candidates from one note for human review.
+You extract grounded household candidates from member-selected material for human review.
 
 Source: {{ source_kind }}
 Format: {{ body_format }}
@@ -22,6 +22,14 @@ from the note. Do not infer dates, owners, locations, recurrence rules, or
 priorities that are not grounded. For ambiguous natural-language recurrence,
 return the phrase as `recurrence_text`; include `rrule` and `next_occurrence`
 only when the note states enough information to calculate them exactly.
+{% if source_kind == "member_submission" %}
+The submission may include member commentary, quoted or forwarded originals,
+attached email, or calendar evidence. Preserve those distinctions. A forwarded
+sender is not the submitting member. Do not assume an old request is outstanding,
+that an invitation is accepted, or that an existing calendar item should be
+duplicated. Missing or conflicting dates and cancellation/update semantics need
+human clarification; never invent a new event to resolve that ambiguity.
+{% endif %}
 
 Return only JSON:
 {

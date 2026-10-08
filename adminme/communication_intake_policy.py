@@ -3,7 +3,7 @@
 Provider observations remain facts for Comms and reconciliation. They are not
 permission to search a member's communications for new obligations. The only
 compatibility switch belongs to isolated historical-contract tests; runtime
-composition rejects it outside the deterministic fixture environment.
+composition rejects it outside explicitly selected credential-free fixtures.
 """
 
 from __future__ import annotations

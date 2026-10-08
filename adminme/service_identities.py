@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+import hashlib
 import re
 from typing import Any, Literal
 
@@ -281,6 +282,34 @@ class ServiceChannelAccount:
     required_for_activation: bool
     routes: tuple[ChannelRoute, ...]
     intake_mode: Literal["conversation", "member_submission"] = "conversation"
+
+
+def cos_message_channel_for_account(
+    channels: tuple[ServiceChannelAccount, ...],
+    *,
+    transport_channel_id: str,
+    account_id: str,
+) -> ServiceChannelAccount | None:
+    """Resolve one enrolled CoS endpoint from exact OpenClaw coordinates.
+
+    Provider aliases normalize only the transport kind. Account IDs are opaque
+    case-sensitive coordinates and their fingerprint is never normalized.
+    """
+
+    if transport_channel_id not in {"imessage", "bluebubbles"} or not account_id:
+        return None
+    reference = "provider-account:" + hashlib.sha256(account_id.encode()).hexdigest()
+    matches = [
+        channel
+        for channel in channels
+        if channel.provider in {"apple_imessage", "imessage"}
+        and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+        and channel.provider_account_reference == reference
+        and channel.enrolled
+        and channel.observation_active
+        and channel.state in {"observation", "healthy", "degraded"}
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def service_private_scope(service_principal_id: str) -> str:
@@ -580,6 +609,7 @@ __all__ = [
     "ServiceContextScope",
     "ServicePrincipal",
     "ServiceRequestContext",
+    "cos_message_channel_for_account",
     "public_service_identity_inventory",
     "resolve_service_channel_route",
     "service_private_scope",

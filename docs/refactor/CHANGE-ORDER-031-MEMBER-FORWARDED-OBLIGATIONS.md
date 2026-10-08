@@ -90,6 +90,13 @@ active service-owned account binding. Attachment metadata alone does not count
 as decoded attachment content. Software support does not enroll an Apple
 account, grant macOS permissions, or prove live channel delivery.
 
+Transport IDs `imessage` and `bluebubbles` map to the CoS messaging service.
+The configured provider account reference is `provider-account:` followed by
+SHA-256 of the **exact, case-sensitive OpenClaw account ID**. Only that uniquely
+enrolled dedicated intake account may serve multiple reviewed member actors;
+ordinary member accounts still cannot be shared. Per-member agent bindings
+retain exact direct-peer matching and per-account/channel/peer session isolation.
+
 ## Triage, destinations and verification
 
 Triage explains member selection and shows submission status. Settings keeps
@@ -131,6 +138,10 @@ Required production-composition proofs are in:
 - `tests/acceptance/test_forwarded_submission_extraction.py`: full submitted
   evidence, ambiguity, restart, Triage, dual approval, observation suppression
   and exact provider reconciliation.
+- `tests/acceptance/test_provider_creation_replay.py`: durable attempt boundaries
+  before and after provider contact, terminal reuse and no blind creation retry.
+- `tests/unit/bootstrap/test_communication_intake_upgrade_safety.py`: candidate
+  and rollback compatibility, including interrupted-update recovery.
 
 Run those in the credential-free hosted suites together with the complete
 protected Python/Node checks, process gates, and macOS clean-install rehearsal.
@@ -147,6 +158,8 @@ migration, permission or write enablement needs its own owner authorization.
 
 **A pre-CO-031 release is not a safe rollback target after cutover.** It can
 ignore the policy epoch and resume passive extraction. The guarded updater
-must refuse activation unless a policy-aware rollback target or separately
-tested compatible rollback mechanism is available. No live updater, release,
+enforces the immutable release manifest's default and supported intake policies
+before activation, rollback and interrupted-update recovery. It refuses an
+unsupported rollback predecessor; first activation therefore requires a
+separately prepared and tested policy-aware rollback baseline. No live updater, release,
 state, provider configuration or account is changed by this source PR.

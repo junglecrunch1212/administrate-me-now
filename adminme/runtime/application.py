@@ -113,6 +113,7 @@ from adminme.service_identities import (
     COS_SERVICE_PRINCIPAL_ID,
     ServiceChannelAccount,
     ServicePrincipal,
+    cos_message_channel_for_account,
     validate_service_identity_config,
 )
 from adminme.deployment_readiness import evaluate_deployment_readiness
@@ -410,6 +411,7 @@ class RuntimeSettings:
                     "enabled OpenClaw transport requires a role for every mapped member"
                 )
             account_owners: dict[tuple[str, str], str] = {}
+            account_routes: dict[tuple[str, str], tuple[str, str]] = {}
             for route, member in self.openclaw_actor_identities.items():
                 parts = route.split("|", 2)
                 if len(parts) != 3 or not all(parts):
@@ -417,9 +419,24 @@ class RuntimeSettings:
                         "OpenClaw actor identity must be channel|account|actor"
                     )
                 account = (parts[0].casefold(), parts[1].casefold())
+                exact_account = (parts[0], parts[1])
+                original_account = account_routes.setdefault(account, exact_account)
                 owner = account_owners.setdefault(account, member)
+                if exact_account != original_account:
+                    raise ValueError(
+                        "OpenClaw channel account cannot be shared with ambiguous casing"
+                    )
                 if owner != member:
-                    raise ValueError("OpenClaw channel account cannot be shared")
+                    service_channel = cos_message_channel_for_account(
+                        service_channels,
+                        transport_channel_id=parts[0],
+                        account_id=parts[1],
+                    )
+                    if (
+                        service_channel is None
+                        or service_channel.intake_mode != "member_submission"
+                    ):
+                        raise ValueError("OpenClaw channel account cannot be shared")
             agent_ids = {member_agent_id(member) for member in mapped_members}
             if len(agent_ids) != len(mapped_members):
                 raise ValueError("OpenClaw member agent identities must be unique")
@@ -1539,26 +1556,40 @@ class AdministrateMeRuntime:
                     valid_terminal = (
                         int(terminal.get("schema_version") or 1) >= 2
                         and terminal.get("type")
-                        in {"external_sync.write_completed", "external_sync.write_failed"}
+                        in {
+                            "external_sync.write_completed",
+                            "external_sync.write_failed",
+                        }
                         and terminal.get("causation_id") == event["event_id"]
-                        and terminal_payload.get("command_event_id") == event["event_id"]
+                        and terminal_payload.get("command_event_id")
+                        == event["event_id"]
                         and all(
                             terminal.get(field) == event.get(field)
-                            for field in ("tenant_id", "owner_scope", "visibility_scope")
+                            for field in (
+                                "tenant_id",
+                                "owner_scope",
+                                "visibility_scope",
+                            )
                         )
                         and all(
                             terminal_payload.get(field) == payload.get(field)
                             for field in (
-                                "command_id", "member_id", "provider",
-                                "provider_account_id", "operation", "request_fingerprint",
-                                "domain_approval_event_id", "openclaw_approval_event_id",
+                                "command_id",
+                                "member_id",
+                                "provider",
+                                "provider_account_id",
+                                "operation",
+                                "request_fingerprint",
+                                "domain_approval_event_id",
+                                "openclaw_approval_event_id",
                                 "origin_proposal_id",
                             )
                         )
                     )
                 else:
                     valid_terminal = terminal_payload.get("command_event_id") in {
-                        None, event["event_id"]
+                        None,
+                        event["event_id"],
                     }
                 if not valid_terminal:
                     raise RuntimeError(
@@ -2077,20 +2108,31 @@ class AdministrateMeRuntime:
                         if (
                             prior_attempt.get("type") != "external_sync.write_attempted"
                             or prior_attempt.get("causation_id") != event["event_id"]
-                            or attempt_payload.get("command_event_id") != event["event_id"]
+                            or attempt_payload.get("command_event_id")
+                            != event["event_id"]
                             or any(
                                 prior_attempt.get(field) != event.get(field)
-                                for field in ("tenant_id", "owner_scope", "visibility_scope")
+                                for field in (
+                                    "tenant_id",
+                                    "owner_scope",
+                                    "visibility_scope",
+                                )
                             )
                             or any(
                                 attempt_payload.get(field) != payload.get(field)
                                 for field in (
-                                    "command_id", "member_id", "provider",
-                                    "provider_account_id", "operation", "request_fingerprint",
+                                    "command_id",
+                                    "member_id",
+                                    "provider",
+                                    "provider_account_id",
+                                    "operation",
+                                    "request_fingerprint",
                                 )
                             )
                         ):
-                            raise ValueError("provider command identity conflicts with its attempt")
+                            raise ValueError(
+                                "provider command identity conflicts with its attempt"
+                            )
                         provider_called = True
                         raise RuntimeError(
                             "ambiguous_after_possible_contact: automatic creation retry refused"

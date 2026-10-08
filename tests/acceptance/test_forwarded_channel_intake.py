@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+import pytest
 
 from adminme.events.envelope import EventEnvelope
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
@@ -81,7 +82,11 @@ def _settings(path: Path, *, intake_mode: str = "member_submission") -> RuntimeS
         openclaw_shared_secret=SECRET,
         openclaw_actor_identities={
             f"imessage|{ACCOUNT}|actor-forward-a": MEMBER_A,
-            f"imessage|{ACCOUNT}|actor-forward-b": MEMBER_B,
+            **(
+                {f"imessage|{ACCOUNT}|actor-forward-b": MEMBER_B}
+                if intake_mode == "member_submission"
+                else {}
+            ),
             "imessage|personal-account|actor-forward-a": MEMBER_A,
         },
         adapter_config={
@@ -90,6 +95,80 @@ def _settings(path: Path, *, intake_mode: str = "member_submission") -> RuntimeS
             "adapters": [],
         },
     )
+
+
+@pytest.mark.parametrize("transport", ["imessage", "bluebubbles"])
+@pytest.mark.parametrize("provider", ["apple_imessage", "imessage"])
+def test_shared_cos_intake_keeps_exact_member_actor_bindings(
+    tmp_path: Path, transport: str, provider: str
+) -> None:
+    settings = _settings(tmp_path / "shared-cos-identity")
+    config = copy.deepcopy(settings.adapter_config)
+    config["service_identities"]["channels"][0]["provider"] = provider
+    identities = {
+        key.replace("imessage|", transport + "|", 1): member
+        for key, member in settings.openclaw_actor_identities.items()
+    }
+    verified = replace(
+        settings, adapter_config=config, openclaw_actor_identities=identities
+    )
+    assert (
+        verified.openclaw_actor_identities[f"{transport}|{ACCOUNT}|actor-forward-a"]
+        == MEMBER_A
+    )
+    assert (
+        verified.openclaw_actor_identities[f"{transport}|{ACCOUNT}|actor-forward-b"]
+        == MEMBER_B
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "no_service",
+        "wrong_fingerprint",
+        "disabled",
+        "revoked",
+        "conversation",
+        "different_account_case",
+        "other_provider",
+        "duplicate_service_account",
+    ],
+)
+def test_shared_endpoint_exception_cannot_be_used_for_member_accounts(
+    tmp_path: Path, invalid: str
+) -> None:
+    settings = _settings(tmp_path / "rejected-shared-account")
+    config = copy.deepcopy(settings.adapter_config)
+    identities = dict(settings.openclaw_actor_identities)
+    channel = config["service_identities"]["channels"][0]
+    if invalid == "no_service":
+        del config["service_identities"]
+    elif invalid == "wrong_fingerprint":
+        channel["provider_account_reference"] = "provider-account:" + "0" * 64
+    elif invalid in {"disabled", "revoked"}:
+        channel["state"] = invalid
+    elif invalid == "conversation":
+        channel["intake_mode"] = "conversation"
+    elif invalid == "different_account_case":
+        del identities[f"imessage|{ACCOUNT}|actor-forward-b"]
+        identities[f"imessage|{ACCOUNT.upper()}|actor-forward-b"] = MEMBER_B
+    elif invalid == "other_provider":
+        channel["provider"] = "discord"
+    elif invalid == "duplicate_service_account":
+        config["service_identities"]["channels"].append(
+            {**channel, "channel_id": "channel:duplicate"}
+        )
+    with pytest.raises(ValueError, match="OpenClaw channel account cannot be shared"):
+        replace(settings, adapter_config=config, openclaw_actor_identities=identities)
+    with pytest.raises(ValueError, match="OpenClaw channel account cannot be shared"):
+        replace(
+            settings,
+            openclaw_actor_identities={
+                "discord|ordinary-member-account|actor-a": MEMBER_A,
+                "discord|ordinary-member-account|actor-b": MEMBER_B,
+            },
+        )
 
 
 def _provenance(
