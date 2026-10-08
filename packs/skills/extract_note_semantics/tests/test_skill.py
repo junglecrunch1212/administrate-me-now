@@ -1,8 +1,7 @@
 from pathlib import Path
 
-from jinja2 import Template
-
 from adminme.lib.skill_runner.pack_loader import invalidate_cache, load_pack
+from adminme.lib.skill_runner.wrapper import _build_request_body
 
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
@@ -80,10 +79,19 @@ def test_forwarded_submission_prompt_includes_evidence_after_old_display_limit()
 ):
     loaded = load_pack(PACK_ROOT)
     body = "Retained source details. " * 1200 + "Final selected obligation."
-    prompt = Template(loaded.prompt_template).render(
-        source_kind="member_submission", body_text=body, body_format="plain"
+    request = _build_request_body(
+        pack=loaded,
+        inputs={
+            "source_kind": "member_submission",
+            "body_text": body,
+            "body_format": "plain",
+        },
+        session_key="fixture-submission",
     )
-    assert body in prompt
-    assert "Final selected obligation." in prompt
-    assert "A forwarded\nsender is not the submitting member" in prompt
-    assert "UNTRUSTED DATA" in prompt
+    assert request["args"]["input"]["body_text"] == body
+    assert request["args"]["input"]["body_text"].endswith("Final selected obligation.")
+    assert (
+        "A forwarded\nsender is not the submitting member" in request["args"]["prompt"]
+    )
+    assert "UNTRUSTED DATA" in request["args"]["prompt"]
+    assert "{{" not in request["args"]["prompt"]

@@ -18,13 +18,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
 from adminme.events.envelope import EventEnvelope
 from adminme.direct_intake import DirectIntakeProcessor
 from adminme.openclaw_approvals import sign_approval_receipt
-from adminme.runtime.application import create_application
+from adminme.runtime.application import RuntimeSettings, create_application
+from adminme.source_assurance import audit_source_assurance
 from tests.acceptance.test_service_owned_cos_sources_direct_intake import (
     CHANNEL_ID,
     ROUTE_A,
@@ -905,3 +907,167 @@ def test_possible_provider_contact_and_terminal_are_not_automatically_retried(
             len(client.portal.call(_events, runtime, "external_sync.write_attempted"))
             == 1
         )
+
+
+def test_refused_retained_submission_does_not_block_later_valid_capture(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "retired-submission-actor"
+    instance.mkdir()
+    current, retired = "fixture-submission-current", "fixture-submission-retired"
+    settings = RuntimeSettings.credential_free(
+        instance,
+        encryption_key=b"r" * 32,
+        repository_root=Path(__file__).resolve().parents[2],
+        member_identities={
+            "submission-current.ts.net": current,
+            "submission-retired.ts.net": retired,
+        },
+        member_roles={current: "principal", retired: "principal"},
+        fixture_member_id=current,
+        deterministic_openclaw_fixture=True,
+    )
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        runtime.bus._subscribers["member-submissions:interpretation"].degraded = True
+        captured = []
+        for member, adapter, suffix in (
+            (retired, "member-triage", "retired"),
+            (current, "untrusted-source-fixture", "invalid"),
+        ):
+            captured.append(
+                client.portal.call(
+                    runtime.events.write,
+                    EventEnvelope(
+                        event_at_ms=int(time.time() * 1000),
+                        tenant_id=settings.instance.tenant_id,
+                        type="triage.intent.submitted",
+                        schema_version=2,
+                        occurred_at="2031-01-01T12:00:00Z",
+                        source_adapter=adapter,
+                        source_account_id=member,
+                        actor_identity=member,
+                        owner_scope=f"private:{member}",
+                        visibility_scope=f"private:{member}",
+                        sensitivity="sensitive",
+                        payload={
+                            "intent_id": f"fixture-context-{suffix}",
+                            "member_id": member,
+                            "text": "Call the private office",
+                            "source_surface": "triage",
+                            "submitted_at": "2031-01-01T12:00:00Z",
+                            "client_request_id": f"fixture-context-{suffix}",
+                            "submission_kind": "manual",
+                            "evidence_complete": True,
+                            "evidence_issues": [],
+                        },
+                    ),
+                )
+            )
+        client.portal.call(runtime.wait_for_projection, "triage", captured[-1])
+        assert client.portal.call(_events, runtime, "skill.call.recorded") == []
+    restored = create_application(
+        replace(
+            settings,
+            member_roles={current: "principal"},
+            member_identities={"submission-current.ts.net": current},
+        )
+    )
+    with TestClient(restored) as client:
+        runtime = restored.state.runtime
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "member-submissions:interpretation",
+            captured[-1],
+        )
+        receipts = client.portal.call(
+            _events, runtime, "triage.intent.interpretation_refused"
+        )
+        assert len(receipts) == 2
+        assert {row["payload"]["reason"] for row in receipts} == {
+            "member_principal_not_active",
+            "submission_identity_invalid",
+        }
+        assert (
+            client.portal.call(
+                _events,
+                runtime,
+                "skill.call.recorded",
+                "triage.intent.features_extracted",
+                "triage.item.proposed",
+            )
+            == []
+        )
+        for receipt, source_id in zip(receipts, captured, strict=True):
+            source = client.portal.call(runtime.event_log.get, source_id)
+            assert receipt["payload"]["source_event_id"] == source_id
+            assert receipt["causation_id"] == source_id
+            assert receipt["owner_scope"] == source["owner_scope"]
+            assert receipt["visibility_scope"] == source["visibility_scope"]
+            assert "Call the private office" not in json.dumps(receipt)
+            client.portal.call(runtime.submission_interpreter.handle, source)
+            with pytest.raises(HTTPException) as refusal:
+                client.portal.call(runtime.submission_interpreter.interpret, source)
+            assert refusal.value.status_code == 403
+        assert (
+            len(
+                client.portal.call(
+                    _events, runtime, "triage.intent.interpretation_refused"
+                )
+            )
+            == 2
+        )
+        response = client.post(
+            "/api/member/v1/triage/intents",
+            headers={"Tailscale-User-Login": "submission-current.ts.net"},
+            json={
+                "text": "Call the school office",
+                "source_surface": "triage",
+                "client_request_id": "fixture-after-refused-submissions",
+            },
+        )
+        assert response.status_code == 202, response.text
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "member-submissions:interpretation",
+            response.json()["intent_event_id"],
+        )
+        subscriber = client.portal.call(
+            runtime.bus.subscriber_status, "member-submissions:interpretation"
+        )
+        assert subscriber["degraded"] is False
+        [feature] = client.portal.call(
+            _events, runtime, "triage.intent.features_extracted"
+        )
+        assert (
+            feature["payload"]["source_event_id"] == response.json()["intent_event_id"]
+        )
+        parent_rows = (
+            runtime.projections.connection("triage")
+            .execute(
+                "SELECT state, last_event_id, proposal_event_id FROM triage_items WHERE proposal_id IN (?,?)",
+                ("fixture-context-retired", "fixture-context-invalid"),
+            )
+            .fetchall()
+        )
+        assert len(parent_rows) == 2
+        assert all(
+            row["state"] == "pending_interpretation"
+            and row["last_event_id"] == row["proposal_event_id"]
+            for row in parent_rows
+        )
+        audit = client.portal.call(
+            lambda: audit_source_assurance(
+                runtime.event_log,
+                repository_root=settings.repository_root,
+                capabilities={},
+            )
+        )
+        assert audit["by_event_type"]["triage.intent.submitted"] == {
+            "source_facts": 3,
+            "accounted": 3,
+            "pending": 0,
+            "missing": 0,
+        }
+        assert audit["counts"]["quarantined"] >= 2

@@ -406,6 +406,16 @@ class TriageIntentPublicationHeldV1(BaseModel):
     held_at: datetime
 
 
+class TriageIntentInterpretationRefusedV1(BaseModel):
+    """Content-free terminal evidence when a retained source lacks authority."""
+
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1, max_length=240)
+    reason: Literal["member_principal_not_active", "submission_identity_invalid"]
+    consumer_version: str = Field(min_length=1, max_length=120)
+    refused_at: datetime
+
+
 class TriageEvidenceSpanV1(BaseModel):
     model_config = {"extra": "forbid"}
     field: str = Field(min_length=1, max_length=120)
@@ -653,6 +663,9 @@ registry.register("triage.intent.submitted", 1, TriageIntentSubmittedV1)
 registry.register("triage.intent.submitted", 2, TriageIntentSubmittedV2)
 registry.register("triage.intent.publication_held", 1, TriageIntentPublicationHeldV1)
 registry.register(
+    "triage.intent.interpretation_refused", 1, TriageIntentInterpretationRefusedV1
+)
+registry.register(
     "triage.intent.features_extracted", 1, TriageIntentFeaturesExtractedV1
 )
 registry.register(
@@ -708,6 +721,7 @@ __all__ = [
     "TriageSourceSurface",
     "TriageIntentSubmittedV1",
     "TriageIntentSubmittedV2",
+    "TriageIntentInterpretationRefusedV1",
     "TriageIntentFeaturesExtractedV1",
     "TriageIntentFeaturesExtractedV2",
     "TriageIntentFeaturesExtractedV3",

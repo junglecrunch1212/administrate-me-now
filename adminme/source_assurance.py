@@ -96,8 +96,11 @@ def load_source_obligations(repository_root: Path) -> tuple[SourceObligation, ..
         SourceObligation(
             event_type="triage.intent.submitted",
             mode="candidate_assessment",
-            terminal_events=("triage.intent.features_extracted",),
-            assessor="inline:member-intent",
+            terminal_events=(
+                "triage.intent.features_extracted",
+                "triage.intent.interpretation_refused",
+            ),
+            assessor="durable:member-submissions:interpretation",
         ),
         SourceObligation(
             event_type="member_knowledge.note_corrected",
@@ -455,6 +458,7 @@ async def audit_source_assurance(
     recovery_assessments: dict[str, dict[str, Any]] = {}
     recovery_refusals: set[str] = set()
     skipped_sources: dict[str, dict[str, Any]] = {}
+    refused_submissions: set[str] = set()
     retired_commands: set[str] = set()
     messaging_cycles: list[dict[str, Any]] = []
     async for event in event_log.read_metadata_since(
@@ -466,6 +470,33 @@ async def audit_source_assurance(
         include_payload_for=sorted(payload_types),
     ):
         payload = event.get("payload") or {}
+        if event.get("type") == "triage.intent.interpretation_refused":
+            source_id = str(payload.get("source_event_id") or "")
+            source = await event_log.get(source_id) if source_id else None
+            receipt = await event_log.get(str(event["event_id"]))
+            if (
+                source is not None
+                and receipt is not None
+                and source.get("type") == "triage.intent.submitted"
+                and receipt.get("source_adapter") == "submission-interpreter"
+                and receipt.get("actor_identity") == "system:submission-interpreter"
+                and receipt.get("source_account_id") == "system"
+                and receipt.get("causation_id") == source_id
+                and receipt.get("idempotency_key")
+                == f"triage-intent-refused:{source_id}"
+                and all(
+                    receipt.get(key) == source.get(key)
+                    for key in (
+                        "tenant_id",
+                        "owner_scope",
+                        "visibility_scope",
+                        "sensitivity",
+                    )
+                )
+                and payload.get("reason")
+                in {"member_principal_not_active", "submission_identity_invalid"}
+            ):
+                refused_submissions.add(source_id)
         if event.get("type") == SKIPPED_EVENT_TYPE:
             source_id = str(payload.get("source_event_id") or "")
             source = await event_log.get(source_id) if source_id else None
@@ -550,6 +581,12 @@ async def audit_source_assurance(
             status = "accounted"
             detail = obligation.mode
             if (
+                obligation.mode == "candidate_assessment"
+                and event_id in refused_submissions
+            ):
+                counts["quarantined"] += 1
+                detail = "submission_context_unavailable"
+            elif (
                 obligation.mode == "candidate_assessment"
                 and event_id in skipped_sources
             ):

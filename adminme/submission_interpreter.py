@@ -46,6 +46,16 @@ class IncompleteSubmission(Exception):
     """Source coverage must be clarified before any candidate is proposed."""
 
 
+class SubmissionContextRefused(HTTPException):
+    """An HTTP refusal that durable delivery can acknowledge without retrying."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(
+            403, {"code": "submission_context_unavailable", "reason": reason}
+        )
+
+
 def forwarded_date_issues(text: str) -> list[str]:
     """A forwarded relative date has no trustworthy original-time anchor."""
     if re.search(
@@ -147,14 +157,17 @@ def _recorded_intent_candidates(
 
 
 class SubmissionInterpreter:
-    CONSUMER_VERSION = "member-submission-interpreter-v1"
+    CONSUMER_VERSION = "member-submission-interpreter-v2"
 
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     async def handle(self, event: dict[str, Any]) -> None:
-        if event.get("type") != "triage.intent.submitted":
+        if (
+            event.get("type") != "triage.intent.submitted"
+            or event.get("tenant_id") != self.runtime.settings.instance.tenant_id
+        ):
             return
         # The historical direct-intake cue discarded evidence after 2,000
         # characters. Never silently treat that old partial cue as a full forward.
@@ -176,8 +189,41 @@ class SubmissionInterpreter:
         )
         if held is not None:
             return
+        refused_key = f"triage-intent-refused:{event['event_id']}"
+        if (
+            await self.runtime.event_log.get_by_idempotency(
+                str(event["tenant_id"]), refused_key
+            )
+            is not None
+        ):
+            return
         try:
             await self.interpret(event)
+        except SubmissionContextRefused as exc:
+            await self.runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=str(event["tenant_id"]),
+                    type="triage.intent.interpretation_refused",
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="submission-interpreter",
+                    source_account_id="system",
+                    owner_scope=str(event["owner_scope"]),
+                    visibility_scope=str(event["visibility_scope"]),
+                    sensitivity=cast(Sensitivity, event.get("sensitivity") or "normal"),
+                    actor_identity="system:submission-interpreter",
+                    correlation_id=event.get("correlation_id"),
+                    causation_id=str(event["event_id"]),
+                    idempotency_key=refused_key,
+                    payload={
+                        "source_event_id": str(event["event_id"]),
+                        "reason": exc.reason,
+                        "consumer_version": self.CONSUMER_VERSION,
+                        "refused_at": EventEnvelope.now_utc_iso(),
+                    },
+                )
+            )
         except HTTPException:
             # A recorded governance refusal is terminal for background delivery.
             # The owner may explicitly retry after the condition is resolved.
@@ -203,7 +249,6 @@ class SubmissionInterpreter:
             or event.get("tenant_id") != runtime.settings.instance.tenant_id
             or event.get("owner_scope") != scope
             or event.get("visibility_scope") != scope
-            or runtime.settings.member_roles.get(member_id) != "principal"
             or source not in member_sources | {"direct-intake", "openclaw-submission"}
             or (source != "direct-intake" and event.get("actor_identity") != member_id)
             or (
@@ -214,13 +259,15 @@ class SubmissionInterpreter:
                 )
             )
         ):
-            raise ValueError("submission ownership or authenticated source is invalid")
+            raise SubmissionContextRefused("submission_identity_invalid")
+        if runtime.settings.member_roles.get(member_id) != "principal":
+            raise SubmissionContextRefused("member_principal_not_active")
         if session is not None and (
             session.tenant_id != event["tenant_id"]
             or session.auth_member_id != member_id
             or session.view_member_id != member_id
         ):
-            raise ValueError("submission request session does not match its owner")
+            raise SubmissionContextRefused("submission_identity_invalid")
         session = session or build_internal_session(
             "submission_interpreter",
             "device",

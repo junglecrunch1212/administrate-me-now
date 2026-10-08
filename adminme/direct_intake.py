@@ -220,6 +220,7 @@ class DirectIntakeProcessor:
         sensitivity = cast(Sensitivity, raw_sensitivity)
         cue_envelope: EventEnvelope | None = None
         cue_event_id: str | None = None
+        receipt_key: str | None = None
         if route_scope == "member_private" and isinstance(target_id, str):
             # Provider label/read revisions may emit a new observation event,
             # but one native delivery is still one member submission. Keep its
@@ -268,6 +269,7 @@ class DirectIntakeProcessor:
                 )
         if route_scope == "member_private" and isinstance(target_id, str):
             cue_intent_id = f"direct-intake-cue:{source_event_id}"
+            assert receipt_key is not None
             text, evidence_complete, evidence_issues = self._submission_evidence(
                 payload
             )

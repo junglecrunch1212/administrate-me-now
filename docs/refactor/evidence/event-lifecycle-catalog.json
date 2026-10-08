@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 345,
-    "technical_event_types": 276,
+    "technical_event_schemas": 346,
+    "technical_event_types": 277,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -36413,6 +36413,45 @@
         "revision_attempt_limit"
       ],
       "schema_version": 5
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.intent.interpretation_refused",
+      "family": "triage",
+      "properties": {
+        "consumer_version": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Consumer Version",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "member_principal_not_active",
+            "submission_identity_invalid"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "refused_at": {
+          "format": "date-time",
+          "title": "Refused At",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "reason",
+        "consumer_version",
+        "refused_at"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
