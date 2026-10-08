@@ -1876,7 +1876,7 @@ async function run() {
       await sampleNotice.waitFor();
       const copy = await sampleNotice.textContent();
       record(`Bounded sample scope is visible at ${width}`, await sampleNotice.isVisible() && copy.includes("lifetime limit of 200") && copy.includes("including Sent and thread context") && copy.includes("does not cover the whole mailbox"), copy);
-      record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).isVisible());
+      record(`Excluded source import is visibly paused at ${width}`, await boundedBrowser.page.getByText("Local import is paused while the bounded test sample is active. Your provider connection is retained.", { exact: true }).first().isVisible());
       record(`Member-forwarded intake is explained at ${width}`, (await boundedBrowser.page.locator(".candidate-policy-intro").textContent()).includes("You are the gate: forward selected email"));
       const passiveCard = boundedBrowser.page.locator(".source-attention-card").filter({ has: sampleNotice });
       record(`Noneditable source offers no extraction controls at ${width}`, await passiveCard.locator("select, button").count() === 0 && (await passiveCard.textContent()).includes("It does not turn on obligation extraction"));
