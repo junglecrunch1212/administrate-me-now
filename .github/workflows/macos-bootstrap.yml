@@ -77,6 +77,25 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      - name: Validate staged intake deployment and readiness
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5
+          tests/acceptance/test_explicit_communication_intake_policy.py
+          tests/acceptance/test_communication_intake_prerequisite.py
+          tests/acceptance/test_communication_intake_upgrade_chain.py
+          tests/acceptance/test_readiness_audit_export.py
+          tests/unit/bootstrap/test_htr10_export.py
+          tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_phase5_operations.py
+          tests/unit/bootstrap/test_deployment_failure.py
+          tests/acceptance/test_disposable_dataset_continuity.py
+          tests/acceptance/test_service_process_lifecycle.py::test_interrupted_recovery_preserves_controls_until_real_stop_and_supported_retry
+          tests/unit/bootstrap/test_candidate_readiness.py
+          tests/unit/test_observation_readiness_window.py
+          tests/unit/test_member_device_check_coverage.py
+          tests/integration/test_runtime_application.py
+
       - name: Validate the exact native plugin contract
         run: |
           npm ci --prefix openclaw/administrateme --ignore-scripts

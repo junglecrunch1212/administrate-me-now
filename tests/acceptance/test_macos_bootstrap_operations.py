@@ -213,6 +213,13 @@ def _write_htr10_fixture(
                     "observation_window": {
                         "state": "healthy",
                         "started_at_configured": True,
+                        "started_at": json.loads(
+                            (
+                                paths.instance_dir
+                                / "config"
+                                / "deployment-readiness.json"
+                            ).read_text("utf-8")
+                        )["provider_effect_window"]["started_at"],
                         "counts": zero_counts,
                         "content_exposed": False,
                     },
@@ -829,9 +836,11 @@ def test_newer_restore_controller_proves_selected_predecessor_in_its_real_proces
     assert services.status().observation_mode is True
 
 
+@pytest.mark.parametrize("skip_device_check", [False, True])
 def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    skip_device_check: bool,
 ) -> None:
     """Production command composition records only immutable pending evidence."""
 
@@ -1018,14 +1027,15 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     )
     now = datetime.now(timezone.utc)
     active_readiness = paths.instance_dir / "config" / "deployment-readiness.json"
+    # New readiness evidence must preserve the full historical effects window,
+    # even when that boundary predates the 31-day evidence freshness limit.
+    original_window_start = (now - timedelta(days=400)).isoformat()
     active_readiness.write_text(
         json.dumps(
             {
                 "contract": "deployment-readiness-v1",
                 "sentinel": True,
-                "provider_effect_window": {
-                    "started_at": (now - timedelta(days=1)).isoformat()
-                },
+                "provider_effect_window": {"started_at": original_window_start},
             }
         ),
         encoding="utf-8",
@@ -1073,6 +1083,8 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
             [f"--confirm-htr-{htr}", f"--htr-{htr}-observed-at", observed_at]
         )
     command.append("--confirm-htr-10")
+    if skip_device_check:
+        command.extend(["--skip-member-device-check", enrollment_principal_id])
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -1100,7 +1112,20 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     )
     stored = validate_pending_attestation(json.loads(pending.read_text("utf-8")))
     assert stored["deployment_binding"]["candidate_commit"] == candidate_commit
+    assert stored["pre_switch_state"]["provider_effect_window_started_at"] == (
+        original_window_start
+    )
     assert stored["activation_boundary"]["candidate_active"] is False
+    if skip_device_check:
+        assert (
+            enrollment_principal_id
+            not in stored["human_evidence"]["htr_03"]["member_ids"]
+        )
+        assert stored["human_evidence"]["htr_03"]["device_check_exceptions"] == {
+            "member_ids": [enrollment_principal_id],
+            "owner_requested": True,
+            "reason": "owner_requested_device_check_omission",
+        }
     assert stored["deployment_binding"]["provider_binding_transition"] == (
         transition.public()
     )
@@ -1161,6 +1186,18 @@ def test_candidate_pending_is_nonmutating_until_journaled_cli_consumes_it(
     assert selected["previous"]["commit"] == predecessor_commit
     promoted = json.loads(active_readiness.read_text("utf-8"))
     assert promoted["contract"] == "deployment-readiness-v1"
+    assert promoted["provider_effect_window"]["started_at"] == original_window_start
+    assert (
+        promoted["identity_acceptance"]["member_ids"]
+        == (stored["human_evidence"]["htr_03"]["member_ids"])
+    )
+    if skip_device_check:
+        assert (
+            promoted["identity_acceptance"]["device_check_exceptions"]
+            == (stored["human_evidence"]["htr_03"]["device_check_exceptions"])
+        )
+    else:
+        assert "device_check_exceptions" not in promoted["identity_acceptance"]
     assert promoted["deployment_binding"]["release_commit"] == candidate_commit
     assert promoted["activation_evidence"]["candidate_live_doctor"] is True
     assert promoted["activation_evidence"]["post_switch_acceptance"] == (

@@ -26,6 +26,10 @@ from typing import Any, Iterator, Mapping
 
 import yaml
 
+from adminme.deployment_readiness import (
+    DEVICE_CHECK_EXCEPTION_REASON,
+    device_check_exception_members,
+)
 from bootstrap.contracts import BACKUP_FORMAT_VERSION, DeploymentPaths, ensure_within
 from bootstrap.provider_binding_transition import (
     PreparedProviderBindingTransition,
@@ -433,7 +437,9 @@ def _binding_transition(
         ) from exc
 
 
-def _parse_time(value: object, *, label: str, now: datetime) -> datetime:
+def _parse_timestamp(value: object, *, label: str, now: datetime) -> datetime:
+    """Validate an absolute timestamp without treating history as fresh evidence."""
+
     if not isinstance(value, str) or len(value) > 64:
         raise CandidateReadinessError(f"{label} timestamp is invalid")
     try:
@@ -445,6 +451,13 @@ def _parse_time(value: object, *, label: str, now: datetime) -> datetime:
     parsed = parsed.astimezone(timezone.utc)
     if parsed > now + timedelta(minutes=5):
         raise CandidateReadinessError(f"{label} timestamp is in the future")
+    return parsed
+
+
+def _parse_time(value: object, *, label: str, now: datetime) -> datetime:
+    """Require recently observed evidence, separately from historical boundaries."""
+
+    parsed = _parse_timestamp(value, label=label, now=now)
     if now - parsed > MAX_EVIDENCE_AGE:
         raise CandidateReadinessError(f"{label} evidence is older than 31 days")
     return parsed
@@ -459,6 +472,21 @@ def _validate_htr10(
     _validate_htr10_value(value, now=now)
     observed = _parse_time(value["observed_at"], label="HTR-10", now=now)
     return value, hashlib.sha256(payload).hexdigest(), observed
+
+
+def _active_provider_effect_window(
+    paths: DeploymentPaths, *, now: datetime
+) -> datetime:
+    payload, _metadata = _read_private_file(
+        paths.instance_dir / "config" / "deployment-readiness.json"
+    )
+    active = _json_no_duplicates(payload, label="active deployment readiness")
+    window = active.get("provider_effect_window")
+    if active.get("contract") != ACTIVE_CONTRACT or not isinstance(window, dict):
+        raise CandidateReadinessError("active provider-effect window is unavailable")
+    return _parse_timestamp(
+        window.get("started_at"), label="provider-effect window", now=now
+    )
 
 
 def build_htr10_review(
@@ -486,7 +514,7 @@ def build_htr10_review(
     )
     active = _json_no_duplicates(active_payload, label="active deployment readiness")
     window_value = (active.get("provider_effect_window") or {}).get("started_at")
-    window = _parse_time(
+    window = _parse_timestamp(
         window_value,
         label="provider-effect window",
         now=current_time,
@@ -560,6 +588,15 @@ def build_htr10_review(
     ):
         raise CandidateReadinessError(
             "HTR-10 metadata audits are incomplete, unhealthy, or inconsistent"
+        )
+    audited_window = _parse_timestamp(
+        observation.get("started_at"),
+        label="audited provider-effect window",
+        now=current_time,
+    )
+    if audited_window != window:
+        raise CandidateReadinessError(
+            "HTR-10 audit does not cover the original provider-effect window"
         )
     value: dict[str, Any] = {
         "contract": HTR10_CONTRACT,
@@ -645,7 +682,7 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
     ):
         raise CandidateReadinessError("HTR-10 review is not healthy or authentic")
     observed = _parse_time(value["observed_at"], label="HTR-10", now=now)
-    window = _parse_time(
+    window = _parse_timestamp(
         value["provider_effect_window_started_at"],
         label="provider-effect window",
         now=now,
@@ -846,6 +883,7 @@ def build_pending_attestation(
     htr10_review: Path,
     confirmations: Mapping[str, bool],
     observed_at: Mapping[str, str],
+    skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
     now: datetime | None = None,
     attestation_id: str | None = None,
@@ -912,6 +950,12 @@ def build_pending_attestation(
     htr10, htr10_sha256, htr10_observed = _validate_htr10(
         paths, htr10_review, now=current_time
     )
+    if _parse_timestamp(
+        htr10["provider_effect_window_started_at"],
+        label="reviewed provider-effect window",
+        now=current_time,
+    ) != _active_provider_effect_window(paths, now=current_time):
+        raise CandidateReadinessError("reviewed provider-effect window changed")
     if htr10.get("provider_binding_transition_sha256") != transition_sha256:
         raise CandidateReadinessError(
             "HTR-10 review does not bind the prepared provider configuration"
@@ -923,7 +967,28 @@ def build_pending_attestation(
         "review_receipt_sha256": htr10_sha256,
         "event_watermark_sha256": htr10["event_watermark_sha256"],
     }
-    human["htr_03"]["member_ids"] = _member_ids(paths)
+    configured_members = set(_member_ids(paths))
+    if (
+        not all(
+            isinstance(member, str) and member
+            for member in skipped_member_device_checks
+        )
+        or len(skipped_member_device_checks) != len(set(skipped_member_device_checks))
+        or not set(skipped_member_device_checks) < configured_members
+    ):
+        raise CandidateReadinessError(
+            "device-check exceptions must uniquely name configured members and retain "
+            "at least one tested member"
+        )
+    human["htr_03"]["member_ids"] = sorted(
+        configured_members - set(skipped_member_device_checks)
+    )
+    if skipped_member_device_checks:
+        human["htr_03"]["device_check_exceptions"] = {
+            "member_ids": sorted(skipped_member_device_checks),
+            "owner_requested": True,
+            "reason": DEVICE_CHECK_EXCEPTION_REASON,
+        }
     _receipt, receipt_sha256, artifact_sha256, watermark_sha256, rehearsal_time = (
         _validate_rehearsal(
             paths,
@@ -1093,6 +1158,8 @@ def validate_pending_attestation(
         expected = {"confirmed", "observed_at"}
         if name == "htr_03":
             expected.add("member_ids")
+            if isinstance(row, dict) and "device_check_exceptions" in row:
+                expected.add("device_check_exceptions")
         if name == "htr_10":
             expected.update({"review_receipt_sha256", "event_watermark_sha256"})
         if (
@@ -1117,6 +1184,12 @@ def validate_pending_attestation(
             or row["member_ids"] != sorted(set(row["member_ids"]))
         ):
             raise CandidateReadinessError("pending HTR-03 member binding is invalid")
+        if name == "htr_03" and "device_check_exceptions" in row:
+            exceptions = device_check_exception_members(row["device_check_exceptions"])
+            if exceptions is None or exceptions & set(row["member_ids"]):
+                raise CandidateReadinessError(
+                    "pending HTR-03 device-check exception is invalid"
+                )
         if name == "htr_10" and not all(
             isinstance(row.get(field), str) and _HEX_64.fullmatch(row[field])
             for field in ("review_receipt_sha256", "event_watermark_sha256")
@@ -1132,11 +1205,18 @@ def validate_pending_attestation(
         "htr_10_review_receipt_sha256": pre_switch.get("htr_10_review_receipt_sha256"),
     }:
         raise CandidateReadinessError("pending pre-switch state is invalid")
-    _parse_time(
+    window = _parse_timestamp(
         pre_switch.get("provider_effect_window_started_at"),
         label="provider-effect window",
         now=current_time,
     )
+    reviewed_at = _parse_time(
+        human["htr_10"]["observed_at"], label="HTR-10", now=current_time
+    )
+    if window > reviewed_at:
+        raise CandidateReadinessError(
+            "provider-effect window starts after HTR-10 review"
+        )
     if _HEX_64.fullmatch(str(pre_switch.get("htr_10_review_receipt_sha256"))) is None:
         raise CandidateReadinessError("pending HTR-10 binding is invalid")
     boundary = value.get("activation_boundary")
@@ -1190,6 +1270,13 @@ def load_pending_attestation_for_activation(
         _json_no_duplicates(payload, label="candidate-pending readiness"),
         now=now,
     )
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if _parse_timestamp(
+        value["pre_switch_state"]["provider_effect_window_started_at"],
+        label="pending provider-effect window",
+        now=current_time,
+    ) != _active_provider_effect_window(paths, now=current_time):
+        raise CandidateReadinessError("pending provider-effect window changed")
     if value["attestation_id"] != attestation_id:
         raise CandidateReadinessError("pending attestation path does not match payload")
     binding = value["deployment_binding"]
@@ -1228,7 +1315,14 @@ def load_pending_attestation_for_activation(
         )
     if candidate_commit in _pointer_commits(paths):
         raise CandidateReadinessError("pending candidate is already active or retained")
-    if value["human_evidence"]["htr_03"]["member_ids"] != _member_ids(paths):
+    identity = value["human_evidence"]["htr_03"]
+    exceptions = (
+        device_check_exception_members(identity["device_check_exceptions"])
+        if "device_check_exceptions" in identity
+        else set()
+    )
+    assert exceptions is not None  # The strict pending schema was validated above.
+    if set(identity["member_ids"]) | exceptions != set(_member_ids(paths)):
         raise CandidateReadinessError("pending member identity binding drifted")
     return value, hashlib.sha256(payload).hexdigest(), snapshot
 
@@ -1279,6 +1373,18 @@ def build_active_attestation_from_pending(
             "member_ids": list(human["htr_03"]["member_ids"]),
             "distinct_identities": True,
             "tested_at": human["htr_03"]["observed_at"],
+            **(
+                {
+                    "device_check_exceptions": {
+                        **human["htr_03"]["device_check_exceptions"],
+                        "member_ids": list(
+                            human["htr_03"]["device_check_exceptions"]["member_ids"]
+                        ),
+                    }
+                }
+                if "device_check_exceptions" in human["htr_03"]
+                else {}
+            ),
         },
         "recovery": {
             "separate_admin_available": True,
@@ -1599,6 +1705,7 @@ def record_pending_attestation(
     htr10_review: Path,
     confirmations: Mapping[str, bool],
     observed_at: Mapping[str, str],
+    skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
     now: datetime | None = None,
     attestation_id: str | None = None,
@@ -1615,6 +1722,7 @@ def record_pending_attestation(
             htr10_review=htr10_review,
             confirmations=confirmations,
             observed_at=observed_at,
+            skipped_member_device_checks=skipped_member_device_checks,
             approve_provider_binding_migration=approve_provider_binding_migration,
             now=fixed_now,
             attestation_id=fixed_attestation_id,
@@ -1632,6 +1740,7 @@ def record_pending_attestation(
                 htr10_review=htr10_review,
                 confirmations=confirmations,
                 observed_at=observed_at,
+                skipped_member_device_checks=skipped_member_device_checks,
                 approve_provider_binding_migration=(approve_provider_binding_migration),
                 now=fixed_now,
                 attestation_id=fixed_attestation_id,
@@ -1664,6 +1773,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preliminary-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--preliminary-backup-artifact", type=Path, required=True)
     parser.add_argument("--htr-10-review", type=Path, required=True)
+    parser.add_argument(
+        "--skip-member-device-check",
+        action="append",
+        default=[],
+        help=(
+            "record an explicit owner-requested coverage exception for one exact "
+            "configured member; at least one member must have passed a device check"
+        ),
+    )
     parser.add_argument(
         "--approve-provider-binding-migration",
         action="store_true",
@@ -1708,6 +1826,7 @@ def main(argv: list[str] | None = None) -> int:
             htr10_review=args.htr_10_review,
             confirmations=confirmations,
             observed_at=observed,
+            skipped_member_device_checks=tuple(args.skip_member_device_check),
             approve_provider_binding_migration=(
                 args.approve_provider_binding_migration
             ),

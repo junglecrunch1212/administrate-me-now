@@ -15,6 +15,28 @@ from adminme.bridge_authorization import (
 
 CENTRAL_HOST_TAG = "tag:administrateme-central"
 REQUIRED_DM_SCOPE = "per_account_channel_peer"
+DEVICE_CHECK_EXCEPTION_REASON = "owner_requested_device_check_omission"
+
+
+def device_check_exception_members(value: Any) -> set[str] | None:
+    """Validate the exact optional owner-selected device coverage exception."""
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"member_ids", "owner_requested", "reason"}
+        or value.get("owner_requested") is not True
+        or value.get("reason") != DEVICE_CHECK_EXCEPTION_REASON
+    ):
+        return None
+    members = value.get("member_ids")
+    if (
+        not isinstance(members, list)
+        or not members
+        or not all(isinstance(member, str) and member for member in members)
+        or members != sorted(set(members))
+    ):
+        return None
+    return set(members)
 
 
 def _dimension(
@@ -44,6 +66,21 @@ def _recent_iso(value: Any, *, max_age_days: int = 31) -> bool:
         return False
     age = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
     return 0 <= age.total_seconds() <= max_age_days * 86400
+
+
+def _historical_boundary(value: Any) -> datetime | None:
+    """Validate an observation origin without expiring its retained history."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed if parsed <= datetime.now(timezone.utc) else None
 
 
 def backup_rollback_ready(backup: dict[str, Any]) -> bool:
@@ -222,15 +259,42 @@ def evaluate_deployment_readiness(
 
     interactive_members = set(portal_member_ids)
     identity = deployment_evidence.get("identity_acceptance") or {}
-    accepted = set(identity.get("member_ids") or [])
+    accepted_list = identity.get("member_ids")
+    accepted_valid = (
+        isinstance(accepted_list, list)
+        and bool(accepted_list)
+        and all(isinstance(member, str) and member for member in accepted_list)
+        and len(accepted_list) == len(set(accepted_list))
+    )
+    accepted = (
+        set(accepted_list)
+        if isinstance(accepted_list, list) and accepted_valid
+        else set()
+    )
+    exception_present = "device_check_exceptions" in identity
+    exceptions = (
+        device_check_exception_members(identity["device_check_exceptions"])
+        if exception_present
+        else set()
+    )
+    excepted = exceptions or set()
     identity_ok = (
         bool(interactive_members)
-        and accepted == interactive_members
+        and accepted_valid
+        and exceptions is not None
+        and not (accepted & excepted)
+        and accepted | excepted == interactive_members
         and portal_identity_count == len(interactive_members)
+        and (not exception_present or binding_ok)
     )
     dimensions["identity_acceptance"] = _dimension(
         "healthy" if identity_ok else "blocked",
-        "each enabled interactive member passed the real trusted-ingress path"
+        (
+            "tested members passed trusted ingress; an explicit owner-requested "
+            "device-check coverage exception remains"
+            if exception_present
+            else "each enabled interactive member passed the real trusted-ingress path"
+        )
         if identity_ok
         else "real trusted-ingress acceptance is incomplete or contradictory",
         evidence={
@@ -238,6 +302,12 @@ def evaluate_deployment_readiness(
             "trusted_identity_count": portal_identity_count,
             "accepted_member_count": len(accepted & interactive_members),
             "unknown_acceptance_count": len(accepted - interactive_members),
+            "device_check_exception_count": len(excepted & interactive_members),
+            "unknown_device_check_exception_count": len(excepted - interactive_members),
+            "owner_requested_device_check_exception": (
+                exception_present and exceptions is not None
+            ),
+            "all_member_devices_tested": identity_ok and not exception_present,
             "distinct_identity_proof": identity.get("distinct_identities") is True,
             "tested_at_recent": _recent_iso(identity.get("tested_at")),
         },
@@ -518,13 +588,19 @@ def evaluate_deployment_readiness(
         )
     )
     integrity_ok = effects.get("state") == "healthy"
-    window_recent = _recent_iso(window_evidence.get("started_at"))
+    window_start = _historical_boundary(window_evidence.get("started_at"))
+    audited_window_start = _historical_boundary(window.get("started_at"))
+    window_matches = (
+        window_start is not None
+        and window.get("started_at_configured") is True
+        and audited_window_start == window_start
+    )
     effects_ok = (
         source_proof_current
         and integrity_ok
         and (
             not observation_active
-            or (window.get("state") == "healthy" and window_recent)
+            or (window.get("state") == "healthy" and window_matches)
         )
     )
     dimensions["observation_effects"] = _dimension(
@@ -554,7 +630,8 @@ def evaluate_deployment_readiness(
             ),
             "integrity_state": effects.get("state", "missing"),
             "window_state": window.get("state", "missing"),
-            "window_recent": window_recent,
+            "window_boundary_valid": window_start is not None,
+            "window_matches_attestation": window_matches,
             "provider_called_true": int(effect_counts.get("provider_called_true") or 0),
             "provider_called_false": int(
                 effect_counts.get("provider_called_false") or 0

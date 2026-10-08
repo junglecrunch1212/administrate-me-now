@@ -21,6 +21,7 @@ from bootstrap.deployment_failure import (
     settlement_diagnostic_evidence,
 )
 from bootstrap.upgrade import UpgradeError, UpgradeManager
+from tests.unit.bootstrap.intake_fixture import stub_uninitialized_intake
 from tests.unit.bootstrap.test_activation_transaction import (
     CANDIDATE_COMMIT,
     PREDECESSOR_COMMIT,
@@ -235,6 +236,7 @@ def test_failed_proof_is_recorded_before_recovery_without_changing_journal(
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
     journal = manager.activation_journal.create(_journal_value(paths))
     original_journal = manager.activation_journal.path.read_bytes()

@@ -28,6 +28,7 @@ from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.source_assurance import audit_source_assurance
+from tests.fixtures.communication_intake_release import communication_intake_release
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,11 +36,11 @@ MEMBER = "fixture-forwarding-policy-member"  # fixture:tenant_data:ok
 AT = "2034-02-01T10:00:00Z"
 
 
-def _settings(path: Path) -> RuntimeSettings:
+def _settings(path: Path, *, repository_root: Path = ROOT) -> RuntimeSettings:
     return RuntimeSettings.credential_free(
         path,
         encryption_key=b"i" * 32,
-        repository_root=ROOT,
+        repository_root=repository_root,
         member_identities={"forward-policy.ts.net": MEMBER},
         member_roles={MEMBER: "principal"},
         fixture_member_id=MEMBER,
@@ -329,7 +330,8 @@ async def _preload(settings) -> dict[str, str]:
 
 
 def test_cutover_retires_only_untouched_drafts_and_survives_replay(tmp_path):
-    settings = _settings(tmp_path / "instance")
+    release = communication_intake_release(ROOT, tmp_path / "cutover", "cutover")
+    settings = _settings(tmp_path / "instance", repository_root=release)
     seeded = asyncio.run(_preload(settings))
 
     async def preview_without_mutation():

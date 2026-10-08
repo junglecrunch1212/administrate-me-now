@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.deployment_readiness import evaluate_deployment_readiness
+from adminme.events.log import EventLog
+from adminme.lib.instance_config import load_instance_config
 from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap import (
     backup_restore,
@@ -600,8 +602,34 @@ def test_bounded_restore_rejects_other_datasets_and_unadmitted_ids_before_mutati
 def test_older_target_is_refused_before_controller_or_services_start(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
     paths.create()
+    # Interrupted recovery authenticates durable intake state before consulting
+    # the target's acquisition capability. Supply a real empty encrypted log,
+    # so this test reaches that independent acquisition boundary without
+    # replacing or bypassing the production intake guard.
+    atomic_write(
+        paths.instance_dir / "config" / "instance.yaml",
+        b"tenant_id: fixture-bounded-target\ntimezone: Etc/UTC\n",
+    )
+    fixture_key = b"d" * 32
+    reference = secret_store(paths, test_mode=True).put("event-log", fixture_key)
+    _write(
+        paths.instance_dir / "config" / "secret-references.json",
+        {"references": {"event_log": reference}},
+    )
+
+    async def initialize_log() -> None:
+        log = EventLog(load_instance_config(paths.instance_dir), fixture_key)
+        try:
+            assert await log.count() == 0
+        finally:
+            await log.close()
+
+    asyncio.run(initialize_log())
+    event_log_path = paths.instance_dir / "events" / "events.db"
+    encrypted_log_before = event_log_path.read_bytes()
     _write(
         paths.instance_dir / "config/disposable-test-dataset.json",
         {"contract": "disposable-test-dataset-v1"},
@@ -673,3 +701,4 @@ def test_older_target_is_refused_before_controller_or_services_start(
     (paths.instance_dir / "config/disposable-test-dataset.json").unlink()
     # Ordinary datasets keep their existing runtime/tool compatibility rules.
     recovery._require_bounded_target(older)
+    assert event_log_path.read_bytes() == encrypted_log_before

@@ -28,6 +28,9 @@ from adminme import source_currentness_revision as currentness
 from adminme.source_assurance import audit_source_assurance
 from tests.acceptance import test_source_assessment_revision as legacy
 from tests.acceptance import test_triage_currentness as behavior
+from tests.acceptance.test_source_assessment_revision import (
+    reviewed_revision_repository as reviewed_revision_repository,
+)
 from tests.fixtures.source_assessment_revision_worker import (
     AUTH,
     OTHER_AUTH,
@@ -633,16 +636,10 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
 )
 @pytest.mark.parametrize("outcome", ["revision", "fail", "pending"])
 def test_currentness_preserves_closed_receipts_and_exact_predecessor(
-    tmp_path, monkeypatch, outcome, predecessor_commit
+    tmp_path, monkeypatch, outcome, predecessor_commit, reviewed_revision_repository
 ):
     monkeypatch.setattr(legacy, "PREDECESSOR", predecessor_commit)
     predecessor = legacy._predecessor(tmp_path)
-    closed_repository = predecessor
-    if predecessor_commit != PREDECESSOR:
-        historical = tmp_path / "closed-revision-release"
-        historical.mkdir()
-        monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
-        closed_repository = legacy._predecessor(historical)
     instance = tmp_path / "instance"
     retained = legacy._run_predecessor(predecessor, instance, "prepare")
     [source_id] = [
@@ -651,9 +648,12 @@ def test_currentness_preserves_closed_receipts_and_exact_predecessor(
         if event["payload"]["native_message_id"] == "message-0"
     ]
     model = legacy._model(monkeypatch)
-    # Spend the closed revision once with its actual historical classifier.
+    # The current runtime needs its real release manifest while spending the
+    # closed revision with the exact archived classifier bundle. This fixture
+    # copies the current source layout and replaces only that classifier; the
+    # prepare/replay subprocesses still execute the exact predecessor archive.
     with TestClient(
-        application.create_application(settings(instance, closed_repository))
+        application.create_application(settings(instance, reviewed_revision_repository))
     ) as client:
         client.portal.call(settle, client.app.state.runtime)
         old_manifest = legacy._preview(client, [source_id])["manifest"]

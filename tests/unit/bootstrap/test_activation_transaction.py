@@ -23,6 +23,10 @@ from bootstrap.deployment_budget import (
     SETTLEMENT_SECONDS,
 )
 from bootstrap.upgrade import UpgradeError, UpgradeManager
+from tests.unit.bootstrap.intake_fixture import (
+    stub_uninitialized_intake,
+    write_release_manifest_fixture,
+)
 
 
 PREDECESSOR_COMMIT = "1" * 40
@@ -109,6 +113,7 @@ def _paths(tmp_path: Path) -> DeploymentPaths:
 def _documents(paths: DeploymentPaths) -> tuple[bytes, dict[str, object], bytes]:
     predecessor = paths.app_dir / "releases" / PREDECESSOR_COMMIT
     predecessor.mkdir(mode=0o700, exist_ok=True)
+    write_release_manifest_fixture(predecessor)
     pointer: dict[str, object] = {
         "path": str(predecessor),
         "commit": PREDECESSOR_COMMIT,
@@ -360,6 +365,7 @@ def test_interrupted_activation_restores_exact_predecessor_bytes(
     phase: str,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     pointer_payload, _pointer, readiness_payload = _documents(paths)
     pointer_path = paths.app_dir / "current-release.json"
     readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
@@ -427,6 +433,7 @@ def test_interrupted_activation_refreshes_binding_after_plugin_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     value = _journal_value(paths)
     readiness = {
         "contract": "deployment-readiness-v1",
@@ -516,6 +523,7 @@ def test_activation_recovery_failure_keeps_journal_and_services_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     owner = ActivationJournal(paths)
     owner.create(_journal_value(paths))
     manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
@@ -550,6 +558,7 @@ def test_activation_recovery_waits_for_bounded_source_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     _documents(paths)
     owner = ActivationJournal(paths)
     owner.create(_journal_value(paths))
@@ -614,6 +623,7 @@ def test_activation_recovery_accepts_only_isolated_degraded_adapter_boundary(
     proof_issue: str | None,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     _documents(paths)
     owner = ActivationJournal(paths)
     owner.create(_journal_value(paths))
@@ -714,6 +724,7 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     pointer_payload, _pointer, readiness_payload = _documents(paths)
     pointer_path = paths.app_dir / "current-release.json"
     readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
@@ -869,6 +880,7 @@ def test_interrupted_provider_config_selection_restores_exact_predecessor_bytes(
     transition_contract: str,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     pointer_payload, _pointer, readiness_payload = _documents(paths)
     atomic_write(
         paths.app_dir / "current-release.json",
@@ -993,6 +1005,7 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     _pointer_payload, pointer, _readiness_payload = _documents(paths)
     candidate = paths.app_dir / "releases" / CANDIDATE_COMMIT
     current = {
@@ -1042,6 +1055,7 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     pointer_payload, pointer, readiness_payload = _documents(paths)
     readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
     atomic_write(readiness_path, readiness_payload, mode=0o600)
@@ -1126,6 +1140,7 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
     pointer_payload, pointer, readiness_payload = _documents(paths)
     atomic_write(
         paths.app_dir / "current-release.json",
@@ -1139,6 +1154,7 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     candidate.mkdir(mode=0o700)
     release = paths.app_dir / "releases" / CANDIDATE_COMMIT
     release.mkdir(mode=0o700)
+    write_release_manifest_fixture(release)
     manager = UpgradeManager(
         paths,
         root=candidate,

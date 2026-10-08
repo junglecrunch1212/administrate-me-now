@@ -8,7 +8,7 @@ import json
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -238,10 +238,18 @@ def _report_strict_openclaw(
     assert response.status_code == 200, response.text
 
 
+@pytest.mark.parametrize("window_age_days", [0, 400])
 def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
-    tmp_path: Path,
+    tmp_path: Path, window_age_days: int
 ) -> None:
-    app = create_application(_strict_settings(tmp_path))
+    runtime_settings = _strict_settings(tmp_path)
+    original_window_start = (
+        datetime.now(timezone.utc) - timedelta(days=window_age_days)
+    ).isoformat()
+    runtime_settings.deployment_evidence["provider_effect_window"]["started_at"] = (
+        original_window_start
+    )
+    app = create_application(runtime_settings)
     with TestClient(app) as client:
         _report_strict_openclaw(client)
         ready = client.get("/api/system/ready")
@@ -250,6 +258,18 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
         assert diagnostics["ready"] is True
         assert diagnostics["activation_eligible"] is True
         assert diagnostics["deployment_readiness"]["ready"] is True
+        assert (
+            diagnostics["deployment_readiness"]["dimensions"]["observation_effects"][
+                "evidence"
+            ]["window_matches_attestation"]
+            is True
+        )
+        assert (
+            diagnostics["capabilities"]["policy:source-assurance"]["details"][
+                "provider_effects"
+            ]["observation_window"]["started_at"]
+            == original_window_start
+        )
         service_channel = diagnostics["deployment_readiness"]["dimensions"][
             "service_channel_identities"
         ]
@@ -286,10 +306,53 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
         assert "openclaw" in drift.json()["deployment_readiness"]["blocking_dimensions"]
 
 
+@pytest.mark.parametrize("skip_device_check", [False, True])
+def test_strict_readiness_reports_owner_requested_device_check_coverage(
+    tmp_path: Path, skip_device_check: bool
+) -> None:
+    runtime_settings = _strict_settings(tmp_path)
+    runtime_settings.member_identities["member-b.ts.net"] = "member-b"
+    runtime_settings.member_roles["member-b"] = "principal"
+    if skip_device_check:
+        runtime_settings.deployment_evidence["identity_acceptance"][
+            "device_check_exceptions"
+        ] = {
+            "member_ids": ["member-b"],
+            "owner_requested": True,
+            "reason": "owner_requested_device_check_omission",
+        }
+    app = create_application(runtime_settings)
+    with TestClient(app) as client:
+        _report_strict_openclaw(client)
+        ready = client.get("/api/system/ready")
+        assert ready.status_code == (200 if skip_device_check else 503), ready.text
+        dimension = ready.json()["deployment_readiness"]["dimensions"][
+            "identity_acceptance"
+        ]
+        assert dimension["evidence"]["accepted_member_count"] == 1
+        assert dimension["evidence"]["required_member_count"] == 2
+        assert dimension["evidence"]["device_check_exception_count"] == int(
+            skip_device_check
+        )
+        assert dimension["evidence"]["all_member_devices_tested"] is False
+        settings = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        ).json()
+        assert (
+            settings["control"]["readiness"]["dimensions"]["identity_acceptance"]
+            == dimension
+        )
+
+
 def test_strict_readiness_identifies_stale_source_refresh_as_settlement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    app = create_application(_strict_settings(tmp_path))
+    runtime_settings = _strict_settings(tmp_path)
+    runtime_settings.deployment_evidence["provider_effect_window"]["started_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=400)
+    ).isoformat()
+    app = create_application(runtime_settings)
     with TestClient(app) as client:
         _report_strict_openclaw(client)
         runtime: AdministrateMeRuntime = app.state.runtime

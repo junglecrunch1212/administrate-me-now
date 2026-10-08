@@ -1,5 +1,15 @@
 # Release acceptance contract
 
+CO-032 amendment (2026-10-08): require production-composition proofs for the
+immutable prerequisite → cutover → prerequisite chain, refusal of a subsequent
+policy-unaware downgrade, and interrupted recovery. Test both release roles;
+the prerequisite's historical queue is intentionally preserved until cutover.
+Fresh observation verification must retain its original historical boundary.
+An explicit owner device-coverage exception must remain distinct from a passed
+test, be bound to the configured candidate, and preserve all authorization and
+isolation checks. See
+[CO-032](CHANGE-ORDER-032-FORWARDED-INTAKE-DEPLOYMENT-READINESS.md).
+
 CO-031 amendment (2026-10-08): the production default requires explicit member
 submission for communication-derived obligations. The process tests and rollout
 boundaries in [CO-031](CHANGE-ORDER-031-MEMBER-FORWARDED-OBLIGATIONS.md) are

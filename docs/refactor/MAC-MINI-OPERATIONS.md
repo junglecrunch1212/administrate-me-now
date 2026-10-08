@@ -368,6 +368,22 @@ state is automatically put back.
 
 ## Upgrade and rollback
 
+For first member-forwarded intake activation, follow the two-release procedure
+in [CO-032](CHANGE-ORDER-032-FORWARDED-INTAKE-DEPLOYMENT-READINESS.md). Activate
+the immutable `rollback-prerequisite` merge first, with its own pending
+attestation and fresh backup/rehearsal. Then activate the later `cutover` merge,
+retaining the prerequisite for rollback. Both use the normal guarded updater;
+there is no environment switch or installed-manifest edit. After cutover, the
+encrypted epoch also prevents a chained rollback to an older unaware release.
+
+An observation window's original start does not expire; its fresh audit and
+review evidence do. Preserve that start when preparing new evidence. If the
+owner explicitly omits a configured member's device check, the pending writer's
+repeatable `--skip-member-device-check <member-id>` records that exact omission
+separately from tested member IDs. At least one member must actually be tested.
+Report the omitted coverage and retain every identity/privacy/isolation check.
+Physical recovery evidence must remain genuine and recent.
+
 An upgrade is not topology repair. Before invoking it, require the Central
 Host to be a tagged non-member infrastructure node, the runtime user to be a
 dedicated Standard account with a separately tested recovery administrator,
@@ -410,6 +426,34 @@ unsuppressed effects in the already configured observation window. It reads
 that window start from active readiness and cannot reset it. Its append-only
 `htr-10-review-v1` receipt contains only counts and hashes. A fixture or an
 unreviewed export is not HTR-10 completion.
+
+If the predecessor's export lacks the explicit observation-window origin, use
+the exact merged candidate's read-only exporter before the reducer:
+
+```bash
+python -m bootstrap.htr10_export \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe" \
+  --historical-output /absolute/path/inside/backups/historical.json \
+  --source-output /absolute/path/inside/backups/source-assurance.json \
+  --approve-provider-binding-migration
+```
+
+Here the compatibility-named approval flag confirms review of the exact
+provider-ownership audit view. The exporter prepares that view only in memory;
+it neither enrolls providers nor changes configuration. An already-current
+configuration produces no transition. A non-null transition digest must be
+reviewed separately before it can be carried into pending activation evidence.
+No provider call or runtime construction occurs. Existing outputs are never
+overwritten. Run from the clean merged candidate with its supported interpreter.
+
+Read-only collection can proceed when only deployment attestation dimensions
+are blocked, while operational topology, core capabilities, safe reads,
+ingestion, observation containment and current zero-effect accounting remain
+healthy. It cannot turn an unobserved recovery login or device test into
+evidence. Missing, unknown or broader operational degradation remains blocked.
+Both exported audits must cover the original active observation boundary; the
+reducer and pending writer reject a missing, mismatched or subsequently changed
+origin. Active readiness and physical-check timestamps remain untouched.
 
 ```bash
 python -m bootstrap.candidate_readiness \

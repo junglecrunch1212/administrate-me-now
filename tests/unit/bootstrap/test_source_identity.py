@@ -45,6 +45,7 @@ from bootstrap.deployment_budget import (
     deployment_clock,
 )
 from bootstrap.upgrade import UpgradeError, UpgradeManager
+from tests.unit.bootstrap.intake_fixture import stub_uninitialized_intake
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1135,6 +1136,7 @@ def test_updater_publishes_source_then_prepares_at_stable_final_coordinate(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     observed: dict[str, object] = {}
 
@@ -1187,6 +1189,7 @@ def test_updater_publication_failure_leaves_no_release_or_staging(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     if failure == "marker":
 
@@ -1222,6 +1225,7 @@ def test_interrupt_after_atomic_rename_retains_retry_authority(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     original_rename = os.rename
 
@@ -1254,9 +1258,11 @@ def test_interrupt_after_atomic_rename_retains_retry_authority(
 
 def test_updater_refuses_to_repair_existing_markerless_release(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     paths.create()
     releases = paths.app_dir / "releases"
     releases.mkdir(mode=0o700)
@@ -1400,10 +1406,12 @@ def test_reviewed_source_ignores_ambient_git_executable(
 @pytest.mark.parametrize("unsafe_mode", (0o755, 0o500))
 def test_updater_rejects_unsafe_releases_directory_without_repair(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     unsafe_mode: int,
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     paths.root.mkdir(mode=0o700)
     paths.app_dir.mkdir(mode=0o700)
     releases = paths.app_dir / "releases"
@@ -1423,9 +1431,11 @@ def test_updater_rejects_unsafe_releases_directory_without_repair(
 
 def test_updater_rejects_releases_symlink_without_mutating_target(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     paths.root.mkdir(mode=0o700)
     paths.app_dir.mkdir(mode=0o700)
     outside = tmp_path / "outside"
@@ -1453,6 +1463,7 @@ def test_prepare_interruption_retains_source_and_retry_finishes(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     calls: list[Path] = []
     outside = tmp_path / "outside-generated-target"
@@ -1530,6 +1541,7 @@ def test_complete_preparation_rebuilds_after_backup_failure(
     repository, commit = _upgrade_repository(tmp_path)
     (repository / ".env").unlink()
     paths = DeploymentPaths.from_root(tmp_path / "deployment-backup-retry")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     prepare_calls = 0
     backup_calls = 0
@@ -1583,6 +1595,7 @@ def test_activation_consumes_preparation_before_first_selector_and_refuses_retry
     repository, commit = _upgrade_repository(tmp_path)
     (repository / ".env").unlink()
     paths = DeploymentPaths.from_root(tmp_path / "deployment-consumed-order")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     state_path = release.parent / f".release-state-{commit}.json"
@@ -1610,9 +1623,11 @@ def test_activation_consumes_preparation_before_first_selector_and_refuses_retry
 
 def test_preparation_consumption_rejects_replaced_activity_before_selector(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-consume-replacement")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     state_path = release.parent / f".release-state-{commit}.json"
@@ -1633,9 +1648,11 @@ def test_preparation_consumption_rejects_replaced_activity_before_selector(
 
 def test_preparation_consumption_rejects_live_shared_activity_before_selector(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-consume-live-lease")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     state_path = release.parent / f".release-state-{commit}.json"
@@ -1662,12 +1679,15 @@ def test_controller_death_makes_guardian_reap_worker_before_retry(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-worker-lease")
+    stub_uninitialized_intake(monkeypatch, paths)
     ready = tmp_path / "preparation-worker-ready"
     controller_code = """
 import sys
 from pathlib import Path
+import pytest
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.upgrade import UpgradeManager
+from tests.unit.bootstrap.intake_fixture import stub_uninitialized_intake
 
 class HeldPreparationManager(UpgradeManager):
     def _prepare_release(self, release: Path) -> None:
@@ -1688,11 +1708,14 @@ time.sleep(300)
             release=release,
         )
 
-HeldPreparationManager(
-    DeploymentPaths.from_root(Path(sys.argv[3])),
-    root=Path(sys.argv[1]),
-    test_mode=True,
-)._publish_release(Path(sys.argv[1]), sys.argv[2])
+fixture_paths = DeploymentPaths.from_root(Path(sys.argv[3]))
+with pytest.MonkeyPatch.context() as fixture:
+    stub_uninitialized_intake(fixture, fixture_paths)
+    HeldPreparationManager(
+        fixture_paths,
+        root=Path(sys.argv[1]),
+        test_mode=True,
+    )._publish_release(Path(sys.argv[1]), sys.argv[2])
 """
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(REPO_ROOT)
@@ -1757,6 +1780,7 @@ def test_durable_activity_coordinate_rejects_replacement_before_retry_cleanup(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-activity-coordinate")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
 
     def initial_prepare(release: Path) -> None:
@@ -1782,6 +1806,7 @@ def test_successful_preparation_leader_cannot_leave_background_process(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-background-process")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     delayed_write = tmp_path / "background-write"
 
@@ -1893,6 +1918,7 @@ def test_unreaped_materializer_retains_private_stage_and_blocks_retry(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment-unreaped-publication")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
 
     def fail_without_terminality(
@@ -1936,9 +1962,12 @@ def test_unreaped_materializer_retains_private_stage_and_blocks_retry(
     assert (stage / "unreaped-canary").read_text("utf-8") == "retained\n"
 
 
-def test_publication_lock_excludes_concurrent_preparation(tmp_path: Path) -> None:
+def test_publication_lock_excludes_concurrent_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     paths.create()
     releases = paths.app_dir / "releases"
     releases.mkdir(mode=0o700)
@@ -1965,6 +1994,7 @@ def test_selected_release_is_verified_without_runtime_repair(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     _write_release_pointer(paths, {"commit": commit, "path": str(release)})
@@ -1983,6 +2013,7 @@ def test_retained_release_chain_is_read_only_without_preparation_authority(
     repository, first = _upgrade_repository(tmp_path)
     (repository / ".env").unlink()
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     first_release = manager._publish_release(repository, first)  # noqa: SLF001
     (repository / "second.txt").write_text("second\n", encoding="utf-8")
@@ -2054,10 +2085,12 @@ def test_retained_release_chain_is_read_only_without_preparation_authority(
 )
 def test_release_pointer_chain_rejects_malformed_or_duplicated_coordinates(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     document_factory: Callable[[str, Path], dict[str, object]],
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     _write_release_pointer(paths, document_factory(commit, release))
@@ -2072,6 +2105,7 @@ def test_existing_unselected_release_without_pending_state_is_not_repaired(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     (release.parent / f".release-state-{commit}.json").unlink()
@@ -2102,6 +2136,7 @@ def test_preparation_state_tampering_fails_before_retry_cleanup(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     state_path = release.parent / f".release-state-{commit}.json"
@@ -2125,6 +2160,7 @@ def test_public_same_release_activation_stops_before_backup(
     repository, commit = _upgrade_repository(tmp_path)
     (repository / ".env").unlink()
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     release = manager._publish_release(repository, commit)  # noqa: SLF001
     pointer = _write_release_pointer(
@@ -2327,6 +2363,7 @@ def test_release_parent_swap_before_rename_cannot_touch_replacement(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     outside = tmp_path / "outside"
     outside.mkdir(mode=0o700)
@@ -2363,6 +2400,7 @@ def test_release_parent_swap_during_materialization_cannot_touch_replacement(
 ) -> None:
     repository, commit = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     manager = UpgradeManager(paths, root=repository, test_mode=True)
     outside = tmp_path / "outside-during-materialization"
     outside.mkdir(mode=0o700)
@@ -2577,6 +2615,7 @@ def test_materializer_timeout_reaps_child_and_publisher_removes_stage(
     monkeypatch.setattr(source_identity, "SYSTEM_GIT_EXECUTABLE", fake_git)
     monkeypatch.setattr(source_identity, "_MATERIALIZATION_TIMEOUT_SECONDS", 0.2)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
+    stub_uninitialized_intake(monkeypatch, paths)
     started = time.monotonic()
 
     with pytest.raises(UpgradeError, match="publication failed"):

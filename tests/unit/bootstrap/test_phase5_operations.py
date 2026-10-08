@@ -54,6 +54,10 @@ from bootstrap.upgrade import (
     validate_candidate,
 )
 from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailure
+from tests.unit.bootstrap.intake_fixture import (
+    stub_uninitialized_intake,
+    write_release_manifest_fixture,
+)
 import bootstrap.openclaw_service as openclaw_service
 import bootstrap.runtime_service as runtime_service
 from bootstrap.openclaw_activation import activate, model_provider_configured
@@ -2817,11 +2821,14 @@ def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    stub_uninitialized_intake(monkeypatch, test_paths)
     releases = test_paths.app_dir / "releases"
     current_release = releases / ("c" * 40)
     previous_release = releases / ("b" * 40)
     current_release.mkdir(parents=True)
     previous_release.mkdir()
+    write_release_manifest_fixture(current_release)
+    write_release_manifest_fixture(previous_release)
     test_paths.root.chmod(0o700)
     test_paths.app_dir.chmod(0o700)
     releases.chmod(0o700)
@@ -2892,11 +2899,14 @@ def test_legacy_rollback_requires_quiescence_and_current_capacity_before_selecti
     monkeypatch: pytest.MonkeyPatch,
     stop_failure: str,
 ) -> None:
+    stub_uninitialized_intake(monkeypatch, test_paths)
     releases = test_paths.app_dir / "releases"
     current_release = releases / ("c" * 40)
     previous_release = releases / ("b" * 40)
     current_release.mkdir(parents=True)
     previous_release.mkdir()
+    write_release_manifest_fixture(current_release)
+    write_release_manifest_fixture(previous_release)
     for path in (
         test_paths.root,
         test_paths.app_dir,
