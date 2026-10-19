@@ -84,6 +84,7 @@ jobs:
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
           tests/unit/bootstrap/test_recovery_readiness.py
           tests/unit/bootstrap/test_release_history.py
+          tests/unit/bootstrap/test_disposable_test_reset.py
           tests/acceptance/test_recovery_readiness_baseline.py
           tests/acceptance/test_disposable_dataset_continuity.py::test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward
           tests/unit/bootstrap/test_runtime_compatibility.py

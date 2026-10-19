@@ -25,6 +25,10 @@ mismatched history cannot authorize rollback. Subsequent forward deployments
 repeat this transaction without raising the parser limit or editing live
 metadata by hand. The unjournaled credential-free legacy test path retains its
 full-chain refusal because it cannot provide durable recovery history.
+The separate test-dataset reset also refuses a new operation at capacity before
+preparation or mutation. Its already accepted and interrupted recovery paths
+remain available; this change does not extend reset authorization or alter its
+original-state archive.
 
 **PRESERVE** source verification, immutable release/lifecycle protections,
 candidate-bound readiness, observation mode, acquisition scope, intake epoch
