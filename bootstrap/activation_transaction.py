@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from bootstrap.recovery_readiness import validate_baseline
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.provider_binding_transition import valid_provider_binding_transition
 
@@ -96,6 +97,7 @@ _ROLLBACK_PHASES = frozenset(
         "services_starting",
         "doctor_running",
         "doctor_healthy",
+        "baseline_restored",
         "services_restopped",
         "recovering",
         "recovered",
@@ -403,7 +405,11 @@ def validate_journal(value: object) -> dict[str, Any]:
     }
     keys = set(value)
     extras = keys - required
-    known_extras = transition_fields | settings_fields
+    known_extras = (
+        transition_fields
+        | settings_fields
+        | {"initial_readiness_baseline", "restored_readiness"}
+    )
     has_config_transition = transition_fields <= keys
     has_settings_snapshot = settings_fields <= keys
     if (
@@ -512,6 +518,24 @@ def validate_journal(value: object) -> dict[str, Any]:
             or readiness_hash != hashlib.sha256(readiness_payload).hexdigest()
         ):
             raise ActivationJournalError("activation predecessor readiness is invalid")
+    baseline = value.get("initial_readiness_baseline")
+    if baseline is not None:
+        try:
+            validate_baseline(baseline, readiness_hash)
+        except ValueError as exc:
+            raise ActivationJournalError(
+                "activation recovery readiness baseline is invalid"
+            ) from exc
+        if value["was_running"] is not True:
+            raise ActivationJournalError(
+                "recovery readiness baseline requires running services"
+            )
+    if "restored_readiness" in value and (
+        value["phase"] not in {"committed", "recovered"}
+        or value["restored_readiness"]
+        not in {"healthy", "preexisting_attestation_gaps", "not_running"}
+    ):
+        raise ActivationJournalError("activation restored readiness result is invalid")
     if has_config_transition:
         decoded_configs: dict[str, bytes] = {}
         for prefix in ("initial", "selected"):

@@ -66,6 +66,13 @@ from bootstrap.provider_binding_transition import (
     prepare_live_provider_binding_transition,
 )
 from bootstrap.runtime_compatibility import retained_python_pin
+from bootstrap.recovery_readiness import (
+    BASELINE_CONTROLS,
+    capture_baseline,
+    validate_baseline,
+    runtime_matches_baseline,
+    full_doctor_matches_baseline,
+)
 from bootstrap.services import (
     RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
     ServiceManager,
@@ -1374,6 +1381,113 @@ class UpgradeManager:
         )
         return refreshed
 
+    def _capture_recovery_readiness_baseline(
+        self, readiness_payload: bytes | None
+    ) -> dict[str, Any] | None:
+        if readiness_payload is None or (
+            self.test_mode and not hasattr(self.services, "runtime_diagnostics")
+        ):
+            return None
+        diagnostics = self.services.runtime_diagnostics()
+        # Ordinary healthy deployments and older test fixtures need no exception.
+        from bootstrap.htr10_export import (
+            _runtime_supports_read_only_attestation_refresh,
+        )
+
+        if not _runtime_supports_read_only_attestation_refresh(diagnostics):
+            if not self.test_mode and (
+                not isinstance(diagnostics, dict)
+                or (
+                    diagnostics.get("ready") is not True
+                    and isolated_degraded_adapter_ids(diagnostics) is None
+                )
+            ):
+                raise UpgradeError(
+                    "predecessor readiness does not permit verified recovery"
+                )
+            return None
+        snapshot = capture_deployment_snapshot(self.paths)
+        return capture_baseline(
+            diagnostics,
+            readiness_sha256=hashlib.sha256(readiness_payload).hexdigest(),
+            host_fingerprint=snapshot.host_fingerprint,
+            instance_fingerprint=snapshot.instance_fingerprint,
+            control_sha256=self._recovery_control_fingerprints(),
+        )
+
+    def _recovery_control_fingerprints(self) -> dict[str, str | None]:
+        return {
+            name: self._hash_private_file(self.paths.instance_dir / "config" / name)
+            if os.path.lexists(self.paths.instance_dir / "config" / name)
+            else None
+            for name in BASELINE_CONTROLS
+        }
+
+    def _require_recovery_baseline_coordinates(self, baseline: dict[str, Any]) -> None:
+        validate_baseline(baseline, baseline.get("readiness_sha256"))
+        snapshot = capture_deployment_snapshot(self.paths)
+        if (
+            baseline["host_fingerprint"] != snapshot.host_fingerprint
+            or baseline["instance_fingerprint"] != snapshot.instance_fingerprint
+        ):
+            raise UpgradeError("recovery readiness baseline host or instance changed")
+        controls = self._recovery_control_fingerprints()
+        if any(
+            controls[name] != baseline["control_sha256"][name]
+            for name in BASELINE_CONTROLS
+            if name not in {"adapters.json", "settings-control.json"}
+        ):
+            raise UpgradeError(
+                "recovery readiness baseline shared configuration changed"
+            )
+
+    def _require_recovery_baseline_controls(self, baseline: dict[str, Any]) -> None:
+        self._require_recovery_baseline_coordinates(baseline)
+        if self._recovery_control_fingerprints() != baseline["control_sha256"]:
+            raise UpgradeError("recovery readiness baseline controls changed")
+        payload, _value = self._read_private_json_payload(
+            self.paths.instance_dir / "config" / "deployment-readiness.json"
+        )
+        if (
+            payload is None
+            or hashlib.sha256(payload).hexdigest() != baseline["readiness_sha256"]
+        ):
+            raise UpgradeError("recovery readiness evidence changed")
+
+    def _recovery_matches_readiness_baseline(
+        self, release: Path, baseline: dict[str, Any]
+    ) -> bool:
+        deadline = self._settlement_deadline
+        required = (
+            RELEASE_DOCTOR_TIMEOUT_SECONDS + 2 * RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
+        )
+        if deadline is None or deployment_clock() + required > deadline:
+            return False
+        self._require_recovery_baseline_controls(baseline)
+        pointer_path = self.paths.app_dir / "current-release.json"
+        pointer_bytes, pointer = self._read_private_json_payload(pointer_path)
+        if pointer is None or pointer.get("path") != str(release):
+            return False
+        if not runtime_matches_baseline(baseline, self.services.runtime_diagnostics()):
+            return False
+        full = self._run_release_doctor(
+            release,
+            include_synthetic_proof=True,
+            timeout_seconds=RELEASE_DOCTOR_TIMEOUT_SECONDS,
+        )
+        if (
+            not full_doctor_matches_baseline(full)
+            or deployment_clock() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS > deadline
+        ):
+            return False
+        final = self.services.runtime_diagnostics()
+        self._require_recovery_baseline_controls(baseline)
+        return (
+            runtime_matches_baseline(baseline, final)
+            and self._read_private_json_payload(pointer_path)[0] == pointer_bytes
+            and deployment_clock() < deadline
+        )
+
     def _write_refreshed_runtime_binding(
         self,
         active_readiness: dict[str, Any] | None,
@@ -1686,6 +1800,7 @@ class UpgradeManager:
                 ) from exc
             return {
                 "status": journal["phase"],
+                "restored_readiness": journal.get("restored_readiness"),
                 "transaction_id": journal["transaction_id"],
                 "history": str(history),
                 "content_exposed": False,
@@ -1791,7 +1906,13 @@ class UpgradeManager:
                     operation()
                 except Exception as exc:
                     recovery_errors.append(exc)
-            if not recovery_errors:
+            baseline = recovery_journal.get("initial_readiness_baseline")
+            if not recovery_errors and baseline is not None:
+                try:
+                    self._require_recovery_baseline_controls(baseline)
+                except Exception as exc:
+                    recovery_errors.append(exc)
+            if not recovery_errors and baseline is None:
                 try:
                     self._write_refreshed_runtime_binding(
                         recovery_journal["initial_readiness"],
@@ -1799,6 +1920,7 @@ class UpgradeManager:
                     )
                 except Exception as exc:
                     recovery_errors.append(exc)
+            restored_readiness = "not_running"
             if journal["was_running"] and not recovery_errors:
                 try:
                     restored = self.services.start()
@@ -1817,6 +1939,16 @@ class UpgradeManager:
                         recovery_healthy = self._isolated_recovery_has_full_proof(
                             predecessor
                         )
+                    if recovery_healthy:
+                        restored_readiness = "healthy"
+                    elif (
+                        baseline is not None
+                        and self._recovery_matches_readiness_baseline(
+                            predecessor, baseline
+                        )
+                    ):
+                        recovery_healthy = True
+                        restored_readiness = "preexisting_attestation_gaps"
                     if not recovery_healthy:
                         detail = (
                             "; " + self._settlement_failure_summary(recovery_proof)
@@ -1842,7 +1974,9 @@ class UpgradeManager:
                 raise UpgradeError(
                     "interrupted activation recovery did not converge: " + detail
                 )
-            journal = self.activation_journal.transition(journal, "recovered")
+            journal = self.activation_journal.transition(
+                journal, "recovered", restored_readiness=restored_readiness
+            )
             history = self.activation_journal.finish(journal)
         except ActivationJournalError as exc:
             raise UpgradeError(
@@ -1850,6 +1984,7 @@ class UpgradeManager:
             ) from exc
         return {
             "status": "recovered",
+            "restored_readiness": journal.get("restored_readiness"),
             "transaction_id": journal["transaction_id"],
             "history": str(history),
             "content_exposed": False,
@@ -2068,6 +2203,11 @@ class UpgradeManager:
                         pointer_payload
                     ).hexdigest(),
                     "initial_readiness": readiness,
+                    "initial_readiness_baseline": self._capture_recovery_readiness_baseline(
+                        readiness_payload
+                    )
+                    if was_running
+                    else None,
                     "initial_readiness_bytes": (
                         base64.b64encode(readiness_payload).decode("ascii")
                         if readiness_payload is not None
@@ -2835,6 +2975,9 @@ class UpgradeManager:
             raise UpgradeError(
                 "rollback requires the exact committed activation history"
             ) from exc
+        target_readiness_baseline = activation_history.get("initial_readiness_baseline")
+        if target_readiness_baseline is not None:
+            self._require_recovery_baseline_coordinates(target_readiness_baseline)
         target_readiness = activation_history["initial_readiness"]
         target_readiness_encoded = activation_history["initial_readiness_bytes"]
         try:
@@ -2938,6 +3081,11 @@ class UpgradeManager:
                         pointer_payload
                     ).hexdigest(),
                     "initial_readiness": readiness,
+                    "initial_readiness_baseline": self._capture_recovery_readiness_baseline(
+                        readiness_payload
+                    )
+                    if was_running
+                    else None,
                     "initial_readiness_bytes": (
                         base64.b64encode(readiness_payload).decode("ascii")
                         if readiness_payload is not None
@@ -3106,10 +3254,13 @@ class UpgradeManager:
                     "settings_control_selected",
                 )
             configure_required_llm_tool(self.paths, test_mode=self.test_mode)
-            self._write_refreshed_runtime_binding(
-                target_readiness,
-                candidate_commit=target_commit,
-            )
+            if target_readiness_baseline is None:
+                self._write_refreshed_runtime_binding(
+                    target_readiness,
+                    candidate_commit=target_commit,
+                )
+            else:
+                self._require_recovery_baseline_controls(target_readiness_baseline)
             journal = self.activation_journal.transition(
                 journal,
                 "launchagents_selecting",
@@ -3129,14 +3280,25 @@ class UpgradeManager:
                 "doctor_running",
             )
             result = self._post_switch_doctor(release)
+            restored_readiness = "healthy"
             if result["status"] != "healthy":
-                failed = self._settlement_failure_summary(result)
-                raise UpgradeError(
-                    f"rolled-back release failed Doctor: {failed or 'unknown check'}"
-                )
+                if (
+                    target_readiness_baseline is not None
+                    and self._recovery_matches_readiness_baseline(
+                        release, target_readiness_baseline
+                    )
+                ):
+                    restored_readiness = "preexisting_attestation_gaps"
+                else:
+                    failed = self._settlement_failure_summary(result)
+                    raise UpgradeError(
+                        f"rolled-back release failed Doctor: {failed or 'unknown check'}"
+                    )
             journal = self.activation_journal.transition(
                 journal,
-                "doctor_healthy",
+                "doctor_healthy"
+                if restored_readiness == "healthy"
+                else "baseline_restored",
             )
             if not was_running:
                 self.services.stop()
@@ -3144,7 +3306,9 @@ class UpgradeManager:
                     journal,
                     "services_restopped",
                 )
-            journal = self.activation_journal.transition(journal, "committed")
+            journal = self.activation_journal.transition(
+                journal, "committed", restored_readiness=restored_readiness
+            )
             history = self.activation_journal.finish(journal)
         except Exception as rollback_error:
             try:
@@ -3162,6 +3326,7 @@ class UpgradeManager:
         assert history is not None
         return {
             "status": "rolled_back",
+            "restored_readiness": journal.get("restored_readiness"),
             "commit": target_commit,
             "activation_transaction_id": transaction_id,
             "activation_history": str(history),

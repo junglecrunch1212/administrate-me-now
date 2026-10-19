@@ -6,6 +6,11 @@ runtime pins and production encrypted replay on that patch. New candidates
 remain exact-pin validated; an edited retained lock and any unlisted predecessor
 receive no exception. See
 [CO-033](CHANGE-ORDER-033-REVIEWED-PYTHON-PATCH-ALIGNMENT.md).
+Also prove that interrupted recovery restarts production composition with
+unchanged expired readiness evidence, preserves observation history and zero
+effects, reports the original gaps, and rejects any new runtime or Doctor
+failure. Explicit rollback must use the exact committed baseline; candidate
+activation must still require full readiness.
 
 CO-032 amendment (2026-10-08): require production-composition proofs for the
 immutable prerequisite → cutover → prerequisite chain, refusal of a subsequent
