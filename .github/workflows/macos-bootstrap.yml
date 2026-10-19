@@ -28,7 +28,9 @@ permissions:
 jobs:
   credential-free-rehearsal:
     runs-on: macos-15
-    timeout-minutes: 90
+    # The complete rehearsal exceeded 90 minutes after all Python tests passed.
+    # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
+    timeout-minutes: 120
     env:
       ADMINME_TEST_MODE: "1"
       PYTHONPATH: bridge

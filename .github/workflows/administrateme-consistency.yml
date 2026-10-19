@@ -15,10 +15,14 @@ jobs:
   # Keep this job name stable because protected main requires it.
   deterministic-consistency:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The complete rehearsal exceeded 90 minutes after all Python tests passed.
+    # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
+    timeout-minutes: 120
     env:
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: "1"
+      # Preserve failed fixtures for diagnosis, releasing passed test trees.
+      PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
