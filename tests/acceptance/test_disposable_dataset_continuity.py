@@ -43,6 +43,7 @@ from bootstrap.disposable_test_reset import (
     select_messages,
 )
 from bootstrap.secrets import secret_store
+from bootstrap.release_history import retained_predecessor
 from bootstrap.services import ServiceManager
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from tests.acceptance.test_disposable_test_acquisition import (
@@ -412,11 +413,12 @@ def _tree_fingerprints(root: Path) -> dict[str, str]:
     }
 
 
+@pytest.mark.parametrize("predecessor_pointer_depth", [62, 63])
 def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, predecessor_pointer_depth
 ):
     paths, candidate, manifest, abandoned_journal = accepted_reset_fixture(
-        tmp_path, monkeypatch, predecessor_pointer_depth=62
+        tmp_path, monkeypatch, predecessor_pointer_depth=predecessor_pointer_depth
     )
     # Match the existing continuity fixture's synthetic observation-window
     # prerequisite before any of the activation/rollback transitions under test.
@@ -429,7 +431,7 @@ def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
     pointer_path = paths.app_dir / "current-release.json"
     predecessor_pointer = pointer_path.read_bytes()
     manager = UpgradeManager(paths, root=candidate, test_mode=True)
-    assert len(manager._release_pointer_state()[4]) == 63
+    assert len(manager._release_pointer_state()[4]) == predecessor_pointer_depth + 1
     first_commit = manifest["candidate_commit"]
     config = paths.instance_dir / "config"
     policy_bytes = (config / "adapters.json").read_bytes()
@@ -447,7 +449,7 @@ def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
     retained_tail = {
         path: path.read_bytes() for path in releases.glob("*/retained-history.txt")
     }
-    assert len(retained_tail) == 61
+    assert len(retained_tail) == predecessor_pointer_depth - 1
     services = ServiceManager(paths, test_mode=True)
     second_commit = _commit(candidate, "fixture activation fills pointer slot 64")
     pending = _pending(paths, candidate, second_commit, monkeypatch)
@@ -462,15 +464,31 @@ def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
     history = manager.activation_journal.history
     committed_history = _tree_fingerprints(history)
     assert committed_history
-    with pytest.raises(UpgradeError, match="retention limit"):
+    with pytest.raises(UpgradeError, match="already selected"):
         manager.activate(candidate)
     assert pointer_path.read_bytes() == full_pointer
     assert _tree_fingerprints(history) == committed_history
 
+    if predecessor_pointer_depth == 63:
+        archived_tail = json.loads(predecessor_pointer)
+        while archived_tail.get("previous") is not None:
+            archived_tail = archived_tail["previous"]
+        tail_path = Path(archived_tail["path"])
+        unavailable = tail_path.with_name("temporarily-unavailable-tail")
+        tail_path.rename(unavailable)
+        try:
+            with pytest.raises(UpgradeError, match="release is missing"):
+                manager.rollback(recovery_repository=candidate)
+            assert pointer_path.read_bytes() == full_pointer
+            assert _tree_fingerprints(history) == committed_history
+            assert services.status().status == "healthy"
+        finally:
+            unavailable.rename(tail_path)
+
     rolled_back = manager.rollback(recovery_repository=candidate)
     assert rolled_back["commit"] == first_commit
     assert pointer_path.read_bytes() == predecessor_pointer
-    assert len(manager._release_pointer_state()[4]) == 63
+    assert len(manager._release_pointer_state()[4]) == predecessor_pointer_depth + 1
     assert services.status().status == "healthy"
     assert settings_path.read_bytes() == settings_bytes
     assert (config / "adapters.json").read_bytes() == policy_bytes
@@ -487,7 +505,9 @@ def test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward(
     )
     assert manager.activate(candidate)["commit"] == third_commit
     assert len(manager._release_pointer_state()[4]) == 64
-    assert _read(pointer_path)["previous"] == json.loads(predecessor_pointer)
+    assert _read(pointer_path)["previous"] == retained_predecessor(
+        json.loads(predecessor_pointer)
+    )
     assert services.status().status == "healthy"
     _accepted_dataset(paths, third_commit)
     for name, inode in retained_directories.items():

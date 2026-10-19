@@ -526,10 +526,9 @@ def _read_pointer(app: Path, app_descriptor: int) -> tuple[dict[str, Any], Path]
         raise SupervisorError("active-release pointer chain exceeds the safe depth")
     if active is None:
         raise SupervisorError("active-release pointer is invalid")
-    if len(seen) >= MAX_POINTER_DEPTH:
-        raise SupervisorError(
-            "active-release pointer chain is at its safe retention limit"
-        )
+    # A valid full chain can reach the journaled controller. It preserves the
+    # original bytes before publishing a bounded selector for the new release.
+    # Oversized, cyclic and unsafe chains remain rejected above.
     return document, active
 
 

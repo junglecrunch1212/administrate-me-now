@@ -56,7 +56,7 @@ def accepted_reset_fixture(tmp_path, monkeypatch, *, predecessor_pointer_depth=1
     previous = None
     # Synthetic inert history is established before the reset manifest exists.
     # Only the real immediate predecessor is ever selected or executed.
-    assert 1 <= predecessor_pointer_depth <= 62
+    assert 1 <= predecessor_pointer_depth <= 63
     for index in range(predecessor_pointer_depth - 1):
         historical_commit = f"{index + 1:040x}"
         historical = predecessor.parent / historical_commit

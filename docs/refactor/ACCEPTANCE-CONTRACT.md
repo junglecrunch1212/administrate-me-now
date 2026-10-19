@@ -1,5 +1,11 @@
 # Release acceptance contract
 
+CO-034 amendment (2026-10-19): prove forward activation at the 64-entry
+selector limit, exact rollback, fresh forward activation, unchanged retained
+release files and audit history, and real-runtime interrupted recovery of the
+complete original selector. Oversized or malformed tails must still fail.
+See [CO-034](CHANGE-ORDER-034-BOUNDED-RELEASE-HISTORY.md).
+
 CO-033 amendment (2026-10-19): run Linux and macOS release checks on exact
 Python 3.14.7. Prove the declared archived predecessor's source identity,
 runtime pins and production encrypted replay on that patch. New candidates
