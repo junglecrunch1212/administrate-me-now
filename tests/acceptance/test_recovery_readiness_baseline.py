@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adminme.runtime.application import create_application
+from adminme.settings_control import SettingsControlStore
 from bootstrap.activation_transaction import ActivationJournal
 from bootstrap.contracts import atomic_write
 from bootstrap.secrets import secret_store
@@ -69,7 +70,10 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
     )
     for name, value in (
         ("adapters.json", settings.adapter_config),
-        ("settings-control.json", {"revision": 0, "schema_version": 2}),
+        (
+            "settings-control.json",
+            SettingsControlStore(config / "settings-control.json").read(),
+        ),
         ("deployment-readiness.json", evidence),
         ("secret-references.json", {"references": {"event_log": reference}}),
     ):

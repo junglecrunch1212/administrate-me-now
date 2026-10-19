@@ -153,7 +153,9 @@ def test_explicit_rollback_reports_preserved_readiness_gaps(tmp_path, monkeypatc
     }
     atomic_write(paths.app_dir / "current-release.json", json.dumps(current).encode())
     readiness_path = paths.instance_dir / "config/deployment-readiness.json"
-    atomic_write(readiness_path, b'{"current":true}')
+    atomic_write(
+        readiness_path, b'{"contract":"deployment-readiness-v1","sentinel":"current"}'
+    )
     started = [False]
     manager = UpgradeManager(
         paths, root=Path(__file__).resolve().parents[3], test_mode=True
