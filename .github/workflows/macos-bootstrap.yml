@@ -77,6 +77,14 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      - name: Validate retained runtime and readiness recovery
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
+          tests/unit/bootstrap/test_recovery_readiness.py
+          tests/acceptance/test_recovery_readiness_baseline.py
+          tests/unit/bootstrap/test_runtime_compatibility.py
+          tests/acceptance/test_source_currentness_revision.py::test_reviewed_retained_patch_proves_source_runtime_and_production_replay
+
       - name: Validate staged intake deployment and readiness
         run: >-
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=5
@@ -88,9 +96,6 @@ jobs:
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/bootstrap/test_runtime_compatibility.py
-          tests/unit/bootstrap/test_recovery_readiness.py
-          tests/acceptance/test_recovery_readiness_baseline.py
-          tests/acceptance/test_source_currentness_revision.py::test_reviewed_retained_patch_proves_source_runtime_and_production_replay
           tests/unit/bootstrap/test_phase5_operations.py
           tests/unit/bootstrap/test_deployment_failure.py
           tests/acceptance/test_disposable_dataset_continuity.py
