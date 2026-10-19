@@ -1976,12 +1976,12 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
         "python": {
             "from": {
                 "compatible": ">=3.11,<3.12",
-                "preferred": "3.14.6",
+                "preferred": "3.14.7",
                 "formula": "python@3.14",
             },
             "to": {
                 "compatible": ">=3.14,<3.15",
-                "preferred": "3.14.6",
+                "preferred": "3.14.7",
                 "formula": "python@3.14",
             },
         },
@@ -2003,7 +2003,7 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
 @pytest.mark.parametrize(
     "component,coordinate,value",
     [
-        ("python", "preferred", "3.14.7"),
+        ("python", "preferred", "3.14.8"),
         ("python", "formula", "python@3.15"),
         ("node", "preferred", "24.20.0"),
         ("node", "formula", "node@25"),

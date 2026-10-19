@@ -26,9 +26,12 @@ operator approval—not an opportunistic package-manager side effect.
 
 ## Decision
 
+The Python patch and exact retained-release exception are governed by
+[CO-033](CHANGE-ORDER-033-REVIEWED-PYTHON-PATCH-ALIGNMENT.md).
+
 The target release baseline is:
 
-- CPython `>=3.14,<3.15`, preferred `3.14.6`, from `python@3.14`;
+- CPython `>=3.14,<3.15`, preferred `3.14.7`, from `python@3.14`;
 - Node `>=24.15,<25`, preferred `24.19.0`, from `node@24`;
 - Homebrew `>=6,<7`, Poetry `2.4.1`, and npm `>=11.6,<12`;
 - SQLCipher `>=4.12,<5` through the existing `sqlcipher3==0.6.2` boundary;

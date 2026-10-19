@@ -15,10 +15,14 @@ jobs:
   # Keep this job name stable because protected main requires it.
   deterministic-consistency:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The complete rehearsal exceeded 90 minutes after all Python tests passed.
+    # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
+    timeout-minutes: 120
     env:
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: "1"
+      # Preserve failed fixtures for diagnosis, releasing passed test trees.
+      PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -27,7 +31,7 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.14.6"
+          python-version: "3.14.7"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -41,9 +45,22 @@ jobs:
       - name: Install locked dependencies
         run: poetry sync --with dev
 
+      # Every pytest invocation owns the same disposable tree and clears its
+      # predecessor. Keeping earlier archived/encrypted fixtures exhausted the
+      # hosted runner during the full suite; the real Doctor disk gate stays.
+      - name: Validate retained runtime and readiness recovery
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
+          --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
+          tests/unit/bootstrap/test_recovery_readiness.py
+          tests/acceptance/test_recovery_readiness_baseline.py
+          tests/unit/bootstrap/test_runtime_compatibility.py
+          tests/acceptance/test_source_currentness_revision.py::test_reviewed_retained_patch_proves_source_runtime_and_production_replay
+
       - name: Validate member-forwarded intake and delivery
         run: >-
           poetry run pytest -p no:cacheprovider -q -ra
+          --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
           tests/acceptance/test_explicit_communication_intake_policy.py
           tests/acceptance/test_communication_intake_prerequisite.py
           tests/acceptance/test_communication_intake_upgrade_chain.py
@@ -62,6 +79,7 @@ jobs:
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/bootstrap/test_activation_transaction.py
           tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_runtime_compatibility.py
           tests/unit/bootstrap/test_phase5_operations.py
           tests/unit/bootstrap/test_deployment_failure.py
           tests/acceptance/test_disposable_dataset_continuity.py
@@ -71,6 +89,7 @@ jobs:
       - name: Validate historical review and recovery
         run: >-
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=5
+          --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
           tests/acceptance/test_apple_messages_governed_reply.py
           tests/acceptance/test_source_assessment_revision.py
           tests/acceptance/test_source_currentness_revision.py
@@ -91,6 +110,7 @@ jobs:
       - name: Validate bounded Gmail receipts and authored HTML
         run: >-
           poetry run pytest -p no:cacheprovider -q -ra
+          --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
           tests/unit/test_pipeline_pack_loader.py
           tests/unit/test_pack_loader.py
           tests/unit/test_message_context.py
@@ -134,6 +154,7 @@ jobs:
           tests/unit/bootstrap/test_restore_settlement.py
           tests/unit/bootstrap/test_phase5_operations.py
           tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_runtime_compatibility.py
           tests/unit/bootstrap/test_activation_transaction.py
           tests/acceptance/test_upgrade_deadline_rollback.py
           tests/acceptance/test_upgrade_readiness_blackout.py
@@ -176,7 +197,8 @@ jobs:
       - name: Validate bridge package
         run: |
           poetry -C bridge sync --with dev --no-interaction
-          poetry -C bridge run pytest -p no:cacheprovider -q
+          poetry -C bridge run pytest -p no:cacheprovider -q \
+            --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
           poetry -C bridge run ruff check adminme_bridge tests
           poetry -C bridge run mypy adminme_bridge
 
@@ -193,3 +215,11 @@ jobs:
           git diff --check "$ADMINME_BASE_REF...HEAD"
           git diff --check
           test -z "$(git status --porcelain)"
+
+      - name: Record hosted test storage
+        if: ${{ always() }}
+        run: |
+          df -h "${RUNNER_TEMP}"
+          if [[ -d "${RUNNER_TEMP}/adminme-consistency-pytest" ]]; then
+            du -sh "${RUNNER_TEMP}/adminme-consistency-pytest"
+          fi

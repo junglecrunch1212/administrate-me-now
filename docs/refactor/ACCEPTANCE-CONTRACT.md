@@ -1,5 +1,17 @@
 # Release acceptance contract
 
+CO-033 amendment (2026-10-19): run Linux and macOS release checks on exact
+Python 3.14.7. Prove the declared archived predecessor's source identity,
+runtime pins and production encrypted replay on that patch. New candidates
+remain exact-pin validated; an edited retained lock and any unlisted predecessor
+receive no exception. See
+[CO-033](CHANGE-ORDER-033-REVIEWED-PYTHON-PATCH-ALIGNMENT.md).
+Also prove that interrupted recovery restarts production composition with
+unchanged expired readiness evidence, preserves observation history and zero
+effects, reports the original gaps, and rejects any new runtime or Doctor
+failure. Explicit rollback must use the exact committed baseline; candidate
+activation must still require full readiness.
+
 CO-032 amendment (2026-10-08): require production-composition proofs for the
 immutable prerequisite → cutover → prerequisite chain, refusal of a subsequent
 policy-unaware downgrade, and interrupted recovery. Test both release roles;
@@ -455,7 +467,7 @@ xfail. Fakes may stand in for provider credentials and household data, but not
 for the event log, bus, projections, authorization, HTTP composition, backup,
 restore, OpenClaw protocol, or browser rendering boundary named by a row.
 
-The release environment is macOS 14 on Apple silicon, Python 3.14.6 from the
+The release environment is macOS 14 on Apple silicon, Python 3.14.7 from the
 lockfile, Node 24.19.0 (the preferred bootstrap pin), OpenClaw API
 and Gateway `2026.7.2` at commit
 `ce67ffb70e83e5ebb56ea02e814e577153f84f61`, installed from the exact

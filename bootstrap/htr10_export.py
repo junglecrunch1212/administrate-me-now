@@ -22,6 +22,7 @@ from adminme.provider_bindings import validate_provider_bindings
 from adminme.source_assurance import audit_source_assurance
 from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths, ensure_within
+from bootstrap.recovery_readiness import _ATTESTATION_REFRESH_DIMENSIONS
 from bootstrap.provider_binding_transition import (
     NoEligibleProviderBindingTransitionError,
     prepare_live_provider_binding_transition,
@@ -34,15 +35,6 @@ class HTR10ExportError(RuntimeError):
     pass
 
 
-_ATTESTATION_REFRESH_DIMENSIONS = frozenset(
-    {
-        "attestation_binding",
-        "service_account_recovery",
-        "identity_acceptance",
-        "backup_rollback",
-        "observation_effects",
-    }
-)
 _OPERATIONAL_DIMENSIONS = frozenset(
     {
         "topology",

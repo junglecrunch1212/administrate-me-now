@@ -11,6 +11,7 @@ import asyncio
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -20,6 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import adminme.runtime.application as application
+from bootstrap.contracts import DeploymentPaths, load_versions
+from bootstrap.upgrade import UpgradeError, UpgradeManager
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.source_assessment_revision import RevisionRefused
@@ -790,3 +793,77 @@ def test_currentness_preserves_closed_receipts_and_exact_predecessor(
             assert state["consumers"][subscriber]["consumer_version"] == "23.0.0"
         for state in (revised, snapshot(client)):
             assert state["consumers"][subscriber]["consumer_version"] == "23.0.0"
+
+
+def test_reviewed_retained_patch_proves_source_runtime_and_production_replay(
+    tmp_path, monkeypatch
+):
+    """Hosted CI uses the actual pinned interpreter and archived rollback code."""
+    monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
+    predecessor = legacy._predecessor(tmp_path)
+    versions = load_versions(predecessor)
+    assert versions["python"]["preferred"] == "3.14.6"
+    python = Path(sys.executable)
+    venv_bin = predecessor / ".venv" / "bin"
+    venv_bin.mkdir(mode=0o700, parents=True)
+    (venv_bin / "python").symlink_to(python)
+    for name in ("node_modules", "dist"):
+        (predecessor / "openclaw" / "administrateme" / name).mkdir(mode=0o700)
+    poetry_path, node_path = shutil.which("poetry"), shutil.which("node")
+    assert poetry_path and node_path
+    manager = UpgradeManager(
+        DeploymentPaths.from_root(tmp_path / "deployment"), root=ROOT, test_mode=False
+    )
+    # Hosted tools live outside Homebrew; executable/version and private-tree
+    # validation stay real. No provider, Keychain, service, or live path is used.
+    monkeypatch.setattr(
+        manager,
+        "_runtime_coordinates",
+        lambda _release: (
+            versions,
+            python,
+            venv_bin / "python",
+            Path(poetry_path),
+            Path(node_path).parent,
+        ),
+    )
+    head = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=30
+    ).strip()
+    evidence = manager._validate_retained_runtime(
+        predecessor, repository=ROOT, commit=PREDECESSOR, retained_by_commit=head
+    )
+    assert evidence["tracked_source_tree_matches"] is True
+    with pytest.raises(UpgradeError, match="wrong pinned Python formula"):
+        manager._validate_prepared_runtime(predecessor)
+
+    config = settings(tmp_path / "instance", ROOT, selected=["message-0"])
+    captured = _predecessor_case(
+        tmp_path,
+        monkeypatch,
+        config,
+        [behavior._source(config, 0, behavior.SCHEDULE)],
+        {
+            behavior.SCHEDULE: _historical_output(
+                [behavior._candidate("@current", behavior.SCHEDULE)]
+            )
+        },
+        predecessor=predecessor,
+    )
+    assert captured["python_version"] == load_versions(ROOT)["python"]["preferred"]
+    assert [item["title"] for item in captured["member_surface"]["items"]] == [
+        behavior.SCHEDULE
+    ]
+    assert len(captured["model_calls"]) == 1
+    reopened = _predecessor_case(
+        tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
+    )
+    assert reopened["member_surface"]["items"] == captured["member_surface"]["items"]
+    assert reopened["model_calls"] == []
+    # The declaration cannot bless a mutated retained dependency lock.
+    lock = predecessor / "poetry.lock"
+    lock.write_bytes(lock.read_bytes() + b"\n# unreviewed change\n")
+    with pytest.raises(UpgradeError, match="source is invalid"):
+        manager._validate_retained_runtime(
+            predecessor, repository=ROOT, commit=PREDECESSOR, retained_by_commit=head
+        )
