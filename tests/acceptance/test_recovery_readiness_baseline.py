@@ -161,7 +161,11 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
         assert baseline is not None
         journal_input["initial_readiness_baseline"] = baseline
         runtime = services.client.app.state.runtime
-        count_before = services.client.portal.call(runtime.event_log.count)
+
+        async def read_events(log):
+            return [event async for event in log.read_since()]
+
+        events_before = services.client.portal.call(read_events, runtime.event_log)
         owner = ActivationJournal(paths)
         owner.create(journal_input)
         # Simulate interruption after candidate control selection. The durable
@@ -220,7 +224,14 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
             baseline["blocking_dimensions"]
         )
         runtime = services.client.app.state.runtime
-        assert services.client.portal.call(runtime.event_log.count) == count_before
+        events_after = services.client.portal.call(read_events, runtime.event_log)
+        assert events_after[: len(events_before)] == events_before
+        # A real restart records its startup and fresh Gateway health report.
+        # Every original fact is preserved and no domain/provider fact is added.
+        assert [event["type"] for event in events_after[len(events_before) :]] == [
+            "runtime.started",
+            "openclaw.integration.state_changed",
+        ]
         window = final["capabilities"]["policy:source-assurance"]["details"][
             "provider_effects"
         ]["observation_window"]
