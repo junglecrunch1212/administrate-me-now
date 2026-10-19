@@ -2266,9 +2266,11 @@ def test_operation_lock_excludes_a_separate_upgrade_process(
     assert called is False
 
 
+@pytest.mark.parametrize("retained_patch", [False, True])
 def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    retained_patch: bool,
 ) -> None:
     repository, _commit_value = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
@@ -2291,7 +2293,8 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
         target.chmod(0o700)
         return target
 
-    formula_python = executable("python3.14", "Python 3.14.6")
+    expected_version = "3.14.7" if retained_patch else "3.14.6"
+    formula_python = executable("python3.14", f"Python {expected_version}")
     (release / ".venv" / "bin" / "python").symlink_to(formula_python)
     poetry = executable("poetry", "Poetry (version 2.4.1)")
     node_bin = tools / "node-bin"
@@ -2316,25 +2319,31 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
         ),
     )
 
-    manager._validate_prepared_runtime(release)  # noqa: SLF001
+    def validate() -> None:
+        if retained_patch:
+            manager._validate_runtime(release, retained_python=expected_version)  # noqa: SLF001
+        else:
+            manager._validate_prepared_runtime(release)  # noqa: SLF001
+
+    validate()
     formula_python.write_text(
         "#!/bin/sh\nprintf 'Python 3.14.5\\n'\n",
         encoding="utf-8",
     )
     formula_python.chmod(0o700)
     with pytest.raises(UpgradeError, match="wrong pinned Python formula"):
-        manager._validate_prepared_runtime(release)  # noqa: SLF001
+        validate()
     formula_python.write_text(
-        "#!/bin/sh\nprintf 'Python 3.14.6\\n'\n",
+        f"#!/bin/sh\nprintf 'Python {expected_version}\\n'\n",
         encoding="utf-8",
     )
     formula_python.chmod(0o700)
 
-    wrong_python = executable("wrong-python", "Python 3.14.6")
+    wrong_python = executable("wrong-python", f"Python {expected_version}")
     (release / ".venv" / "bin" / "python").unlink()
     (release / ".venv" / "bin" / "python").symlink_to(wrong_python)
     with pytest.raises(UpgradeError, match="outside the pinned Python"):
-        manager._validate_prepared_runtime(release)  # noqa: SLF001
+        validate()
     (release / ".venv" / "bin" / "python").unlink()
     (release / ".venv" / "bin" / "python").symlink_to(formula_python)
 
@@ -2344,7 +2353,7 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     )
     poetry.chmod(0o700)
     with pytest.raises(UpgradeError, match="wrong pinned Poetry"):
-        manager._validate_prepared_runtime(release)  # noqa: SLF001
+        validate()
     poetry.write_text(
         "#!/bin/sh\nprintf 'Poetry (version 2.4.1)\\n'\n",
         encoding="utf-8",
@@ -2354,7 +2363,7 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     node.write_text("#!/bin/sh\nprintf 'v24.18.0\\n'\n", encoding="utf-8")
     node.chmod(0o700)
     with pytest.raises(UpgradeError, match="wrong pinned Node"):
-        manager._validate_prepared_runtime(release)  # noqa: SLF001
+        validate()
 
 
 def test_release_parent_swap_before_rename_cannot_touch_replacement(

@@ -737,6 +737,12 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
     reviewed_candidate.mkdir()
     fixed_controller = tmp_path / "materialized-controller"
     fixed_controller.mkdir()
+    (fixed_controller / "bootstrap").mkdir()
+    (fixed_controller / "bootstrap" / "versions.json").write_bytes(
+        (
+            Path(__file__).resolve().parents[3] / "bootstrap" / "versions.json"
+        ).read_bytes()
+    )
     manager = UpgradeManager(paths, root=fixed_controller, test_mode=False)
     events: list[str] = []
     monkeypatch.setattr(
@@ -764,7 +770,7 @@ def test_production_recovery_uses_the_supplied_reviewed_git_candidate(
         "bootstrap.upgrade.verify_release_source_identity",
         verify_source,
     )
-    monkeypatch.setattr(manager, "_validate_prepared_runtime", lambda _release: None)
+    monkeypatch.setattr(manager, "_validate_runtime", lambda _release, **_kwargs: None)
     manager.services = SimpleNamespace(
         stop=lambda *args, **kwargs: events.append("stop"),
         start=lambda: (
@@ -1033,7 +1039,7 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
         "bootstrap.upgrade.validate_candidate",
         lambda *_args, **_kwargs: {"compatible": True},
     )
-    monkeypatch.setattr(manager, "_validate_prepared_runtime", lambda _release: None)
+    monkeypatch.setattr(manager, "_validate_runtime", lambda _release, **_kwargs: None)
     monkeypatch.setattr(
         manager,
         "_install_reviewed_openclaw",
@@ -1096,7 +1102,7 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
         "bootstrap.upgrade.validate_candidate",
         lambda *_args, **_kwargs: {"compatible": True},
     )
-    monkeypatch.setattr(manager, "_validate_prepared_runtime", lambda _release: None)
+    monkeypatch.setattr(manager, "_validate_runtime", lambda _release, **_kwargs: None)
     monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",

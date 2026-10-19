@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.14.6"
+          python-version: "3.14.7"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -62,6 +62,7 @@ jobs:
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/bootstrap/test_activation_transaction.py
           tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_runtime_compatibility.py
           tests/unit/bootstrap/test_phase5_operations.py
           tests/unit/bootstrap/test_deployment_failure.py
           tests/acceptance/test_disposable_dataset_continuity.py
@@ -134,6 +135,7 @@ jobs:
           tests/unit/bootstrap/test_restore_settlement.py
           tests/unit/bootstrap/test_phase5_operations.py
           tests/unit/bootstrap/test_source_identity.py
+          tests/unit/bootstrap/test_runtime_compatibility.py
           tests/unit/bootstrap/test_activation_transaction.py
           tests/acceptance/test_upgrade_deadline_rollback.py
           tests/acceptance/test_upgrade_readiness_blackout.py

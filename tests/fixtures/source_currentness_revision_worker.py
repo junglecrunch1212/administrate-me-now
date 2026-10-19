@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -76,6 +77,7 @@ def main():
             client.portal.call(settle, runtime)
         captured = snapshot(client)
         captured["model_calls"] = model.calls
+        captured["python_version"] = platform.python_version()
         if inputs.get("recovery_target"):
             recovery = client.post(
                 "/api/system/source-assessment-recoveries",

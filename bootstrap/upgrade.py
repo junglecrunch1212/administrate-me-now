@@ -65,6 +65,7 @@ from bootstrap.provider_binding_transition import (
     ProviderBindingTransitionError,
     prepare_live_provider_binding_transition,
 )
+from bootstrap.runtime_compatibility import retained_python_pin
 from bootstrap.services import (
     RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
     ServiceManager,
@@ -1744,17 +1745,16 @@ class UpgradeManager:
                     "activation recovery candidate source is unavailable"
                 )
             try:
-                verify_release_source_identity(
+                self._validate_retained_runtime(
                     predecessor,
                     repository=recovery_repository,
                     commit=predecessor_commit,
-                    allow_legacy_tree=True,
-                    require_tracked_tree=True,
                     retained_by_commit=journal["candidate_commit"],
                 )
-            except SourceIdentityError as exc:
-                raise UpgradeError("activation predecessor source is invalid") from exc
-            self._validate_prepared_runtime(predecessor)
+            except UpgradeError as exc:
+                raise UpgradeError(
+                    "activation predecessor source or runtime is invalid"
+                ) from exc
 
         try:
             recovery_journal = self.activation_journal.transition(
@@ -1869,23 +1869,22 @@ class UpgradeManager:
         if predecessor_release != expected:
             raise UpgradeError("retained predecessor coordinate is invalid")
         try:
-            source = verify_release_source_identity(
+            source = self._validate_retained_runtime(
                 predecessor_release,
                 repository=candidate,
                 commit=predecessor_commit,
-                allow_legacy_tree=True,
-                require_tracked_tree=True,
                 retained_by_commit=candidate_commit,
             )
-        except SourceIdentityError as exc:
-            raise UpgradeError("retained predecessor source is invalid") from exc
+        except UpgradeError as exc:
+            raise UpgradeError(
+                "retained predecessor source or runtime is invalid"
+            ) from exc
         compatibility = self._validate_instance_candidate(
             predecessor_release,
             active_root=candidate_release,
             approve_runtime_migration=True,
             allow_openclaw_rollback=True,
         )
-        self._validate_prepared_runtime(predecessor_release)
         for relative in (
             Path("bootstrap") / "install-openclaw-source.sh",
             Path("bootstrap") / "versions.json",
@@ -2818,7 +2817,15 @@ class UpgradeManager:
             approve_runtime_migration=True,
             allow_openclaw_rollback=True,
         )
-        self._validate_prepared_runtime(release)
+        if not self.test_mode:
+            if recovery_repository is None:
+                raise UpgradeError("rollback recovery repository is unavailable")
+            self._validate_retained_runtime(
+                release,
+                repository=recovery_repository,
+                commit=target_commit,
+                retained_by_commit=current_commit,
+            )
         try:
             activation_history = self.activation_journal.committed_activation(
                 target_commit=current_commit,
@@ -3471,13 +3478,50 @@ class UpgradeManager:
         )
         return versions, python_executable, python, poetry, node_bin
 
+    def _validate_retained_runtime(
+        self,
+        release: Path,
+        *,
+        repository: Path,
+        commit: str,
+        retained_by_commit: str,
+    ) -> dict[str, Any]:
+        try:
+            source = verify_release_source_identity(
+                release,
+                repository=repository,
+                commit=commit,
+                allow_legacy_tree=True,
+                require_tracked_tree=True,
+                retained_by_commit=retained_by_commit,
+            )
+        except SourceIdentityError as exc:
+            raise UpgradeError("retained predecessor source is invalid") from exc
+        if self.test_mode:
+            return source
+        try:
+            pin = retained_python_pin(
+                load_versions(self.root), load_versions(release), commit
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UpgradeError(
+                "retained predecessor Python compatibility is invalid"
+            ) from exc
+        self._validate_runtime(release, retained_python=pin)
+        return source
+
     def _validate_prepared_runtime(self, release: Path) -> None:
+        self._validate_runtime(release)
+
+    def _validate_runtime(
+        self, release: Path, *, retained_python: str | None = None
+    ) -> None:
         if self.test_mode:
             return
         versions, python_executable, python, poetry, node_bin = (
             self._runtime_coordinates(release)
         )
-        expected_python = f"Python {versions['python']['preferred']}"
+        expected_python = f"Python {retained_python or versions['python']['preferred']}"
         self._probe_runtime_version(
             python_executable,
             expected=expected_python,

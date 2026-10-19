@@ -1976,12 +1976,12 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
         "python": {
             "from": {
                 "compatible": ">=3.11,<3.12",
-                "preferred": "3.14.6",
+                "preferred": "3.14.7",
                 "formula": "python@3.14",
             },
             "to": {
                 "compatible": ">=3.14,<3.15",
-                "preferred": "3.14.6",
+                "preferred": "3.14.7",
                 "formula": "python@3.14",
             },
         },
