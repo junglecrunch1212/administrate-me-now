@@ -2003,7 +2003,7 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
 @pytest.mark.parametrize(
     "component,coordinate,value",
     [
-        ("python", "preferred", "3.14.7"),
+        ("python", "preferred", "3.14.8"),
         ("python", "formula", "python@3.15"),
         ("node", "preferred", "24.20.0"),
         ("node", "formula", "node@25"),
