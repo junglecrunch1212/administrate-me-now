@@ -279,27 +279,48 @@ def test_validator_requires_exact_service_enrollment(
 
 
 def test_executable_verification_uses_synthetic_temp_files_only(tmp_path: Path) -> None:
+    release = tmp_path.resolve() / "reviewed-release"
+    wrapper = release / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+    wrapper.parent.mkdir(parents=True)
     config: dict[str, Any] = {}
     for kind in ("cli", "wrapper"):
-        path = tmp_path / kind
+        path = wrapper if kind == "wrapper" else tmp_path / kind
         content = f"nonexecutable fixture {kind}".encode()
         path.write_bytes(content)
         path.chmod(0o600)
         config[f"{kind}_path"] = str(path)
         config[f"{kind}_sha256"] = hashlib.sha256(content).hexdigest()
-    verify_guard_files(config)
+    verify_guard_files(config, reviewed_release=release)
     for kind in ("cli", "wrapper"):
         path = Path(config[f"{kind}_path"])
         original = path.read_bytes()
         path.write_bytes(b"changed fixture")
-        with pytest.raises(ValueError, match="reviewed bytes"):
-            verify_guard_files(config)
+        with pytest.raises(ValueError, match="CoS iMessage"):
+            verify_guard_files(config, reviewed_release=release)
         path.write_bytes(original)
         path.chmod(0o622)
         with pytest.raises(ValueError, match="reviewed bytes"):
-            verify_guard_files(config)
+            verify_guard_files(config, reviewed_release=release)
         path.chmod(0o600)
         link = tmp_path / f"{kind}-symlink"
         link.symlink_to(path)
-        with pytest.raises(ValueError, match="reviewed bytes"):
-            verify_guard_files({**config, f"{kind}_path": str(link)})
+        with pytest.raises(ValueError):
+            verify_guard_files(
+                {**config, f"{kind}_path": str(link)}, reviewed_release=release
+            )
+
+    # An operator-supplied digest must not bless an external wrapper. Even an
+    # identical copy is outside the selected immutable release's trusted path.
+    impostor = tmp_path / "unreviewed-wrapper"
+    for content in (b"unguarded fixture transport", wrapper.read_bytes()):
+        impostor.write_bytes(content)
+        impostor.chmod(0o600)
+        with pytest.raises(ValueError):
+            verify_guard_files(
+                {
+                    **config,
+                    "wrapper_path": str(impostor),
+                    "wrapper_sha256": hashlib.sha256(content).hexdigest(),
+                },
+                reviewed_release=release,
+            )

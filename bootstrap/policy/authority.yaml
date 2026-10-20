@@ -21,6 +21,10 @@ agent_allowlist:
   - agent_id: "user:*"
     actions:
       - "cos.response.approved"
+      # Authenticated member-portal and mapped OpenClaw tool sessions both
+      # derive user:<member>. The response endpoint still requires its exact
+      # member approval and independent OpenClaw receipt before dispatch.
+      - "cos.response.send"
       - "commitment.*"
       - "communication.*"
       - "messaging.reply.*"

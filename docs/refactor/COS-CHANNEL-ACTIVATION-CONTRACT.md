@@ -46,12 +46,19 @@ Messages requests additionally contain `prepared_openclaw_config` and
 `cos_imsg_guard_config`. The pure channel validator and file verifier must accept
 both. Their fixed runtime coordinates are covered by the same journal,
 encrypted backup, restart and recovery boundary as the adapter configuration.
+Before stopping services, preparation reconciles the exact member peer routes,
+agent list and binding fingerprints against existing private member workspaces.
+Missing or moved workspaces and unknown members are refused. The reconciled
+request must equal the narrow channel preparation of the current gateway
+configuration; unrelated model, plugin, agent and provider changes are refused.
 
 The controller serializes with the existing updater lock, proves the selected
 immutable source, requires current healthy observation-mode readiness, stops
 the services, creates and authenticates a fresh encrypted backup and isolated
 restore rehearsal, and journals original control-file bytes before changing
-them. It never deletes or edits the event history or cursor ledger.
+them. The journal retains only the initial recipient-policy revision and event
+reference; compensation reads its contacts from encrypted history. It never
+deletes or edits the event history or cursor ledger.
 
 For live mode, `cos.channels.activated` and `observation.disabled` record the
 exact activation boundary. The old observation audit retains its original
@@ -61,6 +68,15 @@ configuration and replayed against the encrypted log. The final response guard
 holds every send while the operation journal exists. Full bounded Doctor
 settlement and unchanged provider-call counts must pass before commit releases
 that hold.
+
+CoS effect accounting verifies each private member approval, its exact recipient
+policy, the consumed independent OpenClaw approval, contact intent, terminal
+result and correlated outbound fact. Duplicate or orphan facts, missing links,
+identity drift and unknown delivery degrade global integrity. Confirmed effects
+remain counted even when their terminal chain is incomplete. A refusal before
+contact intent is an accounted zero-effect request; unexecuted draft approvals
+are not provider activity. Closed observation windows preserve the prior proof
+without hiding later live effects.
 
 ## Recovery and live safety
 

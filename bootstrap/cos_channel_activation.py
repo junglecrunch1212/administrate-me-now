@@ -239,7 +239,11 @@ class CoSChannelActivator:
             await log.close()
 
     async def _write_policy(
-        self, journal: dict[str, Any], entries: list[dict[str, str]], *, restore: bool
+        self,
+        journal: dict[str, Any],
+        entries: list[dict[str, str]] | None,
+        *,
+        restore: bool,
     ) -> dict[str, Any]:
         log = self._event_log(read_only=False)
         instance = load_instance_config(self.paths.instance_dir)
@@ -262,6 +266,26 @@ class CoSChannelActivator:
                 raise CoSActivationError(
                     "recipient policy changed before stopped-service seed"
                 )
+            if restore:
+                initial = journal["initial_policy"]
+                if initial["revision"] == 0 and initial["event_id"] is None:
+                    entries = []
+                else:
+                    previous = await log.get(initial["event_id"])
+                    if (
+                        previous is None
+                        or previous["tenant_id"] != instance.tenant_id
+                        or previous["type"] != POLICY_EVENT_TYPE
+                        or previous["payload"]["revision"] != initial["revision"]
+                    ):
+                        raise CoSActivationError(
+                            "original recipient policy evidence is unavailable"
+                        )
+                    entries = validate_recipient_entries(
+                        previous["payload"]["entries"], None
+                    )
+            if entries is None:
+                raise CoSActivationError("recipient policy entries are unavailable")
             now = datetime.now(timezone.utc).isoformat()
             event = EventEnvelope(
                 event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
@@ -447,6 +471,7 @@ class CoSChannelActivator:
                 raise CoSActivationError(
                     "configure the nonempty recipient allowlist first"
                 )
+            prepared_openclaw = request.prepared_openclaw_config
             if policy.imessage_channel_id is not None:
                 if (
                     request.prepared_openclaw_config is None
@@ -456,16 +481,52 @@ class CoSChannelActivator:
                         "Messages activation requires the guarded transport"
                     )
                 from bootstrap.cos_imessage import (
+                    prepare_channel,
                     validate_prepared_channel,
                     verify_guard_files,
                 )
+                from bootstrap.openclaw_activation import (
+                    prepare_existing_member_topology,
+                )
 
-                validate_prepared_channel(
+                prepared_openclaw = prepare_existing_member_topology(
                     request.prepared_openclaw_config,
+                    adapter_config=prepared,
+                    openclaw_root=self.paths.instance_dir / "openclaw",
+                    known_members=set(members),
+                )
+                account_prefix = (
+                    f"imessage|{request.cos_imsg_guard_config['account_id']}|"
+                )
+                exact_senders = [
+                    route.removeprefix(account_prefix)
+                    for route in prepared.get("openclaw_actor_identities", {})
+                    if route.startswith(account_prefix)
+                ]
+                expected_openclaw = prepare_existing_member_topology(
+                    prepare_channel(
+                        _json(
+                            self.paths.instance_dir / "openclaw/runtime/openclaw.json"
+                        ),
+                        request.cos_imsg_guard_config,
+                        allowed_senders=exact_senders,
+                    ),
+                    adapter_config=prepared,
+                    openclaw_root=self.paths.instance_dir / "openclaw",
+                    known_members=set(members),
+                )
+                if prepared_openclaw != expected_openclaw:
+                    raise CoSActivationError(
+                        "Messages enrollment changes unrelated gateway configuration"
+                    )
+                validate_prepared_channel(
+                    prepared_openclaw,
                     request.cos_imsg_guard_config,
                     adapter_config=prepared,
                 )
-                verify_guard_files(request.cos_imsg_guard_config)
+                verify_guard_files(
+                    request.cos_imsg_guard_config, reviewed_release=release
+                )
             elif (
                 request.prepared_openclaw_config is not None
                 or request.cos_imsg_guard_config is not None
@@ -538,7 +599,12 @@ class CoSChannelActivator:
                 "owner_member_id": request.owner_member_id,
                 "initial_files": initial_files,
                 "initial_external_files": {},
-                "initial_policy": allowed,
+                # Contacts remain only in the encrypted event log. Recovery
+                # resolves this immutable reference instead of caching them.
+                "initial_policy": {
+                    "event_id": allowed["event_id"],
+                    "revision": allowed["revision"],
+                },
                 "seed_policy": request.recipient_entries is not None,
                 "enabled_live": enable_live,
                 "owner_authorization_sha256": request.owner_authorization_sha256,
@@ -585,7 +651,7 @@ class CoSChannelActivator:
                 if policy.imessage_channel_id is not None:
                     atomic_write(
                         self.paths.instance_dir / "openclaw/runtime/openclaw.json",
-                        _payload(request.prepared_openclaw_config),
+                        _payload(prepared_openclaw),
                     )
                     atomic_write(
                         self.config_dir / "cos-imsg-guard.json",
@@ -704,11 +770,7 @@ class CoSChannelActivator:
             else:
                 atomic_write(path, base64.b64decode(encoded, validate=True))
         if journal.get("seed_policy"):
-            asyncio.run(
-                self._write_policy(
-                    journal, journal["initial_policy"]["entries"], restore=True
-                )
-            )
+            asyncio.run(self._write_policy(journal, None, restore=True))
         # Recovery pauses all polling. It never resumes a member account or
         # deletes newly acquired facts, the old selection, or its lifetime ledger.
         adapters = _json(self.config_dir / "adapters.json")

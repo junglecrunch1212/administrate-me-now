@@ -9,7 +9,7 @@ from typing import Callable, Sequence
 
 from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
 
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.google_oauth_contract import (
     GOOGLE_READONLY_ADAPTER_SCOPES,
     credential_member_digest,
@@ -33,7 +33,7 @@ def _assert_exact_grant(credentials: object, requested_scopes: Sequence[str]) ->
         granted_scopes and granted_scopes != requested
     ):
         raise RuntimeError(
-            "Google OAuth grant does not exactly match the requested read-only scopes"
+            "Google OAuth grant does not exactly match the requested scopes"
         )
 
 
@@ -80,8 +80,7 @@ def enroll(
 
     def authorization_url(**kwargs: object) -> tuple[str, str]:
         url, state = original_authorization_url(**kwargs)
-        authorization_url_file.write_text(url, encoding="utf-8")
-        authorization_url_file.chmod(0o600)
+        atomic_write(authorization_url_file, url.encode("utf-8"), mode=0o600)
         return url, state
 
     flow.authorization_url = authorization_url  # type: ignore[method-assign]
@@ -141,7 +140,6 @@ def enroll(
     if service_principal_id:
         from datetime import datetime, timezone
         import hashlib
-        from bootstrap.contracts import atomic_write
 
         atomic_write(
             paths.run_dir / "cos-google-enrollment.json",

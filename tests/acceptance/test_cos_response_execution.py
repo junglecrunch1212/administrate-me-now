@@ -19,6 +19,7 @@ from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+from adminme.source_assurance import audit_source_assurance
 
 ROOT = Path(__file__).resolve().parents[2]
 A = "member-response-a"  # fixture:tenant_data:ok
@@ -240,6 +241,13 @@ async def _events(runtime: Any, types: list[str]) -> list[dict[str, Any]]:
     return [event async for event in runtime.event_log.read_since(types=types)]
 
 
+async def _provider_assurance(runtime: Any) -> dict[str, Any]:
+    report = await audit_source_assurance(
+        runtime.event_log, repository_root=ROOT, capabilities={}
+    )
+    return report["provider_effects"]
+
+
 def test_response_observation_independent_approval_and_adapter_bypass(
     tmp_path: Path,
 ) -> None:
@@ -279,6 +287,12 @@ def test_response_observation_independent_approval_and_adapter_bypass(
             "denied",
             "suppressed",
         ]
+        assurance = client.portal.call(_provider_assurance, runtime)
+        assert assurance["state"] == "healthy", assurance
+        assert assurance["zero_effect_state"] == "healthy", assurance
+        assert assurance["counts"]["provider_called_true"] == 0
+        assert assurance["counts"]["provider_called_false"] == 2
+        assert assurance["counts"]["suppressed_true"] == 1
 
 
 def test_response_rejects_other_member_group_attachment_and_revocation(
@@ -386,6 +400,10 @@ def test_response_exact_delivery_or_ambiguity_never_retries(
         assert second.json()["status"] == ("unknown" if ambiguous else "sent")
         assert second.json()["automatic_retry_allowed"] is False
         assert len(service.calls) == 1
+        assurance = client.portal.call(_provider_assurance, runtime)
+        assert assurance["state"] == ("degraded" if ambiguous else "healthy"), assurance
+        assert assurance["counts"]["provider_called_true"] == (0 if ambiguous else 1)
+        assert assurance["counts"]["provider_called_unknown"] == (1 if ambiguous else 0)
     with TestClient(create_application(_settings(instance))) as client:
         repeated = client.post(EXECUTE, headers=AUTH, json=execution)
         assert repeated.status_code == 200, repeated.text
@@ -497,7 +515,52 @@ def test_native_response_claim_is_single_use_and_rechecks_policy(
         assert "transport_dispatch" not in result.json()
         effects = client.portal.call(_events, runtime, ["external.sent"])
         assert len(effects) == (0 if revoke_before_claim else 1)
+        assurance = client.portal.call(_provider_assurance, runtime)
+        assert assurance["state"] == (
+            "degraded" if revoke_before_claim else "healthy"
+        ), assurance
+        assert assurance["counts"]["provider_called_true"] == (
+            0 if revoke_before_claim else 1
+        )
         assert (
             client.post(endpoint + "/claim", headers=AUTH, json=claim).status_code
             == 403
         )
+
+
+def test_native_response_observation_has_complete_zero_effect_audit(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client)
+        approved = client.post(
+            BASE + "/approvals",
+            headers=HEADERS,
+            json={
+                "request_id": "native-suppressed-approval",
+                "channel": "imessage",
+                "service_channel_id": "channel:cos:imessage",
+                "provider_account_id": IMESSAGE_ACCOUNT,
+                "recipient": PHONE,
+                "subject": "",
+                "body": "Exact observation fixture response.",
+            },
+        )
+        assert approved.status_code == 201, approved.text
+        approval = approved.json()["approval_event_id"]
+        execution = client.post(
+            EXECUTE, headers=AUTH, json=_execution(client, approval)
+        )
+        assert execution.status_code == 200, execution.text
+        assert execution.json()["status"] == "suppressed"
+        assert "transport_dispatch" not in execution.json()
+        runtime = client.app.state.runtime
+        assert client.portal.call(_events, runtime, ["external.sent"]) == []
+        assurance = client.portal.call(_provider_assurance, runtime)
+        assert assurance["state"] == "healthy", assurance
+        assert assurance["zero_effect_state"] == "healthy", assurance
+        assert assurance["counts"]["provider_called_true"] == 0
+        assert assurance["counts"]["provider_called_false"] == 1
+        assert assurance["counts"]["suppressed_true"] == 1

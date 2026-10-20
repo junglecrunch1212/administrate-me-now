@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 346,
-    "technical_event_types": 277,
+    "technical_event_schemas": 352,
+    "technical_event_types": 283,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -10008,6 +10008,143 @@
     },
     {
       "additional_properties": false,
+      "event_type": "cos.channels.activated",
+      "family": "governance",
+      "properties": {
+        "acquisition_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Acquisition Sha256",
+          "type": "string"
+        },
+        "activation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Activation Id",
+          "type": "string"
+        },
+        "allowlist_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Allowlist Event Id",
+          "type": "string"
+        },
+        "allowlist_revision": {
+          "minimum": 1,
+          "title": "Allowlist Revision",
+          "type": "integer"
+        },
+        "backup_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Backup Sha256",
+          "type": "string"
+        },
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/SenderProof"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "title": "Channels",
+          "type": "array"
+        },
+        "contract": {
+          "const": "cos-channel-operation-v1",
+          "default": "cos-channel-operation-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "enabled_at": {
+          "title": "Enabled At",
+          "type": "string"
+        },
+        "observation_window_started_at": {
+          "title": "Observation Window Started At",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 240,
+          "pattern": "^operator:.+",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "owner_authorization_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Authorization Sha256",
+          "type": "string"
+        },
+        "rehearsal_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rehearsal Sha256",
+          "type": "string"
+        },
+        "release_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Release Commit",
+          "type": "string"
+        },
+        "suppressed_backlog_released": {
+          "const": false,
+          "default": false,
+          "title": "Suppressed Backlog Released",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "activation_id",
+        "release_commit",
+        "enabled_at",
+        "acquisition_sha256",
+        "allowlist_event_id",
+        "allowlist_revision",
+        "channels",
+        "backup_sha256",
+        "rehearsal_sha256",
+        "owner_authorization_sha256",
+        "operator_principal_id",
+        "observation_window_started_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.channels.deactivated",
+      "family": "governance",
+      "properties": {
+        "activation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Activation Id",
+          "type": "string"
+        },
+        "observation_active": {
+          "const": true,
+          "default": true,
+          "title": "Observation Active",
+          "type": "boolean"
+        },
+        "operator_principal_id": {
+          "maxLength": 240,
+          "pattern": "^operator:.+",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "operation_failed",
+            "operator_requested",
+            "interrupted_operation"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "activation_id",
+        "reason",
+        "operator_principal_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "cos.delegated_action.canonical_outcome_returned",
       "family": "delegated_execution",
       "properties": {
@@ -12503,6 +12640,243 @@
         "effect_count"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.response.approved",
+      "family": "external_write",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "channel": {
+          "enum": [
+            "email",
+            "imessage"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-plain-text-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_account_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "recipient": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Recipient",
+          "type": "string"
+        },
+        "service_channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Service Channel Id",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 300,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "member_id",
+        "channel",
+        "service_channel_id",
+        "provider_account_id",
+        "recipient",
+        "subject",
+        "body",
+        "content_fingerprint",
+        "policy_event_id",
+        "policy_revision",
+        "approved_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.response.attempted",
+      "family": "external_write",
+      "properties": {
+        "approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "attempted_at": {
+          "title": "Attempted At",
+          "type": "string"
+        },
+        "automatic_retry_allowed": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry Allowed",
+          "type": "boolean"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-plain-text-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "openclaw_approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Openclaw Approval Event Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "member_id",
+        "approval_event_id",
+        "openclaw_approval_event_id",
+        "content_fingerprint",
+        "policy_event_id",
+        "attempted_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.response.result",
+      "family": "external_write",
+      "properties": {
+        "approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "automatic_retry_allowed": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry Allowed",
+          "type": "boolean"
+        },
+        "completed_at": {
+          "title": "Completed At",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-plain-text-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "anyOf": [
+            {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider Effect Count"
+        },
+        "reason": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "sent",
+            "suppressed",
+            "denied",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "member_id",
+        "approval_event_id",
+        "content_fingerprint",
+        "status",
+        "reason",
+        "provider_effect_count",
+        "completed_at"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
@@ -32172,6 +32546,71 @@
         "action",
         "revision",
         "runtime_reconciled",
+        "changed_by_member_id",
+        "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.cos_response_allowlist_changed",
+      "family": "settings",
+      "properties": {
+        "changed_at": {
+          "minLength": 1,
+          "title": "Changed At",
+          "type": "string"
+        },
+        "changed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-allowlist-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "maxItems": 100,
+          "title": "Entries",
+          "type": "array"
+        },
+        "grants_provider_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Provider Authority",
+          "type": "boolean"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "service_principal_id": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Service Principal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "service_principal_id",
+        "revision",
+        "entries",
         "changed_by_member_id",
         "changed_at"
       ],

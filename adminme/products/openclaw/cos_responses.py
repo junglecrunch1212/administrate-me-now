@@ -434,16 +434,34 @@ async def _execute_locked(
             async def never_send() -> None:
                 raise PermissionError("observation must suppress native dispatch")
 
-            await outbound(
-                session,
-                "cos.response.send",
-                {"content_fingerprint": payload["content_fingerprint"]},
-                never_send,
-                manager=runtime.observation,
-                event_sink=runtime.events,
-                target_channel="imessage",
-                target_identifier=payload["recipient"],
+            audit_token = set_outbound_audit_context(
+                OutboundAuditContext(
+                    initiating_command_id=approval_id,
+                    initiating_event_id=attempt_id,
+                    domain_approval_event_id=approval_id,
+                    openclaw_approval_event_id=openclaw_id,
+                    provider="imessage",
+                    provider_account_id=payload["provider_account_id"],
+                    operation="cos.response.send",
+                    content_fingerprint=payload["content_fingerprint"],
+                    owner_scope=f"private:{session.auth_member_id}",
+                    visibility_scope=f"private:{session.auth_member_id}",
+                    sensitivity="sensitive",
+                )
             )
+            try:
+                await outbound(
+                    session,
+                    "cos.response.send",
+                    {"content_fingerprint": payload["content_fingerprint"]},
+                    never_send,
+                    manager=runtime.observation,
+                    event_sink=runtime.events,
+                    target_channel="imessage",
+                    target_identifier=payload["recipient"],
+                )
+            finally:
+                reset_outbound_audit_context(audit_token)
             return await _terminal(
                 runtime,
                 session,
@@ -689,7 +707,8 @@ async def claim_imessage(
         body=body.body,
     )
     async with runtime.settings_command_locks.setdefault(
-        f"cos-response-policy:{runtime.settings.instance.tenant_id}", asyncio.Lock()
+        f"cos-response-native-claim:{runtime.settings.instance.tenant_id}",
+        asyncio.Lock(),
     ):
         matches = [
             admission
@@ -712,7 +731,13 @@ async def claim_imessage(
         admission["outbound_task"] = asyncio.create_task(
             _native_outbound(runtime, admission, ready)
         )
-        if not await asyncio.wait_for(asyncio.shield(ready), 4):
+        try:
+            admitted = await asyncio.wait_for(asyncio.shield(ready), 4)
+        except TimeoutError as exc:
+            admission["outbound_task"].cancel()
+            await asyncio.shield(admission["outbound_task"])
+            raise HTTPException(503, "CoS native dispatch admission timed out") from exc
+        if not admitted:
             raise HTTPException(403, "CoS native dispatch was suppressed")
         return {
             "allowed": True,
@@ -810,6 +835,10 @@ async def _native_outbound(
     session = admission["session"]
     payload = admission["payload"]
     approval_id = admission["approval_event_id"]
+    policy_lock = runtime.settings_command_locks.setdefault(
+        f"cos-response-policy:{session.tenant_id}", asyncio.Lock()
+    )
+    acquired = False
     token = set_outbound_audit_context(
         OutboundAuditContext(
             initiating_command_id=approval_id,
@@ -835,6 +864,11 @@ async def _native_outbound(
         return {"accepted": True}
 
     try:
+        # Hold the same lock as Settings revocation until native settlement.
+        # The callback never needs this lock, so a successful revocation cannot
+        # race a still-admitted transport call.
+        await policy_lock.acquire()
+        acquired = True
         result = await outbound(
             session,
             "cos.response.send",
@@ -861,6 +895,8 @@ async def _native_outbound(
             )
         )
     finally:
+        if acquired:
+            policy_lock.release()
         if not ready.done():
             ready.set_result(False)
         reset_outbound_audit_context(token)

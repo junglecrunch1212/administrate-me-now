@@ -234,7 +234,7 @@ async def runtime_live_authorization(
             validate_prepared_channel(
                 gateway, guard, adapter_config=runtime.settings.adapter_config
             )
-            verify_guard_files(guard)
+            verify_guard_files(guard, reviewed_release=runtime.settings.repository_root)
     except Exception:
         return {"authorized": False, "reason": "cos_live_authorization_missing"}
     return await live_authorization(

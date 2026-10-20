@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -55,6 +56,118 @@ def model_provider_configured(paths: DeploymentPaths) -> bool:
         and data.get("workspace_configured") is True
         and data.get("cron_reconciled") is True
     )
+
+
+def prepare_existing_member_topology(
+    config: dict[str, Any],
+    *,
+    adapter_config: dict[str, Any],
+    openclaw_root: Path,
+    known_members: set[str],
+) -> dict[str, Any]:
+    """Prepare routes for enrollment without creating or changing workspaces.
+
+    Operational channel enrollment may add actor routes for already provisioned
+    members. Missing agents, changed workspace coordinates or unprovisioned
+    members fail before the activation journal or any live configuration write.
+    """
+    actors = adapter_config.get("openclaw_actor_identities") or {}
+    chat = adapter_config.get("member_chat_enabled_members") or []
+    if (
+        not isinstance(actors, dict)
+        or not all(
+            isinstance(key, str) and isinstance(value, str) and value
+            for key, value in actors.items()
+        )
+        or not isinstance(chat, list)
+        or not all(isinstance(member, str) and member for member in chat)
+    ):
+        raise RuntimeError("OpenClaw prepared actor identity map is invalid")
+    members = sorted(set(actors.values()) | set(chat))
+    if not set(members) <= known_members:
+        raise RuntimeError("OpenClaw prepared actor map names an unknown member")
+    expected = {
+        member_agent_id(member): str(member_workspace_path(openclaw_root, member))
+        for member in members
+    }
+    result = copy.deepcopy(config)
+    agents = (result.get("agents") or {}).get("list")
+    if not isinstance(agents, list) or not all(isinstance(row, dict) for row in agents):
+        raise RuntimeError("OpenClaw prepared member agents are unavailable")
+    member_rows = [
+        row for row in agents if str(row.get("id", "")).startswith("adminme-")
+    ]
+    actual = {row["id"]: row.get("workspace") for row in member_rows}
+    if len(actual) != len(member_rows) or actual != expected:
+        raise RuntimeError("OpenClaw prepared member workspace coordinates changed")
+    for workspace in expected.values():
+        path = Path(workspace)
+        if path.is_symlink() or not path.is_dir() or path.resolve() != path:
+            raise RuntimeError("OpenClaw prepared member workspace is unavailable")
+
+    service_config = adapter_config.get("service_identities")
+    if isinstance(service_config, dict):
+        service_config = {
+            **service_config,
+            "channels": [
+                {**row, "routes": []} if isinstance(row, dict) else row
+                for row in service_config.get("channels") or []
+            ],
+        }
+    _, channels = validate_service_identity_config(
+        service_config, member_ids=set(members), household_party_ids=set()
+    )
+    existing_bindings = result.get("bindings") or []
+    if not isinstance(existing_bindings, list) or not all(
+        isinstance(row, dict) for row in existing_bindings
+    ):
+        raise RuntimeError("OpenClaw prepared bindings are invalid")
+    bindings = [
+        row
+        for row in existing_bindings
+        if not str(row.get("agentId", "")).startswith("adminme-")
+    ]
+    accounts: dict[tuple[str, str], tuple[str, str, str]] = {}
+    for route, member in sorted(actors.items()):
+        parts = route.split("|", 2)
+        if len(parts) != 3 or not all(parts):
+            raise RuntimeError("OpenClaw actor route must be channel|account|actor")
+        channel, account, actor = parts
+        key = (channel.casefold(), account.casefold())
+        prior = accounts.setdefault(key, (channel, account, member))
+        if prior[:2] != (channel, account):
+            raise RuntimeError("OpenClaw prepared account casing is ambiguous")
+        if prior[2] != member:
+            service = cos_message_channel_for_account(
+                channels, transport_channel_id=channel, account_id=account
+            )
+            if service is None or service.intake_mode != "member_submission":
+                raise RuntimeError("OpenClaw prepared account is shared across members")
+        bindings.append(
+            {
+                "agentId": member_agent_id(member),
+                "match": {
+                    "channel": channel,
+                    "accountId": account,
+                    "peer": {"kind": "direct", "id": actor},
+                },
+            }
+        )
+    result["bindings"] = bindings
+    result.setdefault("session", {})["dmScope"] = "per-account-channel-peer"
+    plugin = (
+        result.setdefault("plugins", {})
+        .setdefault("entries", {})
+        .setdefault("administrateme", {})
+    )
+    plugin.setdefault("config", {}).update(
+        {
+            "dmScope": REQUIRED_DM_SCOPE,
+            "memberAgentIds": [member_agent_id(member) for member in members],
+            "bindingFingerprints": list(binding_fingerprints(actors, frozenset(chat))),
+        }
+    )
+    return result
 
 
 def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:

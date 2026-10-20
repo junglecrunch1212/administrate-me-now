@@ -229,8 +229,19 @@ def validate_prepared_channel(
         raise ValueError("CoS member tools can bypass the guarded provider")
 
 
-def verify_guard_files(config: dict[str, Any]) -> None:
-    """Recheck on-disk bytes at enrollment; runtime repeats the provider check."""
+def verify_guard_files(config: dict[str, Any], *, reviewed_release: Path) -> None:
+    """Bind the wrapper to immutable release bytes, then verify both executables."""
+    expected_wrapper = (
+        reviewed_release / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+    )
+    if (
+        not reviewed_release.is_absolute()
+        or expected_wrapper.resolve(strict=True) != expected_wrapper
+        or Path(config["wrapper_path"]) != expected_wrapper
+        or config["wrapper_sha256"]
+        != hashlib.sha256(expected_wrapper.read_bytes()).hexdigest()
+    ):
+        raise ValueError("CoS iMessage wrapper is not the selected release guard")
     for path_key, digest_key in (
         ("cli_path", "cli_sha256"),
         ("wrapper_path", "wrapper_sha256"),

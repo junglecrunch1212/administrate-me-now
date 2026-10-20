@@ -59,6 +59,8 @@ Generic adapter calls and mailbox-management operations cannot send as CoS.
 
 OpenClaw's ordinary outgoing-message hook is supplemental. The dedicated
 iMessage account's actual `cliPath` is the packaged `cos-imsg-guard.mjs`.
+Enrollment and final authorization require that exact file inside the selected
+immutable release; a replacement wrapper and a matching supplied hash are refused.
 The guard relays only enumerated read RPCs. Every other mutation and every CLI
 send is denied. A plain-text direct send to one E.164 recipient must match a
 short-lived, independently approved pending admission in the Python runtime.

@@ -160,6 +160,50 @@ def test_guarded_preparation_retains_member_config_and_requires_send_grant(
         prepare_configuration(original, changed, enable_live=live)
 
 
+@pytest.mark.parametrize("live", [False, True])
+def test_prepared_dedicated_oauth_grants_pass_production_adapter_binding_gate(
+    tmp_path: Path, live: bool
+) -> None:
+    requested = _configuration(tmp_path)
+    selected = requested["adapters"][1]["config"]
+    selected.pop("service_account_key_ref")
+    selected.update(
+        oauth_credentials_ref="keychain://fixture/cos-gmail",
+        binding_provenance="oauth-subject",
+        permission_scope=[
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+        ],
+    )
+    previous = copy.deepcopy(requested)
+    previous.pop(CONFIG_KEY)
+    prepared = prepare_configuration(previous, requested, enable_live=live)
+    # Exercise the production loader's ownership gate before credentials are
+    # resolved or any provider can be contacted. A broader OAuth grant must not
+    # accidentally become a general service-owned write exception.
+    adapters = load_builtin_adapters(
+        prepared,
+        repository_root=ROOT,
+        member_roles={MEMBER_A: "principal"},
+        household_mapping={},
+        service_principal_ids={COS_SERVICE_PRINCIPAL_ID},
+        validate_bindings=True,
+    )
+    assert [adapter.instance_name for adapter in adapters] == ["fixture-cos-gmail"]
+    prepared["adapters"][1]["config"]["permission_scope"].append(
+        "https://www.googleapis.com/auth/gmail.modify"
+    )
+    with pytest.raises(ValueError, match="exact read and send grants"):
+        load_builtin_adapters(
+            prepared,
+            repository_root=ROOT,
+            member_roles={MEMBER_A: "principal"},
+            household_mapping={},
+            service_principal_ids={COS_SERVICE_PRINCIPAL_ID},
+            validate_bindings=True,
+        )
+
+
 class _ReadOnlyGmail:
     def __init__(self) -> None:
         self.mode = ""

@@ -65,11 +65,18 @@ jobs:
             tests/acceptance/test_cos_response_execution.py \
             tests/acceptance/test_cos_channel_acquisition.py \
             tests/unit/test_cos_channel_operation.py \
+            tests/unit/test_cos_response_assurance.py \
             tests/unit/bootstrap/test_cos_channel_activation.py \
             tests/unit/bootstrap/test_cos_imessage.py \
+            tests/unit/bootstrap/test_cos_member_topology.py \
             tests/unit/test_cos_response_policy.py \
+            tests/unit/test_provider_bindings.py \
             tests/unit/bootstrap/test_google_oauth.py \
             tests/adapters/test_credentials.py
+
+      - name: Validate CoS native transport and plugin contract
+        if: ${{ !cancelled() }}
+        run: |
           npm ci --prefix openclaw/administrateme --ignore-scripts
           npm run check --prefix openclaw/administrateme
           npm test --prefix openclaw/administrateme

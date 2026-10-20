@@ -55,8 +55,10 @@ refuses mutations unless an exact unclaimed response admission exists.
 Admission binds account, normalized phone and full text, expires after thirty
 seconds and is atomically claimed once. Generic messages can consume only an
 identical already-approved effect, never change its recipient or content.
-The claim marks dispatch as in flight; later revocation cannot recall an
-already admitted provider call.
+The claim marks dispatch as in flight. The provider settlement holds the same
+tenant policy lock as Settings revocation, so a completed revocation cannot
+race a previously admitted response. An in-flight revocation waits for the
+bounded native result; it does not recall an already submitted message.
 
 The final claim opens the existing observation wrapper, which waits for the
 guard's terminal callback. Provider success is audited only after that callback.

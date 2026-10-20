@@ -189,6 +189,10 @@ def test_authorized_transition_preserves_selection_and_commits_only_after_doctor
     )
     assert configured["adapters"][0]["enabled"] is False
     assert not controller.journal_path.exists()
+    history = next((controller.directory / "history").glob("*.json"))
+    journal = json.loads(history.read_text())
+    assert journal["initial_policy"] == {"event_id": None, "revision": 0}
+    assert "member-a@example.invalid" not in history.read_text()
     policy, events = asyncio.run(_audit(controller))
     assert policy["revision"] == 1
     assert {event["type"] for event in events} >= {
@@ -269,3 +273,100 @@ def test_interrupted_journal_blocks_new_activation_and_can_be_recovered(
     monkeypatch.setattr(controller, "_finish", real_finish)
     assert controller.recover()["observation_active"] is True
     assert not controller.journal_path.exists()
+
+
+def test_compensation_resolves_prior_contacts_only_from_encrypted_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller, request, _original = _controller(tmp_path, monkeypatch)
+    original_entries = [
+        {
+            "member_id": MEMBER_A,
+            "channel": "email",
+            "address": "prior-recipient@example.invalid",
+        }
+    ]
+    prior = asyncio.run(
+        controller._write_policy(
+            {
+                "activation_id": "fixture-original-policy",
+                "initial_policy": {"event_id": None, "revision": 0},
+                "owner_member_id": MEMBER_A,
+                "operator_principal_id": "operator:fixture-channel-enrollment",
+            },
+            original_entries,
+            restore=False,
+        )
+    )
+    calls = 0
+
+    def settle(_release: Path) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise CoSActivationError("synthetic settlement rejection")
+        return {"status": "healthy"}
+
+    monkeypatch.setattr(controller, "_settle", settle)
+    with pytest.raises(CoSActivationError, match="settlement rejection"):
+        controller.activate(request, enable_live=True)
+    policy, _events = asyncio.run(_audit(controller))
+    assert policy["revision"] == 3
+    assert policy["entries"] == original_entries
+    history = next((controller.directory / "history").glob("*.json"))
+    journal = json.loads(history.read_text())
+    assert journal["initial_policy"] == {
+        "event_id": prior["event_id"],
+        "revision": 1,
+    }
+    assert "prior-recipient@example.invalid" not in history.read_text()
+
+
+def test_unrelated_gateway_change_is_rejected_before_stopping_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bootstrap.cos_imessage import prepare_channel
+
+    controller, request, _original = _controller(tmp_path, monkeypatch)
+    guard = {
+        "account_id": "cos-messages-fixture",
+        "wrapper_path": "/fixture/reviewed-wrapper",
+        "db_path": "/fixture/dedicated-messages.db",
+    }
+    senders = ["+12025550101"]  # fixture:tenant_data:ok
+    adapters = copy.deepcopy(request.adapter_config)
+    adapters["cos_channel_acquisition"]["imessage_channel_id"] = (
+        "channel:chief-of-staff:apple-imessage"
+    )
+    adapters["service_identities"]["channels"][0]["response_transport_contract"] = (
+        "cos-imessage-guard-v1"
+    )
+    adapters["openclaw_actor_identities"] = {
+        f"imessage|{guard['account_id']}|{senders[0]}": MEMBER_A
+    }
+    original_gateway = {
+        "models": {"preserve": "reviewed-model"},
+        "agents": {"list": [{"id": "administrator"}]},
+    }
+    gateway_path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+    _write(gateway_path, original_gateway)
+    prepared = prepare_channel(original_gateway, guard, allowed_senders=senders)
+    prepared["models"]["preserve"] = "unrelated-replacement"
+    # Workspace preparation has separate real-directory coverage. Here the
+    # real controller must refuse an unrelated delta before any service/write.
+    monkeypatch.setattr(
+        "bootstrap.openclaw_activation.prepare_existing_member_topology",
+        lambda config, **_kwargs: copy.deepcopy(config),
+    )
+    changed = request.model_copy(
+        update={
+            "adapter_config": adapters,
+            "prepared_openclaw_config": prepared,
+            "cos_imsg_guard_config": guard,
+        }
+    )
+    with pytest.raises(CoSActivationError, match="unrelated gateway"):
+        controller.activate(changed, enable_live=True)
+    assert controller.services.stops == 0
+    assert not controller.journal_path.exists()
+    assert json.loads(gateway_path.read_text()) == original_gateway
