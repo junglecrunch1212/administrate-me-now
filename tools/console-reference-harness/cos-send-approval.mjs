@@ -65,14 +65,10 @@ export async function auditCosSendingApproval({ page, baseUrl, record, screensho
     try {
       await page.locator("#chat-state").filter({ hasText: /^Ready$/ }).waitFor({ timeout: 10_000 });
       record(`CoS terminal stream reports Ready at ${width}`, true);
-      let finishTimer;
-      try {
-        await Promise.race([
-          stream.finished(),
-          new Promise((_, reject) => { finishTimer = setTimeout(() => reject(new Error("CoS SSE response did not finish")), 10_000); }),
-        ]);
-      } finally { clearTimeout(finishTimer); }
-      record(`CoS terminal SSE response closes at ${width}`, true);
+      // Chromium/Playwright can leave Response.finished() unresolved for a
+      // streamed fetch after its reader has reached EOF. The production UI
+      // enables Send and removes approvals only in that reader's finally block;
+      // require that state plus the independent server generator's closed phase.
       await page.waitForFunction(() => document.querySelectorAll(".cos-send-approval").length === 0 && !document.querySelector("#chat-send").disabled, null, { timeout: 10_000 });
     } catch (error) {
       const visible = await page.locator("#chat-panel").innerText({ timeout: 2_000 });
@@ -82,7 +78,7 @@ export async function auditCosSendingApproval({ page, baseUrl, record, screensho
     }
     completed += 1;
     const proof = await call("/__gate7/cos-reply-proof");
-    record(`Terminal chat refresh removes stale approval controls at ${width}`, proof.decisions.length === completed && proof.completed.length === completed && proof.decisions.at(-1).decision === decision && proof.pending === false && proof.provider_effect_count === 0 && (await call(endpoint)).items.length === 0, proof);
+    record(`Terminal chat refresh removes stale approval controls at ${width}`, proof.decisions.length === completed && proof.completed.length === completed && proof.decisions.at(-1).decision === decision && proof.pending === false && proof.phase === "closed" && proof.provider_effect_count === 0 && (await call(endpoint)).items.length === 0, proof);
     const expectedResult = decision === "allow-once" ? "This isolated browser fixture contacts no provider." : "Sending declined. No provider was contacted.";
     record(`Chat reports the bounded fixture result without claiming delivery at ${width}`, (await page.locator("#chat-messages").textContent()).includes(expectedResult));
     const replay = await page.request.post(`${baseUrl}${endpoint}`, { data: decisionBody });
