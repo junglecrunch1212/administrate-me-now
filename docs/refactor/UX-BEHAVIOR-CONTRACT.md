@@ -474,7 +474,7 @@ browser proof.
 
 CoS Settings amendment (2026-09-03): CO-026 replaces the seven-section Settings
 rail with exactly Overview, My identity, CoS behavior, Source intake & context,
-How my CoS works, Capabilities, Connections, Devices & bridges, Learning &
+How my CoS works, CoS replies, Capabilities, Connections, Devices & bridges, Learning &
 trust, Household & privacy, Safety & system, and Admin requests. Each section is
 URL-backed and keyboard reachable. Capability cards use semantic headings and
 buttons, visible text for all state rather than color alone, calm density,
@@ -484,6 +484,17 @@ health, freshness, trust, verification, consent, action, prerequisite,
 unavailable, prohibited, and effective states without an enabled/disabled
 collapse. View-as is read-only and omits adult-private settings. Admin request
 rows are secret-free availability work, never another adult's consent.
+
+CoS response amendment (2026-10-20): the
+[CoS response recipient contract](COS-RESPONSE-ALLOWLIST-CONTRACT.md) adds the
+CoS replies section to CO-026's original twelve sections. A principal in their
+own view manages exact email/iMessage endpoints associated with household
+members. Empty means no recipients permitted. Removing all recipients takes
+effect before new dispatches; revision conflicts require refresh. Neither
+editing the list nor viewing it enables provider sending or grants access to
+another member's private context. View-as and non-principals receive no
+recipient addresses. Controls use labeled fields, native buttons, visible
+pending/error text and the existing narrow-screen form layout.
 
 Member-bridge amendment (2026-09-02): CO-027 advances UX-38 into UX-61. Add
 Bridge now prepares the established encrypted package and carries the member

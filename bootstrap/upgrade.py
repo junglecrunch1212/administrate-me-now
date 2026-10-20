@@ -2056,6 +2056,24 @@ class UpgradeManager:
 
     def _require_bounded_target(self, target: Path) -> None:
         """Never start a target that ignores an active bounded dataset."""
+        adapter_path = self.paths.instance_dir / "config" / "adapters.json"
+        if adapter_path.exists():
+            from adminme.adapters.cos_channel_acquisition import (
+                CONTRACT as COS_ACQUISITION_CONTRACT,
+                policy_from_config as cos_policy_from_config,
+            )
+
+            configured = json.loads(adapter_path.read_text("utf-8"))
+            if cos_policy_from_config(configured) is not None:
+                supported = (
+                    load_versions(target)
+                    .get("administrateme", {})
+                    .get("supported_acquisition_contracts", [])
+                )
+                if COS_ACQUISITION_CONTRACT not in supported:
+                    raise UpgradeError(
+                        "target release cannot preserve CoS-only acquisition"
+                    )
         if os.path.lexists(
             self.paths.instance_dir / "config" / "disposable-test-dataset.json"
         ):

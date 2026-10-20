@@ -309,7 +309,6 @@ def cos_message_channel_for_account(
         and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
         and channel.provider_account_reference == reference
         and channel.enrolled
-        and channel.observation_active
         and channel.state in {"observation", "healthy", "degraded"}
     ]
     return matches[0] if len(matches) == 1 else None
@@ -464,10 +463,20 @@ def validate_service_identity_config(
             raise ValueError("an observation service channel cannot enable sending")
         if sending_enabled and state != "healthy":
             raise ValueError("service-channel sending requires healthy state")
-        if sending_enabled:
-            raise ValueError(
-                "service-principal send command contract is not implemented"
+        if sending_enabled and (
+            principal_id != COS_SERVICE_PRINCIPAL_ID
+            or row.get("provider") not in {"gmail", "apple_imessage"}
+            or observation_active
+            or (
+                row.get("provider") == "apple_imessage"
+                and (
+                    row.get("openclaw_channel_id") != "imessage"
+                    or row.get("intake_mode") != "member_submission"
+                    or row.get("response_transport_contract") != "cos-imessage-guard-v1"
+                )
             )
+        ):
+            raise ValueError("service sends require the governed CoS response contract")
 
         routes: list[ChannelRoute] = []
         intake_mode = row.get("intake_mode", "conversation")

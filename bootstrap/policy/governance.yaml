@@ -6,6 +6,8 @@ action_gates:
   commitment.*: allow
   communication.*: allow
   messaging.reply.*: allow
+  cos.response.approved: allow
+  cos.response.send: allow
   task.*: allow
   triage.*: allow
   context.relationship.rejected: allow
@@ -45,6 +47,9 @@ rate_limits:
   communication.send:
     window_s: 60
     max_n: 20
+  cos.response.send:
+    window_s: 60
+    max_n: 10
   messaging.reply.*:
     window_s: 60
     max_n: 20

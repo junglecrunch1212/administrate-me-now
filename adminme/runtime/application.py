@@ -136,6 +136,10 @@ from adminme.products.member.main import router as member_router
 from adminme.products.member.cos import router as member_cos_router
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw.main import router as openclaw_router
+from adminme.products.openclaw.cos_responses import (
+    recover_response_attempts,
+    router as cos_response_router,
+)
 from adminme.projections.runner import ProjectionRunner, register_default_projections
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
@@ -846,6 +850,7 @@ class AdministrateMeRuntime:
         self._stop_task: asyncio.Task[None] | None = None
         self.startup_error: str | None = None
         self._observation_active = True
+        self._cos_live_authorization: dict[str, Any] = {"authorized": False}
         self.openclaw_state = "degraded" if settings.openclaw_enabled else "unavailable"
         self.openclaw_last_report_monotonic: float | None = None
         self.openclaw_topology_report: dict[str, Any] = {}
@@ -864,6 +869,7 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            await recover_response_attempts(self)
             if not self.settings.legacy_personal_obligation_compatibility:
                 epoch = await read_policy_epoch(
                     self.event_log, self.settings.instance.tenant_id
@@ -2687,6 +2693,14 @@ class AdministrateMeRuntime:
         assert self.pipelines is not None
         assert self.observation is not None
         self._observation_active = await self.observation.is_active()
+        from adminme.cos_channel_operation import runtime_live_authorization
+
+        try:
+            self._cos_live_authorization = await runtime_live_authorization(
+                self, allow_verification=True
+            )
+        except (OSError, ValueError):
+            self._cos_live_authorization = {"authorized": False}
         projection_status = await self.projections.status(include_row_counts=False)
         for name in self.projections.projection_names():
             status = projection_status[name]
@@ -2992,6 +3006,10 @@ class AdministrateMeRuntime:
                     self.settings.deployment_evidence.get("provider_effect_window")
                     or {}
                 ).get("started_at"),
+                provider_effect_window_ended_at=(
+                    self.settings.deployment_evidence.get("provider_effect_window")
+                    or {}
+                ).get("ended_at"),
             )
         except asyncio.CancelledError:
             raise
@@ -3169,6 +3187,9 @@ class AdministrateMeRuntime:
             observation_active=observation_active,
             source_assurance=current_source_assurance,
             disposable_test_dataset=self.settings.test_dataset_marker,
+            cos_live_authorization=self._cos_live_authorization,
+            cos_acquisition_configured="cos_channel_acquisition"
+            in self.settings.adapter_config,
         )
 
     async def diagnostics(self, *, refresh_capabilities: bool = True) -> dict[str, Any]:
@@ -3851,6 +3872,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(automation_router)
     app.include_router(ingest_router)
     app.include_router(openclaw_router)
+    app.include_router(cos_response_router)
     app.include_router(member_router)
     app.include_router(member_cos_router)
     app.include_router(system_router)

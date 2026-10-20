@@ -8,9 +8,12 @@ import pytest
 
 from adminme.adapters.credentials import (
     assert_installed_user_binding,
+    assert_service_oauth_binding,
     credential_member_digest,
+    credential_service_digest,
     resolve_json_credentials,
 )
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 
 
 def test_resolves_keychain_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,3 +131,39 @@ def test_allows_prebinding_credentials_for_migration() -> None:
         member_id="member-fixture",
         provider_account_id="member@example.invalid",
     )
+
+
+def test_service_oauth_is_distinct_from_member_and_unbound_grants() -> None:
+    scopes = [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+    ]
+    document = {
+        "owner_kind": "service_principal",
+        "owner_service_principal_digest": credential_service_digest(
+            COS_SERVICE_PRINCIPAL_ID
+        ),
+        "provider_account_id": "cos-fixture@example.invalid",
+        "client_id": "fixture-client",
+        "client_secret": "fixture-secret",
+        "refresh_token": "fixture-refresh",
+        "scopes": scopes,
+    }
+    kwargs = {
+        "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+        "provider_account_id": "cos-fixture@example.invalid",
+        "required_scopes": scopes,
+    }
+    assert_service_oauth_binding(document, **kwargs)
+    for update in (
+        {"owner_kind": "member"},
+        {"owner_member_digest": credential_member_digest("member-fixture")},
+        {"owner_service_principal_digest": "0" * 24},
+        {"provider_account_id": "other@example.invalid"},
+        {"scopes": scopes + ["https://www.googleapis.com/auth/gmail.modify"]},
+        {"scopes": scopes[:1]},
+    ):
+        with pytest.raises(RuntimeError, match="exact CoS account"):
+            assert_service_oauth_binding({**document, **update}, **kwargs)
+    with pytest.raises(RuntimeError, match="exact CoS account"):
+        assert_service_oauth_binding({}, **kwargs)

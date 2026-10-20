@@ -995,11 +995,27 @@ class Doctor:
             and observation.get("trusted") is False
             and bool(observation.get("trust_not_before"))
         )
+        cos_live = (
+            (runtime_diagnostics.get("deployment_readiness") or {})
+            .get("dimensions", {})
+            .get("cos_channel_operation", {})
+        )
+        live_observation_ok = bool(
+            runtime_diagnostics.get("observation_active") is False
+            and cos_live.get("state") == "healthy"
+            and (cos_live.get("evidence") or {}).get("live_authorized") is True
+            and observation.get("active") is False
+            and observation.get("briefing_complete") is True
+            and observation.get("trusted") is False
+            and bool(observation.get("cos_activation_id"))
+        )
         checks.append(
             DoctorCheck(
                 "observation_mode_and_trust_workflow",
-                observation_ok,
-                "observation is active; trust cannot be declared yet"
+                observation_ok or live_observation_ok,
+                "CoS replies are live under an audited channel and recipient boundary"
+                if live_observation_ok
+                else "observation is active; trust cannot be declared yet"
                 if observation_ok
                 else "observation trust workflow is incomplete",
                 "Repeat the observation briefing; do not disable observation manually.",

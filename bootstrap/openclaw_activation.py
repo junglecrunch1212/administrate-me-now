@@ -123,6 +123,10 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
                 "workspace": str(member_workspace),
             }
         )
+        if isinstance(adapter_config.get("cos_channel_acquisition"), dict):
+            from bootstrap.cos_imessage import MEMBER_TOOLS
+
+            member_agents[-1]["tools"] = {"allow": list(MEMBER_TOOLS)}
     if not retained_agents and member_agents:
         member_agents[0]["default"] = True
     agents["list"] = retained_agents + member_agents

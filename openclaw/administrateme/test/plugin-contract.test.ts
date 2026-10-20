@@ -136,13 +136,78 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(22);
+    expect([...runtime.tools]).toHaveLength(23);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(14);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
     expect(runtime.services).toHaveLength(1);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
+  });
+
+  it("cancels ordinary CoS replies and blocks generic delivery tool bypasses", async () => {
+    const runtime = fakeApi({
+      forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }],
+    });
+    const sending = runtime.hooks.get("message_sending")?.[0]?.handler;
+    expect(sending?.({ to: "+12025550101", content: "unapproved" }, {
+      channelId: "imessage", accountId: "cos-fixture",
+    })).toMatchObject({ cancel: true });
+    expect(sending?.({ to: "+12025550101", content: "unapproved" }, {
+      channelId: "imessage",
+    })).toMatchObject({ cancel: true });
+    expect(sending?.({ to: "fixture", content: "ordinary" }, {
+      channelId: "discord", accountId: "other-fixture",
+    })).toBeUndefined();
+    const before = runtime.hooks.get("before_tool_call")?.[0]?.handler;
+    expect(await before?.({ toolName: "message", params: { channel: "imessage" } }, {}))
+      .toMatchObject({ block: true });
+    expect(await before?.({ toolName: "sessions_send", params: {} }, {}))
+      .toMatchObject({ block: true });
+    expect(await before?.({
+      toolName: "administrateme_cos_response",
+      params: { request_id: "fixture-response", approval_event_id: "ev_fixture" },
+    }, {})).toMatchObject({ requireApproval: { allowedDecisions: ["allow-once", "deny"] } });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("privately dispatches one admitted iMessage without transport retry (failure=%s)", async (failure) => {
+    const runtime = fakeApi({
+      forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }],
+    });
+    const sendText = vi.fn(async () => {
+      if (failure) throw new Error("ambiguous native timeout");
+      return { channel: "imessage", messageId: "fixture-native" };
+    });
+    runtime.api.config = { channels: { imessage: { accounts: { "cos-fixture": {} } } } };
+    runtime.api.runtime = {
+      channel: { outbound: { loadAdapter: vi.fn(async () => ({ sendText })) } },
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ transport_dispatch: {
+        channel: "imessage", account_id: "cos-fixture",
+        recipient: "+12025550101", body: "Exact private response",
+        approval_event_id: "ev_response",
+      } }))
+      .mockResolvedValueOnce(jsonResponse({
+        status: failure ? "unknown" : "sent", automatic_retry_allowed: false,
+      }));
+    const factory = runtime.tools.get("administrateme_cos_response");
+    const made = factory?.(toolContext());
+    const tool = Array.isArray(made) ? made[0] : made;
+    const result = await tool?.execute("call-fixture", {
+      request_id: "response-fixture", approval_event_id: "ev_response",
+    });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith({
+      cfg: runtime.api.config, to: "+12025550101", text: "Exact private response",
+      accountId: "cos-fixture",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestBody(fetchMock, 1)).toMatchObject({ approval_event_id: "ev_response" });
+    expect(JSON.stringify(result)).not.toContain("Exact private response");
+    expect(JSON.stringify(result)).not.toContain("+12025550101");
+    expect(JSON.stringify(result)).toContain(failure ? "unknown" : "sent");
   });
 
   it("registers dashboard ownership during read-only OpenClaw discovery", () => {
@@ -220,7 +285,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(22);
+    expect([...runtime.tools]).toHaveLength(23);
     expect(runtime.services).toHaveLength(0);
   });
 

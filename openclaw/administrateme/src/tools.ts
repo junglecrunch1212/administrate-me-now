@@ -95,6 +95,7 @@ const RepresentationKind = Type.Union([
 ]);
 
 function makeTool(
+  api: OpenClawPluginApi,
   context: OpenClawPluginToolContext,
   runtime: PluginRuntime,
   definition: {
@@ -131,6 +132,40 @@ function makeTool(
         ...invocationParams,
         provenance,
       });
+      if (definition.name === "administrateme_cos_response" &&
+          result && typeof result === "object" && "transport_dispatch" in result) {
+        const dispatch = (result as Record<string, unknown>).transport_dispatch;
+        if (!dispatch || typeof dispatch !== "object") throw new Error("Invalid CoS transport dispatch");
+        const row = dispatch as Record<string, unknown>;
+        if (row.channel !== "imessage" || typeof row.account_id !== "string" ||
+            typeof row.recipient !== "string" || typeof row.body !== "string" ||
+            typeof row.approval_event_id !== "string" ||
+            !runtime.transport.config.forwardIntakeAccounts.some((binding) =>
+              binding.channelId === "imessage" && binding.accountId === row.account_id,
+            )) {
+          throw new Error("CoS transport dispatch is outside the enrolled account");
+        }
+        try {
+          const adapter = await api.runtime.channel.outbound.loadAdapter("imessage");
+          if (!adapter?.sendText) throw new Error("CoS iMessage transport is unavailable");
+          // One invocation only. The configured CLI guard independently claims
+          // the exact approved text and audits the native result. Never expose
+          // this private dispatch body or raw transport result to the model.
+          await adapter.sendText({
+            cfg: api.config,
+            to: row.recipient,
+            text: row.body,
+            accountId: row.account_id,
+          });
+        } catch {
+          // Native timeouts are ambiguous. The backend returns the durable
+          // terminal if present, otherwise records unknown; no automatic retry.
+        }
+        return toolResult(await runtime.transport.request(
+          "/api/openclaw/v1/cos-responses/result",
+          { provenance, approval_event_id: row.approval_event_id },
+        ));
+      }
       return toolResult(result);
     },
   };
@@ -610,6 +645,15 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: "/api/openclaw/v1/notifications/result",
     },
     {
+      name: "administrateme_cos_response",
+      description: "Execute one exact member-approved plain-text CoS response. Requires a current member approval event; recipient listing alone never authorizes disclosure or sending. Unknown delivery is never retried.",
+      parameters: Type.Object({
+        request_id: Type.String({ minLength: 8, maxLength: 120 }),
+        approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/cos-response",
+    },
+    {
       name: "administrateme_standing_order",
       description: "Record one allowlisted standing-order trigger for the authorized direct route.",
       parameters: Type.Object(
@@ -625,7 +669,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
   ];
 
   for (const definition of definitions) {
-    api.registerTool((context) => makeTool(context, runtime, definition), {
+    api.registerTool((context) => makeTool(api, context, runtime, definition), {
       name: definition.name,
       optional: !["administrateme_state", "administrateme_what_now"].includes(definition.name),
     });

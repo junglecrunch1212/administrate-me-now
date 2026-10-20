@@ -399,6 +399,7 @@ async def audit_source_assurance(
     capabilities: dict[str, Any],
     through_event_id: str | None = None,
     provider_effect_window_started_at: str | None = None,
+    provider_effect_window_ended_at: str | None = None,
 ) -> dict[str, Any]:
     """Return secret-free source accounting suitable for Doctor and Settings."""
 
@@ -759,18 +760,24 @@ async def audit_source_assurance(
         messaging_cycles[-1].get("payload", {}) if messaging_cycles else {}
     )
     window_start = _aware_datetime(provider_effect_window_started_at)
-    if window_start is None:
+    window_end = _aware_datetime(provider_effect_window_ended_at)
+    invalid_window_end = provider_effect_window_ended_at is not None and (
+        window_end is None or window_start is None or window_end <= window_start
+    )
+    if window_start is None or invalid_window_end:
         window_counts = _provider_effect_counts([], {})
         window_state = "missing"
         window_zero_effects = False
     else:
-        window_sources = [
-            event for event in source_events if _event_at_or_after(event, window_start)
-        ]
+
+        def in_window(event: dict[str, Any]) -> bool:
+            return _event_at_or_after(event, window_start) and (
+                window_end is None or not _event_at_or_after(event, window_end)
+            )
+
+        window_sources = [event for event in source_events if in_window(event)]
         window_terminals = {
-            command_id: [
-                event for event in rows if _event_at_or_after(event, window_start)
-            ]
+            command_id: [event for event in rows if in_window(event)]
             for command_id, rows in action_terminal_events.items()
         }
         window_terminals = {
@@ -820,6 +827,7 @@ async def audit_source_assurance(
                 "state": window_state,
                 "started_at_configured": window_start is not None,
                 "started_at": window_start.isoformat() if window_start else None,
+                "ended_at": window_end.isoformat() if window_end else None,
                 "counts": window_counts,
                 "content_exposed": False,
             },

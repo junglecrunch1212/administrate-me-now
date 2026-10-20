@@ -1,5 +1,12 @@
 # Release acceptance contract
 
+CoS channel operation amendment (2026-10-20): require the production
+composition, encrypted allowlist replay, native provider-boundary denial,
+exact service OAuth scope, journaled activation/recovery and isolated browser
+checks in [the CoS operation contract](COS-CHANNEL-OPERATION-CONTRACT.md).
+Deployment retains observation; the owner's separate channel activation ends
+it only after verified prerequisites. Old suppressed actions never dispatch.
+
 CO-034 amendment (2026-10-19): prove forward activation at the 64-entry
 selector limit, exact rollback, fresh forward activation, unchanged retained
 release files and audit history, and real-runtime interrupted recovery of the

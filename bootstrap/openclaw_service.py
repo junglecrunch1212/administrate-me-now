@@ -40,6 +40,9 @@ def main() -> None:
     )
     environment["ADMINME_OPENCLAW_SHARED_SECRET"] = shared
     environment["OPENCLAW_GATEWAY_TOKEN"] = shared
+    environment["ADMINISTRATEME_COS_IMSG_GUARD_CONFIG"] = str(
+        paths.instance_dir / "config" / "cos-imsg-guard.json"
+    )
     os.execve(executable, [executable, "gateway", "run"], environment)
 
 

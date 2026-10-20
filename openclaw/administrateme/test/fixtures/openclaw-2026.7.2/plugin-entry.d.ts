@@ -107,6 +107,21 @@ export type PluginHookMessageReceivedEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PluginHookMessageSendingEvent = {
+  to: string;
+  content: string;
+  replyToId?: string;
+  threadId?: string | number;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookMessageSendingResult = {
+  content?: string;
+  cancel?: boolean;
+  cancelReason?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type PluginHookAgentContext = {
   agentId?: string;
   sessionKey?: string;
@@ -158,6 +173,21 @@ export type OpenClawPluginApi = {
   rootDir?: string;
   registrationMode: "full" | "setup" | "snapshot";
   pluginConfig?: Record<string, unknown>;
+  config: Record<string, unknown>;
+  runtime: {
+    channel: {
+      outbound: {
+        loadAdapter: (id: string) => Promise<{
+          sendText?: (context: {
+            cfg: Record<string, unknown>;
+            to: string;
+            text: string;
+            accountId?: string;
+          }) => Promise<unknown>;
+        } | undefined>;
+      };
+    };
+  };
   logger: {
     debug: (message: string) => void;
     info: (message: string) => void;
@@ -176,6 +206,14 @@ export type OpenClawPluginApi = {
   ) => void;
   registerService: (service: OpenClawPluginService) => void;
   on: {
+    (
+      hook: "message_sending",
+      handler: (
+        event: PluginHookMessageSendingEvent,
+        context: PluginHookMessageContext,
+      ) => PluginHookMessageSendingResult | void | Promise<PluginHookMessageSendingResult | void>,
+      opts?: { priority?: number },
+    ): void;
     (
       hook: "before_tool_call",
       handler: (

@@ -138,6 +138,8 @@ def evaluate_deployment_readiness(
     observation_active: bool,
     source_assurance: dict[str, Any] | None = None,
     disposable_test_dataset: dict[str, Any] | None = None,
+    cos_live_authorization: dict[str, Any] | None = None,
+    cos_acquisition_configured: bool = False,
 ) -> dict[str, Any]:
     """Evaluate independent activation axes without exposing identities."""
 
@@ -520,6 +522,27 @@ def evaluate_deployment_readiness(
         },
     )
 
+    cos_live_ready = bool(
+        cos_acquisition_configured
+        and (cos_live_authorization or {}).get("authorized") is True
+    )
+    if cos_acquisition_configured:
+        mode_ready = observation_active or cos_live_ready
+        dimensions["cos_channel_operation"] = _dimension(
+            "healthy" if mode_ready else "blocked",
+            "CoS-only acquisition is active under observation"
+            if observation_active
+            else "live CoS replies require current recipient policy and verified sender activation",
+            evidence={
+                "observation_active": observation_active,
+                "live_authorized": cos_live_ready,
+                "personal_channel_polling": False,
+                "activated_channels": (cos_live_authorization or {}).get(
+                    "activated_channels", []
+                ),
+            },
+        )
+
     if disposable_test_dataset:
         # An explicitly reset test dataset has a different predecessor: its
         # abandoned test history is diagnostic evidence, never a healthy
@@ -552,7 +575,7 @@ def evaluate_deployment_readiness(
         if (
             ordinary_activation_backup_ready(deployment_evidence)
             and binding_ok
-            and observation_active
+            and (observation_active or cos_live_ready)
             and disposable_test_dataset.get("contract") == "disposable-test-dataset-v1"
         ):
             dimensions["backup_rollback"]["evidence"].update(
@@ -590,18 +613,37 @@ def evaluate_deployment_readiness(
     integrity_ok = effects.get("state") == "healthy"
     window_start = _historical_boundary(window_evidence.get("started_at"))
     audited_window_start = _historical_boundary(window.get("started_at"))
+    window_end = _historical_boundary(window_evidence.get("ended_at"))
+    audited_window_end = _historical_boundary(window.get("ended_at"))
     window_matches = (
         window_start is not None
         and window.get("started_at_configured") is True
         and audited_window_start == window_start
+        and (
+            (
+                window_end is None
+                and window_evidence.get("ended_at") is None
+                and window.get("ended_at") is None
+            )
+            or (
+                not observation_active
+                and cos_live_ready
+                and window_end == audited_window_end
+                and window_end
+                == _historical_boundary(
+                    (cos_live_authorization or {}).get("enabled_at")
+                )
+            )
+        )
     )
     effects_ok = (
         source_proof_current
         and integrity_ok
         and (
-            not observation_active
+            (not observation_active and not cos_acquisition_configured)
             or (window.get("state") == "healthy" and window_matches)
         )
+        and (observation_active or not cos_acquisition_configured or cos_live_ready)
     )
     dimensions["observation_effects"] = _dimension(
         "healthy" if effects_ok else "blocked",

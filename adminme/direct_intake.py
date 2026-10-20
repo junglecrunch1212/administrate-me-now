@@ -186,7 +186,6 @@ class DirectIntakeProcessor:
             channel is None
             or channel.service_principal_id != service_id
             or channel.provider != provider
-            or not channel.observation_active
             or not channel.enrolled
             or channel.state not in {"observation", "healthy", "degraded"}
             or not account

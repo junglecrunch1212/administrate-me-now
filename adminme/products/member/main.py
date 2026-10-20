@@ -29,6 +29,11 @@ from adminme.bridge_enrollment import (
     validate_enrollment_transition,
 )
 from adminme.context_fabric import policy_scope_digest
+from adminme.cos_response_policy import (
+    POLICY_CONTRACT as COS_RESPONSE_POLICY_CONTRACT,
+    POLICY_EVENT_TYPE as COS_RESPONSE_POLICY_EVENT,
+    validate_recipient_entries,
+)
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.extensions import ExtensionError
@@ -136,6 +141,7 @@ from adminme.settings_control import (
     member_label,
     public_capability_summary,
 )
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.source_policy import (
     SourceCoordinate,
     SourcePolicyV2,
@@ -218,6 +224,13 @@ class SettingsAppleMessagesReplyRequest(BaseModel):
     expected_revision: int = Field(ge=0)
     request_id: str = Field(min_length=8, max_length=120)
     action: Literal["enable", "pause", "revoke"]
+
+
+class SettingsCosRepliesRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0, strict=True)
+    request_id: str = Field(min_length=8, max_length=120)
+    entries: list[dict[str, str]] = Field(max_length=100)
 
 
 class SettingsCandidatePolicyRequest(BaseModel):
@@ -1009,6 +1022,7 @@ async def _write_settings_receipt(
     request_fingerprint: str,
     owner_member_id: str,
     schema_version: int = 1,
+    sensitivity: Sensitivity = "normal",
 ) -> str:
     if runtime.events is None:
         raise HTTPException(503, "Settings audit log is unavailable")
@@ -1024,7 +1038,7 @@ async def _write_settings_receipt(
             source_account_id=session.auth_member_id,
             owner_scope=f"private:{owner_member_id}",
             visibility_scope=f"private:{owner_member_id}",
-            sensitivity="normal",
+            sensitivity=sensitivity,
             correlation_id=session.correlation_id,
             actor_identity=session.auth_member_id,
             idempotency_key=(
@@ -5093,6 +5107,22 @@ async def surface(
         triage_item=triage_item,
     )
     if surface == "settings":
+        if (
+            session.auth_role == "principal"
+            and session.auth_member_id == session.view_member_id
+        ):
+            result["control"]["cos_replies"] = {
+                "visible": True,
+                "can_mutate": True,
+                **await runtime.settings_control.cos_response_policy(
+                    runtime.event_log, session.tenant_id
+                ),
+            }
+        else:
+            result["control"]["cos_replies"] = {
+                "visible": False,
+                "can_mutate": False,
+            }
         # This request already refreshed before composing its Settings views.
         diagnostics = await runtime.diagnostics(refresh_capabilities=False)
         diagnostics = {
@@ -6115,6 +6145,100 @@ async def change_settings_capability_request(
             "request": mutation.current,
             "provider_effect_count": 0,
             "operational_effects": False,
+        }
+
+
+@router.get("/api/member/v1/settings/cos-replies")
+async def get_cos_reply_recipients(
+    request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_self_settings(session)
+    if session.auth_role != "principal":
+        raise HTTPException(403, "CoS reply recipients require a household principal")
+    runtime = _runtime(request)
+    return await runtime.settings_control.cos_response_policy(
+        runtime.event_log, session.tenant_id
+    )
+
+
+@router.put("/api/member/v1/settings/cos-replies", status_code=202)
+async def replace_cos_reply_recipients(
+    body: SettingsCosRepliesRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    """Replace the recipient ceiling; empty entries revoke every destination."""
+
+    _require_self_settings(session)
+    if session.auth_role != "principal":
+        raise HTTPException(403, "CoS reply recipients require a household principal")
+    runtime = _runtime(request)
+    members = {
+        member
+        for member, role in runtime.settings.member_roles.items()
+        if role not in {"device", "ambient"}
+    }
+    try:
+        entries = validate_recipient_entries(body.entries, members)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    fingerprint = _settings_request_fingerprint(
+        COS_RESPONSE_POLICY_EVENT,
+        {"expected_revision": body.expected_revision, "entries": entries},
+    )
+    lock = runtime.settings_command_locks.setdefault(
+        f"cos-response-policy:{session.tenant_id}", asyncio.Lock()
+    )
+    async with lock:
+        prior = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type=COS_RESPONSE_POLICY_EVENT,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior is not None:
+            return {
+                "accepted": True,
+                "idempotent": True,
+                "event_id": prior["event_id"],
+                "revision": prior["payload"]["revision"],
+                "provider_effects": 0,
+                "grants_provider_authority": False,
+            }
+        try:
+            revision = await runtime.settings_control.prepare_cos_response_policy(
+                runtime.event_log,
+                session.tenant_id,
+                expected_revision=body.expected_revision,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        payload = {
+            "contract": COS_RESPONSE_POLICY_CONTRACT,
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            "revision": revision,
+            "entries": entries,
+            "changed_by_member_id": session.auth_member_id,
+            "changed_at": EventEnvelope.now_utc_iso(),
+            "grants_provider_authority": False,
+            "provider_effects": False,
+        }
+        await _guard_member_write(runtime, session, COS_RESPONSE_POLICY_EVENT, payload)
+        event_id = await _write_settings_receipt(
+            runtime,
+            session,
+            event_type=COS_RESPONSE_POLICY_EVENT,
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+            owner_member_id=session.auth_member_id,
+            sensitivity="sensitive",
+        )
+        return {
+            "accepted": True,
+            "event_id": event_id,
+            "revision": revision,
+            "provider_effects": 0,
+            "grants_provider_authority": False,
         }
 
 

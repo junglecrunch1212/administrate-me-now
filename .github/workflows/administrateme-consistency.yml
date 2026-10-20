@@ -45,6 +45,35 @@ jobs:
       - name: Install locked dependencies
         run: poetry sync --with dev
 
+      - name: Render lifecycle catalog for review
+        run: >-
+          poetry run python scripts/generate_event_lifecycle_catalog.py
+          --output "${RUNNER_TEMP}/event-lifecycle-catalog.json"
+
+      - name: Retain generated lifecycle catalog
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-event-lifecycle-catalog
+          path: ${{ runner.temp }}/event-lifecycle-catalog.json
+          retention-days: 3
+
+      - name: Validate CoS channel and response boundaries
+        run: |
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5 \
+            --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest" \
+            tests/acceptance/test_cos_response_allowlist_settings.py \
+            tests/acceptance/test_cos_response_execution.py \
+            tests/acceptance/test_cos_channel_acquisition.py \
+            tests/unit/test_cos_channel_operation.py \
+            tests/unit/bootstrap/test_cos_channel_activation.py \
+            tests/unit/bootstrap/test_cos_imessage.py \
+            tests/unit/test_cos_response_policy.py \
+            tests/unit/bootstrap/test_google_oauth.py \
+            tests/adapters/test_credentials.py
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+
       # Every pytest invocation owns the same disposable tree and clears its
       # predecessor. Keeping earlier archived/encrypted fixtures exhausted the
       # hosted runner during the full suite; the real Doctor disk gate stays.

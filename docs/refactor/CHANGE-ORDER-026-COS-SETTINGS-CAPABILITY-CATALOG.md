@@ -74,7 +74,9 @@ represented as current support in G08.
 
 ## Settings information architecture and authorization
 
-The adult Settings surface has exactly these twelve URL-backed sections:
+This order introduced these twelve URL-backed sections. The
+[CoS response recipient contract](COS-RESPONSE-ALLOWLIST-CONTRACT.md) subsequently
+adds **CoS replies** after **How my CoS works**:
 
 1. Overview
 2. My identity

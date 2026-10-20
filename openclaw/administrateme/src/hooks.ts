@@ -22,6 +22,15 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
   api.on(
     "before_tool_call",
     async (event) => {
+      // Generic delivery tools cannot borrow CoS account authority. The
+      // governed response tool is the only supported send path; the transport
+      // wrapper remains the authoritative last boundary for channel autosends.
+      if (runtime.transport.config.forwardIntakeAccounts.length > 0 &&
+          (event.toolName === "message" || event.toolName === "sessions_send") &&
+          (event.params.channel === undefined ||
+           event.params.channel === "imessage" || event.params.channel === "bluebubbles")) {
+        return { block: true, blockReason: "Use an exact member-approved AdministrateMe CoS response." };
+      }
       if (!SIDE_EFFECT_TOOL_NAMES.has(event.toolName)) return;
       if (event.toolName === "administrateme_review" && event.params.action === "inspect") return;
       if (event.toolName === "administrateme_policy_proposal" && event.params.action === "inspect") {
@@ -42,6 +51,24 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
       };
     },
     { priority: 50 },
+  );
+
+  api.on(
+    "message_sending",
+    (_event, context) => {
+      // Synchronous cancellation cannot time out on our policy server. Missing
+      // account coordinates also cancel when this transport hosts a CoS inbox.
+      // OpenClaw has direct-send paths outside this hook, so it is deliberately
+      // only defense in depth; activation additionally requires the CLI guard.
+      if (runtime.transport.config.forwardIntakeAccounts.some((binding) =>
+        binding.channelId === context.channelId &&
+        (context.accountId === undefined || binding.accountId === context.accountId),
+      )) {
+        return { cancel: true, cancelReason: "CoS replies require exact governed delivery." };
+      }
+      return;
+    },
+    { priority: 1000 },
   );
 
   api.on(

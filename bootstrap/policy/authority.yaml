@@ -20,6 +20,7 @@ agent_allowlist:
     actions: ["xlsx.regenerated"]
   - agent_id: "user:*"
     actions:
+      - "cos.response.approved"
       - "commitment.*"
       - "communication.*"
       - "messaging.reply.*"
@@ -48,6 +49,7 @@ agent_allowlist:
       - "account.*"
   - agent_id: "openclaw:*"
     actions:
+      - "cos.response.send"
       - "household.action.*"
       - "task.*"
       - "commitment.*"

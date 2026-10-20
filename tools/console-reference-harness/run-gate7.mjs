@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
 import { auditTriageSourceControls } from "./triage-source-controls.mjs";
+import { auditCosReplyControls } from "./cos-reply-controls.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -1347,7 +1348,7 @@ async function run() {
         await screenshot(principal.page, "surface-scoreboard-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
-        record("Settings exposes all twelve control areas", await principal.page.locator(".settings-nav button").count() === 12, await principal.page.locator(".settings-nav").textContent());
+        record("Settings exposes all thirteen control areas", await principal.page.locator(".settings-nav button").count() === 13, await principal.page.locator(".settings-nav").textContent());
         record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
         await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
@@ -1357,6 +1358,7 @@ async function run() {
         await principal.page.getByRole("button", { name: "CoS behavior", exact: true }).click();
         record("Settings offers only adult support profiles", await principal.page.locator(".profile-choice").count() === 3, await principal.page.locator(".profile-grid").textContent());
         await screenshot(principal.page, "surface-settings-behavior-desktop.png");
+        await auditCosReplyControls({ page: principal.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, mutate: true, label: "desktop" });
         await principal.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
         const bridgeWizardText = await principal.page.locator("#surface").textContent();
         record("Settings bridge wizard explains ownership, local permissions, observation, and no writes", bridgeWizardText.includes("Native Apple access stays on your Mac") && bridgeWizardText.includes("observation mode") && bridgeWizardText.includes("macOS control") && bridgeWizardText.includes("No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted"), bridgeWizardText);
@@ -1517,7 +1519,8 @@ async function run() {
       } else if (surface === "notes") {
         record("Notes phone retains sources, search, and source evidence", await principalPhone.page.locator(".notes-source-button").count() === 3 && await principalPhone.page.locator(".notes-search input").count() === 1 && await principalPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "settings") {
-        record("Settings phone retains all twelve control areas", await principalPhone.page.locator(".settings-nav button").count() === 12, await principalPhone.page.locator(".settings-nav").textContent());
+        record("Settings phone retains all thirteen control areas", await principalPhone.page.locator(".settings-nav button").count() === 13, await principalPhone.page.locator(".settings-nav").textContent());
+        await auditCosReplyControls({ page: principalPhone.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, mutate: false, label: "narrow" });
         await principalPhone.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
         const phoneBridgeText = await principalPhone.page.locator("#surface").textContent();
         record("Settings phone retains the self-service bridge review and source ceilings", phoneBridgeText.includes("SELF-SERVICE WIZARD") && phoneBridgeText.includes("Choose read-only sources") && phoneBridgeText.includes("Write ceiling"), phoneBridgeText);
