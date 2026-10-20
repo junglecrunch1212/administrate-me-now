@@ -65,6 +65,9 @@ export function registerCosPermissionPreflight(api: OpenClawPluginApi, runtime: 
   let stopping = false;
   api.registerGatewayMethod(METHOD, async ({ params, client, respond }) => {
     let owned: ReturnType<typeof spawn> | undefined;
+    // Fixed stage names keep operational refusals diagnosable without exposing
+    // paths, credentials, ticket contents, or raw subprocess/filesystem errors.
+    let stage = "authorization";
     try {
       // Defense in depth: the pinned Gateway also enforces the registered scope.
       if (!client?.connect?.scopes?.includes("operator.admin") || stopping || active) {
@@ -91,11 +94,15 @@ export function registerCosPermissionPreflight(api: OpenClawPluginApi, runtime: 
         throw new Error("Permission preflight authorization refused");
       }
       used.set(params.nonce, params.expires_at_ms);
+      stage = "helper_pin";
       const helper = pinnedFile("HELPER");
+      stage = "python_pin";
       const python = pinnedFile("PYTHON");
+      stage = "helper_location";
       if (basename(helper.path) !== "cos_apple_events.py" || basename(dirname(helper.path)) !== "bootstrap") {
         throw new Error("Permission helper location refused");
       }
+      stage = "child_start";
       const started = Date.now();
       owned = spawn(python.path, ["-I", "-B", helper.path, "--operation", operation], {
         env: childEnvironment(), stdio: ["ignore", "pipe", "ignore"], shell: false,
@@ -127,6 +134,7 @@ export function registerCosPermissionPreflight(api: OpenClawPluginApi, runtime: 
           resolve({ contract: CONTRACT, operation, target: TARGET, status: failed ?? "failed", os_status: null, stage: "child" });
         });
       });
+      stage = "database_check";
       const database = operation === "check" ? await checkDatabase() : null;
       const result = {
         ...raw, nonce: params.nonce, started_at_ms: started, completed_at_ms: Date.now(),
@@ -136,7 +144,10 @@ export function registerCosPermissionPreflight(api: OpenClawPluginApi, runtime: 
       const resultSignature = createHmac("sha256", secret).update(JSON.stringify(result)).digest("hex");
       respond(true, { ...result, signature: resultSignature });
     } catch {
-      respond(false, undefined, { code: "PERMISSION_PREFLIGHT_UNAVAILABLE", message: "Permission preflight unavailable" });
+      respond(false, undefined, {
+        code: "PERMISSION_PREFLIGHT_UNAVAILABLE", message: "Permission preflight unavailable",
+        details: { stage },
+      });
     } finally {
       if (owned && active === owned) active = undefined;
     }

@@ -15,6 +15,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { checkPermissionPins } from "./check-cos-permission-pins.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Hosted CI is required");
 assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted", "Disposable hosted runner required");
@@ -115,7 +116,13 @@ async function connect(port, scopes) {
     pending.delete(frame.id);
     clearTimeout(entry.timer);
     if (frame.ok) entry.resolve(frame.payload);
-    else entry.reject(new Error(`RPC refused: ${frame.error?.code ?? "unknown"}`));
+    else {
+      const stage = frame.error?.details?.stage;
+      // Only this fixed production diagnostic vocabulary may enter artifacts.
+      const suffix = ["authorization", "helper_pin", "python_pin", "helper_location", "child_start", "database_check"].includes(stage)
+        ? ` (${stage})` : "";
+      entry.reject(new Error(`RPC refused: ${frame.error?.code ?? "unknown"}${suffix}`));
+    }
   });
   await until(() => challenge, "Gateway challenge");
   // This independent process never imports the SDK or reads its runtime token.
@@ -155,6 +162,11 @@ function ticket(operation, overrides = {}) {
 }
 
 try {
+  evidence.phase = "permission-file-prerequisites";
+  evidence.permission_pins = [];
+  // Mirror the production pre-execution checks before starting the Gateway.
+  // Keep metadata content-free: no private paths, file bytes, or credentials.
+  await checkPermissionPins(permissionEnvironment, evidence.permission_pins);
   // Transpile the actual release source without rewriting its SDK imports.
   // Gateway loads it as a real plugin through its normal public SDK resolver.
   for (const name of ["cos-approval-relay", "approval", "contract", "cos-permission-preflight", "cos-permission-database"]) {

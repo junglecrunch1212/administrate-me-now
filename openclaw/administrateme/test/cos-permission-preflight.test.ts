@@ -2,7 +2,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -91,6 +91,7 @@ it("requires exact admin scope, ticket, operation and schema before any child", 
     const call = invoke(params, scopes);
     await call.done;
     expect(call.respond.mock.calls[0]?.[0]).toBe(false);
+    expect(call.respond.mock.calls[0]?.[2]?.details).toEqual({ stage: "authorization" });
   }
   expect(spawn).not.toHaveBeenCalled();
 });
@@ -124,6 +125,22 @@ it("refuses changed helper bytes before execution", async () => {
   const call = invoke(ticket());
   await call.done;
   expect(call.respond.mock.calls[0]?.[0]).toBe(false);
+  expect(call.respond.mock.calls[0]?.[2]?.details).toEqual({ stage: "helper_pin" });
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+it("reports only the refused pin stage for a writable interpreter fixture", async () => {
+  const binary = join(directories[0]!, "synthetic-python");
+  writeFileSync(binary, "synthetic interpreter; never executed\n", { mode: 0o600 });
+  chmodSync(binary, 0o620);
+  vi.stubEnv("ADMINISTRATEME_PERMISSION_PYTHON", binary);
+  vi.stubEnv("ADMINISTRATEME_PERMISSION_PYTHON_SHA256", createHash("sha256").update(readFileSync(binary)).digest("hex"));
+  const call = invoke(ticket());
+  await call.done;
+  expect(call.respond.mock.calls).toEqual([[false, undefined, {
+    code: "PERMISSION_PREFLIGHT_UNAVAILABLE", message: "Permission preflight unavailable",
+    details: { stage: "python_pin" },
+  }]]);
   expect(spawn).not.toHaveBeenCalled();
 });
 
