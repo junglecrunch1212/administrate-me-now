@@ -96,6 +96,21 @@ activation boundary. Clearing the allowlist revokes live authorization;
 ordinary edits apply immediately without broadening any previously approved
 reply. Unsupported release downgrades are refused while the overlay is present.
 
+Ordinary app upgrades and rollbacks preserve an enrolled transport through the
+existing stopped-service activation transaction. Preflight validates the old
+guard against the current immutable release and prepares only the selected
+release's wrapper path/hash and the matching account `cliPath`. The journal
+holds exact original and selected guard/gateway bytes and rejects wider deltas.
+Provider binaries, provider accounts, recipient policy and operational approval
+are unchanged. Drift after preflight aborts selection. Partial writes, failed
+Doctor and interrupted selection recover the original bytes before services
+restart; explicit rollback prepares the same narrow reverse transition.
+Replies remain held while either the channel-operation journal or ordinary
+release journal is active, including the post-start verification interval.
+Runtime verification continues to require the selected immutable release's exact
+wrapper; retained-release paths and caller-supplied replacement hashes are not
+accepted as substitutes.
+
 The retained dataset remains an accepted bounded predecessor. This operation
 does not relabel the discarded pre-reset history as a proven production
 rollback. Physical browser acceptance and external sign-in coverage are

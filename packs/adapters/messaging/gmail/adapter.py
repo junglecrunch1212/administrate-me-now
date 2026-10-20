@@ -1408,6 +1408,20 @@ class GmailAdapter(CommunicationAdapter):
         event_log = self._observation_event_log
         if session is None or manager is None or event_log is None:
             raise RuntimeError("Gmail observation seam is required for external writes")
+        if self._config.get("service_principal_id"):
+            from adminme.lib.session import build_internal_session
+            from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+
+            # The exact permit above admits only this service principal.
+            # Attribute the provider effect to CoS, preserving the member's
+            # private scope and approval chain from the outbound audit context.
+            # The supervisor's shared device actor is not the sender.
+            session = build_internal_session(
+                COS_SERVICE_PRINCIPAL_ID,
+                "device",
+                session.tenant_id,
+                correlation_id=session.correlation_id,
+            )
 
         response: dict[str, Any] = {}
         suppressed = False

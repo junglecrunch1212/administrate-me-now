@@ -200,12 +200,15 @@ def test_live_window_keeps_old_zero_effect_interval_and_accounts_new_live_effect
     )
 
 
-def test_pending_operation_holds_replies_until_commit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("operation", ["cos-channel-operation", "activation"])
+def test_pending_operation_holds_replies_until_commit(
+    tmp_path: Path, operation: str
+) -> None:
     config_dir = tmp_path / "state/config"
     config_dir.mkdir(parents=True)
     receipt = {"event_id": "fixture", "activation": {}}
     (config_dir / "cos-channel-operation.json").write_text(json.dumps(receipt))
-    journal = tmp_path / "app/cos-channel-operation/active.json"
+    journal = tmp_path / "app" / operation / "active.json"
     journal.parent.mkdir(parents=True)
     journal.write_text("{}")
     assert read_receipt(config_dir) == {}

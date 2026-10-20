@@ -74,6 +74,9 @@ Every authorized response resolves to a private `cos.response.result`:
 `sent`, `suppressed`, `denied`, or `unknown`. Unknown has no invented effect
 count. The native wrapper does not expose message bodies or credentials in
 diagnostics. `external.sent` is emitted only by the existing observation seam.
+For Gmail, that seam attributes the effect to the CoS service principal while
+retaining the approving member's private scope and exact approval chain.
+The adapter supervisor's shared device identity is never presented as the sender.
 
 Production-composition coverage is in
 `tests/acceptance/test_cos_response_execution.py`; actual Gmail send and

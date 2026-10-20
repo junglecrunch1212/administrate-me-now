@@ -87,8 +87,12 @@ class CosChannelActivation(BaseModel):
 def read_receipt(
     config_dir: Path, *, allow_verification: bool = False
 ) -> dict[str, Any]:
-    journal = config_dir.parent.parent / "app" / "cos-channel-operation" / "active.json"
-    if journal.exists() and not allow_verification:
+    app_dir = config_dir.parent.parent / "app"
+    journals = (
+        app_dir / "cos-channel-operation/active.json",
+        app_dir / "activation/active.json",
+    )
+    if any(journal.exists() for journal in journals) and not allow_verification:
         return {}
     path = config_dir / RECEIPT_FILENAME
     if not path.exists():

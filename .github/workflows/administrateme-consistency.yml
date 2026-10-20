@@ -68,7 +68,9 @@ jobs:
             tests/unit/test_cos_response_assurance.py \
             tests/unit/bootstrap/test_cos_channel_activation.py \
             tests/unit/bootstrap/test_cos_imessage.py \
+            tests/unit/bootstrap/test_cos_guard_release.py \
             tests/unit/bootstrap/test_cos_member_topology.py \
+            tests/unit/test_source_assurance.py::test_provider_effect_accounting_proves_v2_observation_suppression \
             tests/unit/test_cos_response_policy.py \
             tests/unit/test_provider_bindings.py \
             tests/unit/bootstrap/test_google_oauth.py \

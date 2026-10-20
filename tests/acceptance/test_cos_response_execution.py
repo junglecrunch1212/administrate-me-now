@@ -14,7 +14,6 @@ import pytest
 
 from adminme.lib.adapters import OutboundMessage
 from adminme.daemons.adapter_supervisor import _ManagedAdapter
-from adminme.lib.session import build_internal_session
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
@@ -226,9 +225,7 @@ def _install_gmail(runtime: Any, service: FakeGmailService) -> Any:
             "enable_writes": True,
             "channel_id": "channel:cos:response",
         },
-        observation_session=build_internal_session(
-            A, "principal", runtime.settings.instance.tenant_id
-        ),
+        observation_session=runtime.adapters._ctx_factory().observation_session,
         observation_manager=runtime.observation,
         observation_event_log=runtime.events,
     )
@@ -293,6 +290,11 @@ def test_response_observation_independent_approval_and_adapter_bypass(
         assert assurance["counts"]["provider_called_true"] == 0
         assert assurance["counts"]["provider_called_false"] == 2
         assert assurance["counts"]["suppressed_true"] == 1
+        suppressed = client.portal.call(_events, runtime, ["observation.suppressed"])
+        assert len(suppressed) == 1
+        assert suppressed[0]["actor_identity"] == COS_SERVICE_PRINCIPAL_ID
+        assert suppressed[0]["owner_scope"] == f"private:{A}"
+        assert suppressed[0]["visibility_scope"] == f"private:{A}"
 
 
 def test_response_rejects_other_member_group_attachment_and_revocation(
@@ -404,6 +406,12 @@ def test_response_exact_delivery_or_ambiguity_never_retries(
         assert assurance["state"] == ("degraded" if ambiguous else "healthy"), assurance
         assert assurance["counts"]["provider_called_true"] == (0 if ambiguous else 1)
         assert assurance["counts"]["provider_called_unknown"] == (1 if ambiguous else 0)
+        outbound = client.portal.call(_events, runtime, ["external.sent"])
+        assert len(outbound) == (0 if ambiguous else 1)
+        if outbound:
+            assert outbound[0]["actor_identity"] == COS_SERVICE_PRINCIPAL_ID
+            assert outbound[0]["owner_scope"] == f"private:{A}"
+            assert outbound[0]["visibility_scope"] == f"private:{A}"
     with TestClient(create_application(_settings(instance))) as client:
         repeated = client.post(EXECUTE, headers=AUTH, json=execution)
         assert repeated.status_code == 200, repeated.text

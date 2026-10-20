@@ -456,6 +456,7 @@ async def test_provider_effect_accounting_proves_v2_observation_suppression(
                 "state": "healthy",
                 "started_at_configured": True,
                 "started_at": "2026-08-07T11:00:00+00:00",
+                "ended_at": None,
                 "counts": {
                     "write_requests": 1,
                     "terminal_results": 1,
