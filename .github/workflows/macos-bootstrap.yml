@@ -90,6 +90,8 @@ jobs:
           tests/unit/bootstrap/test_candidate_readiness.py
           tests/unit/bootstrap/test_htr10_export.py
           tests/unit/test_historical_attribution.py
+          tests/unit/test_event_log.py::test_default_recorded_at_is_precise_and_explicit_history_is_preserved
+          tests/unit/test_cos_response_assurance.py::test_default_recorded_precision_preserves_same_second_effect_windows
 
       - name: Validate the exact native plugin contract
         run: |

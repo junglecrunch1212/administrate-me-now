@@ -218,6 +218,12 @@ upcaster preserves historical reasons and authority boundaries. Enrollment,
 routing, credentials, recipient policy, the old receipt and all activation/source
 history remain unchanged.
 The retained receipt is historical: its deactivation prevents live dispatch.
+New default event-log `recorded_at` timestamps retain UTC microseconds so a
+governed live response within the same second as activation cannot enter the
+preceding closed observation interval through timestamp truncation. Explicit
+historical timestamps remain byte-for-byte unchanged. The existing half-open
+interval comparisons and zero-effect requirements are preserved; no clock
+rounding, tolerance or retrospective timestamp inference is introduced.
 Healthy selected-release Doctor, current observation-on readiness and unchanged
 authoritative provider-effect counts are required before the journal is closed.
 

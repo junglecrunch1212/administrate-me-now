@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from adminme.cos_response_policy import POLICY_CONTRACT, POLICY_EVENT_TYPE
 from adminme.cos_responses import RESPONSE_CONTRACT, content_fingerprint
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events import log as event_log_module
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.source_assurance import (
     _provider_effect_counts,
@@ -359,5 +361,66 @@ async def test_encrypted_auditor_keeps_closed_window_and_global_effects(
             ]
             == 0
         )
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("placement", ["before", "between", "after"])
+async def test_default_recorded_precision_preserves_same_second_effect_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, placement: str
+) -> None:
+    # Exercise the real append default and auditor, with deterministic local
+    # ingestion times. Occurrence remains coarse as in the production reply
+    # route; it cannot establish which side of a subsecond boundary was recorded.
+    origin = datetime(2026, 10, 20, 12, 0, 10, tzinfo=timezone.utc)
+    offset = {"before": 200_000, "between": 500_000, "after": 800_000}[placement]
+    stamps = [origin + timedelta(microseconds=offset + index) for index in range(6)]
+    clock = iter(stamps)
+
+    class RecordingClock:
+        @staticmethod
+        def now(zone):
+            assert zone == timezone.utc
+            return next(clock)
+
+    monkeypatch.setattr(event_log_module, "datetime", RecordingClock)
+    log = EventLog(tmp_path / "same-second-effects.db", b"s" * 32)
+    try:
+        for index, event in enumerate(_chain()):
+            event.pop("recorded_at")
+            event["occurred_at"] = origin.strftime("%Y-%m-%dT%H:%M:%SZ")
+            event_id = await log.append(EventEnvelope(**event))
+            retained = await log.get(event_id)
+            assert retained is not None
+            assert retained["recorded_at"] == stamps[index].strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        for start, end, included in (
+            (
+                origin - timedelta(seconds=1),
+                origin + timedelta(microseconds=300_000),
+                placement == "before",
+            ),
+            (
+                origin + timedelta(microseconds=700_000),
+                origin + timedelta(seconds=1),
+                placement == "after",
+            ),
+        ):
+            audit = await audit_source_assurance(
+                log,
+                repository_root=ROOT,
+                capabilities={},
+                provider_effect_window_started_at=start.isoformat(),
+                provider_effect_window_ended_at=end.isoformat(),
+            )
+            effects = audit["provider_effects"]
+            assert audit["state"] == effects["state"] == "healthy"
+            assert effects["counts"]["provider_called_true"] == 1
+            window = effects["observation_window"]
+            assert window["state"] == ("degraded" if included else "healthy")
+            assert window["counts"]["write_requests"] == int(included)
+            assert window["counts"]["provider_called_true"] == int(included)
     finally:
         await log.close()

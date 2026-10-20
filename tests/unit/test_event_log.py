@@ -14,6 +14,7 @@ import asyncio
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ import sqlcipher3
 from pydantic import BaseModel
 
 from adminme.events.envelope import EventEnvelope
+from adminme.events import log as event_log_module
 from adminme.events.log import (
     AppendValidationError,
     CursorNotFound,
@@ -91,6 +93,37 @@ async def log(tmp_path: Path):
         yield log
     finally:
         await log.close()
+
+
+async def test_default_recorded_at_is_precise_and_explicit_history_is_preserved(
+    log: EventLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stamped = datetime(2026, 10, 20, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    clock_calls = 0
+
+    class RecordingClock:
+        @staticmethod
+        def now(zone):
+            nonlocal clock_calls
+            assert zone == timezone.utc
+            clock_calls += 1
+            return stamped
+
+    monkeypatch.setattr(event_log_module, "datetime", RecordingClock)
+    event_id = await log.append(_event(1))
+    retained = await log.get(event_id)
+    assert retained is not None
+    assert retained["recorded_at"] == "2026-10-20T12:00:00.123456Z"
+    for timestamp in (
+        "2026-10-19T12:00:00Z",
+        "2026-10-19T12:00:00.123456+00:00",
+    ):
+        historical = _event(2).model_copy(update={"recorded_at": timestamp})
+        event_id = await log.append(historical)
+        retained = await log.get(event_id)
+        assert retained is not None
+        assert retained["recorded_at"] == timestamp
+    assert clock_calls == 1
 
 
 async def test_append_and_read_single(log: EventLog) -> None:
