@@ -79,6 +79,7 @@ jobs:
             tests/unit/test_cos_response_policy.py \
             tests/unit/test_cos_imessage_text.py \
             tests/unit/test_provider_bindings.py \
+            tests/unit/test_service_identities.py \
             tests/unit/bootstrap/test_google_oauth.py \
             tests/adapters/test_credentials.py
 
