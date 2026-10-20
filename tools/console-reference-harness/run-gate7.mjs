@@ -39,6 +39,8 @@ const unexpectedResponses = [];
 const expectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
 const observedExpectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
 const closingPages = new WeakSet();
+const completedStreamRequests = new WeakSet();
+const completedStreamCleanupAborts = [];
 const supersededLocalReadAborts = [];
 const screenshots = {};
 let expected404Console = 0;
@@ -116,6 +118,16 @@ function record(name, pass, detail) {
     const renderedDetail = typeof detail === "string" ? detail : JSON.stringify(detail);
     throw new Error(`${name}: ${renderedDetail}`);
   }
+}
+
+function markCompletedStream(request) {
+  const url = new URL(request.url());
+  if (request.method() !== "POST" || url.hostname !== "127.0.0.1"
+    || ![basePort, basePort + 4].includes(Number.parseInt(url.port, 10))
+    || url.pathname !== "/api/member/v1/chat/stream") {
+    throw new Error("Only the exact proven-complete fixture stream may be marked for cleanup");
+  }
+  completedStreamRequests.add(request);
 }
 
 async function launchEdge() {
@@ -433,6 +445,11 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
   page.on("requestfailed", (request) => {
     const errorText = request.failure()?.errorText;
     if (closingPages.has(page) && errorText === "net::ERR_ABORTED") return;
+    if (errorText === "net::ERR_ABORTED" && completedStreamRequests.has(request)) {
+      completedStreamCleanupAborts.push(request.url());
+      console.log(`[Gate 7] Navigation released a proven-complete stream: ${request.url()}`);
+      return;
+    }
     const requestUrl = new URL(request.url());
     const isKnownLocalRead = request.method() === "GET"
       && errorText === "net::ERR_ABORTED"
@@ -1777,6 +1794,7 @@ async function run() {
       && document.querySelector("#chat-stop").hidden
       && document.querySelectorAll(".cos-send-approval").length === 0, null, { timeout: 10_000 });
     record("adult OpenClaw stream rendered", chatResponse.ok() && await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
+    markCompletedStream(chatResponse.request());
     await adult.page.locator("#chat-close").click();
     record("chat drawer returns focus to its opener", await adult.page.locator("#chat-open").evaluate((node) => node === document.activeElement && node.getAttribute("aria-expanded") === "false"), await adult.page.evaluate(() => document.activeElement?.id));
     await screenshot(adult.page, "adult-chat-streamed-tablet.png");
@@ -1939,7 +1957,7 @@ async function run() {
 
     cosReplyServer = await startServer(basePort + 4, true, false, false, true, true);
     const cosReplyBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
-    await auditCosSendingApproval({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility });
+    await auditCosSendingApproval({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility, markCompletedStream });
     await closePageContext(cosReplyBrowser);
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
@@ -1960,7 +1978,7 @@ async function run() {
     record(
       "no failed browser requests",
       requestFailures.length === 0,
-      JSON.stringify({ requestFailures, supersededLocalReadAborts }),
+      JSON.stringify({ requestFailures, supersededLocalReadAborts, completedStreamCleanupAborts }),
     );
   } finally {
     console.log("[Gate 7] Closing browser and fixture servers");
@@ -2003,6 +2021,7 @@ async function run() {
     console_warnings: consoleWarnings,
     page_errors: pageErrors,
     request_failures: requestFailures,
+    completed_stream_cleanup_aborts: completedStreamCleanupAborts,
     unexpected_responses: unexpectedResponses,
   };
   await writeFile(join(evidenceDir, "visual-results.json"), `${JSON.stringify(report, null, 2)}\n`);
@@ -2039,7 +2058,7 @@ boundedRun.then(
     clearTimeout(hardTimeout);
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(join(evidenceDir, "visual-failure.txt"), `${error.stack || error}\n`);
-    await writeFile(join(evidenceDir, "visual-partial-results.json"), `${JSON.stringify({ status: "FAIL", results, screenshots, consoleErrors, pageErrors, requestFailures, unexpectedResponses }, null, 2)}\n`);
+    await writeFile(join(evidenceDir, "visual-partial-results.json"), `${JSON.stringify({ status: "FAIL", results, screenshots, consoleErrors, pageErrors, requestFailures, completedStreamCleanupAborts, unexpectedResponses }, null, 2)}\n`);
     console.error(error);
     process.exit(1);
   },

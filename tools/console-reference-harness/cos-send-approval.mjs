@@ -1,5 +1,5 @@
 // Real member routes and UI; only the isolated Gateway conversation is a fixture.
-export async function auditCosSendingApproval({ page, baseUrl, record, screenshot, auditAccessibility }) {
+export async function auditCosSendingApproval({ page, baseUrl, record, screenshot, auditAccessibility, markCompletedStream }) {
   page.setDefaultTimeout(10_000);
   page.setDefaultNavigationTimeout(20_000);
   const call = async (path, method = "GET", data = null) => {
@@ -83,6 +83,9 @@ export async function auditCosSendingApproval({ page, baseUrl, record, screensho
     record(`Chat reports the bounded fixture result without claiming delivery at ${width}`, (await page.locator("#chat-messages").textContent()).includes(expectedResult));
     const replay = await page.request.post(`${baseUrl}${endpoint}`, { data: decisionBody });
     record(`The resolved sending decision cannot be replayed at ${width}`, replay.status() === 409 && (await call("/__gate7/cos-reply-proof")).decisions.length === completed);
+    // Only this exact stream, after Ready/EOF UI cleanup and the independent
+    // server's closed phase, may be released by the next viewport navigation.
+    markCompletedStream(stream.request());
     await screenshot(page, `cos-reply-decision-result-${width}.png`);
     await page.locator("#chat-close").click();
   }
