@@ -36,6 +36,7 @@ small { display: block; color: var(--muted); }
 .skip-link:focus-visible { top: 1rem; }
 .app-shell { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr) 23rem; min-height: 100vh; }
 .observation-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: -.55rem 0 1rem; border: 1px solid #cdb9d8; border-radius: var(--radius); padding: .72rem .85rem; background: #f2e7f5; color: #4c3459; font-size: .78rem; }
+.observation-banner[hidden] { display: none; }
 .observation-banner div { display: grid; gap: .12rem; }
 .observation-banner a { display: inline-flex; align-items: center; min-height: 1.5rem; color: inherit; font-weight: 800; white-space: nowrap; }
 .freshness-strip { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; margin-bottom: .7rem; color: var(--muted); font-size: .72rem; }
@@ -66,7 +67,6 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .member-chip strong, .member-chip small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member-chip small { color: #ddd8d0; font-size: .62rem; }
 .view-as-banner { background: #fff0c9; border-color: #c99235; color: #72510b; }
-.view-as-banner[hidden] { display: none; }
 .banner { padding: .9rem 1rem; background: #fff1d2; border: 1px solid #c99235; border-radius: var(--radius); margin-bottom: 1rem; }
 .surface { display: grid; min-width: 0; gap: 1rem; }
 .surface > * { min-width: 0; }

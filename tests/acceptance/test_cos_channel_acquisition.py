@@ -6,6 +6,7 @@ import asyncio
 import base64
 import copy
 import hashlib
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -32,6 +33,7 @@ from tests.acceptance.test_forwarded_channel_intake import (
     EMAIL_ACCOUNT,
     MEMBER_A,
     MEMBER_HEADERS,
+    OTHER_HEADERS,
     ROOT,
     TEXT,
     _events,
@@ -134,6 +136,107 @@ def test_overlay_preserves_selection_disables_personal_and_blocks_expansion(
     modified["service_identities"]["channels"][1]["enrolled"] = False
     with pytest.raises(ValueError, match="enrollment"):
         restrict_adapter_config(modified)
+
+
+def test_settings_separates_disabled_personal_sources_from_cos_channels(
+    tmp_path: Path,
+) -> None:
+    base = _settings(tmp_path)
+    config = _configuration(tmp_path)
+    personal, service = config["adapters"]
+    personal["kind"] = "messaging-gmail-api"
+    personal["config"].update(
+        user_email="personal-fixture@example.invalid",
+        account_label="Personal fixture inbox",
+    )
+    # Both transports are inert in this disposable process; the acquisition
+    # policy still supplies the production restriction and service inventory.
+    personal["enabled"] = False
+    service["enabled"] = False
+    app = create_application(replace(base, adapter_config=config))
+    with TestClient(app) as client:
+        assert client.portal is not None
+        runtime = app.state.runtime
+        # Exercise strict deployment presentation without creating a fake
+        # deployed host, readiness evidence, credential, or provider binding.
+        object.__setattr__(runtime.settings, "deployment_evidence_required", True)
+        response = client.get(
+            "/api/member/v1/surfaces/settings", headers=MEMBER_HEADERS
+        )
+        assert response.status_code == 200, response.text
+        control = response.json()["control"]
+        [connection] = control["connections"]
+        assert connection["id"] == "fixture-personal-gmail"
+        assert connection["setup"] == "disabled"
+        assert connection["runtime"] == "not_running"
+        assert connection["binding"]["state"] == "unverified"
+        assert connection["inactive_reason"] == "cos_forwarded_intake"
+        assert connection["actions"] == []
+        assert not any(
+            row["title"].startswith("Review account ownership")
+            for row in control["needs_attention"]
+        )
+        channels = control["service_channels"]
+        assert channels["channel_count"] == 2
+        assert {row["provider"] for row in channels["channels"]} == {
+            "gmail",
+            "apple_imessage",
+        }
+        rendered = json.dumps(channels)
+        for private_value in (
+            EMAIL_ACCOUNT,
+            "personal-fixture@example.invalid",
+            "provider-account:",
+            "route:",
+            "op://",
+        ):
+            assert private_value not in rendered
+        for action in ("pause", "resume"):
+            denied = client.post(
+                "/api/member/v1/settings/connections/fixture-personal-gmail",
+                headers=MEMBER_HEADERS,
+                json={
+                    "action": action,
+                    "expected_revision": control["revision"],
+                    "request_id": f"restricted-{action}",
+                },
+            )
+            assert denied.status_code == 409, denied.text
+        assert runtime.settings_control.read()["revision"] == control["revision"]
+        assert (
+            client.post(
+                "/api/member/v1/settings/connections/fixture-cos-gmail",
+                headers=MEMBER_HEADERS,
+                json={
+                    "action": "pause",
+                    "expected_revision": control["revision"],
+                    "request_id": "service-is-not-personal",
+                },
+            ).status_code
+            == 404
+        )
+        other = client.get(
+            "/api/member/v1/surfaces/settings", headers=OTHER_HEADERS
+        ).json()["control"]
+        assert other["connections"] == []
+        assert other["service_channels"] == channels
+
+        # A genuinely enabled but unverified personal connection must retain
+        # its repair notice. No reconcile/provider action is performed here.
+        runtime.settings.adapter_config.pop(CONFIG_KEY)
+        runtime.settings.adapter_config.pop(TEST_KEY)
+        runtime.settings.adapter_config["adapters"][0]["enabled"] = True
+        blocked = client.get(
+            "/api/member/v1/surfaces/settings", headers=MEMBER_HEADERS
+        ).json()["control"]
+        assert blocked["connections"][0]["setup"] == "binding_blocked"
+        assert any(
+            row["title"] == "Review account ownership for Personal fixture inbox"
+            for row in blocked["needs_attention"]
+        )
+        assert blocked["connections"][0]["actions"] == ["pause"]
+        for event_type in ("external.sent", "settings.connection_lifecycle_changed"):
+            assert client.portal.call(_events, runtime, event_type) == []
 
 
 @pytest.mark.parametrize("live", [False, True])

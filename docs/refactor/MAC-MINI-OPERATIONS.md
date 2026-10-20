@@ -480,6 +480,19 @@ to the fixed event watermark, historical attribution result, source-assurance
 result, and original provider-effect observation-window start; it is not a
 generic checkbox and cannot reset that window.
 
+MODERNIZE: after an authorized CoS live interval, HTR-10 also binds the current
+observation window's actual `ended_at`, when present, and every retained closed
+`prior_provider_effect_windows` entry. The exporter audits each half-open
+`[started_at, ended_at)` interval at the same immutable event watermark and
+requires zero effects within every observation interval. Authorized effects
+between intervals remain visible in the all-history integrity audit. Unknown,
+uncorrelated, or otherwise invalid effects still fail that audit regardless of
+their time. The optional `provider_effect_windows` receipt field carries the
+complete interval evidence through pending attestation and guarded promotion;
+changed ends, reasons, or history invalidate that binding. Original start-only
+receipts remain valid only for the same unchanged open window without retained
+history. A code update never reopens a closed interval or discards its history.
+
 The command holds the canonical cooperative deployment-operation lock, checks
 the full active/retained pointer chain, hashes fixed configuration coordinates,
 streams the exact encrypted backup digest, validates the strengthened

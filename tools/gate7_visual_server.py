@@ -167,6 +167,23 @@ def build_app():
         from tools.cos_reply_visual_fixture import ACCOUNT, PHONE, service_config
 
         adapter_config["service_identities"] = service_config()
+        adapter_config["adapters"] = [
+            {
+                "id": f"visual-disabled-{owner}",
+                "kind": "messaging-gmail-api",
+                "enabled": False,
+                "config": {
+                    "member_id": owner,
+                    "provider_account_id": f"{owner}@example.test",
+                    "user_email": f"{owner}@example.test",
+                    "account_label": label,
+                },
+            }
+            for owner, label in (
+                (PRINCIPAL, "My disabled fixture inbox"),
+                (ADULT, "Other member fixture inbox"),
+            )
+        ]
         reply_actors[f"imessage|{ACCOUNT}|{PHONE}"] = PRINCIPAL
     settings = RuntimeSettings.credential_free(
         INSTANCE,
@@ -199,6 +216,23 @@ def build_app():
         adapter_config=adapter_config,
     )
     app = create_application(settings)
+
+    @app.post("/__gate7/settings-observation")
+    async def settings_observation(active: bool = True):
+        if not COS_REPLIES:
+            raise HTTPException(404, "CoS Settings fixture is not enabled")
+        runtime = app.state.runtime
+        toggle = runtime.observation.enable if active else runtime.observation.disable
+        await toggle(PRINCIPAL, "Disposable browser observation-state proof")
+        await runtime._refresh_capability_registry()
+        effects = [
+            event["event_id"]
+            async for event in runtime.event_log.read_since(types=["external.sent"])
+        ]
+        return {
+            "observation_active": await runtime.observation.is_active(),
+            "provider_effect_count": len(effects),
+        }
 
     @app.post("/__gate7/prepare-cos-replies")
     async def prepare_cos_replies():

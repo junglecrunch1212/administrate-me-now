@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,10 @@ from adminme.provider_bindings import validate_provider_bindings
 from adminme.source_assurance import audit_source_assurance
 from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths, ensure_within
+from bootstrap.candidate_readiness import (
+    CandidateReadinessError,
+    provider_effect_window_evidence,
+)
 from bootstrap.recovery_readiness import _ATTESTATION_REFRESH_DIMENSIONS
 from bootstrap.provider_binding_transition import (
     NoEligibleProviderBindingTransitionError,
@@ -318,9 +323,15 @@ async def export_htr10_audits(
     _readiness_payload, readiness = _private_json(
         paths.instance_dir / "config" / "deployment-readiness.json"
     )
-    window = (readiness.get("provider_effect_window") or {}).get("started_at")
-    if not isinstance(window, str) or not window:
-        raise HTR10ExportError("provider-effect observation window is unavailable")
+    try:
+        window_evidence = provider_effect_window_evidence(
+            readiness, now=datetime.now(timezone.utc)
+        )
+    except CandidateReadinessError as exc:
+        raise HTR10ExportError(
+            "provider-effect observation windows are invalid"
+        ) from exc
+    window = window_evidence["provider_effect_window"]
     _secret_payload, secret_references = _private_json(
         paths.instance_dir / "config" / "secret-references.json"
     )
@@ -349,8 +360,25 @@ async def export_htr10_audits(
             repository_root=repository_root,
             capabilities=capabilities,
             through_event_id=watermark,
-            provider_effect_window_started_at=window,
+            provider_effect_window_started_at=window["started_at"],
+            provider_effect_window_ended_at=window.get("ended_at"),
         )
+        prior_audits = []
+        for prior in window_evidence["prior_provider_effect_windows"]:
+            prior_assurance = await audit_source_assurance(
+                event_log,
+                repository_root=repository_root,
+                capabilities=capabilities,
+                through_event_id=watermark,
+                provider_effect_window_started_at=prior["started_at"],
+                provider_effect_window_ended_at=prior["ended_at"],
+            )
+            prior_audits.append(
+                prior_assurance["provider_effects"]["observation_window"]
+            )
+        if prior_audits:
+            assurance["provider_effects"]["prior_observation_windows"] = prior_audits
+        assurance["provider_effect_windows"] = window_evidence
     finally:
         await event_log.close()
     transition_sha256 = (

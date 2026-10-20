@@ -67,9 +67,13 @@ jobs:
             tests/unit/test_member_chat_protocol.py \
             tests/acceptance/test_cos_response_text.py \
             tests/acceptance/test_cos_channel_acquisition.py \
+            tests/acceptance/test_cos_live_maintenance.py \
+            tests/acceptance/test_disposable_dataset_continuity.py::test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactivation \
             tests/unit/test_cos_channel_operation.py \
             tests/unit/test_cos_response_assurance.py \
             tests/unit/bootstrap/test_cos_channel_activation.py \
+            tests/unit/bootstrap/test_candidate_readiness.py \
+            tests/unit/bootstrap/test_htr10_export.py \
             tests/unit/bootstrap/test_cos_imessage.py \
             tests/unit/bootstrap/test_cos_guard_release.py \
             tests/unit/bootstrap/test_cos_permissions.py \

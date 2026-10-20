@@ -172,6 +172,61 @@ Runtime verification continues to require the selected immutable release's exact
 wrapper; retained-release paths and caller-supplied replacement hashes are not
 accepted as substitutes.
 
+### Upgrading an already live CoS
+
+This MODERNIZE preserves the AGENTS.md observation-on deployment rule. Before
+collecting candidate readiness, use the supported `--enter-observation`
+operation from the clean newly merged protected-main checkout with the selected
+predecessor's installed Python. Refresh the checkout's `origin/main` before
+invocation: the controller requires its exact HEAD to equal that protected-main
+reference, proves the selected predecessor's immutable source and ancestry, and
+refuses a different interpreter or deployment binding. It never edits an
+installed release or starts the candidate to perform containment.
+
+The private `--request` JSON contains only `owner_member_id`, a distinct
+`operator_principal_id`, `owner_authorization_sha256`, `expected_release_commit`,
+`expected_activation_id`, and `expected_configuration_fingerprint`. These bind
+the owner's existing deployment/write authorization to the actual current live
+receipt and configuration; they do not require another approval ceremony or
+accept fabricated enrollment evidence. The command is:
+
+```sh
+SELECTED_PYTHON -m bootstrap.cos_channel_activation \
+  --instance-root PRIVATE_INSTANCE_ROOT --request PRIVATE_OBSERVATION_REQUEST \
+  --enter-observation
+```
+
+The existing operation lock and journal hold replies before stopping services.
+The stopped encrypted log establishes the authoritative, complete provider-effect
+baseline; a legitimate live reply finishing before this boundary is retained.
+An authenticated encrypted backup and isolated restore rehearsal precede the
+observation mutation. The controller revalidates source/configuration and policy,
+appends an idempotent deactivation of the previous live authority and an audited
+observation enable, archives the previous closed interval unchanged, and starts a
+new `cos_enter_observation` interval. Enrollment, routing, credentials, recipient
+policy, the old receipt and all activation/source history remain unchanged.
+The retained receipt is historical: its deactivation prevents live dispatch.
+Healthy selected-release Doctor, current observation-on readiness and unchanged
+authoritative provider-effect counts are required before the journal is closed.
+
+On interruption or failed verification, the journal continues to deny replies
+and services remain stopped. Run the same merged controller and installed Python
+with `--instance-root PRIVATE_INSTANCE_ROOT --recover`; recovery completes that
+same observation boundary and never restores live writes. A repeated recovery
+does not duplicate the deactivation, observation-enable fact or archived interval.
+Configuration, policy or unknown-effect drift remains a blocking failure.
+
+After successful containment, collect normal HTR-10 and candidate-pending
+evidence and use the guarded updater. Its encrypted backup, rollback, full Doctor
+and member-browser gates remain mandatory. Current and archived effect intervals
+must survive promotion and rollback without reinterpretation of authorized live
+effects as observation effects. After successful deployment, run the existing
+`--request PRIVATE_ACTIVATION_REQUEST --enable-live` operation from the selected
+merged release with fresh actual sender/transport evidence. Omit
+`recipient_entries` to retain the existing policy without reseeding. This appends
+a fresh activation boundary; suppressed and pre-boundary requests are never
+released or retried automatically.
+
 The retained dataset remains an accepted bounded predecessor. This operation
 does not relabel the discarded pre-reset history as a proven production
 rollback. Physical browser acceptance and external sign-in coverage are

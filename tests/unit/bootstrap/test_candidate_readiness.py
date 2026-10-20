@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import copy
 import hashlib
 import json
 import os
@@ -706,6 +707,182 @@ def _htr10_audits(
     }
     _private_write(source, json.dumps(source_value).encode())
     return historical, source, source_value
+
+
+def _retained_window_review(
+    paths: DeploymentPaths, *, closed: bool
+) -> tuple[Path, dict[str, Any]]:
+    start = (NOW - timedelta(days=2)).isoformat()
+    historical, source, audit = _htr10_audits(paths, window=start)
+    evidence = {
+        "provider_effect_window": {
+            "started_at": start,
+            "reason": "cos_enter_observation",
+        },
+        "prior_provider_effect_windows": [
+            {
+                "started_at": (NOW - timedelta(days=5)).isoformat(),
+                "ended_at": (NOW - timedelta(days=3)).isoformat(),
+            }
+        ],
+    }
+    if closed:
+        evidence["provider_effect_window"]["ended_at"] = (
+            NOW - timedelta(days=1)
+        ).isoformat()
+    _private_write(
+        paths.instance_dir / "config" / "deployment-readiness.json",
+        json.dumps({"contract": "deployment-readiness-v1", **evidence}).encode(),
+    )
+    current_audit = audit["provider_effects"]["observation_window"]
+    current_audit.update(evidence["provider_effect_window"])
+    prior_audit = copy.deepcopy(current_audit)
+    prior_audit.update(evidence["prior_provider_effect_windows"][0])
+    audit["provider_effects"]["prior_observation_windows"] = [prior_audit]
+    audit["provider_effect_windows"] = evidence
+    _private_write(source, json.dumps(audit).encode())
+    review = build_htr10_review(
+        paths,
+        historical_attribution=historical,
+        source_assurance=source,
+        observed_at=(NOW - timedelta(hours=1)).isoformat(),
+        now=NOW,
+    )
+    path = paths.backup_dir / "retained-window-review.json"
+    _private_write(path, json.dumps(review).encode())
+    return path, evidence
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_pending_promotion_preserves_closed_windows_and_reasons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, closed: bool
+) -> None:
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr(candidate_readiness, "datetime", FixtureClock)
+    paths, candidate, commit, receipt, artifact, _htr, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    review, evidence = _retained_window_review(paths, closed=closed)
+    result = record_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=review,
+        confirmations=confirmations,
+        observed_at=observed,
+        now=NOW,
+    )
+    pending, digest, _snapshot = load_pending_attestation_for_activation(
+        paths,
+        attestation_id=result["attestation_id"],
+        candidate=candidate,
+        candidate_commit=commit,
+        now=NOW,
+    )
+    active = build_active_attestation_from_pending(
+        pending,
+        pending_sha256=digest,
+        fresh_backup_sha256="1" * 64,
+        fresh_rehearsal_receipt_sha256="2" * 64,
+        rollback_eligibility_sha256="3" * 64,
+        tested_at=NOW.isoformat(),
+    )
+    assert pending["pre_switch_state"]["provider_effect_windows"] == evidence
+    assert {key: active[key] for key in evidence} == evidence
+    active["prior_provider_effect_windows"][0]["ended_at"] = NOW.isoformat()
+    assert pending["pre_switch_state"]["provider_effect_windows"] == evidence
+
+
+@pytest.mark.parametrize(
+    "drift", ["current_end", "prior_end", "drop_history", "reason"]
+)
+def test_pending_refuses_changed_closed_window_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    paths, candidate, commit, receipt, artifact, _htr, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    review, evidence = _retained_window_review(paths, closed=True)
+    result = record_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=review,
+        confirmations=confirmations,
+        observed_at=observed,
+        now=NOW,
+    )
+    if drift == "current_end":
+        evidence["provider_effect_window"].pop("ended_at")
+    elif drift == "prior_end":
+        evidence["prior_provider_effect_windows"][0]["ended_at"] = (
+            NOW - timedelta(days=4)
+        ).isoformat()
+    elif drift == "drop_history":
+        evidence["prior_provider_effect_windows"] = []
+    else:
+        evidence["provider_effect_window"]["reason"] = "cos_operation_recovery"
+    _private_write(
+        paths.instance_dir / "config" / "deployment-readiness.json",
+        json.dumps({"contract": "deployment-readiness-v1", **evidence}).encode(),
+    )
+    with pytest.raises(CandidateReadinessError, match="provider-effect window changed"):
+        load_pending_attestation_for_activation(
+            paths,
+            attestation_id=result["attestation_id"],
+            candidate=candidate,
+            candidate_commit=commit,
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    "defect", ["missing_end", "changed_end", "missing_prior", "prior_effect", "overlap"]
+)
+def test_htr10_refuses_incomplete_or_nonzero_closed_window_proof(
+    tmp_path: Path, defect: str
+) -> None:
+    paths = _deployment(tmp_path)
+    _review, evidence = _retained_window_review(paths, closed=True)
+    source = paths.backup_dir / "source-assurance.json"
+    audit = json.loads(source.read_bytes())
+    if defect == "missing_end":
+        audit["provider_effects"]["observation_window"].pop("ended_at")
+    elif defect == "changed_end":
+        audit["provider_effects"]["observation_window"]["ended_at"] = (
+            NOW - timedelta(hours=12)
+        ).isoformat()
+    elif defect == "missing_prior":
+        audit["provider_effects"].pop("prior_observation_windows")
+    elif defect == "prior_effect":
+        audit["provider_effects"]["prior_observation_windows"][0]["counts"][
+            "provider_called_true"
+        ] = 1
+    else:
+        evidence["prior_provider_effect_windows"][0]["ended_at"] = (
+            NOW - timedelta(hours=36)
+        ).isoformat()
+        _private_write(
+            paths.instance_dir / "config" / "deployment-readiness.json",
+            json.dumps({"contract": "deployment-readiness-v1", **evidence}).encode(),
+        )
+    _private_write(source, json.dumps(audit).encode())
+    with pytest.raises(CandidateReadinessError, match="provider-effect window"):
+        build_htr10_review(
+            paths,
+            historical_attribution=paths.backup_dir / "historical.json",
+            source_assurance=source,
+            observed_at=(NOW - timedelta(hours=1)).isoformat(),
+            now=NOW,
+        )
 
 
 @pytest.mark.parametrize("window_age_days", [2, 400])

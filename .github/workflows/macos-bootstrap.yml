@@ -80,6 +80,15 @@ jobs:
           poetry sync --with dev --no-interaction
 
       # Prove the new channel boundary before the longer recovery rehearsals.
+      - name: Validate active CoS maintenance and observation windows
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5
+          tests/acceptance/test_cos_live_maintenance.py
+          tests/acceptance/test_disposable_dataset_continuity.py::test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactivation
+          tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/unit/bootstrap/test_candidate_readiness.py
+          tests/unit/bootstrap/test_htr10_export.py
+
       - name: Validate the exact native plugin contract
         run: |
           npm ci --prefix openclaw/administrateme --ignore-scripts

@@ -22,6 +22,9 @@ from adminme.adapters.disposable_test_acquisition import (
     policy_from_adapter_config,
     restrict_adapter_config,
 )
+from adminme.adapters.cos_channel_acquisition import (
+    policy_from_config as cos_policy_from_config,
+)
 from adminme.bridge_enrollment import (
     CAPABILITY_STATES,
     ENROLLMENT_STATES,
@@ -1485,6 +1488,7 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     effective_config = restrict_adapter_config(runtime.settings.adapter_config)
     test_policy = policy_from_adapter_config(effective_config)
+    cos_policy = cos_policy_from_config(effective_config)
     for index, entry in enumerate(effective_config.get("adapters", [])):
         if not isinstance(entry, dict):
             continue
@@ -1524,15 +1528,17 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                     "severity": raw_error.get("severity") or "unknown",
                     "occurred_at": raw_error.get("occurred_at"),
                 }
-        if (
+        # Disabled adapters intentionally have no active provider binding.
+        # Keep that binding unverified without presenting a repair obligation.
+        if override_state == "paused":
+            setup_state = "paused"
+        elif not configured_enabled:
+            setup_state = "disabled"
+        elif (
             getattr(runtime.settings, "deployment_evidence_required", False)
             and binding is None
         ):
             setup_state = "binding_blocked"
-        elif override_state == "paused":
-            setup_state = "paused"
-        elif not configured_enabled:
-            setup_state = "disabled"
         elif not credentials_present:
             setup_state = "setup_incomplete"
         elif runtime_state == "running":
@@ -1594,7 +1600,22 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                 },
                 "last_sync_at": last_sync,
                 "error": error,
-                "actions": ["resume"] if setup_state == "paused" else ["pause"],
+                "inactive_reason": (
+                    "cos_forwarded_intake"
+                    if cos_policy is not None and not configured_enabled
+                    else "acquisition_restricted"
+                    if test_policy is not None and not configured_enabled
+                    else "configuration_disabled"
+                    if not configured_enabled
+                    else None
+                ),
+                "actions": (
+                    []
+                    if not configured_enabled
+                    else ["resume"]
+                    if setup_state == "paused"
+                    else ["pause"]
+                ),
             }
         )
     for identity, record in sorted(
