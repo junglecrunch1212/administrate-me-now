@@ -23,6 +23,7 @@ from bootstrap.submission_repair import (
     valid_repair_binding,
     validate_submission_repair_audit,
     validate_submission_repair_diagnostics,
+    validate_submission_repair_progress,
 )
 from tests.unit.bootstrap.test_activation_transaction import _journal_value, _paths
 from tests.unit.bootstrap.test_cos_channel_activation import _live_controller
@@ -95,10 +96,7 @@ def assurance() -> dict:
 def diagnostics(*, observation: bool = True) -> dict:
     consumers = {f"projection:{name}": "projection" for name in PROJECTION_NAMES}
     consumers.update(
-        {
-            f"pipeline:{name}": "reactive_pipeline"
-            for name in _required_reactive_pipeline_ids(ROOT)
-        }
+        {name: "reactive_pipeline" for name in _required_reactive_pipeline_ids(ROOT)}
     )
     return {
         "ready": False,
@@ -205,6 +203,7 @@ def test_private_manifest_binding_is_content_free_and_exact(tmp_path, monkeypatc
         "new_dimension",
         "required_dimension",
         "missing_consumer",
+        "missing_pipeline",
         "lag",
         "unknown_worker",
         "stale",
@@ -239,6 +238,8 @@ def test_exact_baseline_refuses_any_unrelated_or_unsettled_gap(defect):
         value["deployment_readiness"]["dimensions"]["bridges"]["required"] = True
     elif defect == "missing_consumer":
         value["capabilities"].pop("projection:context_fabric")
+    elif defect == "missing_pipeline":
+        value["capabilities"].pop("pipeline:pipeline:noise_filtering")
     elif defect == "lag":
         value["capabilities"]["projection:context_fabric"]["details"]["lag_count"] = 1
     elif defect == "unknown_worker":
@@ -264,6 +265,26 @@ def test_exact_baseline_is_contained_degraded_never_healthy():
     )
     validate_submission_repair_audit(manifest(), assurance())
     assert original == before
+
+
+def test_repair_progress_requires_actual_runtime_pipeline_capability_ids():
+    value = diagnostics()
+    pipeline_id = "pipeline:pipeline:noise_filtering"
+    assert pipeline_id in value["capabilities"]
+    assert f"pipeline:{pipeline_id}" not in value["capabilities"]
+    validate_submission_repair_progress(value)
+    value["capabilities"].pop(pipeline_id)
+    with pytest.raises(SubmissionRepairError, match="consumer inventory"):
+        validate_submission_repair_progress(value)
+
+
+def test_failed_summary_retains_deterministic_preface_without_expanding_failures():
+    value = assurance()
+    value["failed"][0]["reason"] = "member_kind_or_text_rule_matched"
+    validate_submission_repair_audit(manifest(), value)
+    value["failed"][0]["reason"] = "unrecognized_failure"
+    with pytest.raises(SubmissionRepairError, match="failure summary"):
+        validate_submission_repair_audit(manifest(), value)
 
 
 @pytest.mark.parametrize("fail_backup", [False, True])

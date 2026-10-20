@@ -301,6 +301,7 @@ def validate_submission_repair_audit(
             or failure.get("reason")
             not in {
                 "member_text_requires_human_interpretation",
+                "member_kind_or_text_rule_matched",
                 expected[source_id].expected_failure_reason,
             }
         ):
@@ -462,10 +463,9 @@ def _validate_operational_diagnostics(
     from bootstrap.contracts import PROJECTION_NAMES
     from bootstrap.doctor import _required_reactive_pipeline_ids
 
-    expected_consumers = {f"projection:{name}" for name in PROJECTION_NAMES} | {
-        f"pipeline:{name}"
-        for name in _required_reactive_pipeline_ids(Path(__file__).resolve().parents[1])
-    }
+    expected_consumers = {
+        f"projection:{name}" for name in PROJECTION_NAMES
+    } | _required_reactive_pipeline_ids(Path(__file__).resolve().parents[1])
     if not expected_consumers <= set(capabilities):
         raise SubmissionRepairError("repair required consumer inventory is incomplete")
 
@@ -884,10 +884,9 @@ def validate_submission_repair_progress(diagnostics: dict[str, Any]) -> None:
             "pending repair runtime is unavailable or structurally degraded"
         )
     capabilities = diagnostics["capabilities"]
-    expected = {f"projection:{name}" for name in PROJECTION_NAMES} | {
-        f"pipeline:{name}"
-        for name in _required_reactive_pipeline_ids(Path(__file__).resolve().parents[1])
-    }
+    expected = {
+        f"projection:{name}" for name in PROJECTION_NAMES
+    } | _required_reactive_pipeline_ids(Path(__file__).resolve().parents[1])
     if not expected <= set(capabilities):
         raise SubmissionRepairError("pending repair consumer inventory is incomplete")
     readiness = diagnostics["deployment_readiness"]

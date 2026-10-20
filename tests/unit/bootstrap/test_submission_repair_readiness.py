@@ -378,11 +378,11 @@ async def test_encrypted_failed_forward_exports_exact_degraded_repair_review(
     }
     capabilities = {}
     for prefix, kind, names in (
-        ("projection", "projection", PROJECTION_NAMES),
-        ("pipeline", "reactive_pipeline", _required_reactive_pipeline_ids(REPO_ROOT)),
+        ("projection:", "projection", PROJECTION_NAMES),
+        ("", "reactive_pipeline", _required_reactive_pipeline_ids(REPO_ROOT)),
     ):
         for name in names:
-            capabilities[f"{prefix}:{name}"] = {
+            capabilities[f"{prefix}{name}"] = {
                 "kind": kind,
                 "state": "healthy",
                 "details": {

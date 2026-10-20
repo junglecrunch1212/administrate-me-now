@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import EventLog
+from adminme.events.log import AppendValidationError, EventLog
 from adminme.events.writer import EventWriter
 from adminme.direct_intake import DirectIntakeProcessor
 from adminme.historical_attribution import audit_historical_attribution
@@ -174,15 +174,24 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
     log = EventLog(tmp_path / "audited.db", b"a" * 32)
     try:
         for event in events:
-            await log.append(
-                EventEnvelope(
-                    **{
-                        key: value
-                        for key, value in event.items()
-                        if key in EventEnvelope.model_fields
-                    }
-                )
+            envelope = EventEnvelope(
+                **{
+                    key: value
+                    for key, value in event.items()
+                    if key in EventEnvelope.model_fields
+                }
             )
+            if defect == "parent_scope" and event is parent:
+                # The source envelope boundary already rejects this cross-owner
+                # contradiction; never bypass it to reach a later audit layer.
+                with pytest.raises(
+                    AppendValidationError,
+                    match="messaging v5 envelope contradicts payload route: owner_scope",
+                ):
+                    await log.append(envelope)
+                assert await log.count() == 0
+                return
+            await log.append(envelope)
         spoofed_member_binding = ProviderBinding(
             adapter_id="spoofed",
             kind="messaging-gmail-api",
