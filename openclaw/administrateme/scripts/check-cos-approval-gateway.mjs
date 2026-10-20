@@ -176,8 +176,15 @@ try {
     name: "@administrateme/approval-gateway-probe", version: "1.0.0", type: "module",
     openclaw: { extensions: ["./index.mjs"] },
   });
+  const productionManifest = JSON.parse(await readFile(
+    path.join(repository, "openclaw/administrateme/openclaw.plugin.json"), "utf8",
+  ));
+  assert.equal(productionManifest.activation?.onStartup, true);
   await privateJson(path.join(plugin, "openclaw.plugin.json"), {
     id: "administrateme", name: "Isolated CoS approval relay",
+    // Enabled alone does not eagerly load service-only plugins on this pin.
+    // Keep the probe bound to the release's actual startup activation contract.
+    activation: { onStartup: productionManifest.activation.onStartup },
     configSchema: { type: "object", additionalProperties: false, properties: {} },
   });
   await privateJson(seedFile, seeds);
