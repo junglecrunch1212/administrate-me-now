@@ -14,16 +14,19 @@ import json
 import time
 from threading import Event
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
 from adminme.events.envelope import EventEnvelope
 from adminme.direct_intake import DirectIntakeProcessor
+from adminme.lib.skill_runner.wrapper import run_skill
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.source_assurance import audit_source_assurance
@@ -209,6 +212,106 @@ def _calendar_bridge_headers(client: TestClient) -> dict[str, str]:
         "Tailscale-User-Login": identity,
         "X-AdministrateMe-Bridge-Enrollment": enrollment["enrollment_id"],
     }
+
+
+def test_full_forward_uses_bounded_model_budget_before_creating_triage(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "forward-extraction-budget"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        _grant_cos_private_context(client, "forwarded-budget-cos-context")
+        quote = "Call the school office."
+        background = "Preserved forwarded background.\n" * 1200
+        text = background[: 32_000 - len(quote)] + quote
+        requests: list[dict[str, Any]] = []
+
+        def bounded_gateway(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            requests.append(body)
+            assert body["tool"] == "llm-task"
+            assert body["args"]["input"]["source_kind"] == "member_submission"
+            assert body["args"]["input"]["body_text"] == text
+            # Model a complete tool invocation requiring twenty seconds, without
+            # sleeping or replacing extraction. The former twelve-second budget
+            # deterministically fails at the HTTP boundary; the revised pack must
+            # carry its larger deadline through the actual wrapper.
+            if body["args"]["timeoutMs"] < 20_000:
+                raise httpx.ReadTimeout("fixture tool deadline", request=request)
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "details": {
+                            "json": {
+                                "candidates": [
+                                    {
+                                        "target_kind": "task",
+                                        "title": quote,
+                                        "candidate": {},
+                                        "evidence_quote": quote,
+                                        "confidence": 0.9,
+                                        "reasons": ["explicit selected obligation"],
+                                    }
+                                ],
+                                "reasons": [],
+                            },
+                            "provider": "fixture",
+                            "model": "budget-sensitive-gateway",
+                        },
+                        "invocation_id": "fixture-forward-budget-call",
+                    },
+                },
+            )
+
+        model_client = httpx.AsyncClient(transport=httpx.MockTransport(bounded_gateway))
+        # Retain the production wrapper, encrypted event sink, invocation locks,
+        # and bus. Replace only its credential-free Gateway HTTP boundary.
+        assert runtime.run_skill_fn.func is run_skill
+        skill_runtime = replace(
+            runtime.run_skill_fn.keywords["_runtime"],
+            httpx_client_factory=lambda: model_client,
+        )
+        runtime.run_skill_fn = partial(run_skill, _runtime=skill_runtime)
+        try:
+            source_id, cue = _forward(client, "bounded-budget", text)
+        finally:
+            client.portal.call(model_client.aclose)
+        assert cue["schema_version"] == 2
+        assert cue["payload"]["source_event_id"] == source_id
+        assert cue["payload"]["evidence_complete"] is True
+        assert len(requests) == 1
+        assert requests[0]["args"]["timeoutMs"] == 120_000
+        assert requests[0]["args"]["maxTokens"] == 1200
+        assert "provider" not in requests[0]["args"]
+        assert "model" not in requests[0]["args"]
+        items = [
+            row
+            for row in _items(client)
+            if row.get("parent_intent_id") == cue["payload"]["intent_id"]
+        ]
+        assert len(items) == 1
+        assert items[0]["target_kind"] == "task"
+        [receipt] = client.portal.call(_events, runtime, "skill.call.recorded")
+        assert receipt["payload"]["skill_name"] == "skill:extract_note_semantics"
+        assert receipt["payload"]["skill_version"] == "2.1.1"
+        assert receipt["payload"]["inputs"]["body_text"] == text
+        assert receipt["owner_scope"] == f"private:{MEMBER}"
+        assert receipt["visibility_scope"] == f"private:{MEMBER}"
+        assert (
+            client.portal.call(
+                _events,
+                runtime,
+                "skill.call.failed",
+                "task.created",
+                "external_sync.write_requested",
+                "external.sent",
+            )
+            == []
+        )
 
 
 def test_full_forward_after_long_evidence_routes_only_after_both_approvals(

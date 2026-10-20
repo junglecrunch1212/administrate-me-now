@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
 import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -172,8 +174,8 @@ def _read_state_sync(path: Path) -> ObservationState:
 
 
 def _write_state_sync(path: Path, state: ObservationState) -> None:
-    """Sync helper for ``enable``/``disable``. Atomic via tmp + replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Atomically persist private state independently of the process umask."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload = {
         "observation_mode_override": {
             "active": state.active,
@@ -181,10 +183,22 @@ def _write_state_sync(path: Path, state: ObservationState) -> None:
             "enabled_by": state.enabled_by,
         }
     }
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("w") as f:
-        yaml.safe_dump(payload, f, sort_keys=True)
-    tmp_path.replace(path)
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp_path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            yaml.safe_dump(payload, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.replace(path)
+        parent = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

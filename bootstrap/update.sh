@@ -46,6 +46,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   candidate=""
   pending_attestation=""
   test_reset_manifest=""
+  submission_repair_manifest=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
       --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
@@ -55,6 +56,12 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         pending_attestation="${argument#*=}"
         [[ "$pending_attestation" =~ ^[0-9a-f]{32}$ ]] \
           || die "pending-attestation identifier must be 32 lowercase hex"
+        ;;
+      --submission-repair-manifest=*)
+        [[ -z "$submission_repair_manifest" ]] || die "submission-repair manifest was repeated"
+        submission_repair_manifest="${argument#*=}"
+        [[ "$submission_repair_manifest" == /* && -f "$submission_repair_manifest" ]] \
+          || die "submission-repair manifest must name an absolute private file"
         ;;
       --test-reset-manifest=*)
         [[ -z "$test_reset_manifest" ]] || die "test-reset manifest was repeated"
@@ -127,6 +134,7 @@ source_repair_flag=""
 provider_binding_flag=""
 pending_flag=""
 test_reset_flag=""
+submission_repair_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -148,6 +156,10 @@ while [[ "${1:-}" == --* ]]; do
       [[ "$pending_value" =~ ^[0-9a-f]{32}$ ]] \
         || fail "pending-attestation identifier must be 32 lowercase hex"
       pending_flag="$1"
+      ;;
+    --submission-repair-manifest=*)
+      [[ -z "$submission_repair_flag" ]] || fail "submission-repair manifest was repeated"
+      submission_repair_flag="$1"
       ;;
     --test-reset-manifest=*)
       [[ -z "$test_reset_flag" ]] || fail "test-reset manifest was repeated"
@@ -341,6 +353,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$submission_repair_flag" ]]; then
+  upgrade_args+=("$submission_repair_flag")
+fi
 if [[ -n "$test_reset_flag" ]]; then
   upgrade_args+=("$test_reset_flag")
 fi

@@ -472,6 +472,23 @@ and request a member-scoped bridge. Secrets and raw secure-reference paths
 never enter the response. AC-31 owns process, isolation, status, receipt, and
 browser proof.
 
+Settings state correction (2026-10-20, **MODERNIZE** UX-29/UX-36 and CO-004):
+the observation banner honors its server-derived hidden state at every viewport;
+the pill, banner, and Settings write-safety label agree after reload in either
+observation state. Personal connected-account and running-sync counts are
+explicitly member-scoped. A separate read-only CoS email/messages panel presents
+the existing content-free service enrollment and configured sending state,
+without claiming live connection health or exposing accounts, routes, or secrets.
+Intentionally disabled or paused personal adapters remain unverified but do not
+create an active binding-repair obligation. Configuration-disabled connections
+offer no lifecycle controls, and their lifecycle API refuses new changes while
+preserving idempotent receipts. Enabled missing-binding notices and ordinary
+enabled pause/resume behavior are **PRESERVE**, as are member isolation, provider
+approval, and observation enforcement. AC-31's production composition coverage
+and the isolated Gate 7 browser harness exercise these distinctions, including
+observation on/off at desktop and 390-pixel widths; this is not a physical phone
+or live member-device claim.
+
 CoS Settings amendment (2026-09-03): CO-026 replaces the seven-section Settings
 rail with exactly Overview, My identity, CoS behavior, Source intake & context,
 How my CoS works, CoS replies, Capabilities, Connections, Devices & bridges, Learning &

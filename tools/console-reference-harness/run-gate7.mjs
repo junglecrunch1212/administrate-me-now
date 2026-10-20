@@ -9,6 +9,7 @@ import { chromium } from "playwright-core";
 import { auditTriageSourceControls } from "./triage-source-controls.mjs";
 import { auditCosReplyControls } from "./cos-reply-controls.mjs";
 import { auditCosSendingApproval } from "./cos-send-approval.mjs";
+import { auditSettingsChannelStatus } from "./settings-channel-status.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -1969,6 +1970,7 @@ async function run() {
     cosReplyServer = await startServer(basePort + 4, true, false, false, true, true);
     const cosReplyBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     await auditCosSendingApproval({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility, markCompletedStream });
+    await auditSettingsChannelStatus({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility });
     await closePageContext(cosReplyBrowser);
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);

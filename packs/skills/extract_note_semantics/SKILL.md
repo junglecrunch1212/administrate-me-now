@@ -1,7 +1,8 @@
 ---
 name: extract_note_semantics
 namespace: adminme
-version: 2.1.0
+version: 2.1.1
+compatible_success_versions: [2.1.0]
 description: Extract grounded, typed, human-gated household candidates from a member note or explicit submission.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -12,7 +13,7 @@ max_tokens: 1200
 temperature: 0.0
 sensitivity_required: normal
 context_scopes_required: []
-timeout_seconds: 12
+timeout_seconds: 120
 outbound_affecting: false
 on_failure:
   candidates: []
@@ -37,3 +38,11 @@ For `member_submission`, the caller supplies the complete bounded selected
 evidence (at most 32,000 characters). Quoted originals and calendar material
 remain evidence, not identity or write authority. Incomplete evidence and
 uncertain cancellation, update, or date semantics require member clarification.
+
+MODERNIZE the bounded extraction budget to 120 seconds through the existing
+pinned OpenClaw `llm-task` seam, following the complete-evidence requirement in
+`docs/refactor/CHANGE-ORDER-031-MEMBER-FORWARDED-OBLIGATIONS.md`. The wrapper retains its
+two-second HTTP completion allowance. Version 2.1.1 preserves the model routing,
+token limit, prompt, schema, and grounding rules of 2.1.0; an exact clean 2.1.0
+success remains reusable with its original provenance. A prior failure is not
+renewed by this patch and still requires separately authorized recovery.

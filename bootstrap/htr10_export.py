@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,11 @@ from adminme.provider_bindings import validate_provider_bindings
 from adminme.source_assurance import audit_source_assurance
 from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths, ensure_within
+from bootstrap.candidate_readiness import (
+    CandidateReadinessError,
+    capture_deployment_snapshot,
+    provider_effect_window_evidence,
+)
 from bootstrap.recovery_readiness import _ATTESTATION_REFRESH_DIMENSIONS
 from bootstrap.provider_binding_transition import (
     NoEligibleProviderBindingTransitionError,
@@ -250,6 +256,7 @@ async def export_htr10_audits(
     historical_output: Path,
     source_output: Path,
     ownership_reviewed: bool,
+    submission_repair_manifest: Path | None = None,
     test_mode: bool = False,
 ) -> dict[str, Any]:
     if ownership_reviewed is not True:
@@ -304,9 +311,25 @@ async def export_htr10_audits(
         },
     )
     diagnostics = ServiceManager(paths, test_mode=test_mode).runtime_diagnostics()
-    if not isinstance(diagnostics, dict) or not (
-        _runtime_supports_read_only_repair_audit(diagnostics)
-    ):
+    if not isinstance(diagnostics, dict):
+        raise HTR10ExportError("active runtime readiness is unavailable")
+    repair = None
+    if submission_repair_manifest is not None:
+        from bootstrap.submission_repair import (
+            load_submission_repair_manifest,
+            validate_submission_repair_diagnostics,
+        )
+
+        repair = load_submission_repair_manifest(
+            submission_repair_manifest,
+            candidate=repository_root,
+            active_commit=capture_deployment_snapshot(paths).predecessor_commit,
+            test_mode=test_mode,
+        )
+        validate_submission_repair_diagnostics(
+            repair, diagnostics, observation_active=True
+        )
+    elif not _runtime_supports_read_only_repair_audit(diagnostics):
         raise HTR10ExportError("active runtime readiness is unavailable")
     if diagnostics.get("observation_active") is not True and not test_mode:
         raise HTR10ExportError("observation mode is not active")
@@ -318,9 +341,15 @@ async def export_htr10_audits(
     _readiness_payload, readiness = _private_json(
         paths.instance_dir / "config" / "deployment-readiness.json"
     )
-    window = (readiness.get("provider_effect_window") or {}).get("started_at")
-    if not isinstance(window, str) or not window:
-        raise HTR10ExportError("provider-effect observation window is unavailable")
+    try:
+        window_evidence = provider_effect_window_evidence(
+            readiness, now=datetime.now(timezone.utc)
+        )
+    except CandidateReadinessError as exc:
+        raise HTR10ExportError(
+            "provider-effect observation windows are invalid"
+        ) from exc
+    window = window_evidence["provider_effect_window"]
     _secret_payload, secret_references = _private_json(
         paths.instance_dir / "config" / "secret-references.json"
     )
@@ -349,8 +378,44 @@ async def export_htr10_audits(
             repository_root=repository_root,
             capabilities=capabilities,
             through_event_id=watermark,
-            provider_effect_window_started_at=window,
+            provider_effect_window_started_at=window["started_at"],
+            provider_effect_window_ended_at=window.get("ended_at"),
         )
+        prior_audits = []
+        for prior in window_evidence["prior_provider_effect_windows"]:
+            prior_assurance = await audit_source_assurance(
+                event_log,
+                repository_root=repository_root,
+                capabilities=capabilities,
+                through_event_id=watermark,
+                provider_effect_window_started_at=prior["started_at"],
+                provider_effect_window_ended_at=prior["ended_at"],
+            )
+            prior_audits.append(
+                prior_assurance["provider_effects"]["observation_window"]
+            )
+        if prior_audits:
+            assurance["provider_effects"]["prior_observation_windows"] = prior_audits
+        assurance["provider_effect_windows"] = window_evidence
+        if repair is not None:
+            from bootstrap.submission_repair import (
+                audit_submission_repair,
+                repair_binding,
+                validate_submission_repair_audit,
+            )
+
+            # This is evidence for an exact repair, never a healthy-source
+            # attestation. Keep the failed audit and all interval counts intact.
+            repair_audit = await audit_submission_repair(
+                event_log,
+                repair,
+                repository_root=repository_root,
+                through_event_id=watermark,
+            )
+            validate_submission_repair_audit(repair, assurance)
+            assurance["submission_repair"] = repair_binding(repair)
+            assurance["submission_repair_audit"] = repair_audit
+            historical["submission_repair"] = repair_binding(repair)
     finally:
         await event_log.close()
     transition_sha256 = (
@@ -388,6 +453,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--instance-root", type=Path, required=True)
     parser.add_argument("--historical-output", type=Path, required=True)
     parser.add_argument("--source-output", type=Path, required=True)
+    parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument(
         "--approve-provider-binding-migration",
         action="store_true",
@@ -409,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
             historical_output=args.historical_output,
             source_output=args.source_output,
             ownership_reviewed=args.approve_provider_binding_migration,
+            submission_repair_manifest=args.submission_repair_manifest,
             test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",
         )
     )

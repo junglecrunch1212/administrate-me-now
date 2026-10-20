@@ -80,6 +80,27 @@ jobs:
           poetry sync --with dev --no-interaction
 
       # Prove the new channel boundary before the longer recovery rehearsals.
+      - name: Validate active CoS maintenance and observation windows
+        run: >-
+          poetry run pytest -p no:cacheprovider -q -ra
+          tests/acceptance/test_cos_live_maintenance.py
+          tests/acceptance/test_forwarded_submission_recovery.py
+          tests/acceptance/test_forwarded_submission_repair_operations.py
+          tests/acceptance/test_forwarded_submission_extraction.py::test_full_forward_uses_bounded_model_budget_before_creating_triage
+          tests/unit/test_submission_recovery.py
+          tests/unit/bootstrap/test_submission_repair.py
+          tests/unit/bootstrap/test_submission_repair_readiness.py
+          tests/unit/test_skill_wrapper.py
+          packs/skills/extract_note_semantics/tests/test_skill.py
+          tests/acceptance/test_disposable_dataset_continuity.py::test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactivation
+          tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/unit/test_observation.py
+          tests/unit/bootstrap/test_candidate_readiness.py
+          tests/unit/bootstrap/test_htr10_export.py
+          tests/unit/test_historical_attribution.py
+          tests/unit/test_event_log.py::test_default_recorded_at_is_precise_and_explicit_history_is_preserved
+          tests/unit/test_cos_response_assurance.py::test_default_recorded_precision_preserves_same_second_effect_windows
+
       - name: Validate the exact native plugin contract
         run: |
           npm ci --prefix openclaw/administrateme --ignore-scripts

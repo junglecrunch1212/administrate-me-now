@@ -9,6 +9,7 @@ claim any of the mechanical work that belongs to the activation transaction.
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import hashlib
 import json
@@ -480,19 +481,118 @@ def _validate_htr10(
     return value, hashlib.sha256(payload).hexdigest(), observed
 
 
-def _active_provider_effect_window(
+def provider_effect_window_evidence(
+    value: Mapping[str, Any], *, now: datetime
+) -> dict[str, Any]:
+    """Validate complete observation intervals without rewriting their history."""
+
+    current = value.get("provider_effect_window")
+    prior = value.get("prior_provider_effect_windows", [])
+    if not isinstance(current, dict) or not isinstance(prior, list):
+        raise CandidateReadinessError("provider-effect window is unavailable")
+    previous_end: datetime | None = None
+    for index, window in enumerate([*prior, current]):
+        if (
+            not isinstance(window, dict)
+            or "started_at" not in window
+            or not set(window) <= {"started_at", "ended_at", "reason"}
+            or (
+                "reason" in window
+                and (
+                    not isinstance(window["reason"], str)
+                    or re.fullmatch(r"[a-z][a-z0-9_]{0,79}", window["reason"]) is None
+                )
+            )
+        ):
+            raise CandidateReadinessError("provider-effect window schema is invalid")
+        start = _parse_timestamp(
+            window["started_at"], label="provider-effect window", now=now
+        )
+        end = (
+            _parse_timestamp(
+                window["ended_at"], label="provider-effect window end", now=now
+            )
+            if "ended_at" in window
+            else None
+        )
+        if (
+            (index < len(prior) and end is None)
+            or (end is not None and end <= start)
+            or (previous_end is not None and start < previous_end)
+        ):
+            raise CandidateReadinessError(
+                "provider-effect windows overlap or lack a closed boundary"
+            )
+        previous_end = end
+    return {
+        "provider_effect_window": copy.deepcopy(current),
+        "prior_provider_effect_windows": copy.deepcopy(prior),
+    }
+
+
+def _window_evidence_for_receipt(
+    value: Mapping[str, Any], *, now: datetime
+) -> dict[str, Any]:
+    supplied = value.get("provider_effect_windows")
+    if "provider_effect_windows" not in value:
+        supplied = {
+            "provider_effect_window": {
+                "started_at": value.get("provider_effect_window_started_at")
+            }
+        }
+    if not isinstance(supplied, dict) or not set(supplied) <= {
+        "provider_effect_window",
+        "prior_provider_effect_windows",
+    }:
+        raise CandidateReadinessError("provider-effect window evidence is invalid")
+    evidence = provider_effect_window_evidence(supplied, now=now)
+    if _parse_timestamp(
+        value.get("provider_effect_window_started_at"),
+        label="provider-effect window",
+        now=now,
+    ) != _parse_timestamp(
+        evidence["provider_effect_window"]["started_at"],
+        label="provider-effect window",
+        now=now,
+    ):
+        raise CandidateReadinessError("provider-effect window evidence origin differs")
+    return evidence
+
+
+def _normalized_window_evidence(
+    value: dict[str, Any], *, now: datetime
+) -> dict[str, Any]:
+    evidence = provider_effect_window_evidence(value, now=now)
+    for window in [
+        *evidence["prior_provider_effect_windows"],
+        evidence["provider_effect_window"],
+    ]:
+        for key in ("started_at", "ended_at"):
+            if key in window:
+                window[key] = _parse_timestamp(
+                    window[key], label="provider-effect window", now=now
+                ).isoformat()
+    return evidence
+
+
+def _extended_window_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    if evidence["prior_provider_effect_windows"] or set(
+        evidence["provider_effect_window"]
+    ) != {"started_at"}:
+        return {"provider_effect_windows": copy.deepcopy(evidence)}
+    return {}
+
+
+def _active_provider_effect_windows(
     paths: DeploymentPaths, *, now: datetime
-) -> datetime:
+) -> dict[str, Any]:
     payload, _metadata = _read_private_file(
         paths.instance_dir / "config" / "deployment-readiness.json"
     )
     active = _json_no_duplicates(payload, label="active deployment readiness")
-    window = active.get("provider_effect_window")
-    if active.get("contract") != ACTIVE_CONTRACT or not isinstance(window, dict):
+    if active.get("contract") != ACTIVE_CONTRACT:
         raise CandidateReadinessError("active provider-effect window is unavailable")
-    return _parse_timestamp(
-        window.get("started_at"), label="provider-effect window", now=now
-    )
+    return provider_effect_window_evidence(active, now=now)
 
 
 def build_htr10_review(
@@ -501,6 +601,7 @@ def build_htr10_review(
     historical_attribution: Path,
     source_assurance: Path,
     observed_at: str,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Reduce reviewed metadata audits to one strict, content-free HTR-10 receipt."""
@@ -515,11 +616,57 @@ def build_htr10_review(
         historical_payload, label="historical attribution audit"
     )
     assurance = _json_no_duplicates(source_payload, label="source-assurance audit")
+    repair = None
+    repair_evidence = None
+    if submission_repair_manifest is not None:
+        from bootstrap.submission_repair import (
+            load_submission_repair_manifest,
+            repair_binding,
+            validate_submission_repair_audit,
+        )
+
+        repair = load_submission_repair_manifest(
+            submission_repair_manifest,
+            candidate=Path(__file__).resolve().parents[1],
+            active_commit=_pointer_snapshot(paths)[0],
+        )
+        repair_evidence = repair_binding(repair)
+        validate_submission_repair_audit(repair, assurance)
+        audit_proof = assurance.get("submission_repair_audit")
+        if (
+            historical.get("submission_repair") != repair_evidence
+            or assurance.get("submission_repair") != repair_evidence
+            or not isinstance(audit_proof, dict)
+            or audit_proof.get("status") != "repair_pending"
+            or audit_proof.get("binding") != repair_evidence
+            or audit_proof.get("watermark_event_id")
+            != assurance.get("watermark_event_id")
+            or audit_proof.get("content_exposed") is not False
+            or audit_proof.get("counts") != assurance.get("counts")
+            or not isinstance(audit_proof.get("provider_effects"), dict)
+            or any(
+                audit_proof["provider_effects"].get(name)
+                != (assurance.get("provider_effects") or {}).get(name)
+                for name in ("state", "zero_effect_state", "counts", "content_exposed")
+            )
+        ):
+            raise CandidateReadinessError(
+                "HTR-10 repair evidence does not bind the exact reviewed failure"
+            )
+    elif any(
+        name in audit
+        for audit in (historical, assurance)
+        for name in ("submission_repair", "submission_repair_audit")
+    ):
+        raise CandidateReadinessError(
+            "HTR-10 repair evidence requires its explicit private manifest"
+        )
     active_payload, _active_metadata = _read_private_file(
         paths.instance_dir / "config" / "deployment-readiness.json"
     )
     active = _json_no_duplicates(active_payload, label="active deployment readiness")
-    window_value = (active.get("provider_effect_window") or {}).get("started_at")
+    window_evidence = provider_effect_window_evidence(active, now=current_time)
+    window_value = window_evidence["provider_effect_window"]["started_at"]
     window = _parse_timestamp(
         window_value,
         label="provider-effect window",
@@ -565,11 +712,12 @@ def build_htr10_review(
         or historical_count < 0
         or historical.get("attributed_event_count") != historical_count
         or assurance.get("contract") != "source-assurance-v1"
-        or assurance.get("state") != "healthy"
+        or assurance.get("state") != ("degraded" if repair is not None else "healthy")
         or assurance.get("content_exposed") is not False
         or historical_watermark != source_watermark
         or not isinstance(counts, dict)
-        or any(counts.get(name) != 0 for name in ("missing", "pending", "failed"))
+        or any(counts.get(name) != 0 for name in ("missing", "pending"))
+        or counts.get("failed") != (len(repair.targets) if repair is not None else 0)
         or not isinstance(effects, dict)
         or effects.get("state") != "healthy"
         or effects.get("content_exposed") is not False
@@ -604,10 +752,87 @@ def build_htr10_review(
         raise CandidateReadinessError(
             "HTR-10 audit does not cover the original provider-effect window"
         )
+    # A closed interval must never silently become an open interval at export
+    # or promotion. Every retained interval uses the same immutable watermark.
+    prior_audits = effects.get("prior_observation_windows", [])
+    if not isinstance(prior_audits, list):
+        raise CandidateReadinessError(
+            "HTR-10 prior provider-effect windows are invalid"
+        )
+    audited_windows = [*prior_audits, observation]
+    expected_windows = [
+        *window_evidence["prior_provider_effect_windows"],
+        window_evidence["provider_effect_window"],
+    ]
+    if len(audited_windows) != len(expected_windows):
+        raise CandidateReadinessError(
+            "HTR-10 prior provider-effect windows are incomplete"
+        )
+    for expected, audited in zip(expected_windows, audited_windows, strict=True):
+        if not isinstance(audited, dict) or (
+            audited.get("state") != "healthy"
+            or audited.get("started_at_configured") is not True
+            or audited.get("content_exposed") is not False
+            or not isinstance(audited.get("counts"), dict)
+            or any(audited["counts"].get(name) != 0 for name in integrity_fields)
+            or audited["counts"].get("provider_called_true") != 0
+            or audited["counts"].get("suppressed_false_or_unknown") != 0
+        ):
+            raise CandidateReadinessError(
+                "HTR-10 provider-effect window audit is unhealthy"
+            )
+        for name in ("started_at", "ended_at"):
+            expected_at = expected.get(name)
+            audited_at = audited.get(name)
+            if expected_at is None and audited_at is None:
+                continue
+            if (
+                expected_at is None
+                or audited_at is None
+                or _parse_timestamp(
+                    expected_at,
+                    label="provider-effect window boundary",
+                    now=current_time,
+                )
+                != _parse_timestamp(
+                    audited_at,
+                    label="audited provider-effect window boundary",
+                    now=current_time,
+                )
+            ):
+                raise CandidateReadinessError(
+                    "HTR-10 audit provider-effect window boundary differs"
+                )
+            if (
+                _parse_timestamp(
+                    expected_at,
+                    label="provider-effect window boundary",
+                    now=current_time,
+                )
+                > observed
+            ):
+                raise CandidateReadinessError(
+                    "provider-effect window boundary follows HTR-10 review"
+                )
+    if _extended_window_evidence(window_evidence):
+        exported_evidence = assurance.get("provider_effect_windows")
+        if not isinstance(exported_evidence, dict) or _normalized_window_evidence(
+            _window_evidence_for_receipt(
+                {
+                    "provider_effect_window_started_at": window_value,
+                    "provider_effect_windows": exported_evidence,
+                },
+                now=current_time,
+            ),
+            now=current_time,
+        ) != _normalized_window_evidence(window_evidence, now=current_time):
+            raise CandidateReadinessError(
+                "HTR-10 provider-effect window evidence changed"
+            )
     value: dict[str, Any] = {
         "contract": HTR10_CONTRACT,
         "schema_version": 1,
-        "status": "healthy",
+        "status": "repair_pending" if repair is not None else "healthy",
         "observed_at": observed.isoformat(),
         "provider_effect_window_started_at": window.isoformat(),
         "event_watermark_sha256": _digest_domain(
@@ -623,6 +848,8 @@ def build_htr10_review(
         "provider_effect_unknown_count": 0,
         "content_exposed": False,
         "raw_identifiers_exposed": False,
+        **_extended_window_evidence(window_evidence),
+        **({"submission_repair": repair_evidence} if repair is not None else {}),
     }
     value["receipt_sha256"] = hashlib.sha256(_canonical(value)).hexdigest()
     _validate_htr10_value(value, now=current_time)
@@ -651,6 +878,15 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
         "raw_identifiers_exposed",
         "receipt_sha256",
     }
+    if "provider_effect_windows" in value:
+        required.add("provider_effect_windows")
+    repair = value.get("submission_repair")
+    if "submission_repair" in value:
+        from bootstrap.submission_repair import valid_repair_binding
+
+        required.add("submission_repair")
+        if not valid_repair_binding(repair):
+            raise CandidateReadinessError("HTR-10 submission repair binding is invalid")
     supplied = value.get("receipt_sha256")
     unsigned = dict(value)
     unsigned.pop("receipt_sha256", None)
@@ -658,7 +894,8 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
         set(value) != required
         or value.get("contract") != HTR10_CONTRACT
         or value.get("schema_version") != 1
-        or value.get("status") != "healthy"
+        or value.get("status")
+        != ("repair_pending" if repair is not None else "healthy")
         or value.get("content_exposed") is not False
         or value.get("raw_identifiers_exposed") is not False
         or value.get("unattributed_event_count") != 0
@@ -697,6 +934,21 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
         raise CandidateReadinessError(
             "provider-effect window starts after HTR-10 review"
         )
+    evidence = _window_evidence_for_receipt(value, now=now)
+    for interval in [
+        *evidence["prior_provider_effect_windows"],
+        evidence["provider_effect_window"],
+    ]:
+        if (
+            "ended_at" in interval
+            and _parse_timestamp(
+                interval["ended_at"], label="provider-effect window end", now=now
+            )
+            > observed
+        ):
+            raise CandidateReadinessError(
+                "provider-effect window ends after HTR-10 review"
+            )
 
 
 def record_htr10_review(
@@ -705,6 +957,7 @@ def record_htr10_review(
     historical_attribution: Path,
     source_assurance: Path,
     observed_at: str,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
     receipt_id: str | None = None,
 ) -> dict[str, Any]:
@@ -720,6 +973,7 @@ def record_htr10_review(
             historical_attribution=historical_attribution,
             source_assurance=source_assurance,
             observed_at=observed_at,
+            submission_repair_manifest=submission_repair_manifest,
             now=fixed_now,
         )
         encoded = json.dumps(value, indent=2, sort_keys=True).encode("utf-8")
@@ -734,6 +988,7 @@ def record_htr10_review(
             historical_attribution=historical_attribution,
             source_assurance=source_assurance,
             observed_at=observed_at,
+            submission_repair_manifest=submission_repair_manifest,
             now=fixed_now,
         )
         if final != value:
@@ -879,6 +1134,26 @@ def _member_ids(paths: DeploymentPaths) -> list[str]:
     return result
 
 
+def _bound_submission_repair(
+    paths: DeploymentPaths, manifest: Path | None, *, candidate: Path
+) -> dict[str, Any] | None:
+    """An exceptional pending receipt never supplies its own repair authority."""
+
+    if manifest is None:
+        return None
+    from bootstrap.submission_repair import (
+        load_submission_repair_manifest,
+        repair_binding,
+    )
+
+    selected = load_submission_repair_manifest(
+        manifest,
+        candidate=candidate,
+        active_commit=_pointer_snapshot(paths)[0],
+    )
+    return repair_binding(selected)
+
+
 def build_pending_attestation(
     paths: DeploymentPaths,
     *,
@@ -891,6 +1166,7 @@ def build_pending_attestation(
     observed_at: Mapping[str, str],
     skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> tuple[dict[str, Any], DeploymentSnapshot]:
@@ -956,11 +1232,19 @@ def build_pending_attestation(
     htr10, htr10_sha256, htr10_observed = _validate_htr10(
         paths, htr10_review, now=current_time
     )
-    if _parse_timestamp(
-        htr10["provider_effect_window_started_at"],
-        label="reviewed provider-effect window",
-        now=current_time,
-    ) != _active_provider_effect_window(paths, now=current_time):
+    repair_evidence = _bound_submission_repair(
+        paths, submission_repair_manifest, candidate=candidate_root
+    )
+    if htr10.get("submission_repair") != repair_evidence:
+        raise CandidateReadinessError(
+            "HTR-10 submission repair does not match explicit candidate authority"
+        )
+    window_evidence = _window_evidence_for_receipt(htr10, now=current_time)
+    if _normalized_window_evidence(
+        window_evidence, now=current_time
+    ) != _normalized_window_evidence(
+        _active_provider_effect_windows(paths, now=current_time), now=current_time
+    ):
         raise CandidateReadinessError("reviewed provider-effect window changed")
     if htr10.get("provider_binding_transition_sha256") != transition_sha256:
         raise CandidateReadinessError(
@@ -1027,6 +1311,11 @@ def build_pending_attestation(
                 prepared_snapshot.configuration_fingerprint
             ),
             "provider_binding_transition": transition_public,
+            **(
+                {"submission_repair": repair_evidence}
+                if repair_evidence is not None
+                else {}
+            ),
             "preliminary_rehearsal_receipt_sha256": receipt_sha256,
             "preliminary_backup_artifact_sha256": artifact_sha256,
             "preliminary_rehearsal_watermark_sha256": watermark_sha256,
@@ -1039,6 +1328,7 @@ def build_pending_attestation(
                 "provider_effect_window_started_at"
             ],
             "htr_10_review_receipt_sha256": htr10_sha256,
+            **_extended_window_evidence(window_evidence),
         },
         "activation_boundary": {
             "candidate_active": False,
@@ -1129,6 +1419,19 @@ def validate_pending_attestation(
         "preliminary_backup_artifact_sha256",
         "preliminary_rehearsal_watermark_sha256",
     }
+    if isinstance(binding, dict) and "submission_repair" in binding:
+        from bootstrap.submission_repair import valid_repair_binding
+
+        expected_binding.add("submission_repair")
+        repair = binding["submission_repair"]
+        if (
+            not valid_repair_binding(repair)
+            or repair["candidate_commit"] != binding.get("candidate_commit")
+            or repair["predecessor_commit"] != binding.get("predecessor_commit")
+        ):
+            raise CandidateReadinessError(
+                "pending submission repair binding is invalid"
+            )
     if not isinstance(binding, dict) or set(binding) != expected_binding:
         raise CandidateReadinessError("pending deployment binding is invalid")
     if (
@@ -1143,6 +1446,7 @@ def validate_pending_attestation(
             "candidate_commit",
             "predecessor_commit",
             "provider_binding_transition",
+            "submission_repair",
         }
     ):
         raise CandidateReadinessError("pending fingerprint binding is invalid")
@@ -1202,14 +1506,25 @@ def validate_pending_attestation(
         ):
             raise CandidateReadinessError("pending HTR-10 review binding is invalid")
     pre_switch = value.get("pre_switch_state")
-    if not isinstance(pre_switch, dict) or pre_switch != {
-        "observation_active": True,
-        "write_admission": False,
-        "provider_effect_window_started_at": pre_switch.get(
-            "provider_effect_window_started_at"
-        ),
-        "htr_10_review_receipt_sha256": pre_switch.get("htr_10_review_receipt_sha256"),
-    }:
+    expected_pre_switch = (
+        {
+            "observation_active": True,
+            "write_admission": False,
+            "provider_effect_window_started_at": (pre_switch or {}).get(
+                "provider_effect_window_started_at"
+            ),
+            "htr_10_review_receipt_sha256": (pre_switch or {}).get(
+                "htr_10_review_receipt_sha256"
+            ),
+        }
+        if isinstance(pre_switch, dict)
+        else {}
+    )
+    if isinstance(pre_switch, dict) and "provider_effect_windows" in pre_switch:
+        expected_pre_switch["provider_effect_windows"] = pre_switch[
+            "provider_effect_windows"
+        ]
+    if not isinstance(pre_switch, dict) or pre_switch != expected_pre_switch:
         raise CandidateReadinessError("pending pre-switch state is invalid")
     window = _parse_timestamp(
         pre_switch.get("provider_effect_window_started_at"),
@@ -1223,6 +1538,23 @@ def validate_pending_attestation(
         raise CandidateReadinessError(
             "provider-effect window starts after HTR-10 review"
         )
+    window_evidence = _window_evidence_for_receipt(pre_switch, now=current_time)
+    for interval in [
+        *window_evidence["prior_provider_effect_windows"],
+        window_evidence["provider_effect_window"],
+    ]:
+        if (
+            "ended_at" in interval
+            and _parse_timestamp(
+                interval["ended_at"],
+                label="provider-effect window end",
+                now=current_time,
+            )
+            > reviewed_at
+        ):
+            raise CandidateReadinessError(
+                "provider-effect window ends after HTR-10 review"
+            )
     if _HEX_64.fullmatch(str(pre_switch.get("htr_10_review_receipt_sha256"))) is None:
         raise CandidateReadinessError("pending HTR-10 binding is invalid")
     boundary = value.get("activation_boundary")
@@ -1248,6 +1580,7 @@ def load_pending_attestation_for_activation(
     candidate: Path,
     candidate_commit: str,
     approve_provider_binding_migration: bool = False,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], str, DeploymentSnapshot]:
     """Load one explicit pending artifact and rebind it to current coordinates.
@@ -1277,11 +1610,12 @@ def load_pending_attestation_for_activation(
         now=now,
     )
     current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    if _parse_timestamp(
-        value["pre_switch_state"]["provider_effect_window_started_at"],
-        label="pending provider-effect window",
+    if _normalized_window_evidence(
+        _window_evidence_for_receipt(value["pre_switch_state"], now=current_time),
         now=current_time,
-    ) != _active_provider_effect_window(paths, now=current_time):
+    ) != _normalized_window_evidence(
+        _active_provider_effect_windows(paths, now=current_time), now=current_time
+    ):
         raise CandidateReadinessError("pending provider-effect window changed")
     if value["attestation_id"] != attestation_id:
         raise CandidateReadinessError("pending attestation path does not match payload")
@@ -1289,6 +1623,12 @@ def load_pending_attestation_for_activation(
     if binding["candidate_commit"] != candidate_commit:
         raise CandidateReadinessError(
             "pending attestation belongs to another candidate"
+        )
+    if binding.get("submission_repair") != _bound_submission_repair(
+        paths, submission_repair_manifest, candidate=candidate_root
+    ):
+        raise CandidateReadinessError(
+            "pending submission repair requires its exact explicit manifest"
         )
     snapshot = capture_deployment_snapshot(paths)
     expected = snapshot.public()
@@ -1405,9 +1745,7 @@ def build_active_attestation_from_pending(
             "automatic_rollback_eligible": True,
             "tested_at": tested.isoformat(),
         },
-        "provider_effect_window": {
-            "started_at": value["pre_switch_state"]["provider_effect_window_started_at"]
-        },
+        **_window_evidence_for_receipt(value["pre_switch_state"], now=current_time),
         "activation_evidence": {
             "contract": "deployment-activation-evidence-v1",
             "candidate_pending_attestation_id": value["attestation_id"],
@@ -1419,6 +1757,11 @@ def build_active_attestation_from_pending(
             "candidate_live_doctor": "pending_post_switch",
             "post_switch_acceptance": "pending_post_switch",
             "content_exposed": False,
+            **(
+                {"submission_repair": copy.deepcopy(binding["submission_repair"])}
+                if "submission_repair" in binding
+                else {}
+            ),
         },
         "content_exposed": False,
     }
@@ -1713,6 +2056,7 @@ def record_pending_attestation(
     observed_at: Mapping[str, str],
     skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1730,6 +2074,7 @@ def record_pending_attestation(
             observed_at=observed_at,
             skipped_member_device_checks=skipped_member_device_checks,
             approve_provider_binding_migration=approve_provider_binding_migration,
+            submission_repair_manifest=submission_repair_manifest,
             now=fixed_now,
             attestation_id=fixed_attestation_id,
         )
@@ -1748,6 +2093,7 @@ def record_pending_attestation(
                 observed_at=observed_at,
                 skipped_member_device_checks=skipped_member_device_checks,
                 approve_provider_binding_migration=(approve_provider_binding_migration),
+                submission_repair_manifest=submission_repair_manifest,
                 now=fixed_now,
                 attestation_id=fixed_attestation_id,
             )
@@ -1779,6 +2125,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preliminary-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--preliminary-backup-artifact", type=Path, required=True)
     parser.add_argument("--htr-10-review", type=Path, required=True)
+    parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument(
         "--skip-member-device-check",
         action="append",
@@ -1836,6 +2183,7 @@ def main(argv: list[str] | None = None) -> int:
             approve_provider_binding_migration=(
                 args.approve_provider_binding_migration
             ),
+            submission_repair_manifest=args.submission_repair_manifest,
         )
     except Exception as exc:
         print(

@@ -512,6 +512,18 @@ class TriageIntentFeaturesExtractedV5(TriageIntentFeaturesExtractedV3):
     revision_attempt_limit: Literal[3]
 
 
+class TriageIntentFeaturesExtractedV6(TriageIntentFeaturesExtractedV3):
+    """Explicit forwarded-submission retry; original failed receipts stay intact."""
+
+    supersedes_assessment_event_id: str = Field(min_length=1, max_length=240)
+    recovery_request_event_id: str = Field(min_length=1, max_length=240)
+    recovery_policy: Literal["member-forwarded-submission-recovery-v1"]
+    recovery_attempt: int = Field(ge=1, le=3)
+    recovery_reason: Literal[
+        "language_seam_OpenClawTimeout", "language_seam_OpenClawUnreachable"
+    ]
+
+
 class TriageCurrentnessFeaturesExtractedV1(TriageIntentFeaturesExtractedV3):
     """Explicit semantic revision; prior completed assessments remain history."""
 
@@ -690,6 +702,9 @@ registry.register(
     "triage.intent.features_extracted", 5, TriageIntentFeaturesExtractedV5
 )
 registry.register(
+    "triage.intent.features_extracted", 6, TriageIntentFeaturesExtractedV6
+)
+registry.register(
     "triage.source_revision_publication.planned", 1, TriageSourcePublicationPlannedV1
 )
 registry.register(
@@ -736,6 +751,7 @@ __all__ = [
     "TriageIntentFeaturesExtractedV3",
     "TriageIntentFeaturesExtractedV4",
     "TriageIntentFeaturesExtractedV5",
+    "TriageIntentFeaturesExtractedV6",
 ]
 
 registry.register(

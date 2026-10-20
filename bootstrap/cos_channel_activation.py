@@ -15,12 +15,14 @@ import hashlib
 import json
 import os
 import stat
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+import yaml
 
 from adminme.adapters.cos_channel_acquisition import (
     CONTRACT as ACQUISITION_CONTRACT,
@@ -38,6 +40,7 @@ from adminme.cos_channel_operation import (
     CosChannelActivation,
     SenderProof,
     aware_time,
+    live_authorization,
 )
 from adminme.cos_response_policy import (
     POLICY_EVENT_TYPE,
@@ -53,14 +56,24 @@ from adminme.lib.observation import ObservationManager
 from bootstrap.backup_restore import BackupManager
 from bootstrap.candidate_readiness import capture_deployment_snapshot
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
+from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
 from bootstrap.service_settlement import run_release_doctor, wait_for_settled_doctor
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import (
+    _run_git,
     reviewed_candidate_commit,
     verify_release_source_identity,
 )
 from bootstrap.upgrade import UpgradeManager
+from bootstrap.submission_repair import (
+    SubmissionRepairManifest,
+    load_submission_repair_manifest,
+    offline_submission_repair,
+    repair_binding,
+    validate_submission_repair_diagnostics,
+    wait_for_submission_repair,
+)
 
 
 class CoSActivationError(RuntimeError):
@@ -78,6 +91,19 @@ class ActivationRequest(BaseModel):
     recipient_entries: list[dict[str, str]] | None = None
     prepared_openclaw_config: dict[str, Any] | None = None
     cos_imsg_guard_config: dict[str, Any] | None = None
+
+
+class EnterObservationRequest(BaseModel):
+    """Content-free binding to the live operation being paused for deployment."""
+
+    model_config = {"extra": "forbid", "strict": True}
+
+    owner_authorization_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operator_principal_id: str = Field(pattern=r"^operator:.+", max_length=240)
+    owner_member_id: str = Field(min_length=1, max_length=240)
+    expected_release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    expected_activation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    expected_configuration_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 def _private_bytes(path: Path) -> bytes:
@@ -98,6 +124,61 @@ def _json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CoSActivationError("operation document is not an object")
     return value
+
+
+def _observation_control_bytes(config_dir: Path, name: str) -> bytes:
+    """Read only the predecessor's exact legacy non-secret observation file.
+
+    Call after selected-source and configuration-binding verification. Older
+    ObservationManager versions published this one file as 0644 under umask
+    022. Every other coordinate retains the ordinary owner-only requirement.
+    The operation journals these bytes and the fixed writer republishes 0600.
+    """
+    path = config_dir / name
+    if name != "runtime.yaml" or stat.S_IMODE(path.lstat().st_mode) != 0o644:
+        return _private_bytes(path)
+    parent = config_dir.lstat()
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != os.getuid()
+        or stat.S_IMODE(parent.st_mode) != 0o700
+    ):
+        raise CoSActivationError("legacy observation control parent is not private")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o644
+            or metadata.st_size > 4096
+        ):
+            raise CoSActivationError("legacy observation control coordinate is unsafe")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read(4097)
+        if len(payload) != metadata.st_size:
+            raise CoSActivationError("legacy observation control changed during read")
+    finally:
+        os.close(descriptor)
+    value = yaml.safe_load(payload)
+    state = value.get("observation_mode_override") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"observation_mode_override"}
+        or not isinstance(state, dict)
+        or set(state) != {"active", "enabled_at", "enabled_by"}
+        or state["active"] is not False
+        or aware_time(state["enabled_at"]) is None
+        or not isinstance(state["enabled_by"], str)
+        or not state["enabled_by"]
+        or len(state["enabled_by"]) > 240
+        # The predecessor writer emits this exact canonical shape. Requiring
+        # its bytes also rejects duplicate/merge keys hidden by YAML loading.
+        or payload != yaml.safe_dump(value, sort_keys=True).encode("utf-8")
+    ):
+        raise CoSActivationError("legacy observation control is not exact toggle state")
+    return payload
 
 
 def _payload(value: Any) -> bytes:
@@ -221,6 +302,467 @@ class CoSChannelActivator:
             )
         return commit, release
 
+    def _observation_selection(self) -> tuple[str, Path, str]:
+        """Permit a merged successor controller to contain its live predecessor.
+
+        This runs before candidate readiness can be collected. It neither
+        publishes nor starts the candidate and uses the selected Python.
+        """
+        controller_commit = reviewed_candidate_commit(self.repository)
+        pointer = _json(self.paths.app_dir / "current-release.json")
+        commit, release = pointer.get("commit"), Path(pointer["path"])
+        if (
+            not isinstance(commit, str)
+            or release != self.paths.app_dir / "releases" / commit
+        ):
+            raise CoSActivationError("selected release coordinate is invalid")
+        if not self.test_mode:
+            main_commit = (
+                _run_git(self.repository, ["rev-parse", "refs/remotes/origin/main"])
+                .stdout.decode("ascii")
+                .strip()
+            )
+            if (
+                main_commit != controller_commit
+                or Path(__file__).resolve().parents[1] != self.repository
+                or Path(sys.prefix).resolve() != (release / ".venv").resolve()
+            ):
+                raise CoSActivationError(
+                    "enter-observation requires clean protected-main source and selected Python"
+                )
+            verify_release_source_identity(
+                release,
+                repository=self.repository,
+                commit=commit,
+                allow_legacy_tree=False,
+                require_tracked_tree=True,
+                retained_by_commit=controller_commit,
+            )
+        for root in (self.repository, release):
+            if ACQUISITION_CONTRACT not in load_versions(root)["administrateme"].get(
+                "supported_acquisition_contracts", []
+            ):
+                raise CoSActivationError(
+                    "observation transition requires CoS-compatible releases"
+                )
+        return commit, release, controller_commit
+
+    def _bound_snapshot(self, commit: str) -> dict[str, str]:
+        snapshot = capture_deployment_snapshot(self.paths)
+        binding = _json(self.config_dir / "deployment-readiness.json").get(
+            "deployment_binding"
+        )
+        if snapshot.predecessor_commit != commit or binding != {
+            "release_commit": commit,
+            "instance_fingerprint": snapshot.instance_fingerprint,
+            "host_fingerprint": snapshot.host_fingerprint,
+            "configuration_fingerprint": snapshot.configuration_fingerprint,
+        }:
+            raise CoSActivationError(
+                "selected deployment configuration binding is stale"
+            )
+        return snapshot.public()
+
+    async def _live_predecessor(self, release: Path) -> dict[str, Any]:
+        adapters = _json(self.config_dir / "adapters.json")
+        policy = policy_from_config(adapters)
+        if policy is None:
+            raise CoSActivationError("live CoS acquisition policy is missing")
+        if policy.imessage_channel_id is not None:
+            from bootstrap.cos_imessage import (
+                validate_prepared_channel,
+                verify_guard_files,
+            )
+
+            guard = _json(self.config_dir / "cos-imsg-guard.json")
+            validate_prepared_channel(
+                _json(self.paths.instance_dir / "openclaw/runtime/openclaw.json"),
+                guard,
+                adapter_config=adapters,
+            )
+            verify_guard_files(guard, reviewed_release=release)
+        log = self._event_log(read_only=True)
+        try:
+            result = await live_authorization(
+                log,
+                load_instance_config(self.paths.instance_dir).tenant_id,
+                adapters,
+                _json(self.config_dir / RECEIPT_FILENAME),
+            )
+        finally:
+            await log.close()
+        if result.get("authorized") is not True:
+            raise CoSActivationError(
+                "predecessor has no current durable CoS live authority"
+            )
+        return result
+
+    async def _effect_count(self) -> int:
+        from adminme.source_assurance import audit_source_assurance
+
+        log = self._event_log(read_only=True)
+        try:
+            report = await audit_source_assurance(
+                log, repository_root=self.repository, capabilities={}
+            )
+        finally:
+            await log.close()
+        effects = report["provider_effects"]
+        count = effects["counts"].get("provider_called_true")
+        if effects.get("state") != "healthy" or type(count) is not int or count < 0:
+            raise CoSActivationError("provider-effect integrity is incomplete")
+        return count
+
+    def enter_observation(
+        self,
+        request: EnterObservationRequest,
+        *,
+        submission_repair_manifest: Path | None = None,
+    ) -> dict[str, Any]:
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if self.journal_path.exists():
+                raise CoSActivationError("recover the interrupted CoS operation first")
+            if (self.paths.app_dir / "activation/active.json").exists():
+                raise CoSActivationError("release activation must complete first")
+            commit, release, controller_commit = self._observation_selection()
+            snapshot = self._bound_snapshot(commit)
+            before = self.services.runtime_diagnostics() or {}
+            repair = (
+                load_submission_repair_manifest(
+                    submission_repair_manifest,
+                    candidate=self.repository,
+                    active_commit=commit,
+                    test_mode=self.test_mode,
+                )
+                if submission_repair_manifest is not None
+                else None
+            )
+            if repair is not None:
+                if (
+                    repair.operator_principal_id,
+                    repair.owner_member_id,
+                    repair.owner_authorization_sha256,
+                ) != (
+                    request.operator_principal_id,
+                    request.owner_member_id,
+                    request.owner_authorization_sha256,
+                ):
+                    raise CoSActivationError(
+                        "containment request and repair authority differ"
+                    )
+                validate_submission_repair_diagnostics(
+                    repair, before, observation_active=False
+                )
+                offline_submission_repair(
+                    self.paths,
+                    repair,
+                    repository_root=self.repository,
+                    candidate_commit=controller_commit,
+                    test_mode=self.test_mode,
+                )
+            elif (
+                before.get("ready") is not True
+                or before.get("observation_active") is not False
+            ):
+                raise CoSActivationError(
+                    "enter-observation requires a healthy live predecessor"
+                )
+            live = asyncio.run(self._live_predecessor(release))
+            members = {
+                row["member_id"]: row["role"]
+                for row in _json(self.config_dir / "member-mapping.json")["members"]
+            }
+            if members.get(request.owner_member_id) != "principal":
+                raise CoSActivationError(
+                    "operation requires its exact authorizing principal"
+                )
+            if (
+                request.expected_release_commit != commit
+                or request.expected_activation_id != live["activation_id"]
+                or request.expected_configuration_fingerprint
+                != snapshot["configuration_fingerprint"]
+            ):
+                raise CoSActivationError(
+                    "enter-observation request does not match live predecessor"
+                )
+            readiness = _json(self.config_dir / "deployment-readiness.json")
+            prior_window = readiness.get("provider_effect_window") or {}
+            receipt = CosChannelActivation.model_validate(
+                _json(self.config_dir / RECEIPT_FILENAME)["activation"]
+            )
+            if (
+                prior_window.get("ended_at") != live["enabled_at"]
+                or prior_window.get("started_at")
+                != receipt.observation_window_started_at
+            ):
+                raise CoSActivationError(
+                    "live predecessor observation interval is not exact"
+                )
+            allowed = asyncio.run(self._policy())
+            journal = {
+                "contract": "cos-channel-operation-journal-v1",
+                "operation": "enter_observation",
+                "activation_id": uuid.uuid4().hex,
+                "prior_activation_id": live["activation_id"],
+                "release_commit": commit,
+                "controller_commit": controller_commit,
+                "request": request.model_dump(mode="json"),
+                "operator_principal_id": request.operator_principal_id,
+                "owner_member_id": request.owner_member_id,
+                "owner_authorization_sha256": request.owner_authorization_sha256,
+                "initial_snapshot": snapshot,
+                "initial_policy": {
+                    "event_id": allowed["event_id"],
+                    "revision": allowed["revision"],
+                },
+                "initial_files": {
+                    name: base64.b64encode(
+                        _observation_control_bytes(self.config_dir, name)
+                    ).decode()
+                    for name in (
+                        "adapters.json",
+                        "observation.json",
+                        "runtime.yaml",
+                        "deployment-readiness.json",
+                        RECEIPT_FILENAME,
+                    )
+                },
+                "diagnostic_provider_calls_before": self._provider_calls(before),
+            }
+            if repair is not None:
+                journal["submission_repair_manifest"] = repair.model_dump(mode="json")
+                journal["submission_repair"] = repair_binding(repair)
+            self._write_journal(journal, "prepared")
+            return self._complete_enter_observation(journal, release=release)
+
+    def _complete_enter_observation(
+        self, journal: dict[str, Any], *, release: Path
+    ) -> dict[str, Any]:
+        """Complete containment after interruption; never restore live writes."""
+        try:
+            self.services.stop()
+            selected = self._observation_selection()
+            if selected != (
+                journal["release_commit"],
+                release,
+                journal["controller_commit"],
+            ):
+                raise CoSActivationError(
+                    "observation operation source or selection changed"
+                )
+            # Provider/account/routing/receipt coordinates are immutable here.
+            if (
+                capture_deployment_snapshot(self.paths).public()
+                != journal["initial_snapshot"]
+            ):
+                raise CoSActivationError(
+                    "configuration drifted during observation transition"
+                )
+            if (
+                asyncio.run(self._policy()).get("event_id")
+                != journal["initial_policy"]["event_id"]
+            ):
+                raise CoSActivationError(
+                    "recipient policy changed during observation transition"
+                )
+            repair = None
+            if "submission_repair_manifest" in journal:
+                repair = SubmissionRepairManifest.model_validate(
+                    journal["submission_repair_manifest"]
+                )
+                if (
+                    repair_binding(repair) != journal.get("submission_repair")
+                    or repair.candidate_commit != journal["controller_commit"]
+                    or repair.predecessor_commit != journal["release_commit"]
+                ):
+                    raise CoSActivationError("contained repair journal binding differs")
+                offline_submission_repair(
+                    self.paths,
+                    repair,
+                    repository_root=self.repository,
+                    candidate_commit=journal["controller_commit"],
+                    test_mode=self.test_mode,
+                )
+            effects = asyncio.run(self._effect_count())
+            if "prior_provider_calls" not in journal:
+                if effects < journal["diagnostic_provider_calls_before"]:
+                    raise CoSActivationError(
+                        "provider-effect history regressed during quiescence"
+                    )
+                # A governed live reply may have finished between the cached
+                # diagnostic and the journal hold. The stopped, audited log is
+                # authoritative for the new observation boundary.
+                journal["prior_provider_calls"] = effects
+                self._write_journal(journal, "quiesced")
+            if effects != journal["prior_provider_calls"]:
+                raise CoSActivationError(
+                    "observation transition found an unsettled provider effect"
+                )
+            if "backup" not in journal:
+                # An interrupted rehearsal may leave its immutable encrypted
+                # artifact behind. A new attempt never overwrites that evidence.
+                backup = self.backups.create(
+                    self.paths.backup_dir
+                    / f"cos-operation-{journal['activation_id']}-{uuid.uuid4().hex}.ambackup"
+                )
+                rehearsal = self.backups.rehearse(
+                    Path(backup["path"]), candidate=self.repository
+                )
+                if (
+                    backup.get("encrypted") is not True
+                    or rehearsal.get("status") != "healthy"
+                    or (rehearsal.get("artifact") or {}).get("authenticated")
+                    is not True
+                ):
+                    raise CoSActivationError("encrypted backup restore proof failed")
+                journal.update(backup=backup, rehearsal=rehearsal)
+                self._write_journal(journal, "backup_verified")
+            if "observation_started_at" not in journal:
+                if (
+                    capture_deployment_snapshot(self.paths).public()
+                    != journal["initial_snapshot"]
+                ):
+                    raise CoSActivationError(
+                        "configuration changed during backup verification"
+                    )
+                for name, encoded in journal["initial_files"].items():
+                    if _observation_control_bytes(
+                        self.config_dir, name
+                    ) != base64.b64decode(encoded, validate=True):
+                        raise CoSActivationError(
+                            "operation control changed during backup verification"
+                        )
+                journal["observation_started_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+                self._write_journal(journal, "observation_enabling")
+            asyncio.run(
+                self._audit_and_toggle(
+                    None, journal=journal, deactivate_reason="deployment_observation"
+                )
+            )
+            observation = json.loads(
+                base64.b64decode(journal["initial_files"]["observation.json"])
+            )
+            observation.update(active=True, trusted=False)
+            observation.pop("cos_activation_id", None)
+            atomic_write(self.config_dir / "observation.json", _payload(observation))
+            readiness = json.loads(
+                base64.b64decode(journal["initial_files"]["deployment-readiness.json"])
+            )
+            readiness.setdefault("prior_provider_effect_windows", []).append(
+                copy.deepcopy(readiness["provider_effect_window"])
+            )
+            readiness["provider_effect_window"] = {
+                "started_at": journal["observation_started_at"],
+                "reason": "cos_enter_observation",
+            }
+            self._refresh_binding(readiness, journal["release_commit"])
+            self._write_journal(journal, "verifying")
+            self.services.start()
+            journal["doctor"] = (
+                wait_for_submission_repair(
+                    repair,
+                    diagnostics=self.services.runtime_diagnostics,
+                    doctor=lambda: run_release_doctor(
+                        self.paths,
+                        release,
+                        test_mode=self.test_mode,
+                        include_synthetic_proof=True,
+                    ),
+                    deadline=deployment_clock() + 600,
+                )
+                if repair is not None
+                else self._settle(release)
+            )
+            after = self.services.runtime_diagnostics() or {}
+            if repair is not None:
+                validate_submission_repair_diagnostics(
+                    repair, after, observation_active=True, doctor=journal["doctor"]
+                )
+                offline_submission_repair(
+                    self.paths,
+                    repair,
+                    repository_root=self.repository,
+                    candidate_commit=journal["controller_commit"],
+                    test_mode=self.test_mode,
+                )
+            elif (
+                after.get("ready") is not True
+                or after.get("observation_active") is not True
+            ):
+                raise CoSActivationError("observation transition did not settle")
+            if (
+                self._provider_calls(after) != journal["prior_provider_calls"]
+                or asyncio.run(self._effect_count()) != journal["prior_provider_calls"]
+            ):
+                raise CoSActivationError(
+                    "observation transition caused an unintended provider effect"
+                )
+            if (
+                capture_deployment_snapshot(self.paths).public()
+                != journal["initial_snapshot"]
+                or asyncio.run(self._policy()).get("event_id")
+                != journal["initial_policy"]["event_id"]
+            ):
+                raise CoSActivationError(
+                    "observation transition configuration or policy changed"
+                )
+            if self._observation_selection() != selected:
+                raise CoSActivationError(
+                    "observation operation source or selection changed"
+                )
+            history = self.directory / "history" / f"{journal['activation_id']}.json"
+            if history.exists():
+                prior_commit = _json(history)
+                if prior_commit.get("phase") != "committed" or any(
+                    prior_commit.get(key) != journal.get(key)
+                    for key in (
+                        "operation",
+                        "activation_id",
+                        "prior_activation_id",
+                        "release_commit",
+                        "controller_commit",
+                        "initial_snapshot",
+                        "initial_policy",
+                        "initial_files",
+                        "observation_started_at",
+                        "prior_provider_calls",
+                    )
+                ):
+                    raise CoSActivationError(
+                        "observation operation history does not match"
+                    )
+                # A crash between durable history publication and journal
+                # removal rechecks containment, then keeps the original proof.
+                self._finish(prior_commit, "committed")
+            else:
+                self._finish(journal, "committed")
+            return {
+                "status": "contained_degraded"
+                if repair is not None
+                else "observation_entered",
+                "observation_active": True,
+                **(
+                    {"submission_repair": repair_binding(repair)}
+                    if repair is not None
+                    else {}
+                ),
+                "release_commit": journal["release_commit"],
+                "prior_activation_id": journal["prior_activation_id"],
+                "provider_test_messages_sent": 0,
+                "allowlist_unchanged": True,
+                "enrollment_unchanged": True,
+            }
+        except BaseException:
+            # The active journal holds replies even if a process cannot stop.
+            # Explicit recovery completes this same observation boundary.
+            self.services.stop()
+            raise
+
     def _event_log(self, *, read_only: bool) -> EventLog:
         references = _json(self.config_dir / "secret-references.json")["references"]
         key = secret_store(self.paths, test_mode=self.test_mode).get(
@@ -325,8 +867,10 @@ class CoSChannelActivator:
         self._write_journal(journal, phase)
         history = self.directory / "history" / f"{journal['activation_id']}.json"
         if history.exists():
-            raise CoSActivationError("operation history already exists")
-        atomic_write(history, _private_bytes(self.journal_path))
+            if _private_bytes(history) != _private_bytes(self.journal_path):
+                raise CoSActivationError("operation history already exists")
+        else:
+            atomic_write(history, _private_bytes(self.journal_path))
         self.journal_path.unlink()
 
     def _refresh_binding(self, readiness: dict[str, Any], commit: str) -> None:
@@ -371,13 +915,18 @@ class CoSChannelActivator:
         bus = EventBus(log, instance.bus_checkpoint_path)
         writer = EventWriter(log, bus)
         manager = ObservationManager(writer, self.config_dir / "runtime.yaml")
-        now = datetime.now(timezone.utc).isoformat()
+        now = (
+            journal.get("observation_started_at")
+            or datetime.now(timezone.utc).isoformat()
+        )
         try:
             payload = (
                 activation.model_dump(mode="json")
                 if activation is not None
                 else {
-                    "activation_id": journal["activation_id"],
+                    "activation_id": journal.get(
+                        "prior_activation_id", journal["activation_id"]
+                    ),
                     "operator_principal_id": journal["operator_principal_id"],
                     "reason": deactivate_reason,
                     "observation_active": True,
@@ -387,7 +936,12 @@ class CoSChannelActivator:
                 event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
                 tenant_id=instance.tenant_id,
                 type=ACTIVATED_EVENT if activation is not None else DEACTIVATED_EVENT,
-                schema_version=1,
+                schema_version=(
+                    2
+                    if activation is None
+                    and deactivate_reason == "deployment_observation"
+                    else 1
+                ),
                 occurred_at=now,
                 source_adapter="cos-channel-operation",
                 source_account_id="system",
@@ -395,6 +949,11 @@ class CoSChannelActivator:
                 visibility_scope="shared:household",
                 sensitivity="normal",
                 actor_identity=journal["operator_principal_id"],
+                idempotency_key=(
+                    f"cos-operation:{journal['activation_id']}:observation"
+                    if journal.get("operation") == "enter_observation"
+                    else None
+                ),
                 payload=payload,
             )
             event_id = await writer.write(envelope)
@@ -404,9 +963,25 @@ class CoSChannelActivator:
                     "owner-authorized CoS channel replies",
                 )
             else:
-                await manager.enable(
-                    journal["operator_principal_id"], "CoS operation recovery"
+                reason = (
+                    f"CoS deployment observation:{journal['activation_id']}"
+                    if journal.get("operation") == "enter_observation"
+                    else "CoS operation recovery"
                 )
+                already_enabled = False
+                if journal.get("operation") == "enter_observation":
+                    async for previous in log.read_since(
+                        None, types=["observation.enabled"]
+                    ):
+                        if (
+                            previous.get("tenant_id") == instance.tenant_id
+                            and previous.get("actor_identity")
+                            == journal["operator_principal_id"]
+                            and previous.get("payload", {}).get("reason") == reason
+                        ):
+                            already_enabled = True
+                if not already_enabled or not await manager.is_active():
+                    await manager.enable(journal["operator_principal_id"], reason)
             return event_id
         finally:
             await bus.stop()
@@ -808,6 +1383,16 @@ class CoSChannelActivator:
         )
         with updater._operation_lock():
             journal = _json(self.journal_path)
+            if journal.get("operation") == "enter_observation":
+                commit, release, controller_commit = self._observation_selection()
+                if (
+                    journal.get("release_commit") != commit
+                    or journal.get("controller_commit") != controller_commit
+                ):
+                    raise CoSActivationError(
+                        "interrupted observation operation belongs to another source"
+                    )
+                return self._complete_enter_observation(journal, release=release)
             commit, release = self._selection()
             if journal.get("release_commit") != commit:
                 raise CoSActivationError(
@@ -823,19 +1408,37 @@ def main() -> None:
     parser.add_argument("--instance-root", type=Path, required=True)
     parser.add_argument("--request", type=Path)
     parser.add_argument("--enable-live", action="store_true")
+    parser.add_argument("--enter-observation", action="store_true")
+    parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument("--recover", action="store_true")
     arguments = parser.parse_args()
     if arguments.recover == bool(arguments.request):
         parser.error("choose one private request or interrupted-operation recovery")
+    if arguments.enter_observation and (arguments.enable_live or arguments.recover):
+        parser.error("enter-observation is a separate private-request operation")
+    if (
+        arguments.submission_repair_manifest is not None
+        and not arguments.enter_observation
+    ):
+        parser.error("submission repair manifest is only for entering observation")
+    if arguments.recover and arguments.enable_live:
+        parser.error("recovery cannot enable live operation")
     controller = CoSChannelActivator(
         DeploymentPaths.from_root(arguments.instance_root, production=True),
         repository=Path(__file__).resolve().parents[1],
     )
     if arguments.recover:
         result = controller.recover()
+    elif arguments.enter_observation:
+        request = EnterObservationRequest.model_validate(_json(arguments.request))
+        result = controller.enter_observation(
+            request, submission_repair_manifest=arguments.submission_repair_manifest
+        )
     else:
-        request = ActivationRequest.model_validate(_json(arguments.request))
-        result = controller.activate(request, enable_live=arguments.enable_live)
+        activation_request = ActivationRequest.model_validate(_json(arguments.request))
+        result = controller.activate(
+            activation_request, enable_live=arguments.enable_live
+        )
     print(json.dumps(result, sort_keys=True))
 
 

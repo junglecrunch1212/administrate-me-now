@@ -1109,6 +1109,14 @@ class AdministrateMeRuntime:
                 replay_on_version_change=True,
             )
             self.bus.subscribe(
+                "member-submissions:recovery",
+                ["triage.intent.recovery_requested"],
+                self.submission_interpreter.handle_recovery,
+                consumer_version="member-submission-recovery-v1",
+                replay_on_version_change=True,
+                delivery_concurrency=2,
+            )
+            self.bus.subscribe(
                 "provider-writes:reconciliation",
                 [
                     "external_sync.write_completed",

@@ -200,6 +200,32 @@ def _write_htr10_fixture(
         "invalid_legacy_reconciliation": 0,
         "duplicate_legacy_reconciliation": 0,
     }
+    readiness = json.loads(
+        (paths.instance_dir / "config/deployment-readiness.json").read_text("utf-8")
+    )
+    window = readiness["provider_effect_window"]
+    prior_windows = readiness.get("prior_provider_effect_windows", [])
+
+    def audited_window(interval: dict) -> dict:
+        return {
+            "state": "healthy",
+            "started_at_configured": True,
+            "started_at": interval["started_at"],
+            "ended_at": interval.get("ended_at"),
+            "counts": zero_counts,
+            "content_exposed": False,
+        }
+
+    extended_windows = (
+        {
+            "provider_effect_windows": {
+                "provider_effect_window": window,
+                "prior_provider_effect_windows": prior_windows,
+            }
+        }
+        if prior_windows or set(window) != {"started_at"}
+        else {}
+    )
     source.write_text(
         json.dumps(
             {
@@ -210,25 +236,17 @@ def _write_htr10_fixture(
                 "provider_effects": {
                     "state": "healthy",
                     "counts": zero_counts,
-                    "observation_window": {
-                        "state": "healthy",
-                        "started_at_configured": True,
-                        "started_at": json.loads(
-                            (
-                                paths.instance_dir
-                                / "config"
-                                / "deployment-readiness.json"
-                            ).read_text("utf-8")
-                        )["provider_effect_window"]["started_at"],
-                        "counts": zero_counts,
-                        "content_exposed": False,
-                    },
+                    "observation_window": audited_window(window),
+                    "prior_observation_windows": [
+                        audited_window(interval) for interval in prior_windows
+                    ],
                     "content_exposed": False,
                 },
                 "content_exposed": False,
                 "provider_binding_transition_sha256": (
                     provider_binding_transition_sha256
                 ),
+                **extended_windows,
             }
         ),
         encoding="utf-8",

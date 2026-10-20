@@ -172,7 +172,87 @@ Runtime verification continues to require the selected immutable release's exact
 wrapper; retained-release paths and caller-supplied replacement hashes are not
 accepted as substitutes.
 
+### Upgrading an already live CoS
+
+This MODERNIZE preserves the AGENTS.md observation-on deployment rule. Before
+collecting candidate readiness, use the supported `--enter-observation`
+operation from the clean newly merged protected-main checkout with the selected
+predecessor's installed Python. Refresh the checkout's `origin/main` before
+invocation: the controller requires its exact HEAD to equal that protected-main
+reference, proves the selected predecessor's immutable source and ancestry, and
+refuses a different interpreter or deployment binding. It never edits an
+installed release or starts the candidate to perform containment.
+
+The private `--request` JSON contains only `owner_member_id`, a distinct
+`operator_principal_id`, `owner_authorization_sha256`, `expected_release_commit`,
+`expected_activation_id`, and `expected_configuration_fingerprint`. These bind
+the owner's existing deployment/write authorization to the actual current live
+receipt and configuration; they do not require another approval ceremony or
+accept fabricated enrollment evidence. The command is:
+
+```sh
+SELECTED_PYTHON -m bootstrap.cos_channel_activation \
+  --instance-root PRIVATE_INSTANCE_ROOT --request PRIVATE_OBSERVATION_REQUEST \
+  --enter-observation
+```
+
+The existing operation lock and journal hold replies before stopping services.
+The predecessor observation writer could publish its non-secret `runtime.yaml`
+with mode 0644. After exact predecessor source and configuration verification,
+only that fixed file may be read in this legacy mode: it must be an owner-owned,
+single-link regular file inside the private configuration directory and contain
+only the exact canonical observation-toggle shape written by that predecessor.
+Unknown fields, duplicate keys, redirects and other writable modes are refused.
+The original bytes are journaled; the fixed atomic writer republishes mode 0600
+during containment independently of process umask. All other operation documents
+retain the strict owner-only requirement.
+The stopped encrypted log establishes the authoritative, complete provider-effect
+baseline; a legitimate live reply finishing before this boundary is retained.
+An authenticated encrypted backup and isolated restore rehearsal precede the
+observation mutation. The controller revalidates source/configuration and policy,
+appends an idempotent deactivation of the previous live authority and an audited
+observation enable, archives the previous closed interval unchanged, and starts a
+new `cos_enter_observation` interval. The `deployment_observation` reason uses
+`cos.channels.deactivated` schema v2; v1 remains unchanged and its identity
+upcaster preserves historical reasons and authority boundaries. Enrollment,
+routing, credentials, recipient policy, the old receipt and all activation/source
+history remain unchanged.
+The retained receipt is historical: its deactivation prevents live dispatch.
+New default event-log `recorded_at` timestamps retain UTC microseconds so a
+governed live response within the same second as activation cannot enter the
+preceding closed observation interval through timestamp truncation. Explicit
+historical timestamps remain byte-for-byte unchanged. The existing half-open
+interval comparisons and zero-effect requirements are preserved; no clock
+rounding, tolerance or retrospective timestamp inference is introduced.
+Healthy selected-release Doctor, current observation-on readiness and unchanged
+authoritative provider-effect counts are required before the journal is closed.
+
+On interruption or failed verification, the journal continues to deny replies
+and services remain stopped. Run the same merged controller and installed Python
+with `--instance-root PRIVATE_INSTANCE_ROOT --recover`; recovery completes that
+same observation boundary and never restores live writes. A repeated recovery
+does not duplicate the deactivation, observation-enable fact or archived interval.
+Configuration, policy or unknown-effect drift remains a blocking failure.
+
+After successful containment, collect normal HTR-10 and candidate-pending
+evidence and use the guarded updater. Its encrypted backup, rollback, full Doctor
+and member-browser gates remain mandatory. Current and archived effect intervals
+must survive promotion and rollback without reinterpretation of authorized live
+effects as observation effects. After successful deployment, run the existing
+`--request PRIVATE_ACTIVATION_REQUEST --enable-live` operation from the selected
+merged release with fresh actual sender/transport evidence. Omit
+`recipient_entries` to retain the existing policy without reseeding. This appends
+a fresh activation boundary; suppressed and pre-boundary requests are never
+released or retried automatically.
+
 The retained dataset remains an accepted bounded predecessor. This operation
 does not relabel the discarded pre-reset history as a proven production
 rollback. Physical browser acceptance and external sign-in coverage are
 reported separately and must not be inferred from these process tests.
+
+An exact failed member-forward extraction is handled only by the separately
+bound procedure in
+[`FORWARDED-SUBMISSION-RECOVERY-CONTRACT.md`](FORWARDED-SUBMISSION-RECOVERY-CONTRACT.md).
+That procedure preserves a declared degraded predecessor during containment;
+it does not broaden ordinary healthy deployment admission or permit live
+reactivation before normal healthy settlement.

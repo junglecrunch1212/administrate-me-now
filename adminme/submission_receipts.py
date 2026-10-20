@@ -61,22 +61,51 @@ def submission_refusal_valid(source: dict[str, Any], receipt: dict[str, Any]) ->
     )
 
 
-def feature_receipt_valid(source: dict[str, Any], feature: dict[str, Any]) -> bool:
+def feature_receipt_valid(
+    source: dict[str, Any],
+    feature: dict[str, Any],
+    *,
+    recovery_request: dict[str, Any] | None = None,
+) -> bool:
     payload = feature.get("payload") or {}
     member = (source.get("payload") or {}).get("member_id")
     fingerprint = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    expected_key = (
+        f"triage-intent-features:{source['event_id']}:member-intent-hybrid-v2"
+    )
+    if recovery_request is not None:
+        from adminme.submission_recovery import feature_key, recovery_request_valid
+
+        request_payload = recovery_request.get("payload") or {}
+        if not (
+            recovery_request_valid(source, recovery_request)
+            and feature.get("schema_version") == 6
+            and payload.get("recovery_request_event_id")
+            == recovery_request.get("event_id")
+            and payload.get("supersedes_assessment_event_id")
+            == request_payload.get("failed_assessment_event_id")
+            and payload.get("recovery_policy") == request_payload.get("recovery_policy")
+            and payload.get("recovery_reason")
+            == request_payload.get("expected_failure_reason")
+            and payload.get("recovery_attempt")
+            == request_payload.get("recovery_attempt")
+        ):
+            return False
+        expected_key = feature_key(
+            str(source["event_id"]), str(recovery_request["event_id"])
+        )
+    elif feature.get("schema_version") != 3:
+        return False
     if not (
         feature.get("type") == "triage.intent.features_extracted"
-        and feature.get("schema_version") == 3
         and same_source_scope(source, feature)
         and feature.get("source_adapter") == "member-intent-hybrid-v2"
         and feature.get("source_account_id") == member
         and feature.get("actor_identity") == "pipeline:member-intent-hybrid-v2"
         and feature.get("causation_id") == source.get("event_id")
-        and feature.get("idempotency_key")
-        == f"triage-intent-features:{source['event_id']}:member-intent-hybrid-v2"
+        and feature.get("idempotency_key") == expected_key
         and feature.get("raw_ref") == f"features-sha256:{fingerprint}"
         and payload.get("intent_id") == (source.get("payload") or {}).get("intent_id")
         and payload.get("source_event_id") == source.get("event_id")
@@ -101,12 +130,16 @@ def feature_receipt_valid(source: dict[str, Any], feature: dict[str, Any]) -> bo
 
 
 def held_receipt_valid(
-    source: dict[str, Any], held: dict[str, Any], feature: dict[str, Any] | None
+    source: dict[str, Any],
+    held: dict[str, Any],
+    feature: dict[str, Any] | None,
+    *,
+    recovery_request: dict[str, Any] | None = None,
 ) -> bool:
     payload = held.get("payload") or {}
     return bool(
         feature is not None
-        and feature_receipt_valid(source, feature)
+        and feature_receipt_valid(source, feature, recovery_request=recovery_request)
         and held.get("type") == "triage.intent.publication_held"
         and held.get("schema_version") == 1
         and same_source_scope(source, held)

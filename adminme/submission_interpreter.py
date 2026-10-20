@@ -10,6 +10,7 @@ are reused across HTTP retries, bus redelivery, crashes, and projection replay.
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 import hashlib
 import json
 import re
@@ -46,6 +47,19 @@ from adminme.submission_receipts import (
     refusal_key,
     same_source_scope,
     submission_refusal_valid,
+)
+from adminme.submission_recovery import (
+    MAX_CONCURRENCY,
+    RECOVERY_EVENT,
+    REFUSED_EVENT,
+    SubmissionRecoveryRefused,
+    SubmissionRecoveryTarget,
+    feature_key as recovery_feature_key,
+    linked_recovery_feature_valid,
+    recovery_authorization_valid,
+    recovery_publication_complete,
+    recovery_request_valid,
+    validate_submission_recovery_target,
 )
 
 
@@ -172,6 +186,129 @@ class SubmissionInterpreter:
         self._receipt_locks: WeakValueDictionary[str, asyncio.Lock] = (
             WeakValueDictionary()
         )
+        self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+
+    async def _held_receipt_valid(
+        self,
+        source: dict[str, Any],
+        held: dict[str, Any],
+        feature: dict[str, Any] | None,
+    ) -> bool:
+        request = None
+        if feature is not None and feature.get("schema_version") == 6:
+            request = await self.runtime.event_log.get(
+                str(feature["payload"].get("recovery_request_event_id") or "")
+            )
+            if not await linked_recovery_feature_valid(
+                self.runtime.event_log, source, feature
+            ):
+                return False
+        return held_receipt_valid(source, held, feature, recovery_request=request)
+
+    async def handle_recovery(self, request: dict[str, Any]) -> None:
+        """A separate durable subscription never replays ordinary submissions."""
+        if (
+            request.get("type") != RECOVERY_EVENT
+            or request.get("tenant_id") != self.runtime.settings.instance.tenant_id
+        ):
+            return
+        source_id = str((request.get("payload") or {}).get("source_event_id") or "")
+        key = f"submission-recovery-refused:{request['event_id']}"
+        if await self.runtime.event_log.get_by_idempotency(
+            str(request["tenant_id"]), key
+        ):
+            return
+        source = await self.runtime.event_log.get(source_id)
+        prior_feature = None
+        try:
+            if source is None or not recovery_request_valid(source, request):
+                raise SubmissionRecoveryRefused("recovery_request_identity_invalid")
+            prior_feature = await self.runtime.event_log.get_by_idempotency(
+                str(request["tenant_id"]),
+                recovery_feature_key(source_id, str(request["event_id"])),
+            )
+            if (
+                prior_feature is not None
+                and await linked_recovery_feature_valid(
+                    self.runtime.event_log, source, prior_feature
+                )
+                and await recovery_publication_complete(
+                    self.runtime.event_log, source, prior_feature
+                )
+            ):
+                # A completed immutable command remains completed after a later
+                # deployment or observation change. It cannot authorize new work.
+                return
+            selected = (
+                self.runtime.settings.host_topology.get("deployment_binding") or {}
+            ).get("release_commit")
+            if not selected or selected != request["payload"].get("candidate_commit"):
+                raise SubmissionRecoveryRefused("candidate_release_mismatch")
+            if not await recovery_authorization_valid(self.runtime, request):
+                raise SubmissionRecoveryRefused("recovery_authorization_mismatch")
+            if (
+                self.runtime.observation is None
+                or not await self.runtime.observation.is_active()
+            ):
+                raise SubmissionRecoveryRefused("observation_inactive")
+            async with self._recovery_semaphore:
+                result = await self.interpret(source, recovery_request=request)
+                if (
+                    result.get("state") == "member_decision_preserved"
+                    and await self.runtime.event_log.get_by_idempotency(
+                        str(request["tenant_id"]),
+                        recovery_feature_key(source_id, str(request["event_id"])),
+                    )
+                    is None
+                ):
+                    raise SubmissionRecoveryRefused(
+                        "member_decision_or_proposal_preserved"
+                    )
+        except (SubmissionRecoveryRefused, SubmissionContextRefused) as exc:
+            if (
+                await self.runtime.event_log.get_by_idempotency(
+                    str(request["tenant_id"]),
+                    recovery_feature_key(source_id, str(request["event_id"])),
+                )
+                is not None
+            ):
+                # An interrupted publication keeps its existing assessment. Its
+                # missing child receipts remain pending in the source audit; lost
+                # authority cannot create a contradictory second terminal event.
+                return
+            reason = (
+                exc.code if isinstance(exc, SubmissionRecoveryRefused) else exc.reason
+            )
+            await self.runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=str(request["tenant_id"]),
+                    type=REFUSED_EVENT,
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="submission-interpreter",
+                    source_account_id="system",
+                    owner_scope=str(request["owner_scope"]),
+                    visibility_scope=str(request["visibility_scope"]),
+                    sensitivity=request.get("sensitivity", "normal"),
+                    actor_identity="system:submission-interpreter",
+                    causation_id=str(request["event_id"]),
+                    idempotency_key=key,
+                    payload={
+                        "source_event_id": source_id,
+                        "request_event_id": str(request["event_id"]),
+                        "reason": reason,
+                        "refused_at": EventEnvelope.now_utc_iso(),
+                    },
+                )
+            )
+        except HTTPException:
+            # The ordinary interpreter has already retained a governance hold.
+            held = await self.runtime.event_log.get_by_idempotency(
+                str(request["tenant_id"]), f"triage-intent-held:{source_id}"
+            )
+            if held is None:
+                raise
 
     async def _terminal_receipt(self, event: dict[str, Any]) -> dict[str, Any] | None:
         for receipt in await self.runtime.event_log.get_by_causation(
@@ -259,7 +396,7 @@ class SubmissionInterpreter:
             feature = await self.runtime.event_log.get(
                 str((held.get("payload") or {}).get("feature_event_id") or "")
             )
-            if not held_receipt_valid(event, held, feature):
+            if not await self._held_receipt_valid(event, held, feature):
                 await self._record_terminal(event, "retained_receipt_identity_invalid")
             return
         try:
@@ -281,11 +418,15 @@ class SubmissionInterpreter:
             )
             if held is None:
                 raise
-            if not held_receipt_valid(event, held, feature):
+            if not await self._held_receipt_valid(event, held, feature):
                 await self._record_terminal(event, "retained_receipt_identity_invalid")
 
     async def interpret(
-        self, event: dict[str, Any], *, session: Session | None = None
+        self,
+        event: dict[str, Any],
+        *,
+        session: Session | None = None,
+        recovery_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         runtime = self.runtime
         payload = event["payload"]
@@ -334,7 +475,9 @@ class SubmissionInterpreter:
             retained_feature = await runtime.event_log.get(
                 str((retained_hold.get("payload") or {}).get("feature_event_id") or "")
             )
-            if not held_receipt_valid(event, retained_hold, retained_feature):
+            if not await self._held_receipt_valid(
+                event, retained_hold, retained_feature
+            ):
                 await self._record_terminal(event, "retained_receipt_identity_invalid")
                 raise SubmissionContextRefused("retained_receipt_identity_invalid")
         session = session or build_internal_session(
@@ -346,7 +489,9 @@ class SubmissionInterpreter:
         key = str(event["event_id"])
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
-            return await self._interpret_locked(event, session)
+            return await self._interpret_locked(
+                event, session, recovery_request=recovery_request
+            )
 
     async def _member_decision_outcome(
         self, event: dict[str, Any]
@@ -385,7 +530,11 @@ class SubmissionInterpreter:
         return None
 
     async def _interpret_locked(
-        self, event: dict[str, Any], session: Session
+        self,
+        event: dict[str, Any],
+        session: Session,
+        *,
+        recovery_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         runtime = self.runtime
         payload = event["payload"]
@@ -420,11 +569,51 @@ class SubmissionInterpreter:
         feature_key = (
             f"triage-intent-features:{intent_event_id}:member-intent-hybrid-v2"
         )
+        if recovery_request is not None:
+            feature_key = recovery_feature_key(
+                intent_event_id, str(recovery_request["event_id"])
+            )
         prior_feature = await runtime.event_log.get_by_idempotency(
             tenant_id, feature_key
         )
+        if recovery_request is not None:
+            target = SubmissionRecoveryTarget.model_validate(
+                {
+                    key: recovery_request["payload"][key]
+                    for key in SubmissionRecoveryTarget.model_fields
+                }
+            )
+            if prior_feature is None:
+                validated = await validate_submission_recovery_target(
+                    runtime.event_log,
+                    target,
+                    tenant_id=tenant_id,
+                    request_event_id=str(recovery_request["event_id"]),
+                )
+                if (
+                    validated["recovery_attempt"]
+                    != recovery_request["payload"]["recovery_attempt"]
+                ):
+                    raise SubmissionRecoveryRefused("recovery_attempt_changed")
+            else:
+                related = await runtime.event_log.get_by_causation(intent_event_id)
+                features = [
+                    row
+                    for row in related
+                    if row.get("type") == "triage.intent.features_extracted"
+                ]
+                if (
+                    not features
+                    or features[-1]["event_id"] != prior_feature["event_id"]
+                    or not await linked_recovery_feature_valid(
+                        runtime.event_log, event, prior_feature
+                    )
+                ):
+                    raise SubmissionRecoveryRefused("recovery_result_not_current")
         if prior_feature is not None:
-            if not feature_receipt_valid(event, prior_feature) or (
+            if not feature_receipt_valid(
+                event, prior_feature, recovery_request=recovery_request
+            ) or (
                 not evidence_complete
                 and (prior_feature.get("payload") or {}).get("candidates")
             ):
@@ -454,8 +643,14 @@ class SubmissionInterpreter:
                     SkillContext(
                         session=session,
                         correlation_id=correlation_id,
-                        triggering_event_id=intent_event_id,
-                        invocation_idempotency_key=f"triage-intent:v2:{intent_event_id}",
+                        triggering_event_id=str(recovery_request["event_id"])
+                        if recovery_request is not None
+                        else intent_event_id,
+                        invocation_idempotency_key=(
+                            f"triage-intent-recovery:{recovery_request['event_id']}"
+                            if recovery_request is not None
+                            else f"triage-intent:v2:{intent_event_id}"
+                        ),
                         require_clean_result=int(event.get("schema_version") or 1) >= 2,
                         owner_scope=f"private:{member_id}",
                         visibility_scope=f"private:{member_id}",
@@ -526,7 +721,9 @@ class SubmissionInterpreter:
                 # only whatever a bounded deterministic prefix happened to find.
                 extracted_candidates = []
             related_skill_events = await runtime.event_log.get_by_causation(
-                intent_event_id
+                str(recovery_request["event_id"])
+                if recovery_request is not None
+                else intent_event_id
             )
             skill_call = next(
                 (
@@ -574,6 +771,19 @@ class SubmissionInterpreter:
                     *evidence_issues[:18],
                 ],
             }
+            if recovery_request is not None:
+                recovery = recovery_request["payload"]
+                feature_payload.update(
+                    {
+                        "supersedes_assessment_event_id": recovery[
+                            "failed_assessment_event_id"
+                        ],
+                        "recovery_request_event_id": str(recovery_request["event_id"]),
+                        "recovery_policy": recovery["recovery_policy"],
+                        "recovery_attempt": recovery["recovery_attempt"],
+                        "recovery_reason": recovery["expected_failure_reason"],
+                    }
+                )
             feature_fingerprint = hashlib.sha256(
                 json.dumps(
                     feature_payload, sort_keys=True, separators=(",", ":")
@@ -584,7 +794,7 @@ class SubmissionInterpreter:
                     event_at_ms=int(time.time() * 1000),
                     tenant_id=tenant_id,
                     type="triage.intent.features_extracted",
-                    schema_version=3,
+                    schema_version=6 if recovery_request is not None else 3,
                     occurred_at=extracted_at,
                     source_adapter="member-intent-hybrid-v2",
                     source_account_id=member_id,
@@ -753,22 +963,29 @@ class SubmissionInterpreter:
         # A member can decide the holding item while the model is running.
         # Recheck immutable decisions immediately before append; the projection
         # independently rejects late children ordered after a member decision.
-        member_decision = await self._member_decision_outcome(event)
-        if member_decision is not None:
-            await self._record_terminal(event, "member_decision_preserved")
-            return member_decision
-        if missing_proposals:
-            appended_ids = await runtime.events.write_batch(
-                [envelope for _proposal_id, _payload, envelope in missing_proposals]
-            )
-            proposal_event_by_id.update(
-                {
-                    proposal_id: event_id
-                    for (proposal_id, _payload, _envelope), event_id in zip(
-                        missing_proposals, appended_ids, strict=True
+        async with AsyncExitStack() as publication:
+            if recovery_request is not None:
+                await publication.enter_async_context(
+                    runtime.triage_command_locks.setdefault(
+                        f"{tenant_id}:{intent_id}", asyncio.Lock()
                     )
-                }
-            )
+                )
+            member_decision = await self._member_decision_outcome(event)
+            if member_decision is not None:
+                await self._record_terminal(event, "member_decision_preserved")
+                return member_decision
+            if missing_proposals:
+                appended_ids = await runtime.events.write_batch(
+                    [envelope for _proposal_id, _payload, envelope in missing_proposals]
+                )
+                proposal_event_by_id.update(
+                    {
+                        proposal_id: event_id
+                        for (proposal_id, _payload, _envelope), event_id in zip(
+                            missing_proposals, appended_ids, strict=True
+                        )
+                    }
+                )
         proposal_event_ids = [
             proposal_event_by_id[proposal_id] for proposal_id in proposal_ids
         ]

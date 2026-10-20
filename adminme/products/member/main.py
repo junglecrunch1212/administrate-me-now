@@ -5422,6 +5422,11 @@ async def change_settings_connection(
                 "idempotent": True,
             }
         previous_state = runtime.settings_control.read()
+        if body.action not in visible[connection_id]["actions"]:
+            raise HTTPException(
+                409,
+                "This connection is turned off by the current source settings.",
+            )
         await _guard_member_write(
             runtime,
             session,

@@ -8,6 +8,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,12 +17,14 @@ import yaml
 from adminme.cos_channel_operation import live_authorization
 from adminme.cos_response_policy import policy_from_event_log
 from adminme.events.log import EventLog
+from adminme.events.registry import EventValidationError, ensure_autoloaded, registry
 from adminme.lib.instance_config import load_instance_config
 from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.cos_channel_activation import (
     ActivationRequest,
     CoSActivationError,
     CoSChannelActivator,
+    EnterObservationRequest,
 )
 from tests.acceptance.test_cos_channel_acquisition import _configuration
 from tests.acceptance.test_forwarded_channel_intake import EMAIL_ACCOUNT, MEMBER_A, ROOT
@@ -64,6 +67,8 @@ class _Services:
 
 class _Backups:
     def create(self, target: Path) -> dict[str, Any]:
+        if target.exists():
+            raise FileExistsError("encrypted backup evidence cannot be replaced")
         atomic_write(target, b"synthetic-encrypted-backup-boundary")
         return {"path": str(target), "encrypted": True}
 
@@ -85,6 +90,12 @@ def _controller(
     original.pop("cos_channel_acquisition")
     config["adapters"][1]["config"]["permission_scope"].append(
         "https://www.googleapis.com/auth/gmail.send"
+    )
+    service = config["adapters"][1]["config"]
+    service.pop("service_account_key_ref")
+    service.update(
+        oauth_credentials_ref="keychain://fixture-cos/credential",
+        binding_provenance="oauth-subject",
     )
     private = paths.instance_dir / "config"
     atomic_write(
@@ -110,7 +121,12 @@ def _controller(
     )
     _write(
         private / "disposable-test-dataset.json",
-        {"retained": "exact original marker bytes"},
+        {
+            "contract": "disposable-test-dataset-v1",
+            "acquisition_contract": "disposable-test-acquisition-v1",
+            "dataset_id": "a" * 32,
+            "reset_manifest_sha256": "b" * 64,
+        },
     )
     instance = load_instance_config(paths.instance_dir)
     initial = EventLog(instance, b"o" * 32)
@@ -371,3 +387,364 @@ def test_unrelated_gateway_change_is_rejected_before_stopping_services(
     assert controller.services.stops == 0
     assert not controller.journal_path.exists()
     assert json.loads(gateway_path.read_text()) == original_gateway
+
+
+def _live_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    controller, request, _original = _controller(tmp_path, monkeypatch)
+    activated = controller.activate(request, enable_live=True)
+    snapshot = {
+        "predecessor_commit": "a" * 40,
+        "pointer_sha256": "1" * 64,
+        "pointer_chain_sha256": "2" * 64,
+        "instance_fingerprint": "3" * 64,
+        "host_fingerprint": "4" * 64,
+        "service_account_fingerprint": "5" * 64,
+        "configuration_fingerprint": "6" * 64,
+    }
+    monkeypatch.setattr(
+        controller, "_observation_selection", lambda: ("a" * 40, ROOT, "b" * 40)
+    )
+    monkeypatch.setattr(
+        controller, "_bound_snapshot", lambda _commit: copy.deepcopy(snapshot)
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.capture_deployment_snapshot",
+        lambda _paths: SimpleNamespace(public=lambda: copy.deepcopy(snapshot)),
+    )
+    pause = EnterObservationRequest(
+        owner_authorization_sha256=request.owner_authorization_sha256,
+        operator_principal_id=request.operator_principal_id,
+        owner_member_id=request.owner_member_id,
+        expected_release_commit="a" * 40,
+        expected_activation_id=activated["activation_id"],
+        expected_configuration_fingerprint=snapshot["configuration_fingerprint"],
+    )
+    return controller, request, pause
+
+
+def test_enter_observation_preserves_enrollment_policy_receipt_and_reactivates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from adminme.cos_channel_operation import read_receipt
+
+    controller, request, pause = _live_controller(tmp_path, monkeypatch)
+    private = controller.config_dir
+    unchanged = {
+        name: (private / name).read_bytes()
+        for name in (
+            "adapters.json",
+            "cos-channel-operation.json",
+            "disposable-test-dataset.json",
+        )
+    }
+    prior_window = json.loads((private / "deployment-readiness.json").read_bytes())[
+        "provider_effect_window"
+    ]
+    policy_before, events_before = asyncio.run(_audit(controller))
+    original_settle = controller._settle
+
+    def held(release):
+        assert read_receipt(private) == {}
+        assert controller.services.runtime_diagnostics()["observation_active"] is True
+        return original_settle(release)
+
+    monkeypatch.setattr(controller, "_settle", held)
+    result = controller.enter_observation(pause)
+    assert result["observation_active"] is True
+    assert all(
+        (private / name).read_bytes() == value for name, value in unchanged.items()
+    )
+    evidence = json.loads((private / "deployment-readiness.json").read_bytes())
+    assert evidence["prior_provider_effect_windows"] == [prior_window]
+    assert "ended_at" not in evidence["provider_effect_window"]
+    policy_after, events_after = asyncio.run(_audit(controller))
+    assert policy_after == policy_before
+    assert events_after[: len(events_before)] == events_before
+    deactivated = [
+        event for event in events_after if event["type"] == "cos.channels.deactivated"
+    ]
+    assert len(deactivated) == 1
+    assert deactivated[0]["schema_version"] == 2
+    assert deactivated[0]["payload"] == {
+        "activation_id": pause.expected_activation_id,
+        "operator_principal_id": pause.operator_principal_id,
+        "reason": "deployment_observation",
+        "observation_active": True,
+    }
+    with pytest.raises(CoSActivationError, match="no current durable"):
+        asyncio.run(controller._live_predecessor(ROOT))
+    monkeypatch.setattr(controller, "_settle", original_settle)
+    reactivated = controller.activate(
+        request.model_copy(update={"recipient_entries": None}), enable_live=True
+    )
+    assert reactivated["activation_id"] != pause.expected_activation_id
+    assert asyncio.run(_audit(controller))[0] == policy_before
+    assert json.loads((private / "deployment-readiness.json").read_bytes())[
+        "prior_provider_effect_windows"
+    ] == [prior_window]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["backup", "backup_published", "rehearsal", "toggle", "doctor", "history"],
+)
+def test_interrupted_observation_recovers_to_containment_without_reseeding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    controller, _request, pause = _live_controller(tmp_path, monkeypatch)
+    original_policy, _ = asyncio.run(_audit(controller))
+    readiness = json.loads(
+        (controller.config_dir / "deployment-readiness.json").read_bytes()
+    )
+    with monkeypatch.context() as crash:
+
+        def fail(*_args, **_kwargs):
+            raise KeyboardInterrupt("synthetic containment interruption")
+
+        if failure == "backup":
+            crash.setattr(controller.backups, "create", fail)
+        elif failure == "backup_published":
+            create = controller.backups.create
+
+            def published(*args, **kwargs):
+                create(*args, **kwargs)
+                fail()
+
+            crash.setattr(controller.backups, "create", published)
+        elif failure == "rehearsal":
+            crash.setattr(controller.backups, "rehearse", fail)
+        elif failure == "toggle":
+            original = controller._audit_and_toggle
+
+            async def after_toggle(*args, **kwargs):
+                await original(*args, **kwargs)
+                fail()
+
+            crash.setattr(controller, "_audit_and_toggle", after_toggle)
+        elif failure == "doctor":
+            crash.setattr(controller, "_settle", fail)
+        else:
+
+            def history_only(journal, phase):
+                controller._write_journal(journal, phase)
+                atomic_write(
+                    controller.directory
+                    / "history"
+                    / f"{journal['activation_id']}.json",
+                    controller.journal_path.read_bytes(),
+                )
+                fail()
+
+            crash.setattr(controller, "_finish", history_only)
+        with pytest.raises(KeyboardInterrupt, match="containment"):
+            controller.enter_observation(pause)
+    assert controller.journal_path.exists()
+    retained_backups = {
+        path: path.read_bytes()
+        for path in controller.paths.backup_dir.glob("*.ambackup")
+    }
+    assert controller.recover()["observation_active"] is True
+    assert all(path.read_bytes() == value for path, value in retained_backups.items())
+    assert not controller.journal_path.exists()
+    policy, events = asyncio.run(_audit(controller))
+    assert policy == original_policy
+    assert [event["type"] for event in events].count("cos.channels.deactivated") == 1
+    assert [event["type"] for event in events].count("observation.enabled") == 1
+    current = json.loads(
+        (controller.config_dir / "deployment-readiness.json").read_bytes()
+    )
+    assert current["prior_provider_effect_windows"] == [
+        readiness["provider_effect_window"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "reason", ["operation_failed", "operator_requested", "interrupted_operation"]
+)
+def test_deactivation_v2_preserves_historical_schema_and_reason(reason: str) -> None:
+    ensure_autoloaded()
+    payload = {
+        "activation_id": "a" * 32,
+        "operator_principal_id": "operator:fixture-channel-enrollment",
+        "reason": reason,
+        "observation_active": True,
+    }
+    assert (
+        registry.validate("cos.channels.deactivated", 1, payload).model_dump()
+        == payload
+    )
+    upgraded = registry.upcast(
+        "cos.channels.deactivated", payload, from_version=1, to_version=2
+    )
+    assert upgraded == payload and upgraded is not payload
+    assert (
+        registry.validate("cos.channels.deactivated", 2, upgraded).model_dump()
+        == payload
+    )
+    new_payload = {**payload, "reason": "deployment_observation"}
+    assert (
+        registry.validate("cos.channels.deactivated", 2, new_payload).model_dump()
+        == new_payload
+    )
+    with pytest.raises(EventValidationError):
+        registry.validate("cos.channels.deactivated", 1, new_payload)
+    for invalid in (
+        {**new_payload, "reason": "unknown_reason"},
+        {**new_payload, "observation_active": False},
+        {**new_payload, "unexpected": True},
+    ):
+        with pytest.raises(EventValidationError):
+            registry.validate("cos.channels.deactivated", 2, invalid)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "expected_activation_id",
+        "expected_release_commit",
+        "expected_configuration_fingerprint",
+        "owner_member_id",
+    ],
+)
+def test_observation_refuses_mismatched_predecessor_before_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    controller, _request, pause = _live_controller(tmp_path, monkeypatch)
+    stopped = controller.services.stops
+    with pytest.raises(CoSActivationError):
+        controller.enter_observation(pause.model_copy(update={field: "wrong"}))
+    assert controller.services.stops == stopped
+    assert not controller.journal_path.exists()
+
+
+def test_observation_refuses_config_drift_after_backup_and_keeps_reply_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller, _request, pause = _live_controller(tmp_path, monkeypatch)
+    original = controller.backups.rehearse
+
+    def drift(*args, **kwargs):
+        value = original(*args, **kwargs)
+        atomic_write(controller.config_dir / "adapters.json", b'{"changed":true}')
+        return value
+
+    monkeypatch.setattr(controller.backups, "rehearse", drift)
+    with pytest.raises(CoSActivationError, match="control changed"):
+        controller.enter_observation(pause)
+    assert controller.journal_path.exists()
+
+
+@pytest.mark.parametrize("failure", ["main", "python", "source"])
+def test_observation_successor_source_is_verified_before_live_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from bootstrap.source_identity import SourceIdentityError
+
+    controller, _request, _original = _controller(tmp_path, monkeypatch)
+    controller.test_mode = False
+    selected = controller.paths.app_dir / "releases" / ("a" * 40)
+    _write(
+        controller.paths.app_dir / "current-release.json",
+        {"commit": "a" * 40, "path": str(selected)},
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.reviewed_candidate_commit",
+        lambda _repo: "b" * 40,
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation._run_git",
+        lambda *_args: SimpleNamespace(
+            stdout=(("c" if failure == "main" else "b") * 40).encode()
+        ),
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.sys.prefix",
+        str(selected / ("wrong-python" if failure == "python" else ".venv")),
+    )
+
+    def unreviewed(*_args, **_kwargs):
+        raise SourceIdentityError("fixture predecessor source changed")
+
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.verify_release_source_identity", unreviewed
+    )
+    with pytest.raises((CoSActivationError, SourceIdentityError)):
+        controller._observation_selection()
+    assert controller.services.stops == 0
+    assert not controller.journal_path.exists()
+
+
+def test_legacy_observation_control_is_preserved_then_privately_republished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import base64
+    import stat
+
+    controller, _request, pause = _live_controller(tmp_path, monkeypatch)
+    runtime = controller.config_dir / "runtime.yaml"
+    original = runtime.read_bytes()
+    runtime.chmod(0o644)
+    result = controller.enter_observation(pause)
+    assert result["observation_active"] is True
+    assert stat.S_IMODE(runtime.stat().st_mode) == 0o600
+    history = [
+        json.loads(path.read_bytes())
+        for path in (controller.directory / "history").glob("*.json")
+    ]
+    paused = next(row for row in history if row.get("operation") == "enter_observation")
+    assert base64.b64decode(paused["initial_files"]["runtime.yaml"]) == original
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "extra_key",
+        "extra_state_key",
+        "duplicate_override",
+        "duplicate_active",
+        "active",
+        "timestamp",
+        "writable",
+        "symlink",
+        "hardlink",
+        "parent",
+        "other_file",
+    ],
+)
+def test_legacy_observation_compatibility_never_widens_other_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    import os
+    from bootstrap.cos_channel_activation import _observation_control_bytes
+
+    controller, _request, _pause = _live_controller(tmp_path, monkeypatch)
+    path = controller.config_dir / "runtime.yaml"
+    document = yaml.safe_load(path.read_text())
+    if invalid == "extra_key":
+        document["unreviewed"] = True
+    elif invalid == "extra_state_key":
+        document["observation_mode_override"]["unreviewed"] = True
+    elif invalid == "active":
+        document["observation_mode_override"]["active"] = True
+    elif invalid == "timestamp":
+        document["observation_mode_override"]["enabled_at"] = "unverified"
+    payload = yaml.safe_dump(document).encode()
+    if invalid == "duplicate_override":
+        payload += payload
+    elif invalid == "duplicate_active":
+        payload += b"  active: false\n"
+    atomic_write(path, payload)
+    path.chmod(0o666 if invalid == "writable" else 0o644)
+    if invalid == "symlink":
+        target = tmp_path / "redirected.yaml"
+        path.rename(target)
+        path.symlink_to(target)
+    elif invalid == "hardlink":
+        os.link(path, tmp_path / "other-link")
+    elif invalid == "parent":
+        controller.config_dir.chmod(0o755)
+    elif invalid == "other_file":
+        path = controller.config_dir / "adapters.json"
+        path.chmod(0o644)
+    with pytest.raises((CoSActivationError, OSError)):
+        _observation_control_bytes(controller.config_dir, path.name)

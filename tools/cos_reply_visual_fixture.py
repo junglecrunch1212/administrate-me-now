@@ -37,7 +37,7 @@ def service_config() -> dict[str, Any]:
                 "kind": "chief_of_staff",
                 "party_id": COS_PARTY_ID,
                 "display_name": "Fixture CoS",
-            }
+            },
         ],
         "channels": [
             {
@@ -55,7 +55,21 @@ def service_config() -> dict[str, Any]:
                 "provider_account_reference": "provider-account:"
                 + hashlib.sha256(ACCOUNT.encode()).hexdigest(),
                 "routes": [],
-            }
+            },
+            {
+                "channel_id": "channel:cos:visual-email",
+                "display_name": "Fixture CoS email",
+                "provider": "gmail",
+                "intake_mode": "member_submission",
+                "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+                "state": "observation",
+                "enrolled": True,
+                "observation_active": True,
+                "sending_enabled": False,
+                "provider_account_reference": "provider-account:"
+                + hashlib.sha256(b"cos-fixture@example.test").hexdigest(),
+                "routes": [],
+            },
         ],
     }
 

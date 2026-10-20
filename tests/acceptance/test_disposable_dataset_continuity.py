@@ -279,9 +279,19 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     baseline_gets = list(provider.get_ids)
     readiness_path = paths.instance_dir / "config/deployment-readiness.json"
     evidence = _read(readiness_path)
-    evidence["provider_effect_window"] = {
-        "started_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    boundary = datetime.now(timezone.utc)
+    current_window = {
+        "started_at": (boundary - timedelta(days=1)).isoformat(),
+        "reason": "cos_maintenance",
     }
+    prior_windows = [
+        {
+            "started_at": (boundary - timedelta(days=3)).isoformat(),
+            "ended_at": (boundary - timedelta(days=2)).isoformat(),
+        }
+    ]
+    evidence["provider_effect_window"] = current_window
+    evidence["prior_provider_effect_windows"] = prior_windows
     _write(readiness_path, evidence)
     selection = paths.root / "continuity-selection.json"
     _write(selection, {"message_ids": ids})
@@ -302,6 +312,8 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     )
     upgraded = manager.activate(candidate)
     assert upgraded["commit"] == second_commit
+    assert _read(readiness_path)["provider_effect_window"] == current_window
+    assert _read(readiness_path)["prior_provider_effect_windows"] == prior_windows
     services.stop()
     # A supported encrypted restore gives state a new directory coordinate.
     # Its logical accepted marker and current activation proof must still work.
@@ -323,6 +335,8 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     assert restored["services_restarted"] is True
     services.stop()
     assert paths.instance_dir.stat().st_ino != previous_inode
+    assert _read(readiness_path)["provider_effect_window"] == current_window
+    assert _read(readiness_path)["prior_provider_effect_windows"] == prior_windows
     assert admission_path.read_bytes() == admission_bytes
     assert marker_path.read_bytes() == marker_bytes
     assert (
@@ -351,6 +365,8 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
     services.start()
     rolled_back = manager.rollback(recovery_repository=candidate)
     assert rolled_back["commit"] == first_commit
+    assert _read(readiness_path)["provider_effect_window"] == current_window
+    assert _read(readiness_path)["prior_provider_effect_windows"] == prior_windows
     services.stop()
     assert (
         _accepted_dataset(paths, first_commit)["disposable_test_reset"][
@@ -369,6 +385,8 @@ def test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactiva
         paths, root=candidate, test_mode=True, pending_attestation_id=pending
     )
     assert manager.activate(candidate)["commit"] == third_commit
+    assert _read(readiness_path)["provider_effect_window"] == current_window
+    assert _read(readiness_path)["prior_provider_effect_windows"] == prior_windows
     services.stop()
     assert select_messages(manager, selection)["lifetime_admitted_count"] == 3
     assert _runtime_snapshot(paths, provider, monkeypatch) == initial

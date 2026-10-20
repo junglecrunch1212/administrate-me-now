@@ -50,6 +50,7 @@ import secrets
 import threading
 import time
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -482,7 +483,12 @@ class EventLog:
         else:
             event_id, event_at_ms = self._id_gen.mint(event_at_ms)
 
-        recorded_at = envelope.recorded_at or EventEnvelope.now_utc_iso()
+        # Observation boundaries retain microseconds. Truncating this local
+        # ingestion timestamp can place a later authorized effect before its
+        # activation boundary. Explicit historical timestamps remain untouched.
+        recorded_at = envelope.recorded_at or datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
 
         row = (
             event_id,

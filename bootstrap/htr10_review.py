@@ -26,6 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-assurance", type=Path, required=True)
     parser.add_argument("--observed-at", required=True)
     parser.add_argument("--confirm-reviewed", action="store_true")
+    parser.add_argument("--submission-repair-manifest", type=Path)
     return parser
 
 
@@ -50,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             historical_attribution=args.historical_attribution,
             source_assurance=args.source_assurance,
             observed_at=args.observed_at,
+            submission_repair_manifest=args.submission_repair_manifest,
         )
     except Exception as exc:
         print(

@@ -1,11 +1,33 @@
 # Release acceptance contract
 
+Forwarded-submission recovery amendment (2026-10-20), **MODERNIZE** under
+CO-031: require the exact-source, append-only retry and private deployment
+manifest boundaries in
+[the recovery contract](FORWARDED-SUBMISSION-RECOVERY-CONTRACT.md).
+An explicitly bound degraded predecessor may be contained for repair, but
+its HTR-10 receipt remains `repair_pending`; the candidate must pass normal
+healthy settlement and full Doctor before activation commits.
+
 CoS channel operation amendment (2026-10-20): require the production
 composition, encrypted allowlist replay, native provider-boundary denial,
 exact service OAuth scope, journaled activation/recovery and isolated browser
 checks in [the CoS operation contract](COS-CHANNEL-OPERATION-CONTRACT.md).
 Deployment retains observation; the owner's separate channel activation ends
 it only after verified prerequisites. Old suppressed actions never dispatch.
+
+Active-CoS maintenance amendment (2026-10-20), **MODERNIZE** under that
+contract: prove the guarded transition from authorized live operation back
+to observation and fresh reactivation through production composition, including
+interruption recovery and unchanged enrollment and recipient policy.
+`tests/acceptance/test_cos_live_maintenance.py` covers that transition;
+`tests/acceptance/test_disposable_dataset_continuity.py` separately proves
+that the real guarded updater, encrypted restore, rollback and forward
+reactivation retain complete observation intervals. HTR-10 audits each closed
+interval at its exact end boundary. An authorized effect between observation
+intervals is distinct from a forbidden effect inside either interval.
+Browser acceptance checks actual rendered visibility with observation both
+on and off, distinguishes CoS accounts from personal connections, and retains
+actionable binding failures for enabled personal connections.
 
 CO-034 amendment (2026-10-19): prove forward activation at the 64-entry
 selector limit, exact rollback, fresh forward activation, unchanged retained

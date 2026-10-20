@@ -24,7 +24,7 @@ def test_pack_loads_and_rejects_ungrounded_shape() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:extract_note_semantics"
-    assert loaded.version == "2.1.0"
+    assert loaded.version == "2.1.1"
     assert loaded.handler_post_process is not None
     output = loaded.handler_post_process(
         {
@@ -95,3 +95,24 @@ def test_forwarded_submission_prompt_includes_evidence_after_old_display_limit()
     )
     assert "UNTRUSTED DATA" in request["args"]["prompt"]
     assert "{{" not in request["args"]["prompt"]
+
+
+def test_full_evidence_budget_keeps_the_existing_extraction_contract() -> None:
+    loaded = load_pack(PACK_ROOT)
+    assert loaded.skill_frontmatter["compatible_success_versions"] == ["2.1.0"]
+    assert loaded.skill_frontmatter["timeout_seconds"] == 120
+    request = _build_request_body(
+        pack=loaded,
+        inputs={
+            "source_kind": "member_submission",
+            "body_text": "Call the school office.",
+            "body_format": "plain",
+        },
+        session_key="fixture-submission-budget",
+    )
+    assert request["tool"] == "llm-task"
+    assert request["args"]["timeoutMs"] == 120_000
+    assert request["args"]["maxTokens"] == 1200
+    assert request["args"]["temperature"] == 0.0
+    assert "model" not in request["args"]
+    assert "provider" not in request["args"]
