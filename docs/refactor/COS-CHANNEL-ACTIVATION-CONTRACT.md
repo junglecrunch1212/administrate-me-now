@@ -197,6 +197,15 @@ SELECTED_PYTHON -m bootstrap.cos_channel_activation \
 ```
 
 The existing operation lock and journal hold replies before stopping services.
+The predecessor observation writer could publish its non-secret `runtime.yaml`
+with mode 0644. After exact predecessor source and configuration verification,
+only that fixed file may be read in this legacy mode: it must be an owner-owned,
+single-link regular file inside the private configuration directory and contain
+only the exact canonical observation-toggle shape written by that predecessor.
+Unknown fields, duplicate keys, redirects and other writable modes are refused.
+The original bytes are journaled; the fixed atomic writer republishes mode 0600
+during containment independently of process umask. All other operation documents
+retain the strict owner-only requirement.
 The stopped encrypted log establishes the authoritative, complete provider-effect
 baseline; a legitimate live reply finishing before this boundary is retained.
 An authenticated encrypted backup and isolated restore rehearsal precede the

@@ -57,6 +57,7 @@ def test_reviewed_binding_audit_view_uses_already_active_configuration(
 async def test_export_audits_every_observation_interval_without_reclassifying_live_effects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, placement: str
 ) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     fixed_now = datetime(2026, 10, 21, tzinfo=timezone.utc)
 
     class FixtureClock(datetime):

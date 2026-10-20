@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+import yaml
 
 from adminme.adapters.cos_channel_acquisition import (
     CONTRACT as ACQUISITION_CONTRACT,
@@ -114,6 +115,61 @@ def _json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CoSActivationError("operation document is not an object")
     return value
+
+
+def _observation_control_bytes(config_dir: Path, name: str) -> bytes:
+    """Read only the predecessor's exact legacy non-secret observation file.
+
+    Call after selected-source and configuration-binding verification. Older
+    ObservationManager versions published this one file as 0644 under umask
+    022. Every other coordinate retains the ordinary owner-only requirement.
+    The operation journals these bytes and the fixed writer republishes 0600.
+    """
+    path = config_dir / name
+    if name != "runtime.yaml" or stat.S_IMODE(path.lstat().st_mode) != 0o644:
+        return _private_bytes(path)
+    parent = config_dir.lstat()
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != os.getuid()
+        or stat.S_IMODE(parent.st_mode) != 0o700
+    ):
+        raise CoSActivationError("legacy observation control parent is not private")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o644
+            or metadata.st_size > 4096
+        ):
+            raise CoSActivationError("legacy observation control coordinate is unsafe")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read(4097)
+        if len(payload) != metadata.st_size:
+            raise CoSActivationError("legacy observation control changed during read")
+    finally:
+        os.close(descriptor)
+    value = yaml.safe_load(payload)
+    state = value.get("observation_mode_override") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"observation_mode_override"}
+        or not isinstance(state, dict)
+        or set(state) != {"active", "enabled_at", "enabled_by"}
+        or state["active"] is not False
+        or aware_time(state["enabled_at"]) is None
+        or not isinstance(state["enabled_by"], str)
+        or not state["enabled_by"]
+        or len(state["enabled_by"]) > 240
+        # The predecessor writer emits this exact canonical shape. Requiring
+        # its bytes also rejects duplicate/merge keys hidden by YAML loading.
+        or payload != yaml.safe_dump(value, sort_keys=True).encode("utf-8")
+    ):
+        raise CoSActivationError("legacy observation control is not exact toggle state")
+    return payload
 
 
 def _payload(value: Any) -> bytes:
@@ -417,7 +473,7 @@ class CoSChannelActivator:
                 },
                 "initial_files": {
                     name: base64.b64encode(
-                        _private_bytes(self.config_dir / name)
+                        _observation_control_bytes(self.config_dir, name)
                     ).decode()
                     for name in (
                         "adapters.json",
@@ -505,9 +561,9 @@ class CoSChannelActivator:
                         "configuration changed during backup verification"
                     )
                 for name, encoded in journal["initial_files"].items():
-                    if _private_bytes(self.config_dir / name) != base64.b64decode(
-                        encoded, validate=True
-                    ):
+                    if _observation_control_bytes(
+                        self.config_dir, name
+                    ) != base64.b64decode(encoded, validate=True):
                         raise CoSActivationError(
                             "operation control changed during backup verification"
                         )

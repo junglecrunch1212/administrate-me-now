@@ -72,6 +72,7 @@ jobs:
             tests/unit/test_cos_channel_operation.py \
             tests/unit/test_cos_response_assurance.py \
             tests/unit/bootstrap/test_cos_channel_activation.py \
+            tests/unit/test_observation.py \
             tests/unit/bootstrap/test_candidate_readiness.py \
             tests/unit/bootstrap/test_htr10_export.py \
             tests/unit/bootstrap/test_cos_imessage.py \

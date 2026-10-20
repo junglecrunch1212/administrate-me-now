@@ -90,6 +90,12 @@ def _controller(
     config["adapters"][1]["config"]["permission_scope"].append(
         "https://www.googleapis.com/auth/gmail.send"
     )
+    service = config["adapters"][1]["config"]
+    service.pop("service_account_key_ref")
+    service.update(
+        oauth_credentials_ref="op://fixture/cos/credential",
+        binding_provenance="oauth-subject",
+    )
     private = paths.instance_dir / "config"
     atomic_write(
         private / "instance.yaml", b"tenant_id: tenant-cos-operation-fixture\n"
@@ -114,7 +120,12 @@ def _controller(
     )
     _write(
         private / "disposable-test-dataset.json",
-        {"retained": "exact original marker bytes"},
+        {
+            "contract": "disposable-test-dataset-v1",
+            "acquisition_contract": "disposable-test-acquisition-v1",
+            "dataset_id": "a" * 32,
+            "reset_manifest_sha256": "b" * 64,
+        },
     )
     instance = load_instance_config(paths.instance_dir)
     initial = EventLog(instance, b"o" * 32)
@@ -610,3 +621,79 @@ def test_observation_successor_source_is_verified_before_live_access(
         controller._observation_selection()
     assert controller.services.stops == 0
     assert not controller.journal_path.exists()
+
+
+def test_legacy_observation_control_is_preserved_then_privately_republished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import base64
+    import stat
+
+    controller, _request, pause = _live_controller(tmp_path, monkeypatch)
+    runtime = controller.config_dir / "runtime.yaml"
+    original = runtime.read_bytes()
+    runtime.chmod(0o644)
+    result = controller.enter_observation(pause)
+    assert result["observation_active"] is True
+    assert stat.S_IMODE(runtime.stat().st_mode) == 0o600
+    history = [
+        json.loads(path.read_bytes())
+        for path in (controller.directory / "history").glob("*.json")
+    ]
+    paused = next(row for row in history if row.get("operation") == "enter_observation")
+    assert base64.b64decode(paused["initial_files"]["runtime.yaml"]) == original
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "extra_key",
+        "extra_state_key",
+        "duplicate_override",
+        "duplicate_active",
+        "active",
+        "timestamp",
+        "writable",
+        "symlink",
+        "hardlink",
+        "parent",
+        "other_file",
+    ],
+)
+def test_legacy_observation_compatibility_never_widens_other_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    import os
+    from bootstrap.cos_channel_activation import _observation_control_bytes
+
+    controller, _request, _pause = _live_controller(tmp_path, monkeypatch)
+    path = controller.config_dir / "runtime.yaml"
+    document = yaml.safe_load(path.read_text())
+    if invalid == "extra_key":
+        document["unreviewed"] = True
+    elif invalid == "extra_state_key":
+        document["observation_mode_override"]["unreviewed"] = True
+    elif invalid == "active":
+        document["observation_mode_override"]["active"] = True
+    elif invalid == "timestamp":
+        document["observation_mode_override"]["enabled_at"] = "unverified"
+    payload = yaml.safe_dump(document).encode()
+    if invalid == "duplicate_override":
+        payload += payload
+    elif invalid == "duplicate_active":
+        payload += b"  active: false\n"
+    atomic_write(path, payload)
+    path.chmod(0o666 if invalid == "writable" else 0o644)
+    if invalid == "symlink":
+        target = tmp_path / "redirected.yaml"
+        path.rename(target)
+        path.symlink_to(target)
+    elif invalid == "hardlink":
+        os.link(path, tmp_path / "other-link")
+    elif invalid == "parent":
+        controller.config_dir.chmod(0o755)
+    elif invalid == "other_file":
+        path = controller.config_dir / "adapters.json"
+        path.chmod(0o644)
+    with pytest.raises((CoSActivationError, OSError)):
+        _observation_control_bytes(controller.config_dir, path.name)

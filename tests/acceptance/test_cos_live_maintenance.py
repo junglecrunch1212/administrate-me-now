@@ -95,11 +95,24 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
     evidence["provider_effect_window"] = json.loads(
         (config / "deployment-readiness.json").read_bytes()
     )["provider_effect_window"]
+    # The selected bounded dataset is an accepted predecessor of an ordinary
+    # journaled deployment, with synthetic authenticated backup/restore proof.
+    evidence["activation_evidence"] = {
+        "contract": "deployment-activation-evidence-v1",
+        "crash_recoverable_replacement": True,
+        "candidate_live_doctor": True,
+        "candidate_pending_attestation_sha256": "1" * 64,
+        "fresh_backup_artifact_sha256": "2" * 64,
+        "fresh_rehearsal_receipt_sha256": "3" * 64,
+        "predecessor_rollback_eligibility_sha256": "4" * 64,
+    }
     atomic_write(config / "deployment-readiness.json", json.dumps(evidence).encode())
     settings = replace(
         settings,
         instance=load_instance_config(controller.paths.instance_dir),
         encryption_key=b"o" * 32,
+        adapter_config=json.loads((config / "adapters.json").read_bytes()),
+        deployment_evidence=evidence,
         member_identities={"maintenance.example.test": MEMBER_A},
         member_roles=roles,
         fixture_member_id=MEMBER_A,

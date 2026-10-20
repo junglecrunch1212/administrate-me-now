@@ -16,6 +16,8 @@ DIAGRAMS.md §9:
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import stat
 from typing import Any
 
 import pytest
@@ -26,6 +28,7 @@ from adminme.lib.observation import (
     ObservationManager,
     ObservationState,
     OutboundResult,
+    _write_state_sync,
     outbound,
 )
 from adminme.lib.session import Session, build_internal_session
@@ -115,6 +118,27 @@ async def test_disable_persists_to_runtime_yaml(
     assert runtime_path.exists()
     state = await manager.get_state()
     assert state.active is False
+
+
+def test_observation_state_publication_is_private_under_permissive_umask(
+    runtime_path: Path,
+) -> None:
+    prior_umask = os.umask(0)
+    try:
+        for active in (False, True):
+            _write_state_sync(
+                runtime_path,
+                ObservationState(
+                    active=active,
+                    enabled_at="2030-01-01T00:00:00+00:00",
+                    enabled_by="operator:fixture",
+                ),
+            )
+            assert stat.S_IMODE(runtime_path.stat().st_mode) == 0o600
+            assert runtime_path.stat().st_nlink == 1
+        assert list(runtime_path.parent.iterdir()) == [runtime_path]
+    finally:
+        os.umask(prior_umask)
 
 
 async def test_enable_persists_to_runtime_yaml(
