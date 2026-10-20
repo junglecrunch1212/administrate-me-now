@@ -29,14 +29,15 @@ def test_reads_only_fixed_account_schema_without_rows_or_writes(
         for table in ("message", "chat", "handle"):
             connection.execute(f"CREATE TABLE {table}(private_text TEXT)")
             connection.execute(f"INSERT INTO {table} VALUES ('synthetic-private-row')")
+    service_home.chmod(0o600)
     before = service_home.read_bytes()
     queries: list[str] = []
     original = sqlite3.connect
 
-    def connect(uri: str, **kwargs: object) -> sqlite3.Connection:
-        assert uri == service_home.as_uri() + "?mode=ro"
+    def connect(database_uri: str, **kwargs: object) -> sqlite3.Connection:
+        assert database_uri == service_home.as_uri() + "?mode=ro"
         assert kwargs == {"uri": True, "timeout": 2.0}
-        result = original(uri, uri=True, timeout=2.0)
+        result = original(database_uri, uri=True, timeout=2.0)
         result.set_trace_callback(queries.append)
         return result
 
@@ -63,6 +64,7 @@ def test_missing_or_untrusted_schema_never_reports_ready(
     if kind != "missing":
         with sqlite3.connect(service_home) as connection:
             connection.execute("CREATE TABLE synthetic_unrelated(value TEXT)")
+        service_home.chmod(0o600)
     if kind == "linked":
         destination = service_home.with_name("other.db")
         service_home.rename(destination)

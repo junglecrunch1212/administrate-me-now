@@ -140,7 +140,8 @@ describe("native OpenClaw contract fixture", () => {
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
     expect([...runtime.tools]).toHaveLength(23);
     expect([...runtime.commands]).toHaveLength(9);
-    expect([...runtime.gateways]).toHaveLength(16);
+    expect([...runtime.gateways]).toHaveLength(17);
+    expect(runtime.gateways.has("administrateme.cosPermissions.preflight")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
     expect(runtime.services).toHaveLength(3);
