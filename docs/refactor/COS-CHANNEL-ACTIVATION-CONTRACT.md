@@ -249,3 +249,10 @@ The retained dataset remains an accepted bounded predecessor. This operation
 does not relabel the discarded pre-reset history as a proven production
 rollback. Physical browser acceptance and external sign-in coverage are
 reported separately and must not be inferred from these process tests.
+
+An exact failed member-forward extraction is handled only by the separately
+bound procedure in
+[`FORWARDED-SUBMISSION-RECOVERY-CONTRACT.md`](FORWARDED-SUBMISSION-RECOVERY-CONTRACT.md).
+That procedure preserves a declared degraded predecessor during containment;
+it does not broaden ordinary healthy deployment admission or permit live
+reactivation before normal healthy settlement.

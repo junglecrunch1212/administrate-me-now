@@ -99,6 +99,16 @@ from bootstrap.source_assessment_repair import (
     offline_validate_repair_baseline,
     validate_declared_baseline,
 )
+from bootstrap.submission_repair import (
+    SubmissionRepairManifest,
+    load_submission_repair_manifest,
+    offline_submission_repair,
+    repair_binding,
+    validate_submission_repair_diagnostics,
+    wait_for_submission_repair,
+    submission_repair_wait_budget,
+    validate_submission_repair_progress,
+)
 from bootstrap.source_identity import (
     GENERATED_EXTRA_POLICY,
     SourceIdentityError,
@@ -301,6 +311,7 @@ class UpgradeManager:
         approve_provider_binding_migration: bool = False,
         pending_attestation_id: str | None = None,
         test_reset_manifest: Path | None = None,
+        submission_repair_manifest: Path | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
@@ -310,6 +321,15 @@ class UpgradeManager:
         self.approve_provider_binding_migration = approve_provider_binding_migration
         self.pending_attestation_id = pending_attestation_id
         self.test_reset_manifest = test_reset_manifest
+        self.submission_repair_manifest = submission_repair_manifest
+        if submission_repair_manifest is not None and (
+            approve_source_assessment_repair
+            or test_reset_manifest is not None
+            or approve_provider_binding_migration
+        ):
+            raise UpgradeError(
+                "submission repair cannot combine with another deployment exception"
+            )
         self.services = ServiceManager(paths, test_mode=test_mode)
         self.activation_journal = ActivationJournal(paths)
         self._failure_audit_attempt_id = uuid.uuid4().hex
@@ -1123,6 +1143,85 @@ class UpgradeManager:
             "activity_inode": None,
             "content_exposed": False,
         }
+
+    def _wait_for_submission_repair_completion(
+        self, manifest: SubmissionRepairManifest, release: Path
+    ) -> dict[str, Any]:
+        """Wait only for this exact authorized extraction before ordinary Doctor.
+
+        The historical failure remains visible until the valid replacement is
+        durable. Normal settlement must not misclassify that bounded in-flight
+        command as an unrelated source failure, nor may this wait accept it as
+        healthy before the unchanged full settlement runs.
+        """
+        deadline = self._candidate_settlement_deadline
+        reserve = (
+            RELEASE_DOCTOR_TIMEOUT_SECONDS + 2 * RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
+        )
+        if deadline is None:
+            raise UpgradeError("submission repair has no candidate settlement deadline")
+        repair_deadline = min(
+            deadline - reserve,
+            deployment_clock() + submission_repair_wait_budget(manifest, self.root),
+        )
+        while (
+            deployment_clock() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS < repair_deadline
+        ):
+            diagnostics = self.services.runtime_diagnostics()
+            if not isinstance(diagnostics, dict):
+                raise UpgradeError("pending submission repair runtime is unavailable")
+            validate_submission_repair_progress(diagnostics)
+            if deployment_clock() >= repair_deadline:
+                break
+            _pointer_bytes, pointer = self._read_private_json_payload(
+                self.paths.app_dir / "current-release.json"
+            )
+            if pointer is None:
+                raise UpgradeError("submission repair selected pointer is absent")
+            if pointer.get("commit") != manifest.candidate_commit or pointer.get(
+                "path"
+            ) != str(release):
+                raise UpgradeError("submission repair selected candidate changed")
+            proof = offline_submission_repair(
+                self.paths,
+                manifest,
+                repository_root=self.root,
+                candidate_commit=manifest.candidate_commit,
+                allow_recovery_lineage=True,
+                test_mode=self.test_mode,
+            )
+            if deployment_clock() >= repair_deadline:
+                break
+            if len(proof["recovery_request_event_ids"]) != len(manifest.targets):
+                raise UpgradeError("submission repair request batch is incomplete")
+            if proof["recovery_pending_count"] == 0:
+                if proof["source_state"] != "healthy" or any(
+                    proof["counts"][key] != 0
+                    for key in ("failed", "missing", "pending")
+                ):
+                    raise UpgradeError("forwarded submission repair did not recover")
+                return proof
+            time.sleep(min(2.0, max(0.0, repair_deadline - deployment_clock())))
+        raise UpgradeError(
+            "forwarded submission repair exceeded the candidate deadline"
+        )
+
+    def _validate_submission_repair_online(
+        self, manifest: SubmissionRepairManifest, release: Path
+    ) -> dict[str, Any]:
+        diagnostics = self.services.runtime_diagnostics() or {}
+        doctor = self._run_release_doctor(release, include_synthetic_proof=False)
+        proof = validate_submission_repair_diagnostics(
+            manifest, diagnostics, observation_active=True, doctor=doctor
+        )
+        offline_submission_repair(
+            self.paths,
+            manifest,
+            repository_root=self.root,
+            candidate_commit=manifest.candidate_commit,
+            test_mode=self.test_mode,
+        )
+        return proof
 
     def _validate_source_repair_online(
         self, policy: SourceAssessmentRepairPolicy
@@ -2041,6 +2140,25 @@ class UpgradeManager:
                     operation()
                 except Exception as exc:
                     recovery_errors.append(exc)
+            repair_manifest = (
+                SubmissionRepairManifest.model_validate(
+                    recovery_journal["submission_repair_manifest"]
+                )
+                if "submission_repair_manifest" in recovery_journal
+                else None
+            )
+            if not recovery_errors and repair_manifest is not None:
+                try:
+                    offline_submission_repair(
+                        self.paths,
+                        repair_manifest,
+                        repository_root=Path(__file__).resolve().parents[1],
+                        candidate_commit=repair_manifest.candidate_commit,
+                        allow_recovery_lineage=True,
+                        test_mode=self.test_mode,
+                    )
+                except Exception as exc:
+                    recovery_errors.append(exc)
             baseline = recovery_journal.get("initial_readiness_baseline")
             if not recovery_errors and baseline is not None:
                 try:
@@ -2062,8 +2180,31 @@ class UpgradeManager:
                     recovery_healthy = False
                     recovery_proof: dict[str, Any] | None = None
                     if self._service_start_reached_doctor_boundary(restored):
-                        recovery_proof = self._post_switch_doctor(predecessor)
-                        recovery_healthy = recovery_proof.get("status") == "healthy"
+                        if repair_manifest is not None:
+                            assert self._recovery_settlement_deadline is not None
+                            recovery_proof = wait_for_submission_repair(
+                                repair_manifest,
+                                diagnostics=self.services.runtime_diagnostics,
+                                doctor=lambda: self._run_release_doctor(
+                                    predecessor, include_synthetic_proof=True
+                                ),
+                                deadline=self._recovery_settlement_deadline,
+                                rollback=True,
+                            )
+                            offline_submission_repair(
+                                self.paths,
+                                repair_manifest,
+                                repository_root=Path(__file__).resolve().parents[1],
+                                candidate_commit=repair_manifest.candidate_commit,
+                                allow_recovery_lineage=True,
+                                test_mode=self.test_mode,
+                            )
+                            recovery_healthy = (
+                                recovery_proof.get("status") == "contained_degraded"
+                            )
+                        else:
+                            recovery_proof = self._post_switch_doctor(predecessor)
+                            recovery_healthy = recovery_proof.get("status") == "healthy"
                     if (
                         not recovery_healthy
                         and recovery_proof is not None
@@ -2075,7 +2216,11 @@ class UpgradeManager:
                             predecessor
                         )
                     if recovery_healthy:
-                        restored_readiness = "healthy"
+                        restored_readiness = (
+                            "contained_degraded"
+                            if repair_manifest is not None
+                            else "healthy"
+                        )
                     elif (
                         baseline is not None
                         and self._recovery_matches_readiness_baseline(
@@ -2230,6 +2375,10 @@ class UpgradeManager:
             if recovered is not None:
                 return recovered
             if self.pending_attestation_id is None:
+                if self.submission_repair_manifest is not None:
+                    raise UpgradeError(
+                        "submission repair requires journaled pending activation"
+                    )
                 if not self.test_mode:
                     raise UpgradeError(
                         "activation requires an explicit candidate-pending attestation"
@@ -2265,11 +2414,24 @@ class UpgradeManager:
                     approve_provider_binding_migration=(
                         self.approve_provider_binding_migration
                     ),
+                    submission_repair_manifest=self.submission_repair_manifest,
                 )
             )
         except CandidateReadinessError as exc:
             raise UpgradeError("candidate-pending readiness is not eligible") from exc
 
+        submission_repair = (
+            load_submission_repair_manifest(
+                self.submission_repair_manifest,
+                candidate=candidate,
+                active_commit=pending_snapshot.predecessor_commit,
+                test_mode=self.test_mode,
+            )
+            if self.submission_repair_manifest is not None
+            else None
+        )
+        if submission_repair is not None:
+            self._validate_submission_repair_online(submission_repair, active_root)
         repair_policy = (
             load_repair_policy(candidate)
             if self.approve_source_assessment_repair
@@ -2330,7 +2492,9 @@ class UpgradeManager:
         predecessor_commit = pointer_rows[0]["commit"]
         predecessor_release = Path(pointer_rows[0]["path"])
         was_running = self.services.status().status != "stopped"
-        if repair_policy is not None and not was_running:
+        if (
+            repair_policy is not None or submission_repair is not None
+        ) and not was_running:
             raise UpgradeError(
                 "declared source-assessment repair requires running services "
                 "at the quiescence boundary"
@@ -2360,8 +2524,18 @@ class UpgradeManager:
                     "initial_readiness_baseline": self._capture_recovery_readiness_baseline(
                         readiness_payload
                     )
-                    if was_running
+                    if was_running and submission_repair is None
                     else None,
+                    **(
+                        {
+                            "submission_repair_manifest": submission_repair.model_dump(
+                                mode="json"
+                            ),
+                            "submission_repair": repair_binding(submission_repair),
+                        }
+                        if submission_repair is not None
+                        else {}
+                    ),
                     "initial_readiness_bytes": (
                         base64.b64encode(readiness_payload).decode("ascii")
                         if readiness_payload is not None
@@ -2507,6 +2681,7 @@ class UpgradeManager:
                         approve_provider_binding_migration=(
                             self.approve_provider_binding_migration
                         ),
+                        submission_repair_manifest=self.submission_repair_manifest,
                     )
                 )
             except CandidateReadinessError as exc:
@@ -2536,6 +2711,28 @@ class UpgradeManager:
                 active_readiness=active_readiness,
             )
 
+            if submission_repair is not None:
+                self._validate_submission_repair_online(submission_repair, active_root)
+                journal = self.activation_journal.transition(
+                    journal, "services_quiescing_for_repair"
+                )
+                self.services.stop(require_openclaw_live_before_stop=True)
+                self._require_instance_intake_compatibility(active_root, release)
+                source_repair_evidence = offline_submission_repair(
+                    self.paths,
+                    submission_repair,
+                    repository_root=candidate,
+                    candidate_commit=commit,
+                    append_requests=True,
+                    test_mode=self.test_mode,
+                )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_quiesced_for_repair",
+                    submission_repair_request_event_ids=source_repair_evidence[
+                        "recovery_request_event_ids"
+                    ],
+                )
             if repair_policy is not None:
                 repair_diagnostics = self._validate_source_repair_online(repair_policy)
                 journal = self.activation_journal.transition(
@@ -2575,7 +2772,7 @@ class UpgradeManager:
                     "preparation_consumed",
                 )
                 self._require_activation_capacity()
-                if repair_policy is None:
+                if repair_policy is None and submission_repair is None:
                     journal = self.activation_journal.transition(
                         journal,
                         "services_quiescing",
@@ -2747,6 +2944,8 @@ class UpgradeManager:
                 journal,
                 "doctor_running",
             )
+            if submission_repair is not None:
+                self._wait_for_submission_repair_completion(submission_repair, release)
             result = self._post_switch_doctor(
                 release,
                 allowed_degraded_adapter_ids=repair_adapter_ids,

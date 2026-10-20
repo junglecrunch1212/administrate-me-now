@@ -1,7 +1,7 @@
 pack:
   id: skill:extract_note_semantics
   name: Extract note semantics
-  version: 2.1.0
+  version: 2.1.1
   kind: skill
   author: built-in
   license: Apache-2.0

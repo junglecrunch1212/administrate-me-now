@@ -198,6 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
         elif name == "upgrade":
             child.add_argument("candidate", type=Path)
             child.add_argument("--test-reset-manifest", type=Path)
+            child.add_argument("--submission-repair-manifest", type=Path)
             child.add_argument(
                 "--pending-attestation-id",
                 help=(
@@ -606,6 +607,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             test_reset_manifest=(
                 args.test_reset_manifest if args.command == "upgrade" else None
+            ),
+            submission_repair_manifest=(
+                args.submission_repair_manifest if args.command == "upgrade" else None
             ),
         )
         if args.command == "test-reset-select":

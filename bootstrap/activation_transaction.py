@@ -412,7 +412,14 @@ def validate_journal(value: object) -> dict[str, Any]:
     known_extras = (
         transition_fields
         | settings_fields
-        | {"initial_readiness_baseline", "restored_readiness", "cos_imessage_rebind"}
+        | {
+            "initial_readiness_baseline",
+            "restored_readiness",
+            "cos_imessage_rebind",
+            "submission_repair_manifest",
+            "submission_repair",
+            "submission_repair_request_event_ids",
+        }
     )
     has_config_transition = transition_fields <= keys
     has_settings_snapshot = settings_fields <= keys
@@ -538,6 +545,45 @@ def validate_journal(value: object) -> dict[str, Any]:
             or readiness_hash != hashlib.sha256(readiness_payload).hexdigest()
         ):
             raise ActivationJournalError("activation predecessor readiness is invalid")
+    if (
+        "submission_repair_request_event_ids" in value
+        and "submission_repair_manifest" not in value
+    ):
+        raise ActivationJournalError(
+            "submission request ids require the exact manifest"
+        )
+    if "submission_repair_manifest" in value or "submission_repair" in value:
+        from bootstrap.submission_repair import SubmissionRepairManifest, repair_binding
+
+        try:
+            repair = SubmissionRepairManifest.model_validate(
+                value.get("submission_repair_manifest")
+            )
+        except ValueError as exc:
+            raise ActivationJournalError(
+                "activation submission repair manifest is invalid"
+            ) from exc
+        request_ids = value.get("submission_repair_request_event_ids")
+        if request_ids is not None and (
+            not isinstance(request_ids, list)
+            or len(request_ids) != len(repair.targets)
+            or len(set(request_ids)) != len(request_ids)
+            or any(not isinstance(item, str) or not item for item in request_ids)
+        ):
+            raise ActivationJournalError(
+                "activation submission repair request inventory is invalid"
+            )
+        if (
+            value.get("submission_repair") != repair_binding(repair)
+            or repair.candidate_commit != value["candidate_commit"]
+            or repair.predecessor_commit != value["predecessor_commit"]
+            or value["operation"] != "activate"
+            or value["was_running"] is not True
+            or value.get("initial_readiness_baseline") is not None
+        ):
+            raise ActivationJournalError(
+                "activation submission repair binding is invalid"
+            )
     baseline = value.get("initial_readiness_baseline")
     if baseline is not None:
         try:
@@ -553,9 +599,21 @@ def validate_journal(value: object) -> dict[str, Any]:
     if "restored_readiness" in value and (
         value["phase"] not in {"committed", "recovered"}
         or value["restored_readiness"]
-        not in {"healthy", "preexisting_attestation_gaps", "not_running"}
+        not in {
+            "healthy",
+            "preexisting_attestation_gaps",
+            "not_running",
+            "contained_degraded",
+        }
     ):
         raise ActivationJournalError("activation restored readiness result is invalid")
+    if (
+        value.get("restored_readiness") == "contained_degraded"
+        and "submission_repair_manifest" not in value
+    ):
+        raise ActivationJournalError(
+            "contained recovery requires exact submission authority"
+        )
     if has_config_transition:
         decoded_configs: dict[str, bytes] = {}
         for prefix in ("initial", "selected"):

@@ -56,6 +56,7 @@ from adminme.lib.observation import ObservationManager
 from bootstrap.backup_restore import BackupManager
 from bootstrap.candidate_readiness import capture_deployment_snapshot
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
+from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
 from bootstrap.service_settlement import run_release_doctor, wait_for_settled_doctor
 from bootstrap.services import ServiceManager
@@ -65,6 +66,14 @@ from bootstrap.source_identity import (
     verify_release_source_identity,
 )
 from bootstrap.upgrade import UpgradeManager
+from bootstrap.submission_repair import (
+    SubmissionRepairManifest,
+    load_submission_repair_manifest,
+    offline_submission_repair,
+    repair_binding,
+    validate_submission_repair_diagnostics,
+    wait_for_submission_repair,
+)
 
 
 class CoSActivationError(RuntimeError):
@@ -404,7 +413,12 @@ class CoSChannelActivator:
             raise CoSActivationError("provider-effect integrity is incomplete")
         return count
 
-    def enter_observation(self, request: EnterObservationRequest) -> dict[str, Any]:
+    def enter_observation(
+        self,
+        request: EnterObservationRequest,
+        *,
+        submission_repair_manifest: Path | None = None,
+    ) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
         )
@@ -416,7 +430,40 @@ class CoSChannelActivator:
             commit, release, controller_commit = self._observation_selection()
             snapshot = self._bound_snapshot(commit)
             before = self.services.runtime_diagnostics() or {}
-            if (
+            repair = (
+                load_submission_repair_manifest(
+                    submission_repair_manifest,
+                    candidate=self.repository,
+                    active_commit=commit,
+                    test_mode=self.test_mode,
+                )
+                if submission_repair_manifest is not None
+                else None
+            )
+            if repair is not None:
+                if (
+                    repair.operator_principal_id,
+                    repair.owner_member_id,
+                    repair.owner_authorization_sha256,
+                ) != (
+                    request.operator_principal_id,
+                    request.owner_member_id,
+                    request.owner_authorization_sha256,
+                ):
+                    raise CoSActivationError(
+                        "containment request and repair authority differ"
+                    )
+                validate_submission_repair_diagnostics(
+                    repair, before, observation_active=False
+                )
+                offline_submission_repair(
+                    self.paths,
+                    repair,
+                    repository_root=self.repository,
+                    candidate_commit=controller_commit,
+                    test_mode=self.test_mode,
+                )
+            elif (
                 before.get("ready") is not True
                 or before.get("observation_active") is not False
             ):
@@ -485,6 +532,9 @@ class CoSChannelActivator:
                 },
                 "diagnostic_provider_calls_before": self._provider_calls(before),
             }
+            if repair is not None:
+                journal["submission_repair_manifest"] = repair.model_dump(mode="json")
+                journal["submission_repair"] = repair_binding(repair)
             self._write_journal(journal, "prepared")
             return self._complete_enter_observation(journal, release=release)
 
@@ -517,6 +567,24 @@ class CoSChannelActivator:
             ):
                 raise CoSActivationError(
                     "recipient policy changed during observation transition"
+                )
+            repair = None
+            if "submission_repair_manifest" in journal:
+                repair = SubmissionRepairManifest.model_validate(
+                    journal["submission_repair_manifest"]
+                )
+                if (
+                    repair_binding(repair) != journal.get("submission_repair")
+                    or repair.candidate_commit != journal["controller_commit"]
+                    or repair.predecessor_commit != journal["release_commit"]
+                ):
+                    raise CoSActivationError("contained repair journal binding differs")
+                offline_submission_repair(
+                    self.paths,
+                    repair,
+                    repository_root=self.repository,
+                    candidate_commit=journal["controller_commit"],
+                    test_mode=self.test_mode,
                 )
             effects = asyncio.run(self._effect_count())
             if "prior_provider_calls" not in journal:
@@ -595,9 +663,34 @@ class CoSChannelActivator:
             self._refresh_binding(readiness, journal["release_commit"])
             self._write_journal(journal, "verifying")
             self.services.start()
-            journal["doctor"] = self._settle(release)
+            journal["doctor"] = (
+                wait_for_submission_repair(
+                    repair,
+                    diagnostics=self.services.runtime_diagnostics,
+                    doctor=lambda: run_release_doctor(
+                        self.paths,
+                        release,
+                        test_mode=self.test_mode,
+                        include_synthetic_proof=True,
+                    ),
+                    deadline=deployment_clock() + 600,
+                )
+                if repair is not None
+                else self._settle(release)
+            )
             after = self.services.runtime_diagnostics() or {}
-            if (
+            if repair is not None:
+                validate_submission_repair_diagnostics(
+                    repair, after, observation_active=True, doctor=journal["doctor"]
+                )
+                offline_submission_repair(
+                    self.paths,
+                    repair,
+                    repository_root=self.repository,
+                    candidate_commit=journal["controller_commit"],
+                    test_mode=self.test_mode,
+                )
+            elif (
                 after.get("ready") is not True
                 or after.get("observation_active") is not True
             ):
@@ -649,8 +742,15 @@ class CoSChannelActivator:
             else:
                 self._finish(journal, "committed")
             return {
-                "status": "observation_entered",
+                "status": "contained_degraded"
+                if repair is not None
+                else "observation_entered",
                 "observation_active": True,
+                **(
+                    {"submission_repair": repair_binding(repair)}
+                    if repair is not None
+                    else {}
+                ),
                 "release_commit": journal["release_commit"],
                 "prior_activation_id": journal["prior_activation_id"],
                 "provider_test_messages_sent": 0,
@@ -1309,12 +1409,18 @@ def main() -> None:
     parser.add_argument("--request", type=Path)
     parser.add_argument("--enable-live", action="store_true")
     parser.add_argument("--enter-observation", action="store_true")
+    parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument("--recover", action="store_true")
     arguments = parser.parse_args()
     if arguments.recover == bool(arguments.request):
         parser.error("choose one private request or interrupted-operation recovery")
     if arguments.enter_observation and (arguments.enable_live or arguments.recover):
         parser.error("enter-observation is a separate private-request operation")
+    if (
+        arguments.submission_repair_manifest is not None
+        and not arguments.enter_observation
+    ):
+        parser.error("submission repair manifest is only for entering observation")
     if arguments.recover and arguments.enable_live:
         parser.error("recovery cannot enable live operation")
     controller = CoSChannelActivator(
@@ -1325,7 +1431,9 @@ def main() -> None:
         result = controller.recover()
     elif arguments.enter_observation:
         request = EnterObservationRequest.model_validate(_json(arguments.request))
-        result = controller.enter_observation(request)
+        result = controller.enter_observation(
+            request, submission_repair_manifest=arguments.submission_repair_manifest
+        )
     else:
         activation_request = ActivationRequest.model_validate(_json(arguments.request))
         result = controller.activate(

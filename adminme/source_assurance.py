@@ -42,6 +42,10 @@ from adminme.source_assessment_recovery import (
     resolved_assessment_disposition,
 )
 from adminme.submission_receipts import submission_refusal_valid
+from adminme.submission_recovery import (
+    audit_submission_recoveries,
+    linked_recovery_feature_valid,
+)
 
 
 @dataclass(frozen=True)
@@ -631,6 +635,29 @@ async def audit_source_assurance(
                 assessment = assessments.get(event_id)
                 if assessment is not None:
                     assessment_id = str(assessment["event_id"])
+                    # Submission recovery is a distinct private protocol. A
+                    # fabricated or unlinked replacement must not hide the
+                    # original failed extraction from release readiness.
+                    if assessment.get("schema_version") == 6:
+                        envelope = await event_log.get(assessment_id)
+                        source = await event_log.get(event_id)
+                        if (
+                            envelope is None
+                            or source is None
+                            or not await linked_recovery_feature_valid(
+                                event_log, source, envelope
+                            )
+                        ):
+                            assessment = {
+                                **assessment,
+                                "payload": {
+                                    **(assessment.get("payload") or {}),
+                                    "assessment_outcome": "failed",
+                                    "reason_codes": [
+                                        "submission_recovery_lineage_invalid"
+                                    ],
+                                },
+                            }
                     check_default = (
                         event_id in legacy_default_sources
                         and legacy_default_assessment_candidate(assessment)
@@ -772,6 +799,9 @@ async def audit_source_assurance(
                     )
 
     counts["source_facts"] = len(source_ids)
+    submission_recovery = await audit_submission_recoveries(
+        event_log, through_event_id=watermark_event_id or ""
+    )
     recovery_counts = {
         "requested": len(recovery_requests),
         "succeeded": 0,
@@ -856,7 +886,11 @@ async def audit_source_assurance(
         "contract": "source-assurance-v1",
         "state": (
             "degraded"
-            if counts["missing"] or counts["failed"] or not effects_healthy
+            if counts["missing"]
+            or counts["failed"]
+            or not effects_healthy
+            or submission_recovery["counts"]["pending"]
+            or submission_recovery["counts"]["invalid"]
             else "healthy"
         ),
         "counts": counts,
@@ -880,6 +914,7 @@ async def audit_source_assurance(
             "max_concurrency": 2,
             "content_exposed": False,
         },
+        "submission_recovery": submission_recovery,
         "provider_effects": {
             "contract": "provider-effect-accounting-v1",
             "state": "healthy" if effects_healthy else "degraded",

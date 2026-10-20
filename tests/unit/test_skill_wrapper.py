@@ -61,6 +61,7 @@ import adminme.lib.skill_runner.wrapper as skill_wrapper
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLASSIFY_TEST_PACK = REPO_ROOT / "packs" / "skills" / "classify_test"
+NOTE_EXTRACTION_PACK = REPO_ROOT / "packs" / "skills" / "extract_note_semantics"
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 
 TEST_KEY = b"k" * 32
@@ -1153,13 +1154,27 @@ async def test_compatible_patch_refuses_failed_default_recorded_as_success(
     assert len(await _read_all_events(event_log)) == 2
 
 
+@pytest.mark.parametrize("actual_note_pack", [False, True])
 async def test_total_http_deadline_covers_injected_streaming_client(
-    event_log: EventLog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    event_log: EventLog,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    actual_note_pack: bool,
 ) -> None:
-    pack = _versioned_test_pack(tmp_path)
-    _upgrade_test_pack(pack)
+    if actual_note_pack:
+        pack = NOTE_EXTRACTION_PACK
+        inputs = {
+            "body_text": "Call the school office.",
+            "body_format": "plain",
+            "source_kind": "member_submission",
+        }
+    else:
+        pack = _versioned_test_pack(tmp_path)
+        _upgrade_test_pack(pack)
+        inputs = {"text": "same"}
     actual_timeout = asyncio.timeout
     deadlines = []
+    requests = []
 
     def short_deadline(seconds):
         deadlines.append(seconds)
@@ -1167,6 +1182,7 @@ async def test_total_http_deadline_covers_injected_streaming_client(
 
     class StalledClient:
         async def post(self, *args, **kwargs):
+            requests.append(kwargs["json"])
             await asyncio.Event().wait()
 
     runtime = replace(
@@ -1176,15 +1192,85 @@ async def test_total_http_deadline_covers_injected_streaming_client(
     with pytest.raises(OpenClawTimeout):
         await run_skill(
             str(pack),
-            {"text": "same"},
+            inputs,
             SkillContext(session=_session(), triggering_event_id="fixture-stalled"),
             _runtime=runtime,
         )
     assert deadlines == [122.0]
+    assert len(requests) == 1
+    assert requests[0]["args"]["timeoutMs"] == 120_000
     [failure] = await _read_all_events(event_log)
     assert failure["type"] == "skill.call.failed"
     assert failure["payload"]["failure_class"] == "openclaw_timeout"
-    assert failure["payload"]["skill_version"] == "8.0.1"
+    assert failure["payload"]["skill_version"] == (
+        "2.1.1" if actual_note_pack else "8.0.1"
+    )
+
+
+@pytest.mark.parametrize("prior_failed", [False, True])
+async def test_note_budget_patch_preserves_exact_prior_terminal_receipt(
+    event_log: EventLog, tmp_path: Path, prior_failed: bool
+) -> None:
+    predecessor = tmp_path / "note-extraction-predecessor"
+    shutil.copytree(NOTE_EXTRACTION_PACK, predecessor)
+    for name in ("pack.yaml", "SKILL.md"):
+        path = predecessor / name
+        path.write_text(
+            path.read_text()
+            .replace("compatible_success_versions: [2.1.0]\n", "")
+            .replace("version: 2.1.1", "version: 2.1.0")
+            .replace("timeout_seconds: 120", "timeout_seconds: 12")
+        )
+    inputs = {
+        "body_text": "Call the school office.",
+        "body_format": "plain",
+        "source_kind": "member_submission",
+    }
+    context = SkillContext(
+        session=_session(),
+        triggering_event_id="fixture-note-budget-source",
+        invocation_idempotency_key="fixture-note-budget-extraction",
+        owner_scope="private:m-test",
+        visibility_scope="private:m-test",
+        require_clean_result=True,
+    )
+    output = {"candidates": [], "reasons": ["fixture reviewed evidence"]}
+
+    def predecessor_response(request):
+        assert json.loads(request.content)["args"]["timeoutMs"] == 12_000
+        if prior_failed:
+            raise httpx.ReadTimeout("fixture bounded extraction", request=request)
+        return _ok_responder(output)(request)
+
+    prior_transport = _MockTransport(predecessor_response)
+    runtime = _runtime_for(event_log, tmp_path, transport=prior_transport)
+    if prior_failed:
+        with pytest.raises(OpenClawTimeout):
+            await run_skill(str(predecessor), inputs, context, _runtime=runtime)
+        original = None
+    else:
+        original = await run_skill(str(predecessor), inputs, context, _runtime=runtime)
+    baseline = await _read_all_events(event_log)
+    assert len(baseline) == 1
+    assert baseline[0]["payload"]["skill_version"] == "2.1.0"
+
+    current_transport = _MockTransport(_ok_responder(output))
+    current_runtime = _runtime_for(event_log, tmp_path, transport=current_transport)
+    if prior_failed:
+        with pytest.raises(OpenClawTimeout):
+            await run_skill(
+                str(NOTE_EXTRACTION_PACK), inputs, context, _runtime=current_runtime
+            )
+    else:
+        reused = await run_skill(
+            str(NOTE_EXTRACTION_PACK), inputs, context, _runtime=current_runtime
+        )
+        assert reused == original
+        assert reused.skill_version == "2.1.0"
+        assert reused.recorded_event_id == baseline[0]["event_id"]
+    assert current_transport.requests == []
+    assert len(prior_transport.requests) == 1
+    assert await _read_all_events(event_log) == baseline
 
 
 @pytest.mark.parametrize("failure_class", ["handler_raised", "output_invalid"])

@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 353,
-    "technical_event_types": 283,
+    "technical_event_schemas": 356,
+    "technical_event_types": 285,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -36895,6 +36895,147 @@
     },
     {
       "additional_properties": false,
+      "event_type": "triage.intent.features_extracted",
+      "family": "triage",
+      "properties": {
+        "assessment_outcome": {
+          "enum": [
+            "eligible_candidates",
+            "no_candidate",
+            "quarantined",
+            "failed"
+          ],
+          "title": "Assessment Outcome",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/TriageFeatureCandidateV1"
+          },
+          "maxItems": 20,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "extracted_at": {
+          "format": "date-time",
+          "title": "Extracted At",
+          "type": "string"
+        },
+        "extraction_state": {
+          "enum": [
+            "complete",
+            "defensive_default",
+            "unavailable",
+            "invalid"
+          ],
+          "title": "Extraction State",
+          "type": "string"
+        },
+        "extractor_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Extractor Id",
+          "type": "string"
+        },
+        "intent_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "recovery_attempt": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Recovery Attempt",
+          "type": "integer"
+        },
+        "recovery_policy": {
+          "const": "member-forwarded-submission-recovery-v1",
+          "title": "Recovery Policy",
+          "type": "string"
+        },
+        "recovery_reason": {
+          "enum": [
+            "language_seam_OpenClawTimeout",
+            "language_seam_OpenClawUnreachable"
+          ],
+          "title": "Recovery Reason",
+          "type": "string"
+        },
+        "recovery_request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Recovery Request Event Id",
+          "type": "string"
+        },
+        "skill_call_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Call Event Id"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "supersedes_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Supersedes Assessment Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "source_event_id",
+        "extractor_id",
+        "extraction_state",
+        "extracted_at",
+        "assessment_outcome",
+        "reason_codes",
+        "supersedes_assessment_event_id",
+        "recovery_request_event_id",
+        "recovery_policy",
+        "recovery_attempt",
+        "recovery_reason"
+      ],
+      "schema_version": 6
+    },
+    {
+      "additional_properties": false,
       "event_type": "triage.intent.interpretation_refused",
       "family": "triage",
       "properties": {
@@ -36990,6 +37131,141 @@
         "feature_event_id",
         "reason",
         "held_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.intent.recovery_refused",
+      "family": "triage",
+      "properties": {
+        "reason": {
+          "maxLength": 120,
+          "pattern": "^[a-z_]+$",
+          "title": "Reason",
+          "type": "string"
+        },
+        "refused_at": {
+          "format": "date-time",
+          "title": "Refused At",
+          "type": "string"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "request_event_id",
+        "reason",
+        "refused_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.intent.recovery_requested",
+      "family": "triage",
+      "properties": {
+        "attempt_limit": {
+          "const": 3,
+          "title": "Attempt Limit",
+          "type": "integer"
+        },
+        "candidate_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Candidate Commit",
+          "type": "string"
+        },
+        "expected_failure_reason": {
+          "enum": [
+            "language_seam_OpenClawTimeout",
+            "language_seam_OpenClawUnreachable"
+          ],
+          "title": "Expected Failure Reason",
+          "type": "string"
+        },
+        "failed_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Failed Assessment Event Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 240,
+          "pattern": "^operator:.+",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "owner_authorization_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Authorization Sha256",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "recovery_attempt": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Recovery Attempt",
+          "type": "integer"
+        },
+        "recovery_policy": {
+          "const": "member-forwarded-submission-recovery-v1",
+          "title": "Recovery Policy",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "failed_assessment_event_id",
+        "member_id",
+        "expected_failure_reason",
+        "request_id",
+        "operator_principal_id",
+        "owner_member_id",
+        "owner_authorization_sha256",
+        "candidate_commit",
+        "recovery_policy",
+        "attempt_limit",
+        "recovery_attempt",
+        "requested_at"
       ],
       "schema_version": 1
     },

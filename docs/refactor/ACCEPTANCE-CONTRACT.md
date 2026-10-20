@@ -1,5 +1,13 @@
 # Release acceptance contract
 
+Forwarded-submission recovery amendment (2026-10-20), **MODERNIZE** under
+CO-031: require the exact-source, append-only retry and private deployment
+manifest boundaries in
+[the recovery contract](FORWARDED-SUBMISSION-RECOVERY-CONTRACT.md).
+An explicitly bound degraded predecessor may be contained for repair, but
+its HTR-10 receipt remains `repair_pending`; the candidate must pass normal
+healthy settlement and full Doctor before activation commits.
+
 CoS channel operation amendment (2026-10-20): require the production
 composition, encrypted allowlist replay, native provider-boundary denial,
 exact service OAuth scope, journaled activation/recovery and isolated browser

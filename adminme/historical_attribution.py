@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from typing import Any
 
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
+from adminme.direct_intake import DirectIntakeProcessor
 from adminme.events.log import EventLog
 from adminme.provider_bindings import ProviderBinding
-from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID, service_private_scope
 from adminme.source_assurance import load_source_obligations
 
 
@@ -69,6 +71,127 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
     )
 
 
+async def _direct_intake_owner_matches(
+    event_log: EventLog,
+    cue: dict[str, Any],
+    bindings: tuple[ProviderBinding, ...],
+    watermark: str,
+) -> bool:
+    """Reconcile frozen member ownership through its original service receipt.
+
+    The service message precedes its member cue; the routing receipt is written
+    immediately after that cue. All three must exist inside this audit snapshot.
+    This does not re-resolve today's route table or grant provider authority.
+    """
+    payload = cue.get("payload") or {}
+    member = payload.get("member_id")
+    source_id = payload.get("source_event_id")
+    tenant = cue.get("tenant_id")
+    if not all(
+        isinstance(value, str) and value for value in (member, source_id, tenant)
+    ):
+        return False
+    member, source_id, tenant = str(member), str(source_id), str(tenant)
+    source = await event_log.get(source_id)
+    route = await event_log.get_by_idempotency(
+        tenant, f"direct-intake-route:{source_id}"
+    )
+    if source is None or route is None:
+        return False
+    parent = source.get("payload") or {}
+    routed = route.get("payload") or {}
+    service = parent.get("service_principal_id")
+    account = parent.get("provider_account_id")
+    provider = parent.get("provider") or parent.get("source_channel")
+    native = parent.get("native_message_id")
+    channel = parent.get("channel_id")
+    if not all(
+        isinstance(value, str) and value
+        for value in (service, account, provider, native, channel)
+    ):
+        return False
+    service, account, provider, native, channel = (
+        str(value) for value in (service, account, provider, native, channel)
+    )
+    service_scope = service_private_scope(service)
+    service_bindings = [
+        binding
+        for binding in bindings
+        if binding.owner_kind == "service_principal"
+        and binding.owner_id == service
+        and binding.service_principal_id == service
+        and binding.member_id is None
+        and binding.provider_account_id == account
+        and binding.owner_scope == service_scope
+        and source.get("source_adapter")
+        in {binding.kind, f"{binding.kind}:{binding.adapter_id}"}
+    ]
+    receipt_seed = json.dumps(
+        [tenant, provider, account, native], separators=(",", ":")
+    )
+    receipt_key = (
+        "direct-intake-receipt:" + hashlib.sha256(receipt_seed.encode()).hexdigest()
+    )
+    text, complete, issues = DirectIntakeProcessor._submission_evidence(parent)
+    correlation = source.get("correlation_id") or source_id
+    scope = f"private:{member}"
+    return bool(
+        len(service_bindings) == 1
+        and source_id
+        < str(cue.get("event_id"))
+        < str(route.get("event_id"))
+        <= watermark
+        and source.get("tenant_id") == route.get("tenant_id") == tenant
+        and source.get("type") == "messaging.received"
+        and source.get("schema_version") == 8
+        and source.get("owner_scope") == source.get("visibility_scope") == service_scope
+        and source.get("actor_identity") in {None, service}
+        and source.get("source_account_id") == account
+        and parent.get("member_id") is None
+        and parent.get("authenticated_member_route") is True
+        and isinstance(parent.get("trusted_route_key"), str)
+        and parent.get("trusted_route_key")
+        and parent.get("route_source") == "exact_authenticated_metadata"
+        and cue.get("type") == "triage.intent.submitted"
+        and cue.get("schema_version") == 2
+        and cue.get("idempotency_key") == receipt_key
+        and payload.get("submission_kind") == "member_forwarded"
+        and payload.get("intent_id") == f"direct-intake-cue:{source_id}"
+        and payload.get("client_request_id")
+        == hashlib.sha256(f"direct-intake:{source_id}".encode()).hexdigest()[:32]
+        and payload.get("source_surface") == "openclaw"
+        and payload.get("intake_channel") == provider
+        and payload.get("text") == text
+        and payload.get("evidence_complete") is complete
+        and payload.get("evidence_issues") == issues
+        and route.get("type") == "direct_intake.routed"
+        and route.get("schema_version") == 1
+        and route.get("idempotency_key") == f"direct-intake-route:{source_id}"
+        and routed.get("source_event_id") == source_id
+        and routed.get("channel_id") == channel
+        and routed.get("service_principal_id") == service
+        and routed.get("route_source") == "exact_authenticated_metadata"
+        and routed.get("route_state") == "resolved"
+        and routed.get("routing_scope") == "member_private"
+        and routed.get("routing_target_id") == member
+        and routed.get("cue_kind") == "primary_triage_cue"
+        and routed.get("cue_event_id") == cue.get("event_id")
+        and routed.get("authority") == "proposal_only"
+        and routed.get("provider_effect_permitted") is False
+        and routed.get("source_content_exposed") is False
+        and all(
+            row.get("source_adapter") == "direct-intake"
+            and row.get("source_account_id") == account
+            and row.get("owner_scope") == row.get("visibility_scope") == scope
+            and row.get("actor_identity") is None
+            and row.get("causation_id") == source_id
+            and row.get("correlation_id") == correlation
+            and row.get("sensitivity") == source.get("sensitivity")
+            for row in (cue, route)
+        )
+    )
+
+
 async def audit_historical_attribution(
     event_log: EventLog,
     *,
@@ -103,6 +226,11 @@ async def audit_historical_attribution(
         account = str(event.get("source_account_id") or "")
         adapter = str(event.get("source_adapter") or "")
         event_type = str(event.get("type") or "")
+        submission = (
+            await event_log.get(str(event["event_id"]))
+            if event_type == "triage.intent.submitted"
+            else None
+        )
         bindings = bindings_by_account.get(account.casefold(), [])
         matching_bindings = [
             binding for binding in bindings if owner_scope == binding.owner_scope
@@ -119,6 +247,23 @@ async def audit_historical_attribution(
             # matching when its member/private correlation is malformed.
             if await _cos_response_owner_matches(event_log, str(event["event_id"])):
                 binding_state = "internal_cos_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif submission is not None and (
+            adapter == "direct-intake"
+            or str((submission.get("payload") or {}).get("intent_id") or "").startswith(
+                "direct-intake-cue:"
+            )
+            or str(submission.get("idempotency_key") or "").startswith(
+                "direct-intake-receipt:"
+            )
+        ):
+            # A forwarded cue is an internal member source, not a provider
+            # observation. Malformed linkage cannot fall back to account matching.
+            if await _direct_intake_owner_matches(
+                event_log, submission, provider_bindings, watermark or ""
+            ):
+                binding_state = "internal_forwarded_member_source_reconciled"
                 workspace = "personal"
                 attributed += 1
         elif len(matching_coordinates) == 1:

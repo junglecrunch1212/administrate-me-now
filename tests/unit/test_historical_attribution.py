@@ -1,18 +1,234 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+from types import SimpleNamespace
 
 import pytest
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
+from adminme.direct_intake import DirectIntakeProcessor
 from adminme.historical_attribution import audit_historical_attribution
 from adminme.provider_bindings import ProviderBinding
-from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+from adminme.service_identities import (
+    COS_SERVICE_PRINCIPAL_ID,
+    ChannelRoute,
+    ServiceChannelAccount,
+)
+from tests.acceptance.test_service_owned_cos_sources_direct_intake import (
+    CHANNEL_ID,
+    ROUTE_A,
+    _service_message,
+)
 from tests.unit.test_cos_response_assurance import MEMBER, _chain
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def forwarded_service_binding() -> ProviderBinding:
+    return ProviderBinding(
+        adapter_id="cos-gmail-read",
+        kind="messaging-gmail-api",
+        provider_family="google",
+        owner_kind="service_principal",
+        owner_id=COS_SERVICE_PRINCIPAL_ID,
+        member_id=None,
+        service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        provider_account_id="cos-service@example.invalid",
+        workspace="service",
+        permission_scope=("gmail.readonly",),
+        binding_provenance="service-account-delegation",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "none",
+        "member_surface",
+        "cue_member",
+        "cue_actor",
+        "cue_tenant",
+        "cue_account",
+        "cue_adapter",
+        "cue_visibility",
+        "cue_native_receipt",
+        "parent_scope",
+        "parent_actor",
+        "parent_tenant",
+        "parent_account",
+        "parent_native",
+        "parent_authentication",
+        "route_member",
+        "route_actor",
+        "route_tenant",
+        "route_cue",
+        "route_key",
+        "missing_route",
+        "route_after_watermark",
+        "missing_service_binding",
+    ],
+)
+async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mutations(
+    tmp_path: Path, defect: str
+) -> None:
+    class NoopBus:
+        async def notify(self, event_id: str) -> None:
+            pass
+
+    generated = EventLog(tmp_path / "generated.db", b"g" * 32)
+    try:
+        writer = EventWriter(generated, NoopBus())  # type: ignore[arg-type]
+        channel = ServiceChannelAccount(
+            channel_id=CHANNEL_ID,
+            display_name="Fixture intake",
+            provider="gmail",
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            state="observation",
+            provider_account_reference="provider-account:"
+            + hashlib.sha256(b"cos-service@example.invalid").hexdigest(),
+            endpoint_reference=None,
+            enrolled=True,
+            observation_active=True,
+            sending_enabled=False,
+            required_for_activation=False,
+            routes=(ChannelRoute(ROUTE_A, "member_private", MEMBER),),
+            intake_mode="member_submission",
+        )
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(
+                instance=SimpleNamespace(tenant_id="tenant-forwarded-attribution")
+            )
+        )
+        parent_id = await writer.write(
+            _service_message(
+                runtime,
+                key="attribution",
+                trusted_route_key=ROUTE_A,
+                from_identifier="sender@example.invalid",
+                subject="Selected forward",
+                body="Synthetic forwarded content remains private.",
+                event_at_ms=1,
+            )
+        )
+        parent = await generated.get(parent_id)
+        assert parent is not None
+        await DirectIntakeProcessor(
+            event_sink=writer, event_log=generated, channels=(channel,)
+        ).handle(parent)
+        events = [event async for event in generated.read_since()]
+    finally:
+        await generated.close()
+    parent, cue, route = events
+    assert [event["type"] for event in events] == [
+        "messaging.received",
+        "triage.intent.submitted",
+        "direct_intake.routed",
+    ]
+    if defect == "member_surface":
+        # A separate member/OpenClaw submission retains its existing provider
+        # ownership rule; it does not claim a direct-intake receipt coordinate.
+        cue["source_adapter"] = "openclaw-submission"
+        cue["source_account_id"] = "spoofed-provider@example.invalid"
+        cue["actor_identity"] = MEMBER
+        cue["idempotency_key"] = "member-forward-fixture"
+        cue["payload"]["intent_id"] = "member-forward-fixture"
+    elif defect == "cue_member":
+        cue["payload"]["member_id"] = "other-member"
+    elif defect in {"cue_actor", "route_actor", "parent_actor"}:
+        {"cue_actor": cue, "route_actor": route, "parent_actor": parent}[defect][
+            "actor_identity"
+        ] = "other-member"
+    elif defect in {"cue_tenant", "route_tenant", "parent_tenant"}:
+        {"cue_tenant": cue, "route_tenant": route, "parent_tenant": parent}[defect][
+            "tenant_id"
+        ] = "other-tenant"
+    elif defect == "cue_account":
+        cue["source_account_id"] = "spoofed-provider@example.invalid"
+    elif defect == "cue_adapter":
+        cue["source_adapter"] = "messaging-gmail-api"
+    elif defect == "cue_visibility":
+        cue["visibility_scope"] = "private:other-member"
+    elif defect == "cue_native_receipt":
+        cue["idempotency_key"] = "direct-intake-receipt:" + "f" * 64
+    elif defect == "parent_scope":
+        parent["owner_scope"] = "private:other-member"
+    elif defect == "parent_account":
+        parent["source_account_id"] = "different-service@example.invalid"
+    elif defect == "parent_native":
+        parent["payload"]["native_message_id"] = "different-native-message"
+    elif defect == "parent_authentication":
+        parent["payload"]["authenticated_member_route"] = False
+    elif defect == "route_member":
+        route["payload"]["routing_target_id"] = "other-member"
+    elif defect == "route_cue":
+        route["payload"]["cue_event_id"] = "different-cue"
+    elif defect == "route_key":
+        route["idempotency_key"] = "direct-intake-route:different-source"
+    elif defect == "missing_route":
+        events.remove(route)
+    log = EventLog(tmp_path / "audited.db", b"a" * 32)
+    try:
+        for event in events:
+            await log.append(
+                EventEnvelope(
+                    **{
+                        key: value
+                        for key, value in event.items()
+                        if key in EventEnvelope.model_fields
+                    }
+                )
+            )
+        spoofed_member_binding = ProviderBinding(
+            adapter_id="spoofed",
+            kind="messaging-gmail-api",
+            provider_family="google",
+            owner_kind="member",
+            owner_id=MEMBER,
+            member_id=MEMBER,
+            service_principal_id=None,
+            provider_account_id=cue["source_account_id"],
+            workspace="personal",
+            permission_scope=("gmail.readonly",),
+            binding_provenance="oauth-subject",
+        )
+        bindings = (
+            (spoofed_member_binding,)
+            if defect == "missing_service_binding"
+            else (forwarded_service_binding(), spoofed_member_binding)
+        )
+        proof = await audit_historical_attribution(
+            log,
+            repository_root=REPO_ROOT,
+            provider_bindings=bindings,
+            hash_key=b"forwarded-attribution-fixture-key",
+            through_event_id=cue["event_id"]
+            if defect == "route_after_watermark"
+            else None,
+        )
+    finally:
+        await log.close()
+    matched = [
+        row
+        for row in proof["groups"]
+        if row["binding_state"] == "internal_forwarded_member_source_reconciled"
+    ]
+    assert bool(matched) is (defect == "none")
+    valid = defect in {"none", "member_surface"}
+    assert proof["state"] == ("healthy" if valid else "degraded")
+    assert proof["source_event_count"] == 2
+    assert (
+        proof["unattributed_event_count"] == 0
+        if valid
+        else proof["unattributed_event_count"] >= 1
+    )
+    assert "Synthetic forwarded content" not in str(proof)
+    assert "cos-service@example.invalid" not in str(proof)
+    assert MEMBER not in str(proof)
 
 
 @pytest.mark.asyncio

@@ -601,6 +601,7 @@ def build_htr10_review(
     historical_attribution: Path,
     source_assurance: Path,
     observed_at: str,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Reduce reviewed metadata audits to one strict, content-free HTR-10 receipt."""
@@ -615,6 +616,51 @@ def build_htr10_review(
         historical_payload, label="historical attribution audit"
     )
     assurance = _json_no_duplicates(source_payload, label="source-assurance audit")
+    repair = None
+    repair_evidence = None
+    if submission_repair_manifest is not None:
+        from bootstrap.submission_repair import (
+            load_submission_repair_manifest,
+            repair_binding,
+            validate_submission_repair_audit,
+        )
+
+        repair = load_submission_repair_manifest(
+            submission_repair_manifest,
+            candidate=Path(__file__).resolve().parents[1],
+            active_commit=_pointer_snapshot(paths)[0],
+        )
+        repair_evidence = repair_binding(repair)
+        validate_submission_repair_audit(repair, assurance)
+        audit_proof = assurance.get("submission_repair_audit")
+        if (
+            historical.get("submission_repair") != repair_evidence
+            or assurance.get("submission_repair") != repair_evidence
+            or not isinstance(audit_proof, dict)
+            or audit_proof.get("status") != "repair_pending"
+            or audit_proof.get("binding") != repair_evidence
+            or audit_proof.get("watermark_event_id")
+            != assurance.get("watermark_event_id")
+            or audit_proof.get("content_exposed") is not False
+            or audit_proof.get("counts") != assurance.get("counts")
+            or not isinstance(audit_proof.get("provider_effects"), dict)
+            or any(
+                audit_proof["provider_effects"].get(name)
+                != (assurance.get("provider_effects") or {}).get(name)
+                for name in ("state", "zero_effect_state", "counts", "content_exposed")
+            )
+        ):
+            raise CandidateReadinessError(
+                "HTR-10 repair evidence does not bind the exact reviewed failure"
+            )
+    elif any(
+        name in audit
+        for audit in (historical, assurance)
+        for name in ("submission_repair", "submission_repair_audit")
+    ):
+        raise CandidateReadinessError(
+            "HTR-10 repair evidence requires its explicit private manifest"
+        )
     active_payload, _active_metadata = _read_private_file(
         paths.instance_dir / "config" / "deployment-readiness.json"
     )
@@ -666,11 +712,12 @@ def build_htr10_review(
         or historical_count < 0
         or historical.get("attributed_event_count") != historical_count
         or assurance.get("contract") != "source-assurance-v1"
-        or assurance.get("state") != "healthy"
+        or assurance.get("state") != ("degraded" if repair is not None else "healthy")
         or assurance.get("content_exposed") is not False
         or historical_watermark != source_watermark
         or not isinstance(counts, dict)
-        or any(counts.get(name) != 0 for name in ("missing", "pending", "failed"))
+        or any(counts.get(name) != 0 for name in ("missing", "pending"))
+        or counts.get("failed") != (len(repair.targets) if repair is not None else 0)
         or not isinstance(effects, dict)
         or effects.get("state") != "healthy"
         or effects.get("content_exposed") is not False
@@ -785,7 +832,7 @@ def build_htr10_review(
     value: dict[str, Any] = {
         "contract": HTR10_CONTRACT,
         "schema_version": 1,
-        "status": "healthy",
+        "status": "repair_pending" if repair is not None else "healthy",
         "observed_at": observed.isoformat(),
         "provider_effect_window_started_at": window.isoformat(),
         "event_watermark_sha256": _digest_domain(
@@ -802,6 +849,7 @@ def build_htr10_review(
         "content_exposed": False,
         "raw_identifiers_exposed": False,
         **_extended_window_evidence(window_evidence),
+        **({"submission_repair": repair_evidence} if repair is not None else {}),
     }
     value["receipt_sha256"] = hashlib.sha256(_canonical(value)).hexdigest()
     _validate_htr10_value(value, now=current_time)
@@ -832,6 +880,13 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
     }
     if "provider_effect_windows" in value:
         required.add("provider_effect_windows")
+    repair = value.get("submission_repair")
+    if "submission_repair" in value:
+        from bootstrap.submission_repair import valid_repair_binding
+
+        required.add("submission_repair")
+        if not valid_repair_binding(repair):
+            raise CandidateReadinessError("HTR-10 submission repair binding is invalid")
     supplied = value.get("receipt_sha256")
     unsigned = dict(value)
     unsigned.pop("receipt_sha256", None)
@@ -839,7 +894,8 @@ def _validate_htr10_value(value: dict[str, Any], *, now: datetime) -> None:
         set(value) != required
         or value.get("contract") != HTR10_CONTRACT
         or value.get("schema_version") != 1
-        or value.get("status") != "healthy"
+        or value.get("status")
+        != ("repair_pending" if repair is not None else "healthy")
         or value.get("content_exposed") is not False
         or value.get("raw_identifiers_exposed") is not False
         or value.get("unattributed_event_count") != 0
@@ -901,6 +957,7 @@ def record_htr10_review(
     historical_attribution: Path,
     source_assurance: Path,
     observed_at: str,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
     receipt_id: str | None = None,
 ) -> dict[str, Any]:
@@ -916,6 +973,7 @@ def record_htr10_review(
             historical_attribution=historical_attribution,
             source_assurance=source_assurance,
             observed_at=observed_at,
+            submission_repair_manifest=submission_repair_manifest,
             now=fixed_now,
         )
         encoded = json.dumps(value, indent=2, sort_keys=True).encode("utf-8")
@@ -930,6 +988,7 @@ def record_htr10_review(
             historical_attribution=historical_attribution,
             source_assurance=source_assurance,
             observed_at=observed_at,
+            submission_repair_manifest=submission_repair_manifest,
             now=fixed_now,
         )
         if final != value:
@@ -1075,6 +1134,26 @@ def _member_ids(paths: DeploymentPaths) -> list[str]:
     return result
 
 
+def _bound_submission_repair(
+    paths: DeploymentPaths, manifest: Path | None, *, candidate: Path
+) -> dict[str, Any] | None:
+    """An exceptional pending receipt never supplies its own repair authority."""
+
+    if manifest is None:
+        return None
+    from bootstrap.submission_repair import (
+        load_submission_repair_manifest,
+        repair_binding,
+    )
+
+    selected = load_submission_repair_manifest(
+        manifest,
+        candidate=candidate,
+        active_commit=_pointer_snapshot(paths)[0],
+    )
+    return repair_binding(selected)
+
+
 def build_pending_attestation(
     paths: DeploymentPaths,
     *,
@@ -1087,6 +1166,7 @@ def build_pending_attestation(
     observed_at: Mapping[str, str],
     skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> tuple[dict[str, Any], DeploymentSnapshot]:
@@ -1152,6 +1232,13 @@ def build_pending_attestation(
     htr10, htr10_sha256, htr10_observed = _validate_htr10(
         paths, htr10_review, now=current_time
     )
+    repair_evidence = _bound_submission_repair(
+        paths, submission_repair_manifest, candidate=candidate_root
+    )
+    if htr10.get("submission_repair") != repair_evidence:
+        raise CandidateReadinessError(
+            "HTR-10 submission repair does not match explicit candidate authority"
+        )
     window_evidence = _window_evidence_for_receipt(htr10, now=current_time)
     if _normalized_window_evidence(
         window_evidence, now=current_time
@@ -1224,6 +1311,11 @@ def build_pending_attestation(
                 prepared_snapshot.configuration_fingerprint
             ),
             "provider_binding_transition": transition_public,
+            **(
+                {"submission_repair": repair_evidence}
+                if repair_evidence is not None
+                else {}
+            ),
             "preliminary_rehearsal_receipt_sha256": receipt_sha256,
             "preliminary_backup_artifact_sha256": artifact_sha256,
             "preliminary_rehearsal_watermark_sha256": watermark_sha256,
@@ -1327,6 +1419,19 @@ def validate_pending_attestation(
         "preliminary_backup_artifact_sha256",
         "preliminary_rehearsal_watermark_sha256",
     }
+    if isinstance(binding, dict) and "submission_repair" in binding:
+        from bootstrap.submission_repair import valid_repair_binding
+
+        expected_binding.add("submission_repair")
+        repair = binding["submission_repair"]
+        if (
+            not valid_repair_binding(repair)
+            or repair["candidate_commit"] != binding.get("candidate_commit")
+            or repair["predecessor_commit"] != binding.get("predecessor_commit")
+        ):
+            raise CandidateReadinessError(
+                "pending submission repair binding is invalid"
+            )
     if not isinstance(binding, dict) or set(binding) != expected_binding:
         raise CandidateReadinessError("pending deployment binding is invalid")
     if (
@@ -1341,6 +1446,7 @@ def validate_pending_attestation(
             "candidate_commit",
             "predecessor_commit",
             "provider_binding_transition",
+            "submission_repair",
         }
     ):
         raise CandidateReadinessError("pending fingerprint binding is invalid")
@@ -1474,6 +1580,7 @@ def load_pending_attestation_for_activation(
     candidate: Path,
     candidate_commit: str,
     approve_provider_binding_migration: bool = False,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], str, DeploymentSnapshot]:
     """Load one explicit pending artifact and rebind it to current coordinates.
@@ -1516,6 +1623,12 @@ def load_pending_attestation_for_activation(
     if binding["candidate_commit"] != candidate_commit:
         raise CandidateReadinessError(
             "pending attestation belongs to another candidate"
+        )
+    if binding.get("submission_repair") != _bound_submission_repair(
+        paths, submission_repair_manifest, candidate=candidate_root
+    ):
+        raise CandidateReadinessError(
+            "pending submission repair requires its exact explicit manifest"
         )
     snapshot = capture_deployment_snapshot(paths)
     expected = snapshot.public()
@@ -1644,6 +1757,11 @@ def build_active_attestation_from_pending(
             "candidate_live_doctor": "pending_post_switch",
             "post_switch_acceptance": "pending_post_switch",
             "content_exposed": False,
+            **(
+                {"submission_repair": copy.deepcopy(binding["submission_repair"])}
+                if "submission_repair" in binding
+                else {}
+            ),
         },
         "content_exposed": False,
     }
@@ -1938,6 +2056,7 @@ def record_pending_attestation(
     observed_at: Mapping[str, str],
     skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
+    submission_repair_manifest: Path | None = None,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1955,6 +2074,7 @@ def record_pending_attestation(
             observed_at=observed_at,
             skipped_member_device_checks=skipped_member_device_checks,
             approve_provider_binding_migration=approve_provider_binding_migration,
+            submission_repair_manifest=submission_repair_manifest,
             now=fixed_now,
             attestation_id=fixed_attestation_id,
         )
@@ -1973,6 +2093,7 @@ def record_pending_attestation(
                 observed_at=observed_at,
                 skipped_member_device_checks=skipped_member_device_checks,
                 approve_provider_binding_migration=(approve_provider_binding_migration),
+                submission_repair_manifest=submission_repair_manifest,
                 now=fixed_now,
                 attestation_id=fixed_attestation_id,
             )
@@ -2004,6 +2125,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preliminary-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--preliminary-backup-artifact", type=Path, required=True)
     parser.add_argument("--htr-10-review", type=Path, required=True)
+    parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument(
         "--skip-member-device-check",
         action="append",
@@ -2061,6 +2183,7 @@ def main(argv: list[str] | None = None) -> int:
             approve_provider_binding_migration=(
                 args.approve_provider_binding_migration
             ),
+            submission_repair_manifest=args.submission_repair_manifest,
         )
     except Exception as exc:
         print(

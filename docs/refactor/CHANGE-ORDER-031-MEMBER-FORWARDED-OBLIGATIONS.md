@@ -70,6 +70,17 @@ visible for clarification. Successfully published children replace the parent
 decision burden. Extraction cannot choose a different member or grant access,
 approval, or a provider destination.
 
+MODERNIZE historical attribution for a service-forwarded member cue: its
+`triage.intent.submitted@2` ownership is reconciled only through the original
+service-private `messaging.received@8` fact, exact native-message receipt,
+reviewed service-account binding, and resolved `direct_intake.routed@1` receipt
+inside the same audit watermark. The route follows the cue in the append-only
+log. PRESERVE frozen historical ownership, private scope, tenant isolation,
+content-free audit exports, and independent source/effect integrity checks;
+malformed linkage never falls back to a member/provider account match. This
+implements the CO-023 direct-intake provenance and CO-031 forwarding boundary
+above without re-resolving a later route configuration or authorizing a send.
+
 Gmail accepts a reviewed exact sender route only with trusted receiver
 authentication and domain alignment, or the more restrictive configured exact
 DKIM identity policy. Receiver domain authentication plus a reviewed sender is

@@ -68,6 +68,14 @@ jobs:
             tests/acceptance/test_cos_response_text.py \
             tests/acceptance/test_cos_channel_acquisition.py \
             tests/acceptance/test_cos_live_maintenance.py \
+            tests/acceptance/test_forwarded_submission_recovery.py \
+            tests/acceptance/test_forwarded_submission_repair_operations.py \
+            tests/acceptance/test_forwarded_submission_extraction.py::test_full_forward_uses_bounded_model_budget_before_creating_triage \
+            tests/unit/test_submission_recovery.py \
+            tests/unit/bootstrap/test_submission_repair.py \
+            tests/unit/bootstrap/test_submission_repair_readiness.py \
+            tests/unit/test_skill_wrapper.py \
+            packs/skills/extract_note_semantics/tests/test_skill.py \
             tests/acceptance/test_disposable_dataset_continuity.py::test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactivation \
             tests/unit/test_cos_channel_operation.py \
             tests/unit/test_cos_response_assurance.py \

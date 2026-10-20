@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import json
@@ -37,15 +38,17 @@ from adminme.runtime.application import create_application
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from bootstrap import cos_channel_activation as operation
 from bootstrap.contracts import atomic_write
+from bootstrap.recovery_readiness import recovery_consumers_settled
 from tests.acceptance.test_cos_channel_acquisition import _ReadOnlyGmail
 from tests.acceptance.test_forwarded_channel_intake import EMAIL_ACCOUNT, MEMBER_A, ROOT
 from tests.integration.test_runtime_application import _strict_settings
 from tests.unit.bootstrap.test_cos_channel_activation import _audit, _live_controller
 
 
-def test_live_observation_cli_restart_and_fresh_reactivation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+@contextmanager
+def maintenance_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, allow_degraded: bool = False
+):
     controller, activate, pause = _live_controller(tmp_path, monkeypatch)
     seed = tmp_path / "strict-host"
     seed.mkdir()
@@ -185,6 +188,7 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
         client = None
         starts = 0
         stops = 0
+        settle_on_start = True
 
         def start(self):
             current = replace(
@@ -216,7 +220,8 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
                 },
             )
             assert health.status_code == 200, health.text
-            self.settle()
+            if self.settle_on_start:
+                self.settle()
 
         def stop(self):
             if self.client is not None:
@@ -235,9 +240,10 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
                     "details"
                 ]
                 if (
-                    diagnostics["ready"]
+                    (diagnostics["ready"] or allow_degraded)
                     and source["freshness"]["revision_current"]
                     and not source["freshness"]["refresh_in_progress"]
+                    and recovery_consumers_settled(diagnostics)
                 ):
                     return diagnostics
                 assert self.client is not None
@@ -253,6 +259,16 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
     )
     try:
         services.start()
+        yield controller, activate, pause, services, settings, gmail, config
+    finally:
+        services.stop()
+
+
+def test_live_observation_cli_restart_and_fresh_reactivation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with maintenance_runtime(tmp_path, monkeypatch) as fixture:
+        controller, activate, pause, services, settings, gmail, config = fixture
         client = services.client
         assert client is not None
         headers = {"Tailscale-User-Login": "maintenance.example.test"}
@@ -439,8 +455,6 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
         )
         assert replay.status_code in {200, 403, 409}
         assert gmail.calls == 1
-    finally:
-        services.stop()
 
 
 def test_public_cli_rejects_combined_enable_and_observe_without_mutation(
