@@ -141,6 +141,7 @@ def enroll(
         from datetime import datetime, timezone
         import hashlib
 
+        digest = credential_service_digest(service_principal_id)
         atomic_write(
             paths.run_dir / "cos-google-enrollment.json",
             json.dumps(

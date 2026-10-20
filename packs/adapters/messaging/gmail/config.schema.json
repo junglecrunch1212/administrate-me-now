@@ -20,11 +20,50 @@
       "then": {
         "required": ["read_only", "channel_id"],
         "properties": {
-          "workspace": { "const": "service" },
-          "read_only": { "const": true },
-          "enable_writes": { "const": false },
-          "permission_scope": { "const": ["https://www.googleapis.com/auth/gmail.readonly"] }
-        }
+          "workspace": { "const": "service" }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "read_only": { "const": true },
+              "enable_writes": { "const": false },
+              "permission_scope": { "const": ["https://www.googleapis.com/auth/gmail.readonly"] }
+            }
+          },
+          {
+            "$comment": "The production provider-binding validator additionally requires this exact OAuth account and channel to match the enrolled CoS acquisition overlay. This branch grants no send authority.",
+            "required": ["oauth_credentials_ref", "enable_writes", "trusted_sender_routes"],
+            "properties": {
+              "service_principal_id": { "const": "service-principal:chief-of-staff" },
+              "binding_provenance": { "const": "oauth-subject" },
+              "permission_scope": {
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "enum": [
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                    "https://www.googleapis.com/auth/gmail.send"
+                  ]
+                }
+              },
+              "trusted_sender_routes": { "minItems": 1 }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "read_only": { "const": true },
+                  "enable_writes": { "const": false }
+                }
+              },
+              {
+                "properties": {
+                  "read_only": { "const": false },
+                  "enable_writes": { "const": true }
+                }
+              }
+            ]
+          }
+        ]
       },
       "else": { "properties": { "workspace": { "enum": ["personal", "work"] } } }
     }

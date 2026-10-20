@@ -77,6 +77,7 @@ class _Backups:
 def _controller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[CoSChannelActivator, ActivationRequest, dict[str, Any]]:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     paths = DeploymentPaths.from_root(tmp_path / "operation", production=False)
     paths.create()
     config = _configuration(tmp_path / "synthetic-source")
