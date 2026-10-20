@@ -2,16 +2,19 @@
 // This fixture adds no production API and never registers a tool or channel.
 import { readFile, writeFile } from "node:fs/promises";
 import { registerCosApprovalRelay } from "./cos-approval-relay.js";
+import { registerCosPermissionPreflight } from "./cos-permission-preflight.js";
 
 export default {
   id: "administrateme",
   name: "AdministrateMe isolated approval relay probe",
   register(api) {
-    const relay = registerCosApprovalRelay(api, {
+    const runtime = {
       transport: {
         config: { sharedSecretEnv: "ADMINME_APPROVAL_PROBE_SECRET" },
       },
-    });
+    };
+    const relay = registerCosApprovalRelay(api, runtime);
+    registerCosPermissionPreflight(api, runtime);
     api.registerService({
       id: "administrateme-approval-probe-seeds",
       async start() {

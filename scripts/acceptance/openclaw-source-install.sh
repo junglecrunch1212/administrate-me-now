@@ -26,8 +26,11 @@ openclaw_commit="$("$python_bin" -c \
   "$REPOSITORY_ROOT/bootstrap/versions.json")"
 node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
   "$TEST_ROOT/app/openclaw/$openclaw_commit"
+PYTHONPATH="$REPOSITORY_ROOT" "$python_bin" -c \
+  'import json; from bootstrap.cos_apple_events import service_environment; print(json.dumps(service_environment()))' \
+  > "$TEST_ROOT/permission-helper.json"
 node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
-  "$TEST_ROOT/app/openclaw/$openclaw_commit"
+  "$TEST_ROOT/app/openclaw/$openclaw_commit" "$TEST_ROOT/permission-helper.json"
 
 PYTHONPATH="$REPOSITORY_ROOT" "$python_bin" - "$TEST_ROOT" <<'PY'
 import sys

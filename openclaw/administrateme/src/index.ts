@@ -8,6 +8,7 @@ import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
 import { AdministrateMeTransport } from "./transport.js";
 import { registerCosApprovalRelay } from "./cos-approval-relay.js";
+import { registerCosPermissionPreflight } from "./cos-permission-preflight.js";
 import type { PluginRuntime } from "./runtime.js";
 
 export default definePluginEntry({
@@ -38,5 +39,6 @@ export default definePluginEntry({
     registerHooks(api, runtime);
     registerService(api, runtime);
     runtime.cosApprovals = registerCosApprovalRelay(api, runtime);
+    registerCosPermissionPreflight(api, runtime);
   },
 });

@@ -143,7 +143,7 @@ describe("native OpenClaw contract fixture", () => {
     expect([...runtime.gateways]).toHaveLength(16);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
-    expect(runtime.services).toHaveLength(2);
+    expect(runtime.services).toHaveLength(3);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
   });
 

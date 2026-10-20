@@ -88,6 +88,57 @@ cleanup are bounded, channels and background work are disabled, and diagnostics
 contain synthetic data only. This MODERNIZE validation follows the independent
 approval requirement in `ACCEPTANCE-CONTRACT.md`; no production test API is added.
 
+## No-send macOS permission preflight
+
+MODERNIZE: provider enrollment gains a narrow operator preflight through the
+existing Gateway, preserving the permission and provider-effect rules in
+`BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md` and `ACCEPTANCE-CONTRACT.md`. From the selected
+release's Python environment, `python -m bootstrap.cos_permissions
+--instance-root <deployment-root>` checks permission without prompting. The
+separate `--request` action may display macOS consent; it never accepts consent,
+opens settings, launches Messages, sends AppleScript or sends a message. Request
+is an explicit operator action. Any native grant still requires the owner's
+action-time approval.
+
+The loopback protocol-v4 RPC requires `operator.admin` plus a short, single-use,
+operation-bound HMAC ticket. The CLI loads the actual Gateway secret reference
+from the configured secret store; no token appears in arguments or output.
+Member dashboard scopes are unchanged. Trusted Gateway startup pins the selected
+release's helper paths and interpreter hashes. The RPC accepts no paths, target,
+environment, command or arbitrary arguments. Helpers inherit only basic OS
+environment values, and run as children of the actual Gateway. Checks are
+bounded; request waits at most 180 seconds before terminating its own child.
+There are no retries or automatic permission grants.
+
+The Apple Events helper calls only public CoreServices descriptor creation,
+`AEDeterminePermissionToAutomateTarget`, and descriptor disposal, off the main
+thread, targeting fixed `com.apple.MobileSMS`. It preserves exact OSStatus:
+`0` authorized, `-1744` needs consent, `-1743` denied, `-600` target not running,
+and `-1742` target inaccessible. Unsupported platform, other OS errors, helper
+failure and timeout remain distinct from authorization. The signed result binds
+operation, nonce, timestamps, helper/interpreter hashes and Gateway PID.
+
+Check also opens only the service account's fixed Messages SQLite database in
+read-only mode and inspects schema metadata; it never enumerates chats, messages
+or contacts. `imsg initialize/status` is intentionally not used because that
+provider starts a Contacts cache even for status. Database readiness means this
+Gateway child can open the expected schema; it does not establish a successful
+imsg send. Request does not run the database check.
+
+macOS chooses the responsible identity across launchd, Node, Python and imsg
+processes. Its actual consent UI and a subsequent deployed-service check must
+confirm attribution. A Terminal, Codex or SSH result is not a service permission
+proof. Bare interpreters may be denied because of usage-description, entitlement
+or attribution restrictions; an authorized result does not prove the transport
+can send, the CoS account is correct, or all provider permissions are ready.
+No private API, SIP change or Full Disk Access bypass is used.
+
+Hosted synthetic tests exercise refusal, pin drift, replay, environment isolation
+and timeout. The exact-source macOS Gateway gate also calls the real helper only
+with `askUserIfNeeded=false`, verifies its signed status and admin-scope refusal,
+and performs the read-only schema check on the disposable runner. CI never
+requests consent or accesses the family instance.
+
 ## Recovery and live safety
 
 Use `--recover` after an interrupted operation. Failure recovery stops the

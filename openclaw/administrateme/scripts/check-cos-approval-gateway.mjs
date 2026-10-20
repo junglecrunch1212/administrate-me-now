@@ -20,6 +20,7 @@ assert.equal(process.env.GITHUB_ACTIONS, "true", "Hosted CI is required");
 assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted", "Disposable hosted runner required");
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = await realpath(process.argv[2]);
+const permissionEnvironment = JSON.parse(await readFile(process.argv[3], "utf8"));
 const runnerTemp = await realpath(process.env.RUNNER_TEMP);
 const pin = JSON.parse(await readFile(path.join(repository, "bootstrap/versions.json"), "utf8")).openclaw;
 assert.equal(path.basename(source), pin.commit);
@@ -156,7 +157,7 @@ function ticket(operation, overrides = {}) {
 try {
   // Transpile the actual release source without rewriting its SDK imports.
   // Gateway loads it as a real plugin through its normal public SDK resolver.
-  for (const name of ["cos-approval-relay", "approval", "contract"]) {
+  for (const name of ["cos-approval-relay", "approval", "contract", "cos-permission-preflight", "cos-permission-database"]) {
     const input = await readFile(path.join(repository, `openclaw/administrateme/src/${name}.ts`), "utf8");
     if (name === "cos-approval-relay") {
       evidence.relay_sha256 = createHash("sha256").update(input).digest("hex");
@@ -205,6 +206,7 @@ try {
       .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]),
   );
   Object.assign(env, {
+    ...permissionEnvironment,
     OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_PORT: String(port), OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_NO_RESPAWN: "1", OPENCLAW_DISABLE_BONJOUR: "1",
@@ -238,6 +240,38 @@ try {
   assert.deepEqual((await list()).items, []);
   await assert.rejects(dashboard.request("plugin.approval.list", {}), /RPC refused/);
   evidence.checks.push("empty-isolated-registry-and-least-privilege-dashboard");
+
+  evidence.phase = "no-send-permission-check";
+  const permissionMethod = "administrateme.cosPermissions.preflight";
+  const permissionTicket = () => {
+    const value = { operation: "check", nonce: randomBytes(16).toString("hex"), expires_at_ms: Date.now() + 5_000 };
+    return { ...value, signature: createHmac("sha256", secret).update(
+      ["cos-apple-events-preflight-v1", value.operation, value.nonce, String(value.expires_at_ms)].join("|"),
+    ).digest("hex") };
+  };
+  await assert.rejects(dashboard.request(permissionMethod, permissionTicket()), /RPC refused/);
+  const operator = await connect(port, ["operator.admin"]);
+  await assert.rejects(operator.request(permissionMethod, { ...permissionTicket(), signature: "0".repeat(64) }), /RPC refused/);
+  await assert.rejects(operator.request(permissionMethod, { ...permissionTicket(), operation: "request" }), /RPC refused/);
+  const permissionAuthorization = permissionTicket();
+  const proof = await operator.request(permissionMethod, permissionAuthorization, 25_000);
+  const { signature: proofSignature, ...unsignedProof } = proof;
+  assert.equal(proofSignature, createHmac("sha256", secret).update(JSON.stringify(unsignedProof)).digest("hex"));
+  assert.equal(proof.operation, "check");
+  assert.equal(proof.nonce, permissionAuthorization.nonce);
+  assert.equal(proof.target, "com.apple.MobileSMS");
+  assert.equal(proof.stage, "permission");
+  assert.ok(Number.isInteger(proof.os_status));
+  assert.ok(["authorized", "needs_consent", "denied", "target_not_running", "target_not_accessible"].includes(proof.status));
+  assert.equal(proof.helper_sha256, permissionEnvironment.ADMINISTRATEME_PERMISSION_HELPER_SHA256);
+  assert.equal(proof.python_sha256, permissionEnvironment.ADMINISTRATEME_PERMISSION_PYTHON_SHA256);
+  assert.equal(proof.database.contract, "cos-messages-database-preflight-v1");
+  assert.equal(proof.database.target, "service_messages_database");
+  assert.ok(["ready", "not_found", "unavailable", "invalid_schema"].includes(proof.database.status));
+  assert.equal(proof.database.ready, proof.database.status === "ready");
+  await assert.rejects(operator.request(permissionMethod, permissionAuthorization), /RPC refused/);
+  evidence.permission_check = { status: proof.status, os_status: proof.os_status, stage: proof.stage };
+  evidence.checks.push("real-public-apple-events-check-only-signed-result-and-admin-refusal");
 
   for (const seed of seeds) {
     const name = seed.params.request_id.slice("synthetic-".length);
