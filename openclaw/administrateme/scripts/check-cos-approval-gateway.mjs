@@ -1,5 +1,5 @@
 /**
- * Hosted exact-source Gateway proof of the production CoS approval relay.
+ * Hosted exact-source normal-startup proof of the production CoS approval relay.
  * No SDK, sockets, registry, service lifecycle or approval handlers are mocked.
  * Only synthetic remembered tool contexts and HMAC member tickets are supplied.
  */
@@ -215,7 +215,9 @@ try {
       allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" },
       entries: { administrateme: { enabled: true } },
     },
-    channels: {}, cron: { enabled: false }, browser: { enabled: false },
+    // Exercise the ordinary sidecar/scheduler lifecycle without any provider
+    // accounts, model calls, heartbeat work, or scheduled jobs.
+    channels: {}, cron: { enabled: true }, browser: { enabled: false },
     logging: { file: path.join(state, "gateway.log") },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false, auto: { enabled: false } },
@@ -230,13 +232,22 @@ try {
     OPENCLAW_GATEWAY_PORT: String(port), OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_NO_RESPAWN: "1", OPENCLAW_DISABLE_BONJOUR: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_SKIP_CHANNELS: "1", OPENCLAW_SKIP_PROVIDERS: "1",
-    OPENCLAW_SKIP_CRON: "1", OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1", OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     ADMINME_APPROVAL_PROBE_SECRET: secret,
     ADMINME_APPROVAL_PROBE_SEEDS: seedFile, ADMINME_APPROVAL_PROBE_READY: readyFile,
   });
-  evidence.phase = "gateway-service-start";
+  // On this exact pin the first two flags select sidecarStartup="defer",
+  // hiding the effect of synchronous service-start waits on normal readiness.
+  // Explicitly clear these even if the parent or permission environment set
+  // them; an enabled empty scheduler must also execute its normal lifecycle.
+  for (const key of ["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS", "OPENCLAW_SKIP_CRON"]) {
+    delete env[key];
+    assert.equal(env[key], undefined);
+  }
+  evidence.startup_mode = "normal";
+  evidence.phase = "gateway-normal-startup";
+  const startupAt = Date.now();
   gateway = spawn(process.execPath, [path.join(source, "openclaw.mjs"), "gateway", "run"], {
     cwd: directory, env, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -245,10 +256,33 @@ try {
   gateway.stdout.on("data", capture);
   gateway.stderr.on("data", capture);
   await until(async () => {
-    try { return await readFile(readyFile, "utf8") === "ready\n"; }
+    try { if (await readFile(readyFile, "utf8") !== "ready\n") return false; }
     catch (error) { if (error.code !== "ENOENT") throw error; return false; }
-  }, "production relay service startup", 60_000);
+    const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
+      signal: AbortSignal.timeout(2_000),
+    }).catch(() => null);
+    if (!response || response.status !== 200) return false;
+    const readiness = await response.json();
+    assert.equal(readiness.ready, true);
+    assert.deepEqual(readiness.failing, []);
+    return true;
+  }, "normal Gateway readiness after production service startup", 60_000);
   evidence.checks.push("production-service-started");
+  evidence.normal_startup_ms = Date.now() - startupAt;
+  evidence.phase = "normal-cron-readiness";
+  const scheduler = await connect(port, ["operator.read"]);
+  const [cronStatus, cronPage] = await Promise.all([
+    scheduler.request("cron.status", {}),
+    scheduler.request("cron.list", { includeDisabled: true, includeDeliveryPreviews: false }),
+  ]);
+  assert.equal(cronStatus.enabled, true);
+  assert.equal(cronStatus.jobs, 0);
+  assert.equal(cronStatus.nextWakeAtMs, null);
+  assert.deepEqual(cronPage.jobs, []);
+  assert.equal(cronPage.total, 0);
+  assert.equal(cronPage.hasMore, false);
+  evidence.cron = { enabled: cronStatus.enabled, jobs: cronStatus.jobs, listed_jobs: cronPage.jobs.length };
+  evidence.checks.push("normal-startup-ready-and-empty-cron-responsive");
   const requester = await connect(port, ["operator.approvals"]);
   const dashboard = await connect(port, ["operator.read", "operator.write"]);
   const unrelatedApprover = await connect(port, ["operator.approvals"]);
@@ -256,7 +290,17 @@ try {
     "administrateme.cosApprovals.list", ticket("list", overrides),
   );
   assert.deepEqual(await requester.request("plugin.approval.list", {}), []);
-  assert.deepEqual((await list()).items, []);
+  // The service hook must return before the public native SDK hello can finish.
+  // Poll the production fail-closed read seam with a fresh ticket on every try;
+  // never request an approval before that subscription is actually usable.
+  const initial = await until(async () => {
+    try { return await list(); }
+    catch (error) {
+      if (error.message === "RPC refused: APPROVAL_UNAVAILABLE") return false;
+      throw error;
+    }
+  }, "production relay native subscription", 30_000);
+  assert.deepEqual(initial.items, []);
   await assert.rejects(dashboard.request("plugin.approval.list", {}), /RPC refused/);
   evidence.checks.push("empty-isolated-registry-and-least-privilege-dashboard");
 
