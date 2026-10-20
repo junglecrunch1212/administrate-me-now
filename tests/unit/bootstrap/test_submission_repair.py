@@ -287,6 +287,36 @@ def test_failed_summary_retains_deterministic_preface_without_expanding_failures
         validate_submission_repair_audit(manifest(), value)
 
 
+@pytest.mark.parametrize(
+    ("state", "required", "accepted"),
+    [
+        ("observation", False, True),
+        ("observation", True, False),
+        ("degraded", False, False),
+        ("blocked", False, False),
+        ("unknown", False, False),
+    ],
+)
+def test_repair_preserves_independent_channel_observation(state, required, accepted):
+    value = diagnostics()
+    value["deployment_readiness"]["dimensions"]["service_channel_identities"] = {
+        "state": state,
+        "required": required,
+    }
+    if accepted:
+        validate_submission_repair_diagnostics(
+            manifest(), value, observation_active=True, doctor=doctor()
+        )
+        validate_submission_repair_progress(value)
+    else:
+        with pytest.raises(SubmissionRepairError, match="service_channel_identities"):
+            validate_submission_repair_diagnostics(
+                manifest(), value, observation_active=True, doctor=doctor()
+            )
+        with pytest.raises(SubmissionRepairError):
+            validate_submission_repair_progress(value)
+
+
 @pytest.mark.parametrize("fail_backup", [False, True])
 def test_containment_journals_exact_exception_and_keeps_hold_on_failure(
     tmp_path, monkeypatch, fail_backup

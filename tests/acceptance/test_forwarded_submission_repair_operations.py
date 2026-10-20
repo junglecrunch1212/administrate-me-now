@@ -28,6 +28,7 @@ from bootstrap.contracts import atomic_write
 from bootstrap.secrets import secret_store
 from bootstrap.submission_repair import (
     REPAIR_DOCTOR_CHECKS,
+    SubmissionRepairError,
     SubmissionRepairManifest,
     offline_submission_repair,
     repair_binding,
@@ -379,9 +380,26 @@ def test_forwarded_failure_containment_guarded_upgrade_and_retained_rollback(
             operation, "run_release_doctor", lambda *_a, **_kw: _doctor(services)
         )
         before = services.settle()
-        validate_submission_repair_diagnostics(
-            declared, before, observation_active=False
-        )
+        try:
+            validate_submission_repair_diagnostics(
+                declared, before, observation_active=False
+            )
+        except SubmissionRepairError as exc:
+            readiness = before["deployment_readiness"]
+            exc.add_note(
+                json.dumps(
+                    {
+                        "blocking_dimensions": readiness["blocking_dimensions"],
+                        "dimension_states": {
+                            name: {key: row.get(key) for key in ("state", "required")}
+                            for name, row in readiness["dimensions"].items()
+                        },
+                        "capability_ids": sorted(before["capabilities"]),
+                    },
+                    sort_keys=True,
+                )
+            )
+            raise
         policy_before = asyncio.run(_audit(controller))[0]
         enrollment_before = (config / "adapters.json").read_bytes()
         monkeypatch.setattr(

@@ -82,7 +82,7 @@ jobs:
       # Prove the new channel boundary before the longer recovery rehearsals.
       - name: Validate active CoS maintenance and observation windows
         run: >-
-          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5
+          poetry run pytest -p no:cacheprovider -q -ra
           tests/acceptance/test_cos_live_maintenance.py
           tests/acceptance/test_forwarded_submission_recovery.py
           tests/acceptance/test_forwarded_submission_repair_operations.py

@@ -409,6 +409,22 @@ def validate_submission_repair_diagnostics(
     )
 
 
+def _accepted_readiness_dimension(key: str, value: Any) -> bool:
+    return isinstance(value, dict) and (
+        value.get("state") == "healthy"
+        or (
+            value.get("required") is False
+            and (
+                value.get("state") == "not_applicable"
+                or (
+                    key == "service_channel_identities"
+                    and value.get("state") == "observation"
+                )
+            )
+        )
+    )
+
+
 def _validate_operational_diagnostics(
     manifest: SubmissionRepairManifest,
     diagnostics: dict[str, Any],
@@ -499,19 +515,21 @@ def _validate_operational_diagnostics(
     ):
         raise SubmissionRepairError("repair readiness has unrelated blockers")
     dimensions = readiness.get("dimensions") or {}
-    if not REPAIR_READINESS_DIMENSIONS <= set(dimensions) or any(
-        not isinstance(value, dict)
-        or (
-            value.get("state") != "healthy"
-            and not (
-                value.get("required") is False
-                and value.get("state") == "not_applicable"
-            )
-        )
-        for key, value in dimensions.items()
-        if key != "observation_effects"
-    ):
+    if not REPAIR_READINESS_DIMENSIONS <= set(dimensions):
         raise SubmissionRepairError("repair readiness inventory is incomplete")
+    for key, value in dimensions.items():
+        if key != "observation_effects" and not _accepted_readiness_dimension(
+            key, value
+        ):
+            dimension = (
+                key
+                if key
+                in REPAIR_READINESS_DIMENSIONS | {"topology", "cos_channel_operation"}
+                else "unrecognized_dimension"
+            )
+            raise SubmissionRepairError(
+                f"repair readiness state is not accepted: {dimension}"
+            )
     if doctor is not None:
         checks = doctor.get("checks")
         if (
@@ -896,11 +914,7 @@ def validate_submission_repair_progress(diagnostics: dict[str, Any]) -> None:
     for key, value in dimensions.items():
         if not isinstance(value, dict) or (
             key not in {"observation_effects", "openclaw"}
-            and value.get("state") != "healthy"
-            and not (
-                value.get("required") is False
-                and value.get("state") == "not_applicable"
-            )
+            and not _accepted_readiness_dimension(key, value)
         ):
             raise SubmissionRepairError("pending repair has an unrelated readiness gap")
     for key, value in capabilities.items():

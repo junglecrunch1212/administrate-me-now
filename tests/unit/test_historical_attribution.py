@@ -171,6 +171,11 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
         route["idempotency_key"] = "direct-intake-route:different-source"
     elif defect == "missing_route":
         events.remove(route)
+    append_refusal = {
+        "parent_scope": "messaging v5 envelope contradicts payload route: owner_scope",
+        "parent_account": "messaging v5 envelope contradicts payload route: source_account_id",
+        "parent_authentication": "intake route proof contradicts the route key",
+    }.get(defect)
     log = EventLog(tmp_path / "audited.db", b"a" * 32)
     try:
         for event in events:
@@ -181,12 +186,12 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
                     if key in EventEnvelope.model_fields
                 }
             )
-            if defect == "parent_scope" and event is parent:
+            if append_refusal is not None and event is parent:
                 # The source envelope boundary already rejects this cross-owner
                 # contradiction; never bypass it to reach a later audit layer.
                 with pytest.raises(
                     AppendValidationError,
-                    match="messaging v5 envelope contradicts payload route: owner_scope",
+                    match=append_refusal,
                 ):
                     await log.append(envelope)
                 assert await log.count() == 0
