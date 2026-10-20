@@ -201,8 +201,26 @@ def _expired_attestation_diagnostics() -> dict[str, Any]:
             "dimensions": dimensions,
         },
         "capabilities": {
-            "pipeline:fixture": {"state": "healthy"},
-            "projection:fixture": {"state": "healthy"},
+            "pipeline:fixture": {
+                "state": "healthy",
+                "kind": "reactive_pipeline",
+                "details": {
+                    "lag_count": 0,
+                    "version": 1,
+                    "checkpoint_event_id": None,
+                    "consecutive_failures": 0,
+                },
+            },
+            "projection:fixture": {
+                "state": "healthy",
+                "kind": "projection",
+                "details": {
+                    "lag_count": 0,
+                    "version": 1,
+                    "checkpoint_event_id": None,
+                    "consecutive_failures": 0,
+                },
+            },
             "policy:source-assurance": {
                 "state": "healthy",
                 "details": {
@@ -211,6 +229,7 @@ def _expired_attestation_diagnostics() -> dict[str, Any]:
                     "freshness": {
                         "state": "fresh",
                         "revision_current": True,
+                        "refresh_in_progress": False,
                         "refresh_error_type": None,
                     },
                     "provider_effects": {

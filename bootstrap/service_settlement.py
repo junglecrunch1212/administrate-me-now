@@ -417,6 +417,73 @@ def has_new_structural_degradation(
     return False
 
 
+def wait_for_recovery_baseline(
+    *,
+    services: ServiceManager,
+    baseline: dict[str, Any],
+    absolute_deadline: float,
+    reserve_seconds: float,
+    validate_selection: Callable[[], None],
+) -> dict[str, Any] | None:
+    """Settle restored consumers and their audit without refreshing owner proof.
+
+    This separate path preserves the exact saved attestation gaps. Only replay
+    and audit lag may wait; the existing operation deadline and checkpoint
+    watchdog still apply, with room reserved for the remaining full proof.
+    """
+    from bootstrap.recovery_readiness import (
+        recovery_consumers_settled,
+        recovery_settlement_pending,
+        runtime_matches_baseline,
+    )
+
+    if (
+        not math.isfinite(absolute_deadline)
+        or not math.isfinite(reserve_seconds)
+        or reserve_seconds < 0
+    ):
+        raise ValueError("recovery settlement requires a finite proof budget")
+    progress = _ReplayProgress()
+    audit_pending_since: float | None = None
+    try:
+        while True:
+            validate_selection()
+            now = deployment_clock()
+            if now + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS + reserve_seconds > (
+                absolute_deadline
+            ):
+                return None
+            diagnostics = services.runtime_diagnostics()
+            validate_selection()
+            now = deployment_clock()
+            if now + reserve_seconds >= absolute_deadline:
+                return None
+            # Malformed/missing evidence and new structural failures do not
+            # enter a wait. This predicate validates every consumer's details.
+            if not recovery_settlement_pending(baseline, diagnostics):
+                return None
+            assert isinstance(diagnostics, dict)
+            progress.observe(diagnostics, now)
+            progress.check_stalls(now)
+            if runtime_matches_baseline(baseline, diagnostics):
+                return diagnostics
+            if recovery_consumers_settled(diagnostics):
+                if audit_pending_since is None:
+                    audit_pending_since = now
+                if now - audit_pending_since >= POST_SWITCH_CONSUMER_PROGRESS_SECONDS:
+                    return None
+            else:
+                audit_pending_since = None
+            until = progress.next_deadline(absolute_deadline - reserve_seconds)
+            if audit_pending_since is not None:
+                until = min(
+                    until, audit_pending_since + POST_SWITCH_CONSUMER_PROGRESS_SECONDS
+                )
+            time.sleep(min(POST_SWITCH_POLL_SECONDS, max(until - now, 0)))
+    except _SettlementStopped:
+        return None
+
+
 def wait_for_settled_doctor(
     *,
     run_doctor: Callable[..., dict[str, Any]],

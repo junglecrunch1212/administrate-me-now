@@ -106,8 +106,158 @@ def capture_baseline(
 def runtime_matches_baseline(baseline: dict[str, Any], diagnostics: Any) -> bool:
     return bool(
         _safe_runtime(diagnostics)
+        and recovery_consumers_settled(diagnostics)
+        and diagnostics["capabilities"]["policy:source-assurance"]["details"][
+            "freshness"
+        ].get("refresh_in_progress")
+        is False
         and set(diagnostics["deployment_readiness"]["blocking_dimensions"])
         <= set(baseline["blocking_dimensions"])
+    )
+
+
+def _recovery_consumers(diagnostics: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(diagnostics, dict):
+        return None
+    capabilities = diagnostics.get("capabilities")
+    if not isinstance(capabilities, dict) or any(
+        not isinstance(key, str) for key in capabilities
+    ):
+        return None
+    consumers = []
+    for prefix, kind in (
+        ("projection:", "projection"),
+        ("pipeline:", "reactive_pipeline"),
+    ):
+        rows = [row for key, row in capabilities.items() if key.startswith(prefix)]
+        if not rows:
+            return None
+        for row in rows:
+            if not isinstance(row, dict) or row.get("kind") != kind:
+                return None
+            details = row.get("details")
+            if not isinstance(details, dict):
+                return None
+            lag = details.get("lag_count")
+            version = details.get("version")
+            checkpoint = details.get("checkpoint_event_id")
+            if (
+                type(lag) is not int
+                or lag < 0
+                or "checkpoint_event_id" not in details
+                or not (
+                    (type(version) is int and version > 0)
+                    or (isinstance(version, str) and bool(version.strip()))
+                )
+                or not (
+                    checkpoint is None
+                    or (isinstance(checkpoint, str) and bool(checkpoint.strip()))
+                )
+                or details.get("poison_event_id")
+                or type(details.get("consecutive_failures")) is not int
+                or details["consecutive_failures"] != 0
+            ):
+                return None
+            consumers.append(row)
+    return consumers
+
+
+def recovery_consumers_settled(diagnostics: Any) -> bool:
+    """A current audit cannot settle recovery ahead of its consumer checkpoints."""
+    consumers = _recovery_consumers(diagnostics)
+    return consumers is not None and all(
+        row["details"]["lag_count"] == 0 for row in consumers
+    )
+
+
+def recovery_settlement_pending(baseline: dict[str, Any], diagnostics: Any) -> bool:
+    """Allow waiting for replay/audit only; this predicate never accepts recovery."""
+    from bootstrap.htr10_export import _INTEGRITY_ZERO_COUNTS
+
+    if (
+        not isinstance(diagnostics, dict)
+        or any(
+            diagnostics.get(key) is not expected
+            for key, expected in (
+                ("ready", False),
+                ("service_ready", True),
+                ("safe_reads", True),
+                ("event_ingest_ready", True),
+                ("observation_active", True),
+            )
+        )
+        or diagnostics.get("status") not in {"healthy", "observation_only", "degraded"}
+        or diagnostics.get("write_admission") != "blocked"
+        or diagnostics.get("startup_error") is not None
+    ):
+        return False
+    readiness = diagnostics.get("deployment_readiness")
+    if not isinstance(readiness, dict):
+        return False
+    blockers = readiness.get("blocking_dimensions")
+    if (
+        readiness.get("contract") != "deployment-readiness-v1"
+        or readiness.get("ready") is not False
+        or not isinstance(blockers, list)
+        or not blockers
+        or any(not isinstance(key, str) for key in blockers)
+        or len(blockers) != len(set(blockers))
+        or not set(blockers)
+        <= set(baseline["blocking_dimensions"]) | {"observation_effects"}
+    ):
+        return False
+    if _recovery_consumers(diagnostics) is None:
+        return False
+    capabilities = diagnostics["capabilities"]
+    for key, row in capabilities.items():
+        if not isinstance(row, dict):
+            return False
+        if row.get("state") not in {"healthy", "observation_only", "disabled"} and not (
+            key
+            in {
+                "policy:source-assurance",
+                "product:member",
+                "surface:triage-processing",
+            }
+            and row.get("state") == "degraded"
+        ):
+            return False
+    source = (capabilities.get("policy:source-assurance") or {}).get("details") or {}
+    if not isinstance(source, dict) or source.get("state") not in {
+        "healthy",
+        "degraded",
+    }:
+        return False
+    freshness = source.get("freshness") or {}
+    counts = source.get("counts") or {}
+    effects = source.get("provider_effects") or {}
+    if not all(isinstance(value, dict) for value in (freshness, counts, effects)):
+        return False
+    window = effects.get("observation_window") or {}
+    effect_counts = effects.get("counts") or {}
+    if not isinstance(window, dict) or not isinstance(effect_counts, dict):
+        return False
+    window_counts = window.get("counts") or {}
+    if not isinstance(window_counts, dict):
+        return False
+    return bool(
+        freshness.get("state") in {"fresh", "stale"}
+        and type(freshness.get("revision_current")) is bool
+        and type(freshness.get("refresh_in_progress")) is bool
+        and freshness.get("refresh_error_type") is None
+        and all(
+            type(counts.get(name)) is int and counts[name] == 0
+            for name in ("failed", "missing")
+        )
+        and type(counts.get("pending")) is int
+        and counts["pending"] >= 0
+        and effects.get("state") == "healthy"
+        and window.get("state") == "healthy"
+        and window.get("started_at_configured") is True
+        and all(effect_counts.get(name) == 0 for name in _INTEGRITY_ZERO_COUNTS)
+        and all(window_counts.get(name) == 0 for name in _INTEGRITY_ZERO_COUNTS)
+        and window_counts.get("provider_called_true") == 0
+        and window_counts.get("suppressed_false_or_unknown") == 0
     )
 
 

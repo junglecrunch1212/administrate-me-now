@@ -24,6 +24,11 @@ unchanged expired readiness evidence, preserves observation history and zero
 effects, reports the original gaps, and rejects any new runtime or Doctor
 failure. Explicit rollback must use the exact committed baseline; candidate
 activation must still require full readiness.
+Exercise the real-consumer race explicitly: hold a startup event behind a
+projection checkpoint while its zero-effect audit is current, release the
+consumer, observe the now-outdated audit, and require quiescent consumers plus
+a freshly current audit before recovery succeeds. Keep the original blocking
+dimensions, evidence bytes and zero-provider-effect assertions unchanged.
 
 CO-032 amendment (2026-10-08): require production-composition proofs for the
 immutable prerequisite → cutover → prerequisite chain, refusal of a subsequent

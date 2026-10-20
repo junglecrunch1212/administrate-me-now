@@ -71,7 +71,6 @@ from bootstrap.recovery_readiness import (
     BASELINE_CONTROLS,
     capture_baseline,
     validate_baseline,
-    runtime_matches_baseline,
     full_doctor_matches_baseline,
 )
 from bootstrap.services import (
@@ -90,6 +89,7 @@ from bootstrap.service_settlement import (
     has_new_structural_degradation,
     runtime_has_only_transient_deployment_readiness_gap,
     run_release_doctor,
+    wait_for_recovery_baseline,
     wait_for_settled_doctor,
 )
 from bootstrap.source_assessment_repair import (
@@ -1479,7 +1479,26 @@ class UpgradeManager:
         pointer_bytes, pointer = self._read_private_json_payload(pointer_path)
         if pointer is None or pointer.get("path") != str(release):
             return False
-        if not runtime_matches_baseline(baseline, self.services.runtime_diagnostics()):
+
+        def validate_selection() -> None:
+            self._require_recovery_baseline_controls(baseline)
+            if self._read_private_json_payload(pointer_path)[0] != pointer_bytes:
+                raise UpgradeError(
+                    "recovery release selection changed during settlement"
+                )
+
+        if (
+            wait_for_recovery_baseline(
+                services=self.services,
+                baseline=baseline,
+                absolute_deadline=deadline,
+                reserve_seconds=(
+                    RELEASE_DOCTOR_TIMEOUT_SECONDS + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
+                ),
+                validate_selection=validate_selection,
+            )
+            is None
+        ):
             return False
         full = self._run_release_doctor(
             release,
@@ -1491,10 +1510,16 @@ class UpgradeManager:
             or deployment_clock() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS > deadline
         ):
             return False
-        final = self.services.runtime_diagnostics()
-        self._require_recovery_baseline_controls(baseline)
+        final = wait_for_recovery_baseline(
+            services=self.services,
+            baseline=baseline,
+            absolute_deadline=deadline,
+            reserve_seconds=0,
+            validate_selection=validate_selection,
+        )
+        validate_selection()
         return (
-            runtime_matches_baseline(baseline, final)
+            final is not None
             and self._read_private_json_payload(pointer_path)[0] == pointer_bytes
             and deployment_clock() < deadline
         )
