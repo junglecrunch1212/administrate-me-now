@@ -35,6 +35,7 @@ const consoleErrors = [];
 const consoleWarnings = [];
 const pageErrors = [];
 const requestFailures = [];
+const failedRequestEvents = [];
 const unexpectedResponses = [];
 const expectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
 const observedExpectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
@@ -128,6 +129,21 @@ function markCompletedStream(request) {
     throw new Error("Only the exact proven-complete fixture stream may be marked for cleanup");
   }
   completedStreamRequests.add(request);
+}
+
+function classifyFailedRequests() {
+  requestFailures.length = 0;
+  completedStreamCleanupAborts.length = 0;
+  for (const { request, errorText } of failedRequestEvents) {
+    // Chromium may report reader cleanup before the asynchronous terminal
+    // assertions finish. Classify only after those assertions have proved this
+    // exact Request complete; an unproved stream abort remains a failure.
+    if (errorText === "net::ERR_ABORTED" && completedStreamRequests.has(request)) {
+      completedStreamCleanupAborts.push(request.url());
+    } else {
+      requestFailures.push(`${request.url()} ${errorText}`);
+    }
+  }
 }
 
 async function launchEdge() {
@@ -445,11 +461,6 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
   page.on("requestfailed", (request) => {
     const errorText = request.failure()?.errorText;
     if (closingPages.has(page) && errorText === "net::ERR_ABORTED") return;
-    if (errorText === "net::ERR_ABORTED" && completedStreamRequests.has(request)) {
-      completedStreamCleanupAborts.push(request.url());
-      console.log(`[Gate 7] Navigation released a proven-complete stream: ${request.url()}`);
-      return;
-    }
     const requestUrl = new URL(request.url());
     const isKnownLocalRead = request.method() === "GET"
       && errorText === "net::ERR_ABORTED"
@@ -465,7 +476,7 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
       console.log(`[Gate 7] Navigation superseded local read: ${request.url()}`);
       return;
     }
-    requestFailures.push(`${request.url()} ${errorText}`);
+    failedRequestEvents.push({ request, errorText });
   });
   return { context, page };
 }
@@ -1975,6 +1986,7 @@ async function run() {
       JSON.stringify({ unexpectedResponses, remaining: Object.fromEntries(expectedHttpResponses), observed: Object.fromEntries(observedExpectedHttpResponses) }),
     );
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
+    classifyFailedRequests();
     record(
       "no failed browser requests",
       requestFailures.length === 0,
@@ -2056,6 +2068,7 @@ boundedRun.then(
   },
   async (error) => {
     clearTimeout(hardTimeout);
+    classifyFailedRequests();
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(join(evidenceDir, "visual-failure.txt"), `${error.stack || error}\n`);
     await writeFile(join(evidenceDir, "visual-partial-results.json"), `${JSON.stringify({ status: "FAIL", results, screenshots, consoleErrors, pageErrors, requestFailures, completedStreamCleanupAborts, unexpectedResponses }, null, 2)}\n`);
