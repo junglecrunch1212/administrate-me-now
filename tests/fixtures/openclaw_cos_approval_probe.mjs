@@ -24,8 +24,9 @@ export default {
         for (const row of rows) {
           relay.remember(row.params, row.context, row.receipt);
         }
-        // Registered after the production service: this marker also proves
-        // native.start() did not deadlock Gateway startup readiness.
+        // Registered after the production service: this marker proves its
+        // startup hook returned. The hosted probe independently requires
+        // normal Gateway readiness, cron RPCs, and the native subscription.
         await writeFile(process.env.ADMINME_APPROVAL_PROBE_READY, "ready\n", {
           mode: 0o600,
         });

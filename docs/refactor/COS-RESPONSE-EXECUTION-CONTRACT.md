@@ -99,7 +99,28 @@ The hosted source-install gate runs a synthetic Unicode, spacing, directive,
 escape and formatting corpus through the exact pinned OpenClaw sender's pure
 formatting functions. This checks the supported literal subset and specific
 regressions; it does not prove arbitrary Markdown preserves exact content.
+**MODERNIZE — normal Gateway startup proof:** the hosted exact-source approval
+probe starts the pinned Gateway with an empty provider/channel configuration
+and an enabled scheduler containing no jobs. It explicitly removes the
+channel/provider/cron skip overrides, requires bounded `/readyz` readiness and
+real read-scoped `cron.status`/`cron.list` responses, and waits for the relay's
+signed read seam to become usable before exercising every existing approval
+boundary. Auxiliary browser, canvas and Gmail watcher services remain disabled;
+the probe performs no model invocation or provider contact. This strengthens
+the production-composition requirement in `ACCEPTANCE-CONTRACT.md`: deferred
+sidecar startup is not evidence that the ordinary service startup can finish.
 Plugin tests cover ordinary reply
 cancellation, generic-tool bypass refusal and private native dispatch without
 retry. Operational activation and transport pin proofs remain separate
 prerequisites; code tests never claim a live sign-in or delivered message.
+
+**MODERNIZE — approval relay lifecycle:** the generic service start hook returns
+immediately while the pinned public SDK establishes its native approval
+connection. Signed approval listing and resolution fail closed until startup
+completes within thirty seconds. Failure, expiry or shutdown clears pending
+approvals and rejects callbacks from retired connection generations. Shutdown
+waits at most five seconds for the SDK's cleanup; a replacement connection is
+refused until cleanup succeeds. The relay never automatically retries startup
+or an uncertain approval resolution. These bounds preserve OpenClaw's ownership
+of native approval authority under `BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md` without
+allowing a stalled approval connection to block the ordinary Gateway lifecycle.

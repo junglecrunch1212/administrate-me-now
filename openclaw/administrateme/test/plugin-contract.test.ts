@@ -17,6 +17,7 @@ import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
 import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
+import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 
 type ToolFactory = (context: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[];
@@ -102,6 +103,52 @@ function toolContext(overrides: Partial<OpenClawPluginToolContext> = {}): OpenCl
   };
 }
 
+function replyApprovalTicket(operation: string, overrides: Record<string, unknown> = {}) {
+  const value = {
+    session_key: "agent:adminme-a:portal-a", agent_id: "adminme-a", member_id: "member-a",
+    approval_id: "", revision: "", decision: "", nonce: randomUUID().replaceAll("-", ""),
+    expires_at_ms: Date.now() + 8_000, ...overrides,
+  };
+  const fields = ["session_key", "agent_id", "member_id", "approval_id", "revision", "decision", "nonce"];
+  const material = ["cos-member-approval-v1", operation, ...fields.map((key) => value[key as keyof typeof value]), String(value.expires_at_ms)].join("|");
+  return { ...value, signature: createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!).update(material).digest("hex") };
+}
+
+function deferredSignal() {
+  let resolve!: () => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<void>((accept, refuse) => { resolve = accept; reject = refuse; });
+  return { promise, resolve, reject };
+}
+
+function controlApprovalLifecycle(start: () => Promise<void>, stop?: () => Promise<void>) {
+  const createNative = approvalRuntimeFixture.createChannelNativeApprovalRuntime;
+  vi.spyOn(approvalRuntimeFixture, "createChannelNativeApprovalRuntime").mockImplementationOnce((adapter) => {
+    const native = createNative(adapter);
+    vi.spyOn(native, "start").mockImplementation(start);
+    if (stop) vi.spyOn(native, "stop").mockImplementation(stop);
+    return native;
+  });
+}
+
+async function deliverReplyApproval(runtime: ReturnType<typeof fakeApi>) {
+  const native = fixtureApprovalRuntimes.at(-1)!;
+  await runtime.hooks.get("before_tool_call")![0]!.handler({
+    toolName: "administrateme_cos_response",
+    params: { request_id: "reply-a", approval_event_id: "event-private-a" },
+  }, { sessionKey: "agent:adminme-a:portal-a", agentId: "adminme-a", toolCallId: "call-a" });
+  const now = Date.now();
+  const record: PluginApprovalRequest = {
+    id: "plugin:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMs: now, expiresAtMs: now + 120_000,
+    request: {
+      pluginId: "administrateme", toolName: "administrateme_cos_response", toolCallId: "call-a",
+      agentId: "adminme-a", sessionKey: "agent:adminme-a:portal-a", allowedDecisions: ["allow-once", "deny"],
+    },
+  };
+  await native.adapter.deliverTarget({ request: record });
+  return { native, record };
+}
+
 describe("native OpenClaw contract fixture", () => {
   it("matches Python approval fingerprints for Unicode and exponent values", () => {
     expect(approvalRequestFingerprint({ text: "member-fixture’s café ☕" })).toBe(
@@ -127,6 +174,7 @@ describe("native OpenClaw contract fixture", () => {
 
   afterEach(() => {
     delete process.env.ADMINME_OPENCLAW_SHARED_SECRET;
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
@@ -524,16 +572,7 @@ describe("native OpenClaw contract fixture", () => {
     expect(native.adapter.shouldHandle({ ...record, expiresAtMs: 1 })).toBe(false);
     expect(native.adapter.shouldHandle(record)).toBe(true);
     await native.adapter.deliverTarget({ request: record });
-    const ticket = (operation: string, overrides: Record<string, unknown> = {}) => {
-      const value = {
-        session_key: context.sessionKey, agent_id: context.agentId, member_id: "member-a",
-        approval_id: "", revision: "", decision: "", nonce: randomUUID().replaceAll("-", ""),
-        expires_at_ms: Date.now() + 8_000, ...overrides,
-      };
-      const fields = ["session_key", "agent_id", "member_id", "approval_id", "revision", "decision", "nonce"];
-      const material = ["cos-member-approval-v1", operation, ...fields.map((key) => value[key as keyof typeof value]), String(value.expires_at_ms)].join("|");
-      return { ...value, signature: createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!).update(material).digest("hex") };
-    };
+    const ticket = replyApprovalTicket;
     const list = runtime.gateways.get("administrateme.cosApprovals.list")!.handler;
     const resolve = runtime.gateways.get("administrateme.cosApprovals.resolve")!.handler;
     const respond = vi.fn();
@@ -555,6 +594,122 @@ describe("native OpenClaw contract fixture", () => {
     expect(respond.mock.lastCall?.[0]).toBe(false);
     expect(native.calls).toHaveLength(1);
     await service?.stop();
+  });
+
+  it("returns from service startup while native Hello is pending and refuses decisions until ready", async () => {
+    const started = deferredSignal();
+    controlApprovalLifecycle(() => started.promise);
+    const runtime = fakeApi();
+    const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay")!;
+    expect(service.start()).toBeUndefined();
+    const { native, record } = await deliverReplyApproval(runtime);
+    const list = runtime.gateways.get("administrateme.cosApprovals.list")!.handler;
+    const resolve = runtime.gateways.get("administrateme.cosApprovals.resolve")!.handler;
+    const respond = vi.fn();
+    await list({ params: replyApprovalTicket("list"), client: null, respond });
+    expect(respond).toHaveBeenLastCalledWith(false, undefined, {
+      code: "APPROVAL_UNAVAILABLE", message: "Reply approval unavailable",
+    });
+    await resolve({
+      params: replyApprovalTicket("resolve", { approval_id: record.id, decision: "allow-once" }),
+      client: null, respond,
+    });
+    expect(respond.mock.lastCall?.[0]).toBe(false);
+    expect(native.calls).toEqual([]);
+    started.resolve();
+    await Promise.resolve();
+    await list({ params: replyApprovalTicket("list"), client: null, respond });
+    expect(respond.mock.lastCall?.[0]).toBe(true);
+    expect(respond.mock.lastCall?.[1].items).toHaveLength(1);
+    await service.stop?.();
+  });
+
+  it("fences timed-out and late native callbacks and waits for cleanup before a replacement", async () => {
+    vi.useFakeTimers();
+    const started = deferredSignal();
+    const stopped = deferredSignal();
+    controlApprovalLifecycle(() => started.promise, () => stopped.promise);
+    const runtime = fakeApi();
+    const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay")!;
+    service.start();
+    const { native: previous, record } = await deliverReplyApproval(runtime);
+    const list = runtime.gateways.get("administrateme.cosApprovals.list")!.handler;
+    const respond = vi.fn();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runtime.api.logger.warn).toHaveBeenCalledWith("CoS reply approval connection startup timed out");
+    await list({ params: replyApprovalTicket("list"), client: null, respond });
+    expect(respond.mock.lastCall?.[0]).toBe(false);
+    expect(previous.adapter.shouldHandle(record)).toBe(false);
+    expect(await previous.adapter.deliverTarget({ request: record })).toBeNull();
+    expect(() => service.start()).toThrow("cleanup is incomplete");
+    started.resolve();
+    await Promise.resolve();
+    await list({ params: replyApprovalTicket("list"), client: null, respond });
+    expect(respond.mock.lastCall?.[0]).toBe(false);
+    expect(() => service.start()).toThrow("cleanup is incomplete");
+    stopped.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    service.start();
+    const { native, record: replacement } = await deliverReplyApproval(runtime);
+    expect(native).not.toBe(previous);
+    await previous.adapter.finalizeResolved({ request: record, resolved: { id: record.id, decision: "deny" } });
+    await previous.adapter.finalizeExpired({ request: record });
+    previous.adapter.onStopped();
+    expect(await previous.adapter.deliverTarget({ request: replacement })).toBeNull();
+    await list({ params: replyApprovalTicket("list"), client: null, respond });
+    expect(respond.mock.lastCall?.[0]).toBe(true);
+    expect(respond.mock.lastCall?.[1].items).toHaveLength(1);
+    expect(previous.calls).toEqual([]);
+    await service.stop?.();
+  });
+
+  it("bounds shutdown of a stuck native start and handles late start and cleanup rejection", async () => {
+    vi.useFakeTimers();
+    const started = deferredSignal();
+    const stopped = deferredSignal();
+    controlApprovalLifecycle(() => started.promise, () => stopped.promise);
+    const runtime = fakeApi();
+    const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay")!;
+    service.start();
+    const { native, record } = await deliverReplyApproval(runtime);
+    let stopReturned = false;
+    const completion = Promise.resolve(service.stop?.()).then(() => { stopReturned = true; });
+    expect(native.adapter.shouldHandle(record)).toBe(false);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(stopReturned).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await completion;
+    expect(stopReturned).toBe(true);
+    expect(runtime.api.logger.warn).toHaveBeenCalledWith("CoS reply approval connection cleanup timed out");
+    expect(() => service.start()).toThrow("cleanup is incomplete");
+    started.reject(new Error("private startup error must not reach logs"));
+    stopped.reject(new Error("private cleanup error must not reach logs"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.api.logger.warn).toHaveBeenCalledWith("CoS reply approval connection cleanup failed");
+    expect(JSON.stringify(vi.mocked(runtime.api.logger.warn).mock.calls)).not.toContain("private");
+    expect(() => service.start()).toThrow("cleanup is incomplete");
+    expect(native.calls).toEqual([]);
+  });
+
+  it("fails closed on rejected native startup without automatically retrying", async () => {
+    vi.useFakeTimers();
+    const started = deferredSignal();
+    controlApprovalLifecycle(() => started.promise);
+    const runtime = fakeApi();
+    const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay")!;
+    const initialCount = fixtureApprovalRuntimes.length;
+    service.start();
+    started.reject(new Error("private rejected connection"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fixtureApprovalRuntimes).toHaveLength(initialCount + 1);
+    expect(runtime.api.logger.warn).toHaveBeenCalledWith("CoS reply approval connection startup failed");
+    expect(JSON.stringify(vi.mocked(runtime.api.logger.warn).mock.calls)).not.toContain("private");
+    const respond = vi.fn();
+    await runtime.gateways.get("administrateme.cosApprovals.list")!.handler({
+      params: replyApprovalTicket("list"), client: null, respond,
+    });
+    expect(respond.mock.lastCall?.[0]).toBe(false);
+    await service.stop?.();
   });
 
   it("waits for receipt publication even when the pinned host does not await onResolution", async () => {
