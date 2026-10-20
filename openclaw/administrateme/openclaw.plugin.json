@@ -51,6 +51,7 @@
       "administrateme_google_tasks_create_state",
       "administrateme_skill",
       "administrateme_notification_result",
+      "administrateme_cos_response",
       "administrateme_standing_order"
     ]
   },
@@ -74,6 +75,7 @@
     "administrateme_execute_pending_provider_action": { "optional": true },
     "administrateme_skill": { "optional": true },
     "administrateme_notification_result": { "optional": true },
+    "administrateme_cos_response": { "optional": true },
     "administrateme_standing_order": { "optional": true }
   },
   "dashboard": {

@@ -38,6 +38,7 @@ from adminme.cos_compiled_context import (
     compile_effective_cos_context,
     plain_operating_agreement,
 )
+from adminme.cos_response_policy import policy_from_event_log
 from adminme.openclaw_topology import member_agent_id
 from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.messages_reply import reply_control_for
@@ -242,6 +243,21 @@ class SettingsControlStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+
+    async def cos_response_policy(
+        self, event_log: Any, tenant_id: str
+    ) -> dict[str, Any]:
+        """Read authoritative encrypted receipts; never journal contact details."""
+
+        return await policy_from_event_log(event_log, tenant_id)
+
+    async def prepare_cos_response_policy(
+        self, event_log: Any, tenant_id: str, *, expected_revision: int
+    ) -> int:
+        current = await self.cos_response_policy(event_log, tenant_id)
+        if current["revision"] != expected_revision:
+            raise ValueError("CoS reply recipients changed; refresh before saving")
+        return int(current["revision"]) + 1
 
     @staticmethod
     def _default() -> dict[str, Any]:

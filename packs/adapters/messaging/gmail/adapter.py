@@ -62,6 +62,7 @@ from adminme.adapters.disposable_test_acquisition import (
 from adminme.adapters.emission import build_adapter_event, write_adapter_event
 from adminme.adapters.credentials import (
     assert_installed_user_binding,
+    assert_service_oauth_binding,
     resolve_json_credentials,
 )
 from adminme.events.envelope import EventEnvelope
@@ -249,7 +250,12 @@ class GmailAdapter(CommunicationAdapter):
                 raise ValueError("disposable test Gmail ownership mismatch")
             self._config["enable_writes"] = False
         self._scopes = (
-            [GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE]
+            [
+                GMAIL_READONLY_SCOPE
+                if self._config.get("service_principal_id")
+                else GMAIL_MODIFY_SCOPE,
+                GMAIL_SEND_SCOPE,
+            ]
             if bool(self._config.get("enable_writes"))
             else [GMAIL_READONLY_SCOPE]
         )
@@ -354,7 +360,19 @@ class GmailAdapter(CommunicationAdapter):
             raise ValueError("user_email must be a valid email address")
 
         creds_json = self._credentials_resolver(op_ref)
-        if op_ref.startswith("keychain://"):
+        service_principal_id = self._config.get("service_principal_id")
+        if service_principal_id and "refresh_token" in creds_json:
+            if self._config.get("member_id") or not isinstance(
+                self._config.get("provider_account_id"), str
+            ):
+                raise ValueError("CoS OAuth requires exact service account ownership")
+            assert_service_oauth_binding(
+                creds_json,
+                service_principal_id=service_principal_id,
+                provider_account_id=self._config["provider_account_id"],
+                required_scopes=[GMAIL_READONLY_SCOPE] if read_only else self._scopes,
+            )
+        elif op_ref.startswith("keychain://"):
             member_id = self._config.get("member_id")
             provider_account_id = self._config.get("provider_account_id")
             if not isinstance(member_id, str) or not isinstance(
@@ -1349,6 +1367,9 @@ class GmailAdapter(CommunicationAdapter):
         NOT emitted on the error path — the action did not, in fact,
         send.
         """
+        from adminme.cos_responses import guard_gmail_response
+
+        await guard_gmail_response(self._config, message)
         # [§7.3, D17]: defense-in-depth input check; the Cat-A ABC's
         # OutboundMessage is frozen but does not validate non-emptiness.
         if not message.recipient:
@@ -1368,6 +1389,9 @@ class GmailAdapter(CommunicationAdapter):
             # Wrapped in a closure so :func:`outbound` can suppress it
             # under observation mode. ``execute()`` is sync; the
             # observation seam awaits the closure.
+            # Fresh durable allowlist and activation check at the final effect.
+            # No provider await intervenes after this check.
+            await guard_gmail_response(self._config, message, provider_effect=True)
             request_body = {"raw": mime_b64}
             thread_id = message.metadata.get("thread_id")
             if isinstance(thread_id, str) and thread_id:
@@ -1384,6 +1408,20 @@ class GmailAdapter(CommunicationAdapter):
         event_log = self._observation_event_log
         if session is None or manager is None or event_log is None:
             raise RuntimeError("Gmail observation seam is required for external writes")
+        if self._config.get("service_principal_id"):
+            from adminme.lib.session import build_internal_session
+            from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+
+            # The exact permit above admits only this service principal.
+            # Attribute the provider effect to CoS, preserving the member's
+            # private scope and approval chain from the outbound audit context.
+            # The supervisor's shared device actor is not the sender.
+            session = build_internal_session(
+                COS_SERVICE_PRINCIPAL_ID,
+                "device",
+                session.tenant_id,
+                correlation_id=session.correlation_id,
+            )
 
         response: dict[str, Any] = {}
         suppressed = False
@@ -1420,6 +1458,16 @@ class GmailAdapter(CommunicationAdapter):
                     retry_after_s=retry_after_s,
                 )
             raise
+
+        if self._config.get("service_principal_id"):
+            # The exact CoS command owns its private terminal receipt. A later
+            # provider observation emits the service-owned messaging.sent@v6;
+            # never mislabel this service action as member-authored mail.
+            return SendResult(
+                delivered=not suppressed,
+                external_id=response.get("id"),
+                suppressed=suppressed,
+            )
 
         # D28 retains the delivery fields and adds the account-bound
         # ``messaging.sent@v4`` coordinates, RFC continuity, and the optional
@@ -1506,6 +1554,8 @@ class GmailAdapter(CommunicationAdapter):
     ) -> dict[str, Any]:
         """Apply Gmail read/archive state through the observation seam."""
 
+        if self._config.get("service_principal_id"):
+            raise PermissionError("CoS Gmail supports only governed plain-text replies")
         if self._config.get("enable_writes") is False:
             raise PermissionError(
                 "Gmail writes are disabled; reconnect with modify/send scopes"

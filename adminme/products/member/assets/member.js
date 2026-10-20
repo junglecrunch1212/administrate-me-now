@@ -3858,6 +3858,7 @@ const SETTINGS_SECTIONS = [
   ["behavior", "CoS behavior"],
   ["source-context", "Source intake & context"],
   ["cos-work", "How my CoS works"],
+  ["cos-replies", "CoS replies"],
   ["capabilities", "Capabilities"],
   ["connections", "Connections"],
   ["bridges", "Devices & bridges"],
@@ -4616,6 +4617,138 @@ function adminRequestsSettings(data) {
   const fragment = document.createDocumentFragment(); const model = data.control.admin_requests || { visible: false, items: [] }; const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Administrative work can make software available."), text("p", "It cannot complete another adult’s consent, pair their bridge, enroll their account, retrieve credentials, grant authority, or execute a provider action.")); fragment.append(intro); const listCard = document.createElement("section"); listCard.className = "card"; listCard.append(text("h2", "Secret-free requests")); if (!model.visible) listCard.append(text("p", "Admin requests are read-only and unavailable in this view-as context.", "empty")); else { const list = document.createElement("ul"); list.className = "settings-contract-list"; for (const item of model.items || []) { const row = document.createElement("li"); row.append(text("strong", item.desired_outcome || item.capability_id), text("small", `${item.requesting_member_label} · ${titleCase(item.requested_scope)} · ${titleCase(item.state)}`), text("small", "No credentials or provider content · member consent remains incomplete")); list.append(row); } if (!list.children.length) list.append(text("li", "No capability requests need administrative preparation.", "empty")); listCard.append(list); } fragment.append(listCard); return fragment;
 }
 
+function cosResponseApprovalCard() {
+  const card = document.createElement("section"); card.className = "card cos-response-approval";
+  card.append(text("h2", "Approve a CoS reply"), text("p", "Review the exact destination and plain text below. This approves one reply to your own listed address; a separate sending approval is still required.", "state-note"));
+  const content = document.createElement("div"); content.append(text("p", "Loading available reply accounts…", "state-note")); card.append(content);
+  void (async () => {
+    try {
+      const options = await api("/api/member/v1/cos/responses/options");
+      if (!card.isConnected) return;
+      const accounts = options.accounts || [];
+      const recipients = (options.recipients || []).filter((recipient) => recipient.channel === "email" || (recipient.channel === "imessage" && /^\+[1-9][0-9]{7,14}$/.test(recipient.address)));
+      content.replaceChildren();
+      if (!accounts.length || !recipients.length) {
+        content.append(text("p", !accounts.length ? "A connected CoS account is needed before you can approve a reply." : "Add your email address or iMessage phone number to CoS replies before approving a reply to yourself.", "empty"));
+        return;
+      }
+      const form = document.createElement("form");
+      const channel = selectControl([{ value: "email", label: "Email" }, { value: "imessage", label: "iMessage" }], accounts[0].channel, "");
+      const account = selectControl([], "", "");
+      const recipient = selectControl([], "", "");
+      const subject = document.createElement("input"); subject.type = "text"; subject.maxLength = 300;
+      const body = document.createElement("textarea"); body.maxLength = 8000; body.rows = 8; body.required = true;
+      const subjectField = field("Subject", subject);
+      form.append(field("Reply channel", channel), field("From", account), field("To", recipient), subjectField, field("Exact reply text", body), text("p", "iMessage replies use one plain-text line without formatting marks, tabs, or spaces at the beginning or end. Use email for multiple lines or text containing formatting marks. Replies have no attachments or group recipients.", "state-note"));
+      const approve = text("button", "Approve this exact reply", "button button-primary"); approve.type = "submit";
+      const status = text("p", "", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+      form.append(approve, status); content.append(form);
+      let pending = false; let retry = null;
+      function updateChoices() {
+        const accountOptions = accounts.map((value, index) => ({ ...value, index })).filter((value) => value.channel === channel.value).map((value) => ({ value: String(value.index), label: value.label }));
+        const recipientOptions = recipients.filter((value) => value.channel === channel.value).map((value) => ({ value: value.address, label: value.address }));
+        replaceSelectOptions(account, accountOptions, accountOptions[0]?.value || "", accountOptions.length ? "" : "No connected account");
+        replaceSelectOptions(recipient, recipientOptions, recipientOptions[0]?.value || "", recipientOptions.length ? "" : "No allowed recipient");
+        subjectField.style.display = channel.value === "imessage" ? "none" : "";
+        approve.disabled = !accountOptions.length || !recipientOptions.length;
+        status.textContent = !accountOptions.length ? "This CoS channel is not connected for replies." : !recipientOptions.length ? "List your own address for this channel before approving a reply." : "";
+        retry = null;
+      }
+      function unlock() { pending = false; for (const control of form.querySelectorAll("input,select,textarea,button")) control.disabled = false; }
+      channel.addEventListener("change", updateChoices); updateChoices();
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault(); if (pending) return;
+        const selected = accounts[Number(account.value)];
+        if (!selected || selected.channel !== channel.value || !recipient.value) return;
+        const values = { channel: channel.value, service_channel_id: selected.service_channel_id, provider_account_id: selected.provider_account_id, recipient: recipient.value, subject: channel.value === "imessage" ? "" : subject.value, body: body.value };
+        const fingerprint = JSON.stringify(values);
+        if (!retry || retry.fingerprint !== fingerprint) retry = { fingerprint, requestId: crypto.randomUUID() };
+        pending = true; for (const control of form.querySelectorAll("input,select,textarea,button")) control.disabled = true;
+        status.textContent = "Recording your approval…";
+        try {
+          const result = await api("/api/member/v1/cos/responses/approvals", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ ...values, request_id: retry.requestId }) });
+          status.textContent = `Reply text approved until ${new Date(result.expires_at).toLocaleTimeString()}. It has not been sent. Continue below to make the separate sending decision.`;
+          const continueButton = text("button", "Continue to sending approval", "button button-primary");
+          continueButton.type = "button";
+          continueButton.disabled = !state.bootstrap.chat.enabled || state.bootstrap.chat.state !== "healthy";
+          continueButton.addEventListener("click", (click) => {
+            if (state.controller) { status.textContent = "Finish or stop the current conversation before continuing."; return; }
+            continueButton.disabled = true;
+            $("#chat-panel").classList.add("open"); $("#chat-open").setAttribute("aria-expanded", "true");
+            void sendChat(click, {
+              message: `Please use administrateme_cos_response to request sending approval for approved reply ${result.approval_event_id}.`,
+              displayMessage: "Please send the exact reply I just approved.",
+            });
+          });
+          form.append(continueButton);
+          // Leave the approved content immutable in this view. A new approval
+          // requires a fresh form and never extends this approval's expiry.
+        } catch (error) {
+          status.textContent = `${error.message} No send is confirmed. Retrying the same approval is safe.`;
+          unlock();
+        }
+      });
+    } catch (error) {
+      if (card.isConnected) content.replaceChildren(text("p", `${error.message} Reply approval is unavailable.`, "state-note"));
+    }
+  })();
+  return card;
+}
+
+function cosReplySettings(data) {
+  const fragment = document.createDocumentFragment();
+  const policy = data.control.cos_replies || { visible: false, can_mutate: false };
+  const card = document.createElement("section"); card.className = "card cos-reply-settings";
+  if (policy.visible) card.dataset.policyRevision = String(policy.revision);
+  card.append(text("h2", "CoS replies"), text("p", "CoS can reply only to these recipients in the associated member’s conversations. An empty list blocks all replies. Adding a recipient does not turn on sending or share another member’s information.", "state-note"));
+  if (!policy.visible) {
+    card.append(text("p", "A household principal can manage recipients from their own Settings view.", "empty"));
+    fragment.append(card); return fragment;
+  }
+  const form = document.createElement("form");
+  const rows = document.createElement("div"); rows.className = "cos-reply-recipient-list";
+  let pending = false; let retry = null;
+  const members = (data.control.household || []).map((member) => ({ value: member.member_id, label: member.label }));
+  function addRow(entry = {}) {
+    const row = document.createElement("div"); row.className = "preference-grid cos-reply-recipient";
+    const member = selectControl(members, entry.member_id || data.control.identity.authenticated_member_id, "");
+    const channel = selectControl([{ value: "email", label: "Email" }, { value: "imessage", label: "iMessage" }], entry.channel || "email", "");
+    const address = document.createElement("input"); address.type = "text"; address.value = entry.address || ""; address.maxLength = 254; address.autocomplete = "off"; address.spellcheck = false; address.required = true;
+    const remove = text("button", "Remove recipient", "button button-quiet"); remove.type = "button";
+    remove.addEventListener("click", () => { if (!pending) { row.remove(); retry = null; } });
+    row.append(field("Member", member), field("Channel", channel), field("Email address or international phone number", address), remove);
+    row.recipientValue = () => ({ member_id: member.value, channel: channel.value, address: address.value });
+    rows.append(row);
+  }
+  for (const entry of policy.entries || []) addRow(entry);
+  form.append(rows, text("p", "Enter one bare email address or an iMessage number beginning with + and its country code. Display names, lists and wildcards are not accepted. Email aliases and plus tags must be listed separately.", "state-note"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  const add = text("button", "Add recipient", "button button-secondary"); add.type = "button"; add.addEventListener("click", () => { if (!pending && rows.children.length < 100) { addRow(); retry = null; } });
+  const save = text("button", "Save recipients", "button button-primary"); save.type = "submit";
+  const revoke = text("button", "Revoke all replies", "button button-quiet"); revoke.type = "button";
+  const status = text("p", "", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  function lock(locked) { pending = locked; for (const control of form.querySelectorAll("input,select,button")) control.disabled = locked || !policy.can_mutate; }
+  async function submit(entries) {
+    if (pending || !policy.can_mutate) return;
+    const fingerprint = JSON.stringify(entries);
+    if (!retry || retry.fingerprint !== fingerprint) retry = { fingerprint, requestId: crypto.randomUUID() };
+    lock(true); status.textContent = "Saving CoS reply recipients…";
+    try {
+      await api("/api/member/v1/settings/cos-replies", { method: "PUT", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: policy.revision, request_id: retry.requestId, entries }) });
+      setBanner(entries.length ? "CoS reply recipients saved. Sending permissions are unchanged." : "All CoS reply recipients revoked. New replies are blocked.");
+      await reloadActiveSurface();
+    } catch (error) {
+      status.textContent = `${error.message} Check the current list before making another change; retrying the same save is safe.`;
+      lock(false);
+    }
+  }
+  form.addEventListener("input", () => { if (!pending) retry = null; });
+  form.addEventListener("change", () => { if (!pending) retry = null; });
+  form.addEventListener("submit", (event) => { event.preventDefault(); void submit([...rows.children].map((row) => row.recipientValue())); });
+  revoke.addEventListener("click", () => { void submit([]); });
+  actions.append(add, save, revoke); form.append(actions, status); lock(false); card.append(form); fragment.append(card, cosResponseApprovalCard()); return fragment;
+}
+
 function renderSettings(data) {
   const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic control plane";
   root.append(settingsHero(data), settingsNav()); const content = document.createElement("div"); content.className = "settings-content";
@@ -4624,6 +4757,7 @@ function renderSettings(data) {
   else if (state.settingsSection === "behavior") content.append(behaviorSettings(data));
   else if (state.settingsSection === "source-context") content.append(candidateIdentificationSettings(data));
   else if (state.settingsSection === "cos-work") content.append(howCosWorksSettings(data));
+  else if (state.settingsSection === "cos-replies") content.append(cosReplySettings(data));
   else if (state.settingsSection === "capabilities") content.append(capabilitySettings(data));
   else if (state.settingsSection === "connections") content.append(renderConnections(data));
   else if (state.settingsSection === "bridges") content.append(bridgeSettings(data));
@@ -4762,12 +4896,78 @@ async function loadChatHistory() {
   } catch { $("#chat-state").textContent = "Conversation history is temporarily unavailable."; }
 }
 
-async function sendChat(event) {
+const chatReplyApprovals = new Map();
+
+function clearChatReplyApprovals() {
+  for (const entry of chatReplyApprovals.values()) { clearTimeout(entry.timer); entry.node.remove(); }
+  chatReplyApprovals.clear();
+}
+
+async function refreshChatReplyApprovals(isCurrent) {
+  if (state.bootstrap.member.authenticated_role !== "principal" || state.bootstrap.member.viewing_as) return;
+  const result = await api("/api/member/v1/chat/reply-approvals");
+  if (!isCurrent()) return;
+  const active = new Set();
+  for (const row of result.items || []) {
+    const key = `${row.approval_id}:${row.revision}`; active.add(key);
+    const existing = chatReplyApprovals.get(key);
+    if (existing) {
+      if (!row.can_allow && !existing.resolving()) {
+        existing.allow.disabled = true;
+        existing.note.textContent = "The earlier reply approval changed or expired. This reply cannot be sent.";
+      }
+      continue;
+    }
+    if (row.expires_at_ms <= Date.now()) continue;
+    const node = document.createElement("li"); node.className = "message assistant cos-send-approval";
+    node.append(text("h3", "Ready to send this reply?"), text("p", `${row.channel === "imessage" ? "iMessage" : "Email"} to ${row.recipient}`));
+    if (row.subject) node.append(text("strong", row.subject));
+    const content = text("p", row.body); content.style.whiteSpace = "pre-wrap"; node.append(content);
+    const note = text("p", row.can_allow ? "Your reply text is approved. Sending still needs this separate, one-time decision." : "The earlier reply approval changed or expired. This reply cannot be sent.", "state-note");
+    note.setAttribute("role", "status"); note.setAttribute("aria-live", "polite");
+    const allow = text("button", "Allow this reply once", "button button-primary"); allow.type = "button"; allow.disabled = !row.can_allow;
+    const deny = text("button", "Don’t send", "button button-secondary"); deny.type = "button";
+    let resolving = false;
+    const decide = async (decision) => {
+      if (resolving || row.expires_at_ms <= Date.now()) return;
+      resolving = true; allow.disabled = true; deny.disabled = true; note.textContent = "Recording your sending decision…";
+      try {
+        await api("/api/member/v1/chat/reply-approvals", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approval_id: row.approval_id, revision: row.revision, decision }),
+        });
+        note.textContent = decision === "allow-once" ? "Sending allowed once. CoS will report the result." : "Sending declined.";
+      } catch { note.textContent = "No sending decision is confirmed. Wait for CoS to report the result; this control will not retry."; }
+    };
+    allow.addEventListener("click", () => { void decide("allow-once"); });
+    deny.addEventListener("click", () => { void decide("deny"); });
+    node.append(note, allow, deny); $("#chat-messages").append(node);
+    const timer = setTimeout(() => {
+      allow.disabled = true; deny.disabled = true;
+      if (!resolving) note.textContent = "This sending approval expired. No send is authorized by this control.";
+    }, Math.max(0, row.expires_at_ms - Date.now()));
+    chatReplyApprovals.set(key, { node, timer, allow, note, resolving: () => resolving });
+  }
+  for (const [key, entry] of chatReplyApprovals) {
+    if (!active.has(key)) { clearTimeout(entry.timer); entry.node.remove(); chatReplyApprovals.delete(key); }
+  }
+}
+
+async function sendChat(event, handoff = null) {
   event.preventDefault();
-  const input = $("#chat-input"); const message = input.value.trim();
+  const input = $("#chat-input"); const message = handoff?.message || input.value.trim();
   if (!message || state.controller) return;
-  input.value = ""; appendMessage("user", message); state.assistantNode = appendMessage("assistant", "");
+  input.value = ""; appendMessage("user", handoff?.displayMessage || message); state.assistantNode = appendMessage("assistant", "");
   state.controller = new AbortController(); $("#chat-stop").hidden = false; $("#chat-send").disabled = true;
+  let polling = true; let inFlight = false;
+  const poll = async () => {
+    if (inFlight || !polling) return;
+    inFlight = true;
+    try { await refreshChatReplyApprovals(() => polling); }
+    catch { if (polling && chatReplyApprovals.size) clearChatReplyApprovals(); }
+    finally { inFlight = false; }
+  };
+  const approvalTimer = setInterval(() => { void poll(); }, 1000); void poll();
   $("#chat-state").textContent = "Preparing context…";
   try {
     const response = await fetch("/api/member/v1/chat/stream", {
@@ -4792,7 +4992,7 @@ async function sendChat(event) {
     }
   } catch (error) {
     if (error.name !== "AbortError") $("#chat-state").textContent = "The model connection ended. Your household views are still available.";
-  } finally { state.controller = null; state.assistantNode = null; $("#chat-stop").hidden = true; $("#chat-send").disabled = false; }
+  } finally { polling = false; clearInterval(approvalTimer); clearChatReplyApprovals(); state.controller = null; state.assistantNode = null; $("#chat-stop").hidden = true; $("#chat-send").disabled = false; }
 }
 
 function configureChat(policy) {

@@ -39,6 +39,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.lib.adapters import (
     CommunicationAdapter,
     OutboundMessage,
+    SendResult,
     WriteOperation,
     WriteResult,
 )
@@ -231,6 +232,30 @@ class AdapterSupervisor:
         if not result.applied and not result.suppressed:
             raise RuntimeError("provider adapter is not ready to accept writes")
         return result
+
+    async def dispatch_cos_email(
+        self, *, provider_account_id: str, message: OutboundMessage
+    ) -> SendResult:
+        """Select one exact service-owned Gmail adapter, never a member account."""
+        from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+
+        matches: list[CommunicationAdapter] = []
+        for managed in self._managed.values():
+            adapter = managed.adapter
+            config = getattr(adapter, "_config", {})
+            if (
+                getattr(adapter, "name", None) == "messaging-gmail-api"
+                and config.get("service_principal_id") == COS_SERVICE_PRINCIPAL_ID
+                and not config.get("member_id")
+                and config.get("provider_account_id") == provider_account_id
+                and config.get("user_email") == provider_account_id
+                and config.get("enable_writes") is True
+                and isinstance(adapter, CommunicationAdapter)
+            ):
+                matches.append(adapter)
+        if len(matches) != 1:
+            raise LookupError("CoS response requires one exact writable Gmail account")
+        return await matches[0].send(message)
 
     async def dispatch_communication_write(
         self,

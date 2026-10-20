@@ -69,6 +69,17 @@ its derived process-health check. LaunchAgent definitions and running services
 must still be proved. Any new blocker, provider effect, source-accounting error,
 process failure or unrelated Doctor failure refuses successful recovery.
 
+**MODERNIZE** recovery settlement: each safe observation must show zero lag for
+every registered projection and reactive pipeline, followed by a current
+source/effect audit with no refresh in progress. A current audit collected
+before consumers finish does not prove settlement. Replay or a temporary
+`observation_effects` gap may wait only within the existing absolute operation
+budget and checkpoint-progress watchdog, reserving time for full Doctor.
+Malformed consumer evidence, failed accounting and provider effects fail closed.
+**PRESERVE** the exact saved blocker allowlist and original evidence: an added
+observation gap must disappear before recovery succeeds; waiting does not
+refresh an attestation or make expired evidence ready.
+
 Report and journal `preexisting_attestation_gaps` rather than `healthy` when
 that baseline is restored. The dashboard and readiness endpoint remain blocked;
 timestamps and the original observation origin remain unchanged. Successful

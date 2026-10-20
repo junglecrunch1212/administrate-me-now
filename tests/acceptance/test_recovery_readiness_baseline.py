@@ -12,6 +12,7 @@ import base64
 import copy
 import hashlib
 import json
+import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,12 +21,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from adminme.runtime.application import create_application
+from adminme.events.bus import EventBus
+from adminme.runtime.application import AdministrateMeRuntime, create_application
 from adminme.settings_control import SettingsControlStore
 from bootstrap.activation_transaction import ActivationJournal
 from bootstrap.contracts import atomic_write
 from bootstrap.secrets import secret_store
 from bootstrap.release_history import retained_predecessor
+from bootstrap.recovery_readiness import recovery_consumers_settled
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from tests.integration.test_runtime_application import (
     REPO_ROOT,
@@ -108,12 +111,68 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
     pointer = paths.app_dir / "current-release.json"
     atomic_write(pointer, base64.b64decode(journal_input["initial_pointer_bytes"]))
 
+    # Hold an actual all-events projection after the restart fact is appended.
+    # Its earlier checkpoint can have a current zero-effect audit despite lag.
+    # Releasing the durable consumer must invalidate that audit before recovery
+    # can accept the final checkpoint and its independently refreshed proof.
+    hold_recovery_consumer = pointer_depth == 64 and not new_doctor_failure
+    hold_requested = threading.Event()
+    consumer_waiting = threading.Event()
+    release_consumer = threading.Event()
+    audit_waiting = threading.Event()
+    release_audit = threading.Event()
+    barrier_expired = threading.Event()
+    original_deliver = EventBus._deliver_batch
+    original_refresh = AdministrateMeRuntime._run_source_assurance_refresh
+
+    async def wait_for_barrier(release):
+        async def wait():
+            while not release.is_set():
+                await asyncio.sleep(0.001)
+
+        try:
+            await asyncio.wait_for(wait(), timeout=10)
+        except TimeoutError:
+            # Never leave the production runtime stuck if an assertion fails.
+            barrier_expired.set()
+
+    async def delayed_delivery(bus, state, events):
+        if (
+            hold_requested.is_set()
+            and state.subscriber_id == "projection:context_fabric"
+            and any(event["type"] == "runtime.started" for event in events)
+        ):
+            consumer_waiting.set()
+            await wait_for_barrier(release_consumer)
+        return await original_deliver(bus, state, events)
+
+    async def delayed_refresh(runtime, capabilities, revision, *, initial=False):
+        if (
+            not initial
+            and hold_requested.is_set()
+            and release_consumer.is_set()
+            and capabilities["projection:context_fabric"]["details"]["lag_count"] == 0
+        ):
+            audit_waiting.set()
+            await wait_for_barrier(release_audit)
+        return await original_refresh(runtime, capabilities, revision, initial=initial)
+
+    monkeypatch.setattr(EventBus, "_deliver_batch", delayed_delivery)
+    monkeypatch.setattr(
+        AdministrateMeRuntime, "_run_source_assurance_refresh", delayed_refresh
+    )
+
     class Services:
         client = None
         starts = 0
         stops = 0
+        starting = False
+        recovery_observations = None
 
         def start(self):
+            self.starting = True
+            if self.starts == 1 and hold_recovery_consumer:
+                hold_requested.set()
             self.client = TestClient(create_application(settings))
             self.client.__enter__()
             self.starts += 1
@@ -126,10 +185,21 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
                 if (
                     freshness["revision_current"]
                     and not freshness["refresh_in_progress"]
+                    and (
+                        hold_requested.is_set()
+                        or recovery_consumers_settled(diagnostics)
+                    )
                 ):
                     break
                 self.client.portal.call(asyncio.sleep, 0.01)
             assert freshness["revision_current"]
+            if hold_requested.is_set():
+                assert consumer_waiting.is_set()
+                assert not recovery_consumers_settled(diagnostics)
+                self.recovery_observations = []
+            else:
+                assert recovery_consumers_settled(diagnostics)
+            self.starting = False
             return self.status()
 
         def stop(self):
@@ -147,7 +217,24 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
 
         def runtime_diagnostics(self):
             assert self.client is not None
-            return self.client.get("/api/system/ready").json()
+            diagnostics = self.client.get("/api/system/ready").json()
+            if not self.starting and self.recovery_observations is not None:
+                self.recovery_observations.append(diagnostics)
+                freshness = diagnostics["capabilities"]["policy:source-assurance"][
+                    "details"
+                ]["freshness"]
+                if not release_consumer.is_set():
+                    assert not recovery_consumers_settled(diagnostics)
+                    assert freshness["revision_current"]
+                    release_consumer.set()
+                elif (
+                    recovery_consumers_settled(diagnostics)
+                    and not freshness["revision_current"]
+                ):
+                    # The actual refresh cannot complete before this invalidated
+                    # audit has been observed, independent of worker scheduling.
+                    release_audit.set()
+            return diagnostics
 
     services = Services()
     services.start()
@@ -223,6 +310,13 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
         def full_doctor(_release, *, include_synthetic_proof, timeout_seconds):
             assert include_synthetic_proof is True
             assert timeout_seconds > 0
+            if hold_recovery_consumer:
+                assert release_consumer.is_set()
+                assert release_audit.is_set()
+                assert recovery_consumers_settled(services.recovery_observations[-1])
+                assert services.recovery_observations[-1]["capabilities"][
+                    "policy:source-assurance"
+                ]["details"]["freshness"]["revision_current"]
             full_calls.append(True)
             result = copy.deepcopy(doctor)
             if new_doctor_failure:
@@ -242,6 +336,19 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
             saved = json.loads(Path(result["history"]).read_text())
             assert saved["restored_readiness"] == "preexisting_attestation_gaps"
         assert full_calls == [True]
+        if hold_recovery_consumer:
+            assert audit_waiting.is_set()
+            assert not barrier_expired.is_set()
+            observations = services.recovery_observations
+            assert not recovery_consumers_settled(observations[0])
+            assert any(
+                not row["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["revision_current"]
+                and "observation_effects"
+                in row["deployment_readiness"]["blocking_dimensions"]
+                for row in observations[1:]
+            )
         assert services.starts == 2 and services.stops == 1
         assert pointer.read_bytes() == original_pointer
         assert (config / "deployment-readiness.json").read_bytes() == original_readiness
@@ -267,4 +374,6 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
         assert window["started_at"] == origin
         assert window["counts"]["provider_called_true"] == 0
     finally:
+        release_consumer.set()
+        release_audit.set()
         services.stop()

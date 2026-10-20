@@ -9,7 +9,26 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from adminme.bridge_enrollment import CAPABILITY_STATES, ENROLLMENT_STATES
+from adminme.cos_response_policy import validate_recipient_entries
 from adminme.events.registry import registry
+
+
+class SettingsCosResponseAllowlistChangedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    contract: Literal["cos-response-allowlist-v1"]
+    service_principal_id: Literal["service-principal:chief-of-staff"]
+    revision: int = Field(ge=1, strict=True)
+    entries: list[dict[str, str]] = Field(max_length=100)
+    changed_by_member_id: str = Field(min_length=1, max_length=240)
+    changed_at: str = Field(min_length=1)
+    grants_provider_authority: Literal[False] = False
+    provider_effects: Literal[False] = False
+
+    @field_validator("entries")
+    @classmethod
+    def validate_entries(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
+        return validate_recipient_entries(value, None)
 
 
 class SettingsProfileChangedV1(BaseModel):
@@ -296,6 +315,9 @@ class SettingsAppleMessagesReplyControlledV1(BaseModel):
 
 
 registry.register("settings.profile_changed", 1, SettingsProfileChangedV1)
+registry.register(
+    "settings.cos_response_allowlist_changed", 1, SettingsCosResponseAllowlistChangedV1
+)
 registry.register("settings.preferences_changed", 1, SettingsPreferencesChangedV1)
 registry.register(
     "settings.connection_lifecycle_changed", 1, SettingsConnectionLifecycleChangedV1

@@ -117,6 +117,13 @@ def restrict_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
     connection resume cannot widen this local acquisition restriction.
     """
 
+    from adminme.adapters.cos_channel_acquisition import (
+        CONFIG_KEY as COS_CONFIG_KEY,
+        restrict_cos_adapter_config,
+    )
+
+    if COS_CONFIG_KEY in value:
+        return restrict_cos_adapter_config(value)
     policy = policy_from_adapter_config(value)
     if policy is None:
         if any(

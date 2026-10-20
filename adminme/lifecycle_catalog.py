@@ -1761,6 +1761,8 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("settings.", "settings"),
     ("service.delegation.", "service_delegation"),
     ("cos.work.", "cos_work"),
+    ("cos.response.", "external_write"),
+    ("cos.channels.", "governance"),
     ("cos.execution_envelope.", "delegated_execution"),
     ("cos.delegated_action.", "delegated_execution"),
     ("cos.google_tasks_execution.", "delegated_execution"),

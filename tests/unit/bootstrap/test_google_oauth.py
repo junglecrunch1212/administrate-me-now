@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from bootstrap import google_oauth
 
 
@@ -154,4 +157,117 @@ def test_enroll_refuses_the_wrong_google_account_before_secret_storage(
             account_resolver=lambda _credentials: "different@example.invalid",
         )
 
+    assert store.puts == []
+
+
+def test_cos_enrollment_binds_exact_read_send_scope_to_service_owner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    flow, store, requested = _install_fakes(monkeypatch, tmp_path)
+    flow.credentials.scopes = list(google_oauth.COS_GOOGLE_SCOPES)
+    flow.credentials.granted_scopes = list(google_oauth.COS_GOOGLE_SCOPES)
+    reference = google_oauth.enroll(
+        tmp_path / "client.json",
+        service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        expected_account_id="cos@example.test",
+        account_resolver=lambda _credentials: "COS@EXAMPLE.TEST",
+    )
+    assert requested == [list(google_oauth.COS_GOOGLE_SCOPES)]
+    assert requested[0] == [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+    ]
+    [(secret_name, raw_document)] = store.puts
+    owner_digest = google_oauth.credential_service_digest(COS_SERVICE_PRINCIPAL_ID)
+    assert secret_name == f"google-oauth-service-{owner_digest}"
+    assert reference == f"keychain://fixture/{secret_name}"
+    document = json.loads(raw_document)
+    assert document["owner_kind"] == "service_principal"
+    assert document["owner_service_principal_digest"] == owner_digest
+    assert "owner_member_digest" not in document
+    assert document["provider_account_id"] == "cos@example.test"
+    assert document["scopes"] == sorted(google_oauth.COS_GOOGLE_SCOPES)
+    marker_path = tmp_path / "cos-google-enrollment.json"
+    marker = json.loads(marker_path.read_text())
+    assert marker["contract"] == "cos-google-enrollment-v1"
+    assert marker["credential_reference"] == reference
+    assert marker["profile_verified"] is True
+    assert marker["provider_effect_count"] == 0
+    assert (
+        marker["provider_account_sha256"]
+        == hashlib.sha256(b"cos@example.test").hexdigest()
+    )
+    assert marker["owner_service_principal_digest"] == owner_digest
+    assert stat.S_IMODE(marker_path.stat().st_mode) == 0o600
+    for private_value in (
+        "cos@example.test",
+        flow.credentials.refresh_token,
+        flow.credentials.client_secret,
+    ):
+        assert private_value not in marker_path.read_text()
+    assert not (tmp_path / "google-oauth-authorization-url").exists()
+
+
+def test_cos_wrong_account_cannot_reach_keychain_or_create_enrollment_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    flow, store, _requested = _install_fakes(monkeypatch, tmp_path)
+    flow.credentials.scopes = list(google_oauth.COS_GOOGLE_SCOPES)
+    with pytest.raises(RuntimeError, match="does not match"):
+        google_oauth.enroll(
+            tmp_path / "client.json",
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            expected_account_id="cos@example.test",
+            account_resolver=lambda _credentials: "personal@example.test",
+        )
+    assert store.puts == []
+    assert not (tmp_path / "cos-google-enrollment.json").exists()
+    assert not (tmp_path / "google-oauth-authorization-url").exists()
+
+
+def test_cos_broader_scope_is_rejected_before_service_secret_storage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    flow, store, _requested = _install_fakes(monkeypatch, tmp_path)
+    flow.credentials.scopes = list(google_oauth.COS_GOOGLE_SCOPES)
+    flow.credentials.granted_scopes = [
+        *google_oauth.COS_GOOGLE_SCOPES,
+        "https://www.googleapis.com/auth/calendar",
+    ]
+    with pytest.raises(RuntimeError, match="does not exactly match"):
+        google_oauth.enroll(
+            tmp_path / "client.json",
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            expected_account_id="cos@example.test",
+            account_resolver=lambda _credentials: "cos@example.test",
+        )
+    assert store.puts == []
+    assert not (tmp_path / "cos-google-enrollment.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("member", "service"),
+    [
+        ("member-fixture", COS_SERVICE_PRINCIPAL_ID),
+        (None, None),
+        (None, "unrecognized-service"),
+    ],
+)
+def test_enrollment_refuses_ambiguous_or_unrecognized_owners_before_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    member: str | None,
+    service: str | None,
+) -> None:
+    flow, store, requested = _install_fakes(monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        google_oauth.enroll(
+            tmp_path / "client.json",
+            member_id=member,
+            service_principal_id=service,
+            expected_account_id="cos@example.test",
+            account_resolver=lambda _credentials: "cos@example.test",
+        )
+    assert requested == []
+    assert flow.run_calls == []
     assert store.puts == []

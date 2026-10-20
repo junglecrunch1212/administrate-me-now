@@ -343,6 +343,12 @@ def capture_deployment_snapshot(
     test_marker = "state/config/disposable-test-dataset.json"
     if (paths.root / test_marker).exists():
         config_rows.append(_read_config_coordinate(paths, test_marker, True))
+    for cos_coordinate in (
+        "state/config/cos-channel-operation.json",
+        "state/config/cos-imsg-guard.json",
+    ):
+        if (paths.root / cos_coordinate).exists():
+            config_rows.append(_read_config_coordinate(paths, cos_coordinate, True))
     instance_path = paths.instance_dir / "config" / "instance.yaml"
     instance_payload, _metadata = _read_private_file(instance_path)
     try:

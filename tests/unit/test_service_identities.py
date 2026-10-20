@@ -254,7 +254,10 @@ def test_service_identity_cannot_collapse_into_a_member_or_overclaim_state() -> 
     assert isinstance(channels, list)
     channels[0]["observation_active"] = False
     channels[0]["sending_enabled"] = True
-    with pytest.raises(ValueError, match="send command contract is not implemented"):
+    # A healthy identity alone does not enroll the governed response transport.
+    with pytest.raises(
+        ValueError, match="^service sends require the governed CoS response contract$"
+    ):
         validate_service_identity_config(
             premature_send,
             member_ids={"member-a"},

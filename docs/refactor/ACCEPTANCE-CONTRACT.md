@@ -1,5 +1,12 @@
 # Release acceptance contract
 
+CoS channel operation amendment (2026-10-20): require the production
+composition, encrypted allowlist replay, native provider-boundary denial,
+exact service OAuth scope, journaled activation/recovery and isolated browser
+checks in [the CoS operation contract](COS-CHANNEL-OPERATION-CONTRACT.md).
+Deployment retains observation; the owner's separate channel activation ends
+it only after verified prerequisites. Old suppressed actions never dispatch.
+
 CO-034 amendment (2026-10-19): prove forward activation at the 64-entry
 selector limit, exact rollback, fresh forward activation, unchanged retained
 release files and audit history, and real-runtime interrupted recovery of the
@@ -17,6 +24,11 @@ unchanged expired readiness evidence, preserves observation history and zero
 effects, reports the original gaps, and rejects any new runtime or Doctor
 failure. Explicit rollback must use the exact committed baseline; candidate
 activation must still require full readiness.
+Exercise the real-consumer race explicitly: hold a startup event behind a
+projection checkpoint while its zero-effect audit is current, release the
+consumer, observe the now-outdated audit, and require quiescent consumers plus
+a freshly current audit before recovery succeeds. Keep the original blocking
+dimensions, evidence bytes and zero-provider-effect assertions unchanged.
 
 CO-032 amendment (2026-10-08): require production-composition proofs for the
 immutable prerequisite → cutover → prerequisite chain, refusal of a subsequent

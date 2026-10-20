@@ -33,6 +33,7 @@ const expectedTools = [
   "administrateme_google_tasks_create_state",
   "administrateme_skill",
   "administrateme_notification_result",
+  "administrateme_cos_response",
   "administrateme_standing_order",
 ];
 

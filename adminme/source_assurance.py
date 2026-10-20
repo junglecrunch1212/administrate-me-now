@@ -25,6 +25,13 @@ from adminme.communication_intake_policy import (
     command_retirement,
     source_skip_valid,
 )
+from adminme.cos_response_assurance import (
+    APPROVED as COS_APPROVED,
+    ATTEMPTED as COS_ATTEMPTED,
+    AUDIT_TYPES as COS_AUDIT_TYPES,
+    RESULT as COS_RESULT,
+    cos_provider_effect_counts,
+)
 from adminme.lib.pack_registry.models import SourceAssuranceRule
 from adminme.source_assessment_recovery import (
     assessment_outcome,
@@ -121,6 +128,11 @@ def load_source_obligations(repository_root: Path) -> tuple[SourceObligation, ..
                 "external_sync.write_completed",
                 "external_sync.write_failed",
             ),
+        ),
+        SourceObligation(
+            event_type=COS_ATTEMPTED,
+            mode="action_request_terminal",
+            terminal_events=(COS_RESULT,),
         ),
     )
     for obligation in platform:
@@ -399,6 +411,7 @@ async def audit_source_assurance(
     capabilities: dict[str, Any],
     through_event_id: str | None = None,
     provider_effect_window_started_at: str | None = None,
+    provider_effect_window_ended_at: str | None = None,
 ) -> dict[str, Any]:
     """Return secret-free source accounting suitable for Doctor and Settings."""
 
@@ -422,6 +435,7 @@ async def audit_source_assurance(
             RETIRED_COMMAND_TYPE,
         }
     )
+    interesting.update(COS_AUDIT_TYPES)
     payload_types = {
         event_type
         for obligation in obligations
@@ -443,6 +457,7 @@ async def audit_source_assurance(
             RETIRED_COMMAND_TYPE,
         }
     )
+    payload_types.update(COS_AUDIT_TYPES)
     watermark_event_id = through_event_id
     if watermark_event_id is None:
         watermark_event_id = await event_log.latest_event_id()
@@ -462,6 +477,8 @@ async def audit_source_assurance(
     refused_submissions: set[str] = set()
     retired_commands: set[str] = set()
     messaging_cycles: list[dict[str, Any]] = []
+    cos_metadata: list[dict[str, Any]] = []
+    cos_terminals: set[str] = set()
     async for event in event_log.read_metadata_since(
         # An empty log has a null public watermark; the impossible empty
         # string still provides a closed upper bound if an append races the
@@ -471,6 +488,10 @@ async def audit_source_assurance(
         include_payload_for=sorted(payload_types),
     ):
         payload = event.get("payload") or {}
+        if event.get("type") in COS_AUDIT_TYPES:
+            cos_metadata.append(event)
+            if event.get("type") == COS_RESULT:
+                cos_terminals.add(str(payload.get("approval_event_id") or ""))
         if event.get("type") == "triage.intent.interpretation_refused":
             source_id = str(payload.get("source_event_id") or "")
             source = await event_log.get(source_id) if source_id else None
@@ -529,6 +550,36 @@ async def audit_source_assurance(
             messaging_cycles.append(event)
         if event.get("type") in by_type:
             source_events.append(event)
+
+    # Load private envelopes only for this exact CoS protocol. Other provider
+    # writes keep their established metadata-only accounting.
+    cos_ids = {
+        event["event_id"]
+        for event in cos_metadata
+        if event["type"] in {COS_APPROVED, COS_ATTEMPTED, COS_RESULT}
+    }
+    cos_openclaw_ids = {
+        (event.get("payload") or {}).get("openclaw_approval_event_id")
+        for event in cos_metadata
+        if event["type"] == COS_ATTEMPTED
+    }
+    cos_events: list[dict[str, Any]] = []
+    for event in cos_metadata:
+        payload = event.get("payload") or {}
+        if not (
+            event["event_id"] in cos_ids | cos_openclaw_ids
+            or (cos_ids and event["type"] == "settings.cos_response_allowlist_changed")
+            or payload.get("operation") == "cos.response.send"
+            or payload.get("action") == "cos.response.send"
+            or payload.get("attempted_action") == "cos.response.send"
+            or payload.get("initiating_event_id") in cos_ids
+            or payload.get("domain_approval_event_id") in cos_ids
+        ):
+            continue
+        full_event = await event_log.get(str(event["event_id"]))
+        if full_event is None:
+            raise RuntimeError("CoS response audit envelope is unavailable")
+        cos_events.append(full_event)
 
     counts = {
         "source_facts": 0,
@@ -675,8 +726,14 @@ async def audit_source_assurance(
                     status = "pending"
                     detail = "projection_checkpoint_pending"
             elif obligation.mode == "action_request_terminal":
-                command_id = str((event.get("payload") or {}).get("command_id") or "")
-                if command_id not in action_terminals:
+                command_key = (
+                    "approval_event_id" if event_type == COS_ATTEMPTED else "command_id"
+                )
+                command_id = str((event.get("payload") or {}).get(command_key) or "")
+                terminals = (
+                    cos_terminals if event_type == COS_ATTEMPTED else action_terminals
+                )
+                if command_id not in terminals:
                     status = "missing" if _is_overdue(event) else "pending"
                     detail = (
                         "terminal_action_result_overdue"
@@ -739,6 +796,8 @@ async def audit_source_assurance(
     effect_counts = _provider_effect_counts(
         source_events, action_terminal_events, effect_reconciliations
     )
+    for key, value in cos_provider_effect_counts(cos_events).items():
+        effect_counts[key] += value
     effects_healthy = _provider_effect_integrity_healthy(effect_counts)
     zero_effects = _zero_provider_effects(effect_counts)
     messaging_counts = {
@@ -759,24 +818,34 @@ async def audit_source_assurance(
         messaging_cycles[-1].get("payload", {}) if messaging_cycles else {}
     )
     window_start = _aware_datetime(provider_effect_window_started_at)
-    if window_start is None:
+    window_end = _aware_datetime(provider_effect_window_ended_at)
+    invalid_window_end = provider_effect_window_ended_at is not None and (
+        window_end is None or window_start is None or window_end <= window_start
+    )
+    if window_start is None or invalid_window_end:
         window_counts = _provider_effect_counts([], {})
         window_state = "missing"
         window_zero_effects = False
     else:
-        window_sources = [
-            event for event in source_events if _event_at_or_after(event, window_start)
-        ]
+
+        def in_window(event: dict[str, Any]) -> bool:
+            return _event_at_or_after(event, window_start) and (
+                window_end is None or not _event_at_or_after(event, window_end)
+            )
+
+        window_sources = [event for event in source_events if in_window(event)]
         window_terminals = {
-            command_id: [
-                event for event in rows if _event_at_or_after(event, window_start)
-            ]
+            command_id: [event for event in rows if in_window(event)]
             for command_id, rows in action_terminal_events.items()
         }
         window_terminals = {
             command_id: rows for command_id, rows in window_terminals.items() if rows
         }
         window_counts = _provider_effect_counts(window_sources, window_terminals)
+        for key, value in cos_provider_effect_counts(
+            cos_events, include=in_window
+        ).items():
+            window_counts[key] += value
         window_zero_effects = _zero_provider_effects(window_counts)
         window_state = (
             "healthy"
@@ -820,6 +889,7 @@ async def audit_source_assurance(
                 "state": window_state,
                 "started_at_configured": window_start is not None,
                 "started_at": window_start.isoformat() if window_start else None,
+                "ended_at": window_end.isoformat() if window_end else None,
                 "counts": window_counts,
                 "content_exposed": False,
             },

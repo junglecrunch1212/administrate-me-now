@@ -79,7 +79,7 @@ export function prepareApproval(
         OPENCLAW_COMMIT,
       ].join("|");
       const signature = createHmac("sha256", secret).update(material).digest("hex");
-      await runtime.transport.request("/api/openclaw/v1/approvals/resolve", {
+      const publication = runtime.transport.request("/api/openclaw/v1/approvals/resolve", {
         receipt_id: receiptId,
         tool_name: toolName,
         request_fingerprint: requestFingerprint,
@@ -89,7 +89,29 @@ export function prepareApproval(
         openclaw_version: OPENCLAW_VERSION,
         openclaw_commit: OPENCLAW_COMMIT,
         signature,
-      });
+      }).then(() => undefined);
+      // The pinned host intentionally does not await onResolution. Register
+      // synchronously before its next tool step and consume this exact promise.
+      runtime.approvalPublications ??= new Map();
+      runtime.approvalPublications.set(receiptId, publication);
+      const expiry = setTimeout(() => runtime.approvalPublications?.delete(receiptId), 120_000);
+      expiry.unref();
+      await publication;
     },
   };
+}
+
+export async function waitForApprovalPublication(runtime: PluginRuntime, receiptId: unknown): Promise<void> {
+  if (typeof receiptId !== "string") return;
+  const publication = runtime.approvalPublications?.get(receiptId);
+  if (!publication) return; // Backend still requires its independently authenticated receipt.
+  try {
+    await Promise.race([
+      publication,
+      new Promise<never>((_resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Sending approval was not recorded")), 10_000);
+        timer.unref();
+      }),
+    ]);
+  } finally { runtime.approvalPublications?.delete(receiptId); }
 }

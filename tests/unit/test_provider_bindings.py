@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from jsonschema import Draft202012Validator, ValidationError
 import pytest
 
+from adminme.adapters.cos_channel_acquisition import CosAcquisitionPolicy
+from adminme.adapters.disposable_test_acquisition import DisposableTestAcquisition
 from adminme.provider_bindings import (
     public_binding_inventory,
     validate_provider_bindings,
@@ -287,3 +296,226 @@ def test_provider_binding_rejects_member_and_service_owner_collapse() -> None:
             household_mapping={},
             service_principal_ids={"service-principal:chief-of-staff"},
         )
+
+
+def _cos_oauth_configuration(*, live: bool) -> dict[str, Any]:
+    retained = DisposableTestAcquisition(
+        adapter_id="personal-paused",
+        member_id="member-a",
+        provider_account_id="member-a@example.test",
+        message_ids=("retained-message",),
+    )
+    account = "cos@example.test"
+    channel = "channel:chief-of-staff:gmail"
+    return {
+        "disposable_test_acquisition": retained.private_config(),
+        "cos_channel_acquisition": CosAcquisitionPolicy(
+            retained_test_policy_sha256=retained.receipt_digest(),
+            gmail_adapter_id="cos-oauth",
+            gmail_channel_id=channel,
+            gmail_provider_account_id=account,
+        ).model_dump(mode="json"),
+        "service_identities": {
+            "channels": [
+                {
+                    "channel_id": channel,
+                    "service_principal_id": "service-principal:chief-of-staff",
+                    "provider": "gmail",
+                    "enrolled": True,
+                    "state": "healthy" if live else "observation",
+                    "intake_mode": "member_submission",
+                    "provider_account_reference": (
+                        "provider-account:"
+                        + hashlib.sha256(account.encode()).hexdigest()
+                    ),
+                }
+            ]
+        },
+        "adapters": [
+            {
+                "id": "personal-paused",
+                "enabled": False,
+                "kind": "messaging-gmail-api",
+                "config": {"member_id": "member-a"},
+            },
+            {
+                "id": "cos-oauth",
+                "kind": "messaging-gmail-api",
+                "enabled": True,
+                "config": {
+                    "service_principal_id": "service-principal:chief-of-staff",
+                    "provider_account_id": account,
+                    "user_email": account,
+                    "channel_id": channel,
+                    "workspace": "service",
+                    "permission_scope": [
+                        "https://www.googleapis.com/auth/gmail.readonly",
+                        "https://www.googleapis.com/auth/gmail.send",
+                    ],
+                    "binding_provenance": "oauth-subject",
+                    "ownership_attested": True,
+                    "oauth_credentials_ref": "keychain://fixture/cos-gmail",
+                    "read_only": not live,
+                    "enable_writes": live,
+                    "trusted_sender_routes": [
+                        {
+                            "exact_from_identifier": "member-a@example.test",
+                            "route_key": "route:" + "1" * 64,
+                            "authentication_policy": "receiver_aligned_sender",
+                        }
+                    ],
+                },
+            },
+        ],
+    }
+
+
+def _validate_cos_oauth(config: dict[str, Any]) -> Any:
+    return validate_provider_bindings(
+        config,
+        member_roles={"member-a": "principal"},
+        household_mapping={},
+        service_principal_ids={"service-principal:chief-of-staff"},
+    )
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_exact_enrolled_cos_oauth_binding_accepts_observation_and_governed_send(
+    live: bool,
+) -> None:
+    config = _cos_oauth_configuration(live=live)
+    original = copy.deepcopy(config)
+    [binding] = _validate_cos_oauth(config)
+    assert config == original
+    assert binding.member_id is None
+    assert binding.owner_scope == "service-private:service-principal:chief-of-staff"
+    assert binding.permitted_operations == (("send",) if live else ())
+    assert binding.write_binding_state == (
+        "governed_cos_response" if live else "read_only"
+    )
+    assert binding.b03_dispatch_coordinate is None
+    assert "cos@example.test" not in str(binding.public())
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("provider_account_id", "other@example.test"),
+        ("user_email", "other@example.test"),
+        ("service_principal_id", "service-principal:other"),
+        ("member_id", "member-a"),
+        ("channel_id", "channel:other:gmail"),
+        ("workspace", "personal"),
+        ("permission_scope", ["https://www.googleapis.com/auth/gmail.readonly"]),
+        (
+            "permission_scope",
+            [
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/gmail.modify",
+            ],
+        ),
+        ("binding_provenance", "service-account-delegation"),
+        ("ownership_attested", False),
+        ("oauth_credentials_ref", "/tmp/unreviewed-credential"),
+        ("service_account_key_ref", "op://fixture/ambiguous/credential"),
+        ("read_only", True),
+        ("enable_writes", False),
+        ("b03_google_tasks_create", {}),
+    ],
+)
+def test_cos_oauth_binding_rejects_inexact_account_grant_or_write_mode(
+    key: str, value: Any
+) -> None:
+    config = _cos_oauth_configuration(live=True)
+    config["adapters"][1]["config"][key] = value
+    with pytest.raises(ValueError):
+        _validate_cos_oauth(config)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["no-overlay", "unselected", "unenrolled", "history"]
+)
+def test_cos_oauth_binding_requires_selected_enrolled_acquisition_contract(
+    mutation: str,
+) -> None:
+    config = _cos_oauth_configuration(live=True)
+    if mutation == "no-overlay":
+        config.pop("cos_channel_acquisition")
+    elif mutation == "unselected":
+        config["cos_channel_acquisition"]["gmail_adapter_id"] = "other"
+    elif mutation == "unenrolled":
+        config["service_identities"]["channels"][0]["enrolled"] = False
+    else:
+        config["disposable_test_acquisition"]["message_ids"].append("expanded")
+    with pytest.raises(ValueError):
+        _validate_cos_oauth(config)
+
+
+def _gmail_schema() -> Draft202012Validator:
+    root = Path(__file__).resolve().parents[2]
+    return Draft202012Validator(
+        json.loads(
+            (root / "packs/adapters/messaging/gmail/config.schema.json").read_text()
+        )
+    )
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_gmail_pack_schema_accepts_only_exact_cos_oauth_response_shape(
+    live: bool,
+) -> None:
+    selected = _cos_oauth_configuration(live=live)["adapters"][1]["config"]
+    _gmail_schema().validate(selected)
+    # Provider grant order is irrelevant to the exact permission set.
+    selected["permission_scope"].reverse()
+    _gmail_schema().validate(selected)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("service_principal_id", "service-principal:other"),
+        ("binding_provenance", "service-account-delegation"),
+        ("service_account_key_ref", "op://fixture/ambiguous/credential"),
+        ("read_only", True),
+        ("enable_writes", False),
+        ("trusted_sender_routes", []),
+        (
+            "permission_scope",
+            [
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.modify",
+            ],
+        ),
+        (
+            "permission_scope",
+            [
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/gmail.send",
+            ],
+        ),
+    ],
+)
+def test_gmail_pack_schema_does_not_widen_other_service_accounts_or_grants(
+    key: str, value: Any
+) -> None:
+    selected = _cos_oauth_configuration(live=True)["adapters"][1]["config"]
+    selected[key] = value
+    with pytest.raises(ValidationError):
+        _gmail_schema().validate(selected)
+
+
+def test_gmail_pack_schema_preserves_personal_and_delegated_readonly_shapes() -> None:
+    schema = _gmail_schema()
+    schema.validate(_entry()["config"])
+    service = _service_entry(
+        "messaging-gmail-api", "https://www.googleapis.com/auth/gmail.readonly"
+    )["config"]
+    assert isinstance(service, dict)
+    service["channel_id"] = "channel:service:gmail"
+    schema.validate(service)
+    service["enable_writes"] = True
+    service["read_only"] = False
+    with pytest.raises(ValidationError):
+        schema.validate(service)

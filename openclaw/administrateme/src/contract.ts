@@ -67,6 +67,7 @@ export const TOOL_NAMES = [
   "administrateme_google_tasks_create_state",
   "administrateme_skill",
   "administrateme_notification_result",
+  "administrateme_cos_response",
   "administrateme_standing_order",
 ] as const;
 
@@ -86,5 +87,6 @@ export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([
   "administrateme_execute_google_tasks_create_once",
   "administrateme_execute_pending_provider_action",
   "administrateme_skill",
+  "administrateme_cos_response",
   "administrateme_standing_order",
 ]);

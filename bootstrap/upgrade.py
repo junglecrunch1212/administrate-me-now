@@ -71,7 +71,6 @@ from bootstrap.recovery_readiness import (
     BASELINE_CONTROLS,
     capture_baseline,
     validate_baseline,
-    runtime_matches_baseline,
     full_doctor_matches_baseline,
 )
 from bootstrap.services import (
@@ -90,6 +89,7 @@ from bootstrap.service_settlement import (
     has_new_structural_degradation,
     runtime_has_only_transient_deployment_readiness_gap,
     run_release_doctor,
+    wait_for_recovery_baseline,
     wait_for_settled_doctor,
 )
 from bootstrap.source_assessment_repair import (
@@ -1479,7 +1479,26 @@ class UpgradeManager:
         pointer_bytes, pointer = self._read_private_json_payload(pointer_path)
         if pointer is None or pointer.get("path") != str(release):
             return False
-        if not runtime_matches_baseline(baseline, self.services.runtime_diagnostics()):
+
+        def validate_selection() -> None:
+            self._require_recovery_baseline_controls(baseline)
+            if self._read_private_json_payload(pointer_path)[0] != pointer_bytes:
+                raise UpgradeError(
+                    "recovery release selection changed during settlement"
+                )
+
+        if (
+            wait_for_recovery_baseline(
+                services=self.services,
+                baseline=baseline,
+                absolute_deadline=deadline,
+                reserve_seconds=(
+                    RELEASE_DOCTOR_TIMEOUT_SECONDS + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS
+                ),
+                validate_selection=validate_selection,
+            )
+            is None
+        ):
             return False
         full = self._run_release_doctor(
             release,
@@ -1491,10 +1510,16 @@ class UpgradeManager:
             or deployment_clock() + RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS > deadline
         ):
             return False
-        final = self.services.runtime_diagnostics()
-        self._require_recovery_baseline_controls(baseline)
+        final = wait_for_recovery_baseline(
+            services=self.services,
+            baseline=baseline,
+            absolute_deadline=deadline,
+            reserve_seconds=0,
+            validate_selection=validate_selection,
+        )
+        validate_selection()
         return (
-            runtime_matches_baseline(baseline, final)
+            final is not None
             and self._read_private_json_payload(pointer_path)[0] == pointer_bytes
             and deployment_clock() < deadline
         )
@@ -1748,6 +1773,102 @@ class UpgradeManager:
                 raise UpgradeError("activation journal readiness bytes changed")
             atomic_write(readiness_path, readiness_payload, mode=0o600)
             self._fsync_directory(readiness_path.parent)
+        self._restore_cos_guard_rebind(journal)
+
+    def _prepare_cos_guard_rebind(
+        self,
+        *,
+        adapter_config: dict[str, Any],
+        source_release: Path,
+        target_release: Path,
+        history: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        from adminme.adapters.cos_channel_acquisition import policy_from_config
+        from bootstrap.cos_guard_release import prepare_rebind, snapshot_bytes
+
+        policy = policy_from_config(adapter_config)
+        if policy is None or policy.imessage_channel_id is None:
+            return None
+        guard, _ = self._read_private_json_payload(
+            self.paths.instance_dir / "config/cos-imsg-guard.json"
+        )
+        gateway, _ = self._read_private_json_payload(
+            self.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        )
+        assert guard is not None and gateway is not None
+        prior_rebind = (history or {}).get("cos_imessage_rebind")
+        try:
+            return prepare_rebind(
+                guard_payload=guard,
+                gateway_payload=gateway,
+                adapter_config=adapter_config,
+                source_release=source_release,
+                target_release=target_release,
+                historical_target_guard=(
+                    snapshot_bytes(prior_rebind["guard"]["before"])
+                    if prior_rebind is not None
+                    else None
+                ),
+            )
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise UpgradeError(
+                "CoS guard release transition cannot be prepared exactly"
+            ) from exc
+
+    def _select_cos_guard_rebind(self, journal: dict[str, Any]) -> dict[str, Any]:
+        """Called only after quiescence; intent precedes either control write."""
+        from bootstrap.cos_guard_release import COORDINATES, snapshot_bytes
+        from bootstrap.cos_imessage import verify_guard_files
+
+        rebind = journal.get("cos_imessage_rebind")
+        if rebind is None:
+            return journal
+        if journal["phase"] not in {"openclaw_selected", "provider_config_selected"}:
+            raise UpgradeError("CoS guard selection requires stopped-service selection")
+        for side, release_key in (
+            ("before", "predecessor_path"),
+            ("after", "target_path"),
+        ):
+            verify_guard_files(
+                json.loads(snapshot_bytes(rebind["guard"][side])),
+                reviewed_release=Path(journal[release_key]),
+            )
+        for name, relative in COORDINATES.items():
+            payload, _ = self._read_private_json_payload(
+                self.paths.instance_dir / relative
+            )
+            if payload != snapshot_bytes(rebind[name]["before"]):
+                raise UpgradeError(
+                    "CoS transport configuration changed before release selection"
+                )
+        journal = self.activation_journal.transition(journal, "cos_guard_selecting")
+        for name, relative in COORDINATES.items():
+            path = self.paths.instance_dir / relative
+            atomic_write(path, snapshot_bytes(rebind[name]["after"]), mode=0o600)
+            self._fsync_directory(path.parent)
+            if name == "guard":
+                self._test_crash_after_journal_phase("cos_guard_selecting")
+        journal = self.activation_journal.transition(journal, "cos_guard_selected")
+        self._test_crash_after_journal_phase("cos_guard_selected")
+        return journal
+
+    def _restore_cos_guard_rebind(self, journal: dict[str, Any]) -> None:
+        from bootstrap.cos_guard_release import COORDINATES, snapshot_bytes
+        from bootstrap.cos_imessage import verify_guard_files
+
+        rebind = journal.get("cos_imessage_rebind")
+        if rebind is None:
+            return
+        # A damaged candidate must not prevent restoration of the independently
+        # verified predecessor; only the recovery target is required here.
+        verify_guard_files(
+            json.loads(snapshot_bytes(rebind["guard"]["before"])),
+            reviewed_release=Path(journal["predecessor_path"]),
+        )
+        for name, relative in COORDINATES.items():
+            path = self.paths.instance_dir / relative
+            atomic_write(path, snapshot_bytes(rebind[name]["before"]), mode=0o600)
+            self._fsync_directory(path.parent)
 
     def _prepared_adapter_config(
         self,
@@ -1907,6 +2028,9 @@ class UpgradeManager:
                     predecessor,
                     test_mode=self.test_mode,
                 ),
+                # Plugin installation must not change captured transport bytes
+                # on recovery (including their configuration fingerprint).
+                lambda: self._restore_cos_guard_rebind(recovery_journal),
                 lambda: install_launch_agents(
                     self.paths,
                     predecessor,
@@ -2056,6 +2180,24 @@ class UpgradeManager:
 
     def _require_bounded_target(self, target: Path) -> None:
         """Never start a target that ignores an active bounded dataset."""
+        adapter_path = self.paths.instance_dir / "config" / "adapters.json"
+        if adapter_path.exists():
+            from adminme.adapters.cos_channel_acquisition import (
+                CONTRACT as COS_ACQUISITION_CONTRACT,
+                policy_from_config as cos_policy_from_config,
+            )
+
+            configured = json.loads(adapter_path.read_text("utf-8"))
+            if cos_policy_from_config(configured) is not None:
+                supported = (
+                    load_versions(target)
+                    .get("administrateme", {})
+                    .get("supported_acquisition_contracts", [])
+                )
+                if COS_ACQUISITION_CONTRACT not in supported:
+                    raise UpgradeError(
+                        "target release cannot preserve CoS-only acquisition"
+                    )
         if os.path.lexists(
             self.paths.instance_dir / "config" / "disposable-test-dataset.json"
         ):
@@ -2167,6 +2309,11 @@ class UpgradeManager:
                 source_config=adapter_config,
             )
         )
+        cos_rebind = self._prepare_cos_guard_rebind(
+            adapter_config=selected_adapter_config,
+            source_release=active_root,
+            target_release=release,
+        )
         (
             current_pointer,
             current_active,
@@ -2251,6 +2398,7 @@ class UpgradeManager:
                         selected_adapter_payload
                     ).hexdigest(),
                     "provider_binding_transition": binding_transition,
+                    "cos_imessage_rebind": cos_rebind,
                     "was_running": was_running,
                     "pending_attestation_id": self.pending_attestation_id,
                     "pending_attestation_sha256": pending_sha256,
@@ -2488,6 +2636,7 @@ class UpgradeManager:
                     journal,
                     "provider_config_selected",
                 )
+            journal = self._select_cos_guard_rebind(journal)
             journal = self.activation_journal.transition(
                 journal,
                 "plugin_selecting",
@@ -3069,6 +3218,12 @@ class UpgradeManager:
             target_adapter_config = historical_adapter_config
         if pointer != current:
             raise UpgradeError("active-release pointer changed before rollback")
+        cos_rebind = self._prepare_cos_guard_rebind(
+            adapter_config=target_adapter_config,
+            source_release=current_release,
+            target_release=release,
+            history=activation_history,
+        )
         was_running = self.services.status().status != "stopped"
         transaction_id = uuid.uuid4().hex
         try:
@@ -3132,6 +3287,7 @@ class UpgradeManager:
                         target_adapter_payload
                     ).hexdigest(),
                     "provider_binding_transition": binding_transition,
+                    "cos_imessage_rebind": cos_rebind,
                     "was_running": was_running,
                     "pending_attestation_id": None,
                     "pending_attestation_sha256": None,
@@ -3196,6 +3352,7 @@ class UpgradeManager:
                     journal,
                     "provider_config_selected",
                 )
+            journal = self._select_cos_guard_rebind(journal)
             journal = self.activation_journal.transition(
                 journal,
                 "plugin_selecting",
@@ -3271,6 +3428,13 @@ class UpgradeManager:
                 )
             else:
                 self._require_recovery_baseline_controls(target_readiness_baseline)
+                if cos_rebind is not None:
+                    # The release-bound transport has deliberately changed;
+                    # bind its verified target configuration before startup.
+                    self._write_refreshed_runtime_binding(
+                        target_readiness,
+                        candidate_commit=target_commit,
+                    )
             journal = self.activation_journal.transition(
                 journal,
                 "launchagents_selecting",

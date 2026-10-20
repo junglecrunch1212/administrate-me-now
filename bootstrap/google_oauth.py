@@ -9,13 +9,20 @@ from typing import Callable, Sequence
 
 from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
 
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.google_oauth_contract import (
     GOOGLE_READONLY_ADAPTER_SCOPES,
     credential_member_digest,
     member_google_secret_name,
 )
 from bootstrap.secrets import secret_store
+from adminme.adapters.credentials import credential_service_digest
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+
+COS_GOOGLE_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+)
 
 
 def _assert_exact_grant(credentials: object, requested_scopes: Sequence[str]) -> None:
@@ -26,7 +33,7 @@ def _assert_exact_grant(credentials: object, requested_scopes: Sequence[str]) ->
         granted_scopes and granted_scopes != requested
     ):
         raise RuntimeError(
-            "Google OAuth grant does not exactly match the requested read-only scopes"
+            "Google OAuth grant does not exactly match the requested scopes"
         )
 
 
@@ -49,15 +56,22 @@ def _resolve_google_account_id(credentials: object) -> str:
 def enroll(
     client_file: Path,
     *,
-    member_id: str,
+    member_id: str | None = None,
+    service_principal_id: str | None = None,
     expected_account_id: str,
     account_resolver: Callable[[object], str] = _resolve_google_account_id,
 ) -> str:
-    """Run exact read-only consent and retain refresh credentials in Keychain."""
+    """Enroll one exact member read grant or a dedicated CoS read/send grant."""
+    if bool(member_id) == bool(service_principal_id):
+        raise ValueError("exactly one credential owner must be selected")
+    if service_principal_id and service_principal_id != COS_SERVICE_PRINCIPAL_ID:
+        raise ValueError("unsupported service credential owner")
     paths = DeploymentPaths.default()
     paths.run_dir.mkdir(parents=True, exist_ok=True)
     authorization_url_file = paths.run_dir / "google-oauth-authorization-url"
-    scopes = list(GOOGLE_READONLY_ADAPTER_SCOPES)
+    scopes = list(
+        COS_GOOGLE_SCOPES if service_principal_id else GOOGLE_READONLY_ADAPTER_SCOPES
+    )
     flow = InstalledAppFlow.from_client_secrets_file(str(client_file), scopes=scopes)
     token_uri = flow.client_config.get("token_uri")
     if not isinstance(token_uri, str) or not token_uri:
@@ -66,8 +80,7 @@ def enroll(
 
     def authorization_url(**kwargs: object) -> tuple[str, str]:
         url, state = original_authorization_url(**kwargs)
-        authorization_url_file.write_text(url, encoding="utf-8")
-        authorization_url_file.chmod(0o600)
+        atomic_write(authorization_url_file, url.encode("utf-8"), mode=0o600)
         return url, state
 
     flow.authorization_url = authorization_url  # type: ignore[method-assign]
@@ -102,31 +115,74 @@ def enroll(
     document = {
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-        "owner_member_digest": credential_member_digest(member_id),
         "provider_account_id": actual_account,
         "refresh_token": credentials.refresh_token,
         "token_uri": token_uri,
         "scopes": sorted(scopes),
     }
-    return secret_store(paths).put(
-        member_google_secret_name(member_id),
+    if service_principal_id:
+        digest = credential_service_digest(service_principal_id)
+        document.update(
+            {
+                "owner_kind": "service_principal",
+                "owner_service_principal_digest": digest,
+            }
+        )
+        secret_name = f"google-oauth-service-{digest}"
+    else:
+        assert member_id is not None
+        document["owner_member_digest"] = credential_member_digest(member_id)
+        secret_name = member_google_secret_name(member_id)
+    reference = secret_store(paths).put(
+        secret_name,
         json.dumps(document, sort_keys=True).encode("utf-8"),
     )
+    if service_principal_id:
+        from datetime import datetime, timezone
+        import hashlib
+
+        digest = credential_service_digest(service_principal_id)
+        atomic_write(
+            paths.run_dir / "cos-google-enrollment.json",
+            json.dumps(
+                {
+                    "contract": "cos-google-enrollment-v1",
+                    "credential_reference": reference,
+                    "owner_service_principal_digest": digest,
+                    "provider_account_sha256": hashlib.sha256(
+                        actual_account.encode()
+                    ).hexdigest(),
+                    "scopes": sorted(scopes),
+                    "profile_verified": True,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "provider_effect_count": 0,
+                },
+                sort_keys=True,
+            ).encode(),
+            mode=0o600,
+        )
+    return reference
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("client_file", type=Path)
-    parser.add_argument(
+    owner = parser.add_mutually_exclusive_group(required=True)
+    owner.add_argument(
         "--member-id",
-        required=True,
         help="opaque AdministrateMe member id from the local member mapping",
+    )
+    owner.add_argument(
+        "--cos-service",
+        action="store_true",
+        help="enroll only the CoS Gmail read/send service account",
     )
     args = parser.parse_args(argv)
     expected_account_id = input("Expected Google account (local input only): ")
     reference = enroll(
         args.client_file,
         member_id=args.member_id,
+        service_principal_id=COS_SERVICE_PRINCIPAL_ID if args.cos_service else None,
         expected_account_id=expected_account_id,
     )
     print(f"Google adapter credentials stored at {reference}")

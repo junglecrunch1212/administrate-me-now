@@ -49,6 +49,56 @@ def assert_installed_user_binding(
         )
 
 
+def credential_service_digest(service_principal_id: str) -> str:
+    """Separate service ownership namespace; never aliases a member grant."""
+    if (
+        not isinstance(service_principal_id, str)
+        or not service_principal_id
+        or service_principal_id != service_principal_id.strip()
+    ):
+        raise ValueError("service principal must be an exact non-empty identifier")
+    return hashlib.sha256(
+        ("service-principal:" + service_principal_id).encode()
+    ).hexdigest()[:24]
+
+
+def assert_service_oauth_binding(
+    document: dict[str, Any],
+    *,
+    service_principal_id: str,
+    provider_account_id: str,
+    required_scopes: list[str],
+) -> None:
+    """Require a newly enrolled, exact service-owned OAuth grant.
+
+    Historical unbound and member-owned grants never gain service authority.
+    Service mail only needs read and send; modify/full-mail grants are rejected.
+    """
+    from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+
+    allowed = {
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+    }
+    account = document.get("provider_account_id")
+    scopes = document.get("scopes")
+    if (
+        service_principal_id != COS_SERVICE_PRINCIPAL_ID
+        or document.get("owner_kind") != "service_principal"
+        or document.get("owner_service_principal_digest")
+        != credential_service_digest(service_principal_id)
+        or document.get("owner_member_digest") is not None
+        or not isinstance(account, str)
+        or account != provider_account_id
+        or not account
+        or not isinstance(scopes, list)
+        or any(not isinstance(scope, str) for scope in scopes)
+        or not set(required_scopes) <= set(scopes) <= allowed
+        or not {"client_id", "client_secret", "refresh_token"} <= document.keys()
+    ):
+        raise RuntimeError("service OAuth grant does not match the exact CoS account")
+
+
 def resolve_json_credentials(reference: str) -> dict[str, Any]:
     """Resolve JSON from a supported secret-provider reference.
 

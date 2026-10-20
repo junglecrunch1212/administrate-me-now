@@ -79,6 +79,42 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      # Prove the new channel boundary before the longer recovery rehearsals.
+      - name: Validate the exact native plugin contract
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+
+      - name: Build and verify the exact reviewed OpenClaw source
+        run: bash scripts/acceptance/openclaw-source-install.sh
+
+      - name: Preserve isolated Gateway approval probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cos-approval-gateway-probe
+          path: ${{ runner.temp }}/adminme-approval-gateway-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Validate member browser behavior
+        env:
+          ADMINME_GATE7_EVIDENCE_DIR: ${{ runner.temp }}/adminme-gate7-early
+        run: |
+          npm ci --prefix tools/console-reference-harness --ignore-scripts
+          ADMINME_GATE7_PYTHON="$(poetry env info --executable)" \
+          npm run test:gate7 --prefix tools/console-reference-harness
+
+      - name: Retain credential-free browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: credential-free-member-browser
+          path: ${{ runner.temp }}/adminme-gate7-early
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Validate retained runtime and readiness recovery
         run: >-
           poetry run pytest -p no:cacheprovider -q -ra --maxfail=1
@@ -109,29 +145,6 @@ jobs:
           tests/unit/test_observation_readiness_window.py
           tests/unit/test_member_device_check_coverage.py
           tests/integration/test_runtime_application.py
-
-      - name: Validate the exact native plugin contract
-        run: |
-          npm ci --prefix openclaw/administrateme --ignore-scripts
-          npm run check --prefix openclaw/administrateme
-          npm test --prefix openclaw/administrateme
-
-      - name: Validate member browser behavior
-        env:
-          ADMINME_GATE7_EVIDENCE_DIR: ${{ runner.temp }}/adminme-gate7-early
-        run: |
-          npm ci --prefix tools/console-reference-harness --ignore-scripts
-          ADMINME_GATE7_PYTHON="$(poetry env info --executable)" \
-          npm run test:gate7 --prefix tools/console-reference-harness
-
-      - name: Retain credential-free browser evidence
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: credential-free-member-browser
-          path: ${{ runner.temp }}/adminme-gate7-early
-          if-no-files-found: warn
-          retention-days: 7
 
       - name: Validate bounded Gmail receipts and authored HTML
         run: >-
@@ -197,9 +210,6 @@ jobs:
           brew install shellcheck
           shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
           bash -n bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
-
-      - name: Build and verify the exact reviewed OpenClaw source
-        run: bash scripts/acceptance/openclaw-source-install.sh
 
       - name: Credential-free clean install and recovery rehearsal
         run: |

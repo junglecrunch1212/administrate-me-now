@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: {
+      "openclaw/plugin-sdk/approval-runtime": fileURLToPath(
+        new URL("./test/fixtures/openclaw-2026.7.2/approval-runtime.ts", import.meta.url),
+      ),
       "openclaw/plugin-sdk/plugin-entry": fileURLToPath(
         new URL("./test/fixtures/openclaw-2026.7.2/plugin-entry-runtime.ts", import.meta.url),
       ),

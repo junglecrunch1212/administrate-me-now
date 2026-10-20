@@ -52,6 +52,8 @@ _ACTIVATE_PHASES = frozenset(
         "services_quiesced",
         "provider_config_selecting",
         "provider_config_selected",
+        "cos_guard_selecting",
+        "cos_guard_selected",
         "plugin_selecting",
         "plugin_selected",
         "pointer_selecting",
@@ -84,6 +86,8 @@ _ROLLBACK_PHASES = frozenset(
         "services_quiesced",
         "provider_config_selecting",
         "provider_config_selected",
+        "cos_guard_selecting",
+        "cos_guard_selected",
         "plugin_selecting",
         "plugin_selected",
         "pointer_selecting",
@@ -408,7 +412,7 @@ def validate_journal(value: object) -> dict[str, Any]:
     known_extras = (
         transition_fields
         | settings_fields
-        | {"initial_readiness_baseline", "restored_readiness"}
+        | {"initial_readiness_baseline", "restored_readiness", "cos_imessage_rebind"}
     )
     has_config_transition = transition_fields <= keys
     has_settings_snapshot = settings_fields <= keys
@@ -446,6 +450,22 @@ def validate_journal(value: object) -> dict[str, Any]:
         raw = value.get(name)
         if not isinstance(raw, str) or not Path(raw).is_absolute():
             raise ActivationJournalError("activation release coordinate is invalid")
+    rebind = value.get("cos_imessage_rebind")
+    if rebind is not None:
+        from bootstrap.cos_guard_release import validate_rebind
+
+        try:
+            validate_rebind(
+                rebind,
+                source_release=Path(value["predecessor_path"]),
+                target_release=Path(value["target_path"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ActivationJournalError(
+                "activation CoS guard transition is invalid"
+            ) from exc
+    elif phase in {"cos_guard_selecting", "cos_guard_selected"}:
+        raise ActivationJournalError("activation CoS guard transition is missing")
     if not isinstance(value.get("initial_pointer"), dict):
         raise ActivationJournalError("activation predecessor pointer is invalid")
     pointer_encoded = value.get("initial_pointer_bytes")

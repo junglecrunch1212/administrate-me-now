@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from bootstrap.contracts import DeploymentPaths, load_versions
+from bootstrap.cos_apple_events import service_environment
 from bootstrap.openclaw_install import resolve_reviewed_openclaw
 from bootstrap.secrets import secret_store
 
@@ -40,6 +41,12 @@ def main() -> None:
     )
     environment["ADMINME_OPENCLAW_SHARED_SECRET"] = shared
     environment["OPENCLAW_GATEWAY_TOKEN"] = shared
+    environment["ADMINISTRATEME_COS_IMSG_GUARD_CONFIG"] = str(
+        paths.instance_dir / "config" / "cos-imsg-guard.json"
+    )
+    # Trusted service startup fixes both coordinates; the admin RPC accepts
+    # neither a caller-supplied path nor executable arguments.
+    environment.update(service_environment())
     os.execve(executable, [executable, "gateway", "run"], environment)
 
 

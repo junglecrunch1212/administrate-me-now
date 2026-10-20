@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
 import { auditTriageSourceControls } from "./triage-source-controls.mjs";
+import { auditCosReplyControls } from "./cos-reply-controls.mjs";
+import { auditCosSendingApproval } from "./cos-send-approval.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -33,10 +35,13 @@ const consoleErrors = [];
 const consoleWarnings = [];
 const pageErrors = [];
 const requestFailures = [];
+const failedRequestEvents = [];
 const unexpectedResponses = [];
 const expectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
 const observedExpectedHttpResponses = new Map([[404, 0], [409, 0], [422, 0], [503, 0]]);
 const closingPages = new WeakSet();
+const completedStreamRequests = new WeakSet();
+const completedStreamCleanupAborts = [];
 const supersededLocalReadAborts = [];
 const screenshots = {};
 let expected404Console = 0;
@@ -116,6 +121,31 @@ function record(name, pass, detail) {
   }
 }
 
+function markCompletedStream(request) {
+  const url = new URL(request.url());
+  if (request.method() !== "POST" || url.hostname !== "127.0.0.1"
+    || ![basePort, basePort + 4].includes(Number.parseInt(url.port, 10))
+    || url.pathname !== "/api/member/v1/chat/stream") {
+    throw new Error("Only the exact proven-complete fixture stream may be marked for cleanup");
+  }
+  completedStreamRequests.add(request);
+}
+
+function classifyFailedRequests() {
+  requestFailures.length = 0;
+  completedStreamCleanupAborts.length = 0;
+  for (const { request, errorText } of failedRequestEvents) {
+    // Chromium may report reader cleanup before the asynchronous terminal
+    // assertions finish. Classify only after those assertions have proved this
+    // exact Request complete; an unproved stream abort remains a failure.
+    if (errorText === "net::ERR_ABORTED" && completedStreamRequests.has(request)) {
+      completedStreamCleanupAborts.push(request.url());
+    } else {
+      requestFailures.push(`${request.url()} ${errorText}`);
+    }
+  }
+}
+
 async function launchEdge() {
   for (const executablePath of [
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
@@ -158,7 +188,7 @@ async function waitForServer(baseUrl) {
   throw new Error(`Gate 7 fixture server did not become ready at ${baseUrl}`);
 }
 
-async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false) {
+async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false, cosReplies = false) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
@@ -176,6 +206,7 @@ async function startServer(port, modelConfigured, attentionEnabled = false, boun
         ADMINME_GATE7_ATTENTION_ENABLED: attentionEnabled ? "1" : "0",
         ADMINME_GATE7_BOUNDED_SAMPLE: boundedSample ? "1" : "0",
         ADMINME_GATE7_EXPLICIT_SUBMISSIONS: explicitSubmissions ? "1" : "0",
+        ADMINME_GATE7_COS_REPLIES: cosReplies ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -362,6 +393,8 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
     extraHTTPHeaders: headers(identity),
     colorScheme: "light",
   });
+  context.setDefaultTimeout(10_000);
+  context.setDefaultNavigationTimeout(20_000);
   await context.addInitScript(({ instant, contextId }) => {
     const RealDate = Date;
     const frozen = new RealDate(instant).getTime();
@@ -432,7 +465,7 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
     const isKnownLocalRead = request.method() === "GET"
       && errorText === "net::ERR_ABORTED"
       && requestUrl.hostname === "127.0.0.1"
-      && [basePort, basePort + 1, basePort + 2].includes(Number.parseInt(requestUrl.port, 10))
+      && [basePort, basePort + 1, basePort + 2, basePort + 3, basePort + 4].includes(Number.parseInt(requestUrl.port, 10))
       && (
         requestUrl.pathname === "/api/member/v1/bootstrap"
         || requestUrl.pathname === "/api/member/v1/chat/history"
@@ -443,14 +476,24 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
       console.log(`[Gate 7] Navigation superseded local read: ${request.url()}`);
       return;
     }
-    requestFailures.push(`${request.url()} ${errorText}`);
+    failedRequestEvents.push({ request, errorText });
   });
   return { context, page };
 }
 
 async function closePageContext(pageContext) {
   closingPages.add(pageContext.page);
-  await pageContext.context.close();
+  let closeTimeout;
+  try {
+    await Promise.race([
+      pageContext.context.close(),
+      new Promise((_, reject) => {
+        closeTimeout = setTimeout(() => reject(new Error("Browser context close exceeded 15000 ms")), 15_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(closeTimeout);
+  }
 }
 
 async function screenshot(page, name) {
@@ -818,6 +861,7 @@ async function run() {
   let degraded;
   let attentionServer;
   let boundedServer;
+  let cosReplyServer;
   const browser = await launchEdge();
   browserDescription = `${browserDescription}; engine ${browser.version()}`;
   console.log(`[Gate 7] Browser ready: ${browserDescription}`);
@@ -1347,7 +1391,7 @@ async function run() {
         await screenshot(principal.page, "surface-scoreboard-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
-        record("Settings exposes all twelve control areas", await principal.page.locator(".settings-nav button").count() === 12, await principal.page.locator(".settings-nav").textContent());
+        record("Settings exposes all thirteen control areas", await principal.page.locator(".settings-nav button").count() === 13, await principal.page.locator(".settings-nav").textContent());
         record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
         await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
@@ -1357,6 +1401,7 @@ async function run() {
         await principal.page.getByRole("button", { name: "CoS behavior", exact: true }).click();
         record("Settings offers only adult support profiles", await principal.page.locator(".profile-choice").count() === 3, await principal.page.locator(".profile-grid").textContent());
         await screenshot(principal.page, "surface-settings-behavior-desktop.png");
+        await auditCosReplyControls({ page: principal.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, mutate: true, label: "desktop" });
         await principal.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
         const bridgeWizardText = await principal.page.locator("#surface").textContent();
         record("Settings bridge wizard explains ownership, local permissions, observation, and no writes", bridgeWizardText.includes("Native Apple access stays on your Mac") && bridgeWizardText.includes("observation mode") && bridgeWizardText.includes("macOS control") && bridgeWizardText.includes("No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted"), bridgeWizardText);
@@ -1517,7 +1562,8 @@ async function run() {
       } else if (surface === "notes") {
         record("Notes phone retains sources, search, and source evidence", await principalPhone.page.locator(".notes-source-button").count() === 3 && await principalPhone.page.locator(".notes-search input").count() === 1 && await principalPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "settings") {
-        record("Settings phone retains all twelve control areas", await principalPhone.page.locator(".settings-nav button").count() === 12, await principalPhone.page.locator(".settings-nav").textContent());
+        record("Settings phone retains all thirteen control areas", await principalPhone.page.locator(".settings-nav button").count() === 13, await principalPhone.page.locator(".settings-nav").textContent());
+        await auditCosReplyControls({ page: principalPhone.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, mutate: false, label: "narrow" });
         await principalPhone.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
         const phoneBridgeText = await principalPhone.page.locator("#surface").textContent();
         record("Settings phone retains the self-service bridge review and source ceilings", phoneBridgeText.includes("SELF-SERVICE WIZARD") && phoneBridgeText.includes("Choose read-only sources") && phoneBridgeText.includes("Write ceiling"), phoneBridgeText);
@@ -1748,13 +1794,18 @@ async function run() {
     await adult.page.locator("#chat-input").fill("What is one kind next step?");
     const chatResponsePromise = adult.page.waitForResponse((response) =>
       response.url().includes("/api/member/v1/chat/stream")
-      && response.request().method() === "POST");
+      && response.request().method() === "POST", { timeout: 10_000 });
     await adult.page.locator("#chat-send").click();
     const chatResponse = await chatResponsePromise;
-    await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).last().waitFor();
-    await adult.page.locator("#chat-state").filter({ hasText: "Ready" }).waitFor();
-    await chatResponse.finished();
-    record("adult OpenClaw stream rendered", await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
+    await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).last().waitFor({ timeout: 10_000 });
+    await adult.page.locator("#chat-state").filter({ hasText: /^Ready$/ }).waitFor({ timeout: 10_000 });
+    // Response.finished() can remain pending after a streamed fetch reaches
+    // EOF. Require the production reader's final cleanup instead.
+    await adult.page.waitForFunction(() => !document.querySelector("#chat-send").disabled
+      && document.querySelector("#chat-stop").hidden
+      && document.querySelectorAll(".cos-send-approval").length === 0, null, { timeout: 10_000 });
+    record("adult OpenClaw stream rendered", chatResponse.ok() && await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
+    markCompletedStream(chatResponse.request());
     await adult.page.locator("#chat-close").click();
     record("chat drawer returns focus to its opener", await adult.page.locator("#chat-open").evaluate((node) => node === document.activeElement && node.getAttribute("aria-expanded") === "false"), await adult.page.evaluate(() => document.activeElement?.id));
     await screenshot(adult.page, "adult-chat-streamed-tablet.png");
@@ -1915,6 +1966,11 @@ async function run() {
     record("Other member cannot see the private bounded sample", !otherBoundedText.includes("visual-bounded@example.invalid") && !otherBoundedText.includes("Bounded test sample:"), otherBoundedText);
     await closePageContext(otherBounded);
 
+    cosReplyServer = await startServer(basePort + 4, true, false, false, true, true);
+    const cosReplyBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    await auditCosSendingApproval({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility, markCompletedStream });
+    await closePageContext(cosReplyBrowser);
+
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
@@ -1930,10 +1986,11 @@ async function run() {
       JSON.stringify({ unexpectedResponses, remaining: Object.fromEntries(expectedHttpResponses), observed: Object.fromEntries(observedExpectedHttpResponses) }),
     );
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
+    classifyFailedRequests();
     record(
       "no failed browser requests",
       requestFailures.length === 0,
-      JSON.stringify({ requestFailures, supersededLocalReadAborts }),
+      JSON.stringify({ requestFailures, supersededLocalReadAborts, completedStreamCleanupAborts }),
     );
   } finally {
     console.log("[Gate 7] Closing browser and fixture servers");
@@ -1948,6 +2005,10 @@ async function run() {
     if (degraded) await stopServer(degraded);
     if (attentionServer) await stopServer(attentionServer);
     if (boundedServer) await stopServer(boundedServer);
+    if (cosReplyServer) {
+      await writeFile(join(evidenceDir, "cos-reply-fixture-output.txt"), cosReplyServer.output());
+      await stopServer(cosReplyServer);
+    }
   }
 
   const report = {
@@ -1965,13 +2026,14 @@ async function run() {
       contrast: "computed foreground composited over rendered ancestor backgrounds",
     },
     viewports: ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
-    states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
+    states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "cos-reply-confirmed", "cos-reply-sending-approval", "cos-reply-decision-result", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
     results,
     screenshots,
     console_errors: consoleErrors,
     console_warnings: consoleWarnings,
     page_errors: pageErrors,
     request_failures: requestFailures,
+    completed_stream_cleanup_aborts: completedStreamCleanupAborts,
     unexpected_responses: unexpectedResponses,
   };
   await writeFile(join(evidenceDir, "visual-results.json"), `${JSON.stringify(report, null, 2)}\n`);
@@ -2006,8 +2068,10 @@ boundedRun.then(
   },
   async (error) => {
     clearTimeout(hardTimeout);
+    classifyFailedRequests();
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(join(evidenceDir, "visual-failure.txt"), `${error.stack || error}\n`);
+    await writeFile(join(evidenceDir, "visual-partial-results.json"), `${JSON.stringify({ status: "FAIL", results, screenshots, consoleErrors, pageErrors, requestFailures, completedStreamCleanupAborts, unexpectedResponses }, null, 2)}\n`);
     console.error(error);
     process.exit(1);
   },

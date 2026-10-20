@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from collections.abc import Mapping, Set
 from typing import Any, Iterable
 
+from adminme.adapters.cos_channel_acquisition import (
+    policy_from_config as cos_policy_from_config,
+    restrict_cos_adapter_config,
+)
 from adminme.service_identities import service_private_scope
 from adminme.google_tasks_execution import (
     ACTION_CLASS as B03_ACTION_CLASS,
@@ -56,6 +60,12 @@ SERVICE_OWNER_READONLY_SCOPES = {
     ),
     "tasks-google-tasks": frozenset({"https://www.googleapis.com/auth/tasks.readonly"}),
 }
+COS_GMAIL_OAUTH_SCOPES = frozenset(
+    {
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -230,6 +240,11 @@ def validate_provider_bindings(
         raise ValueError("adapter_config.adapters must be a list")
     known_members = _known_member_ids(member_roles, household_mapping)
     known_service_principals = set(service_principal_ids or ())
+    cos_policy = cos_policy_from_config(config)
+    if cos_policy is not None:
+        # Validate the exact service account/channel and retained acquisition
+        # ceiling without changing the caller's inventory or enabling a row.
+        restrict_cos_adapter_config(config)
     # The current service-identity catalog contains planned channel identities,
     # not provider-account authority. Keep the parameter for source-compatible
     # callers, but no caller may turn a planned principal into an enabled
@@ -265,6 +280,13 @@ def validate_provider_bindings(
         workspace = adapter_config.get("workspace")
         permission_scope = adapter_config.get("permission_scope")
         provenance = adapter_config.get("binding_provenance")
+        cos_oauth = (
+            cos_policy is not None
+            and entry.get("id") == cos_policy.gmail_adapter_id
+            and kind == "messaging-gmail-api"
+            and provenance == "oauth-subject"
+        )
+        cos_writes = False
         b03 = adapter_config.get("b03_google_tasks_create")
         if b03 is not None and not isinstance(b03, dict):
             raise ValueError(
@@ -334,7 +356,37 @@ def validate_provider_bindings(
                 raise ValueError(
                     f"enabled provider adapter {index} requires service workspace"
                 )
-            if b03 is None:
+            if cos_oauth:
+                if (
+                    b03 is not None
+                    or frozenset(permission_scope) != COS_GMAIL_OAUTH_SCOPES
+                ):
+                    raise ValueError(
+                        "CoS Gmail OAuth requires only the exact read and send grants"
+                    )
+                reference = adapter_config.get("oauth_credentials_ref")
+                if (
+                    not isinstance(reference, str)
+                    or not reference.startswith(("op://", "keychain://"))
+                    or adapter_config.get("service_account_key_ref") is not None
+                ):
+                    raise ValueError(
+                        "CoS Gmail OAuth requires one explicit OAuth credential reference"
+                    )
+                read_only = adapter_config.get("read_only")
+                enable_writes = adapter_config.get("enable_writes")
+                if not (
+                    (read_only is True and enable_writes is False)
+                    or (read_only is False and enable_writes is True)
+                ):
+                    raise ValueError(
+                        "CoS Gmail OAuth requires an explicit consistent write mode"
+                    )
+                # This records configuration readiness only. Recipient policy,
+                # domain and OpenClaw approvals, observation and the final
+                # privacy guard remain mandatory at the response transport.
+                cos_writes = enable_writes is True
+            elif b03 is None:
                 reviewed_scopes = SERVICE_OWNER_READONLY_SCOPES[kind]
                 if frozenset(permission_scope) != reviewed_scopes:
                     raise ValueError(
@@ -411,8 +463,9 @@ def validate_provider_bindings(
                     raise ValueError(
                         "B03 binding requires a positive reviewed revision"
                     )
-            if provenance != "service-account-delegation" or not isinstance(
-                adapter_config.get("service_account_key_ref"), str
+            if not cos_oauth and (
+                provenance != "service-account-delegation"
+                or not isinstance(adapter_config.get("service_account_key_ref"), str)
             ):
                 raise ValueError(
                     f"enabled provider adapter {index} requires reviewed "
@@ -444,8 +497,16 @@ def validate_provider_bindings(
                     str(b03["resource_owner_principal_id"]) if b03 else None
                 ),
                 destination_id=str(b03["destination_task_list_id"]) if b03 else None,
-                permitted_operations=(B03_OPERATION,) if b03 else (),
-                write_binding_state="trial" if b03 else "read_only",
+                permitted_operations=(
+                    (B03_OPERATION,) if b03 else ("send",) if cos_writes else ()
+                ),
+                write_binding_state=(
+                    "trial"
+                    if b03
+                    else "governed_cos_response"
+                    if cos_writes
+                    else "read_only"
+                ),
                 binding_revision=int(b03["revision"]) if b03 else 1,
                 review_provenance=str(b03["review_provenance"]) if b03 else None,
             )
