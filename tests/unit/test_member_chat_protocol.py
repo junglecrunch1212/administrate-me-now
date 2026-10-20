@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import pytest
 
-from adminme.member_chat import OpenClawGatewayChatTransport
+from adminme.member_chat import MemberChatError, OpenClawGatewayChatTransport
 
 
 class _PinnedGatewaySocket:
@@ -99,3 +100,73 @@ async def test_chat_send_omits_every_admin_only_system_provenance_field(
         "systemProvenanceReceipt",
         "suppressCommandInterpretation",
     }.isdisjoint(params)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pending_session", ["member-session", "another-session"])
+async def test_native_approval_extends_only_its_member_stream_deadline(
+    monkeypatch: pytest.MonkeyPatch, pending_session: str
+) -> None:
+    """A bounded native decision window survives the normal 30-second silence."""
+
+    class Socket(_PinnedGatewaySocket):
+        timed_out = False
+
+        async def recv(self) -> str:
+            request = self.sent[-1]
+            if request["method"].endswith(".list"):
+                return json.dumps(
+                    {
+                        "type": "res",
+                        "id": request["id"],
+                        "ok": True,
+                        "payload": {
+                            "items": [
+                                {
+                                    "session_key": pending_session,
+                                    "expires_at_ms": int(time.time() * 1000) + 60_000,
+                                }
+                            ]
+                        },
+                    }
+                )
+            if request["method"] == "chat.abort":
+                return json.dumps(
+                    {"type": "res", "id": request["id"], "ok": True, "payload": {}}
+                )
+            if self._responses and not self.timed_out:
+                self.timed_out = True
+                raise TimeoutError
+            return await super().recv()
+
+    socket = Socket("member-session")
+    transport = OpenClawGatewayChatTransport(
+        url="ws://127.0.0.1:18789", token="fixture-token"
+    )
+
+    async def connect() -> Socket:
+        return socket
+
+    monkeypatch.setattr(transport, "_connect", connect)
+    await transport.cos_approval_request(
+        "administrateme.cosApprovals.list", {"session_key": "member-session"}
+    )
+
+    async def collect() -> list[str]:
+        return [
+            chunk.kind
+            async for chunk in transport.stream(
+                session_key="member-session",
+                message="Please send the approved reply.",
+                idempotency_key="reply-after-domain-approval",
+            )
+        ]
+
+    if pending_session == "member-session":
+        assert await collect() == ["status", "delta", "final"]
+        assert not any(row["method"] == "chat.abort" for row in socket.sent)
+    else:
+        with pytest.raises(MemberChatError, match="timed out"):
+            await collect()
+        assert socket.sent[-1]["method"] == "chat.abort"
+    assert transport._approval_deadlines == {}

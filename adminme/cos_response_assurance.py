@@ -299,7 +299,14 @@ def cos_provider_effect_counts(
                     and str(effects[0]["event_id"]) < str(result["event_id"])
                 )
             elif status == "denied" and (requests or effects):
-                valid_terminal = False
+                valid_terminal = bool(
+                    valid_terminal
+                    and approved["payload"].get("channel") == "imessage"
+                    and len(requests) == 1
+                    and not effects
+                    and payload.get("reason") == "native_dispatch_not_claimed"
+                    and _attempt_valid(requests[0], approved, by_id, policies)
+                )
             if not valid_terminal:
                 counts["approval_correlation_missing"] += 1
         for index, effect in enumerate(effects):

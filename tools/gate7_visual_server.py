@@ -29,6 +29,7 @@ MODEL_CONFIGURED = os.environ.get("ADMINME_GATE7_VISUAL_MODEL", "1") == "1"
 ATTENTION_ENABLED = os.environ.get("ADMINME_GATE7_ATTENTION_ENABLED", "0") == "1"
 EXPLICIT_SUBMISSIONS = os.environ.get("ADMINME_GATE7_EXPLICIT_SUBMISSIONS", "0") == "1"
 BOUNDED_SAMPLE = os.environ.get("ADMINME_GATE7_BOUNDED_SAMPLE", "0") == "1"
+COS_REPLIES = os.environ.get("ADMINME_GATE7_COS_REPLIES", "0") == "1"
 FIXED_NOW = datetime.fromisoformat(
     os.environ.get("ADMINME_GATE7_VISUAL_NOW", "2026-08-13T14:00:00Z").replace(
         "Z", "+00:00"
@@ -86,6 +87,7 @@ def _install_determinism() -> None:
         "adminme.lib.observation",
         "adminme.products.commitment_service",
         "adminme.products.member.main",
+        "adminme.member_chat_approvals",
         "adminme.runtime.application",
     ):
         module = sys.modules.get(name)
@@ -160,6 +162,12 @@ def build_app():
                 "message_ids": ["visual-selected-one", "visual-selected-sent"],
             },
         }
+    reply_actors = {}
+    if COS_REPLIES:
+        from tools.cos_reply_visual_fixture import ACCOUNT, PHONE, service_config
+
+        adapter_config["service_identities"] = service_config()
+        reply_actors[f"imessage|{ACCOUNT}|{PHONE}"] = PRINCIPAL
     settings = RuntimeSettings.credential_free(
         INSTANCE,
         encryption_key=b"v" * 32,
@@ -181,6 +189,7 @@ def build_app():
         fixture_member_id=PRINCIPAL,
         openclaw_enabled=True,
         openclaw_shared_secret="gate7-visual-secret-never-rendered",
+        openclaw_actor_identities=reply_actors,
         openclaw_model_configured=MODEL_CONFIGURED,
         member_chat_enabled_members=frozenset({PRINCIPAL, ADULT, CHILD}),
         child_chat_enabled_members=frozenset({CHILD}),
@@ -190,6 +199,46 @@ def build_app():
         adapter_config=adapter_config,
     )
     app = create_application(settings)
+
+    @app.post("/__gate7/prepare-cos-replies")
+    async def prepare_cos_replies():
+        if not COS_REPLIES:
+            raise HTTPException(404, "CoS reply fixture is not enabled")
+        from tools.cos_reply_visual_fixture import (
+            ACCOUNT,
+            CHANNEL,
+            PHONE,
+            CoSReplyVisualTransport,
+        )
+
+        runtime = app.state.runtime
+        if not isinstance(runtime.member_chat, CoSReplyVisualTransport):
+            runtime.member_chat = CoSReplyVisualTransport(
+                runtime, PRINCIPAL, fixture_now
+            )
+        return {
+            "member_id": PRINCIPAL,
+            "channel": "imessage",
+            "account_id": ACCOUNT,
+            "service_channel_id": CHANNEL,
+            "recipient": PHONE,
+        }
+
+    @app.get("/__gate7/cos-reply-proof")
+    async def cos_reply_proof():
+        if not COS_REPLIES:
+            raise HTTPException(404, "CoS reply fixture is not enabled")
+        runtime = app.state.runtime
+        effects = [
+            event["event_id"]
+            async for event in runtime.event_log.read_since(types=["external.sent"])
+        ]
+        return {
+            "decisions": runtime.member_chat.decisions,
+            "completed": runtime.member_chat.completed,
+            "pending": runtime.member_chat.pending is not None,
+            "provider_effect_count": len(effects),
+        }
 
     @app.post("/__gate7/seed-attention-sources")
     async def seed_attention_sources_endpoint(future: bool = False):

@@ -21,7 +21,7 @@ type BridgeMarker = {
 export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): void {
   api.on(
     "before_tool_call",
-    async (event) => {
+    async (event, context) => {
       // Generic delivery tools cannot borrow CoS account authority. The
       // governed response tool is the only supported send path; the transport
       // wrapper remains the authoritative last boundary for channel autosends.
@@ -37,6 +37,11 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
         return;
       }
       const approval = prepareApproval(runtime, event.toolName, event.params);
+      if (event.toolName === "administrateme_cos_response") {
+        runtime.cosApprovals?.remember(event.params, {
+          ...context, toolCallId: context.toolCallId ?? event.toolCallId,
+        }, approval.receiptId);
+      }
       return {
         params: approval.params,
         requireApproval: {

@@ -7,6 +7,7 @@ import type {
 import { provenanceFromTool } from "./provenance.js";
 import { toolResult } from "./result.js";
 import { trackSession, type PluginRuntime } from "./runtime.js";
+import { waitForApprovalPublication } from "./approval.js";
 
 const ItemKind = Type.Union([Type.Literal("task"), Type.Literal("commitment")]);
 const LifecycleAction = Type.Union([
@@ -128,6 +129,9 @@ function makeTool(
           ? definition.path(invocationParams)
           : definition.path;
       if (definition.pathParam) delete invocationParams[definition.pathParam];
+      if (definition.name === "administrateme_cos_response") {
+        await waitForApprovalPublication(runtime, invocationParams.openclaw_approval_receipt_id);
+      }
       const result = await runtime.transport.request(path, {
         ...invocationParams,
         provenance,

@@ -4639,7 +4639,7 @@ function cosResponseApprovalCard() {
       const subject = document.createElement("input"); subject.type = "text"; subject.maxLength = 300;
       const body = document.createElement("textarea"); body.maxLength = 8000; body.rows = 8; body.required = true;
       const subjectField = field("Subject", subject);
-      form.append(field("Reply channel", channel), field("From", account), field("To", recipient), subjectField, field("Exact reply text", body), text("p", "iMessage replies currently use listed international phone numbers. Replies contain plain text and no attachments or group recipients.", "state-note"));
+      form.append(field("Reply channel", channel), field("From", account), field("To", recipient), subjectField, field("Exact reply text", body), text("p", "iMessage replies use one plain-text line without formatting marks, tabs, or spaces at the beginning or end. Use email for multiple lines or text containing formatting marks. Replies have no attachments or group recipients.", "state-note"));
       const approve = text("button", "Approve this exact reply", "button button-primary"); approve.type = "submit";
       const status = text("p", "", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
       form.append(approve, status); content.append(form);
@@ -4667,7 +4667,20 @@ function cosResponseApprovalCard() {
         status.textContent = "Recording your approval…";
         try {
           const result = await api("/api/member/v1/cos/responses/approvals", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ ...values, request_id: retry.requestId }) });
-          status.textContent = `Reply approved until ${new Date(result.expires_at).toLocaleTimeString()}. It has not been sent. Ask CoS to send approved reply ${result.approval_event_id}; the separate sending approval is still required.`;
+          status.textContent = `Reply text approved until ${new Date(result.expires_at).toLocaleTimeString()}. It has not been sent. Continue below to make the separate sending decision.`;
+          const continueButton = text("button", "Continue to sending approval", "button button-primary");
+          continueButton.type = "button";
+          continueButton.disabled = !state.bootstrap.chat.enabled || state.bootstrap.chat.state !== "healthy";
+          continueButton.addEventListener("click", (click) => {
+            if (state.controller) { status.textContent = "Finish or stop the current conversation before continuing."; return; }
+            continueButton.disabled = true;
+            $("#chat-panel").classList.add("open"); $("#chat-open").setAttribute("aria-expanded", "true");
+            void sendChat(click, {
+              message: `Please use administrateme_cos_response to request sending approval for approved reply ${result.approval_event_id}.`,
+              displayMessage: "Please send the exact reply I just approved.",
+            });
+          });
+          form.append(continueButton);
           // Leave the approved content immutable in this view. A new approval
           // requires a fresh form and never extends this approval's expiry.
         } catch (error) {
@@ -4883,12 +4896,78 @@ async function loadChatHistory() {
   } catch { $("#chat-state").textContent = "Conversation history is temporarily unavailable."; }
 }
 
-async function sendChat(event) {
+const chatReplyApprovals = new Map();
+
+function clearChatReplyApprovals() {
+  for (const entry of chatReplyApprovals.values()) { clearTimeout(entry.timer); entry.node.remove(); }
+  chatReplyApprovals.clear();
+}
+
+async function refreshChatReplyApprovals(isCurrent) {
+  if (state.bootstrap.member.authenticated_role !== "principal" || state.bootstrap.member.viewing_as) return;
+  const result = await api("/api/member/v1/chat/reply-approvals");
+  if (!isCurrent()) return;
+  const active = new Set();
+  for (const row of result.items || []) {
+    const key = `${row.approval_id}:${row.revision}`; active.add(key);
+    const existing = chatReplyApprovals.get(key);
+    if (existing) {
+      if (!row.can_allow && !existing.resolving()) {
+        existing.allow.disabled = true;
+        existing.note.textContent = "The earlier reply approval changed or expired. This reply cannot be sent.";
+      }
+      continue;
+    }
+    if (row.expires_at_ms <= Date.now()) continue;
+    const node = document.createElement("li"); node.className = "message assistant cos-send-approval";
+    node.append(text("h3", "Ready to send this reply?"), text("p", `${row.channel === "imessage" ? "iMessage" : "Email"} to ${row.recipient}`));
+    if (row.subject) node.append(text("strong", row.subject));
+    const content = text("p", row.body); content.style.whiteSpace = "pre-wrap"; node.append(content);
+    const note = text("p", row.can_allow ? "Your reply text is approved. Sending still needs this separate, one-time decision." : "The earlier reply approval changed or expired. This reply cannot be sent.", "state-note");
+    note.setAttribute("role", "status"); note.setAttribute("aria-live", "polite");
+    const allow = text("button", "Allow this reply once", "button button-primary"); allow.type = "button"; allow.disabled = !row.can_allow;
+    const deny = text("button", "Don’t send", "button button-secondary"); deny.type = "button";
+    let resolving = false;
+    const decide = async (decision) => {
+      if (resolving || row.expires_at_ms <= Date.now()) return;
+      resolving = true; allow.disabled = true; deny.disabled = true; note.textContent = "Recording your sending decision…";
+      try {
+        await api("/api/member/v1/chat/reply-approvals", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approval_id: row.approval_id, revision: row.revision, decision }),
+        });
+        note.textContent = decision === "allow-once" ? "Sending allowed once. CoS will report the result." : "Sending declined.";
+      } catch { note.textContent = "No sending decision is confirmed. Wait for CoS to report the result; this control will not retry."; }
+    };
+    allow.addEventListener("click", () => { void decide("allow-once"); });
+    deny.addEventListener("click", () => { void decide("deny"); });
+    node.append(note, allow, deny); $("#chat-messages").append(node);
+    const timer = setTimeout(() => {
+      allow.disabled = true; deny.disabled = true;
+      if (!resolving) note.textContent = "This sending approval expired. No send is authorized by this control.";
+    }, Math.max(0, row.expires_at_ms - Date.now()));
+    chatReplyApprovals.set(key, { node, timer, allow, note, resolving: () => resolving });
+  }
+  for (const [key, entry] of chatReplyApprovals) {
+    if (!active.has(key)) { clearTimeout(entry.timer); entry.node.remove(); chatReplyApprovals.delete(key); }
+  }
+}
+
+async function sendChat(event, handoff = null) {
   event.preventDefault();
-  const input = $("#chat-input"); const message = input.value.trim();
+  const input = $("#chat-input"); const message = handoff?.message || input.value.trim();
   if (!message || state.controller) return;
-  input.value = ""; appendMessage("user", message); state.assistantNode = appendMessage("assistant", "");
+  input.value = ""; appendMessage("user", handoff?.displayMessage || message); state.assistantNode = appendMessage("assistant", "");
   state.controller = new AbortController(); $("#chat-stop").hidden = false; $("#chat-send").disabled = true;
+  let polling = true; let inFlight = false;
+  const poll = async () => {
+    if (inFlight || !polling) return;
+    inFlight = true;
+    try { await refreshChatReplyApprovals(() => polling); }
+    catch { if (polling && chatReplyApprovals.size) clearChatReplyApprovals(); }
+    finally { inFlight = false; }
+  };
+  const approvalTimer = setInterval(() => { void poll(); }, 1000); void poll();
   $("#chat-state").textContent = "Preparing context…";
   try {
     const response = await fetch("/api/member/v1/chat/stream", {
@@ -4913,7 +4992,7 @@ async function sendChat(event) {
     }
   } catch (error) {
     if (error.name !== "AbortError") $("#chat-state").textContent = "The model connection ended. Your household views are still available.";
-  } finally { state.controller = null; state.assistantNode = null; $("#chat-stop").hidden = true; $("#chat-send").disabled = false; }
+  } finally { polling = false; clearInterval(approvalTimer); clearChatReplyApprovals(); state.controller = null; state.assistantNode = null; $("#chat-stop").hidden = true; $("#chat-send").disabled = false; }
 }
 
 function configureChat(policy) {

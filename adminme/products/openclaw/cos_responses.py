@@ -29,6 +29,7 @@ from adminme.cos_responses import (
     content_fingerprint,
     reset_response_permit,
     set_response_permit,
+    validate_imessage_response_text,
 )
 from adminme.lib.adapters import OutboundMessage
 from adminme.lib.observation import (
@@ -223,6 +224,11 @@ async def approve_response(
     if session.view_member_id != session.auth_member_id:
         raise HTTPException(403, "confirm a CoS response in your own private view")
     runtime = seam._runtime(request)
+    if body.channel == "imessage":
+        try:
+            validate_imessage_response_text(body.body)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     values = body.model_dump(exclude={"request_id"})
     policy = await _policy_check(runtime, session, values, require_current=False)
     fingerprint = content_fingerprint(
@@ -345,6 +351,11 @@ async def _execute_locked(
         )
 
     async def final_check(provider_effect: bool = False) -> None:
+        if payload["channel"] == "imessage":
+            try:
+                validate_imessage_response_text(payload["body"])
+            except ValueError as exc:
+                raise HTTPException(403, str(exc)) from exc
         await _policy_check(runtime, session, payload, require_current=True)
         if datetime.fromisoformat(payload["expires_at"]) <= datetime.now(timezone.utc):
             raise HTTPException(409, "exact response approval expired")
@@ -793,8 +804,26 @@ async def response_result(
     ):
         # Called after the plugin's sole provider invocation. Missing durable
         # terminal evidence is unknown, never permission for a retry.
-        for admission in _admissions(runtime).values():
+        for dispatch_id, admission in list(_admissions(runtime).items()):
             if admission["approval_event_id"] == body.approval_event_id:
+                async with runtime.settings_command_locks.setdefault(
+                    f"cos-response-native-claim:{session.tenant_id}", asyncio.Lock()
+                ):
+                    if not admission["claimed"]:
+                        # The same lock protects claim admission. Retire it
+                        # before publishing zero effects, so no late wrapper
+                        # request can send after this proof of non-contact.
+                        admission["claimed"] = True
+                        _admissions(runtime).pop(dispatch_id, None)
+                        admission["expiry_task"].cancel()
+                        return await _existing_or_terminal(
+                            runtime,
+                            session,
+                            event["payload"],
+                            body.approval_event_id,
+                            "denied",
+                            "native_dispatch_not_claimed",
+                        )
                 admission["claimed"] = True
                 future = admission["provider_future"]
                 if future is not None and not future.done():

@@ -519,14 +519,12 @@ def test_native_response_claim_is_single_use_and_rechecks_policy(
             },
         )
         assert result.status_code == 200, result.text
-        assert result.json()["status"] == ("unknown" if revoke_before_claim else "sent")
+        assert result.json()["status"] == ("denied" if revoke_before_claim else "sent")
         assert "transport_dispatch" not in result.json()
         effects = client.portal.call(_events, runtime, ["external.sent"])
         assert len(effects) == (0 if revoke_before_claim else 1)
         assurance = client.portal.call(_provider_assurance, runtime)
-        assert assurance["state"] == (
-            "degraded" if revoke_before_claim else "healthy"
-        ), assurance
+        assert assurance["state"] == "healthy", assurance
         assert assurance["counts"]["provider_called_true"] == (
             0 if revoke_before_claim else 1
         )

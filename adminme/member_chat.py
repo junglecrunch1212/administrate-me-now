@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -73,6 +74,10 @@ class MemberChatTransport(Protocol):
 
     async def abort(self, *, session_key: str) -> bool: ...
 
+    async def cos_approval_request(
+        self, method: str, ticket: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
 
 def _safe_visible_text(value: str) -> str:
     text = _DIRECTIVE_RE.sub("", value)
@@ -112,7 +117,7 @@ def _assistant_text(message: Any) -> str:
 
 
 class OpenClawGatewayChatTransport:
-    """Minimal protocol-v4 Gateway client for chat/history/abort only."""
+    """Protocol-v4 chat relay with signed, member-scoped CoS approval calls."""
 
     def __init__(
         self,
@@ -130,6 +135,7 @@ class OpenClawGatewayChatTransport:
         self._url = url
         self._token = token
         self._request_timeout_s = request_timeout_s
+        self._approval_deadlines: dict[str, int] = {}
 
     async def _connect(self) -> Any:
         try:
@@ -297,9 +303,16 @@ class OpenClawGatewayChatTransport:
                 )
             )
             while True:
-                raw = await asyncio.wait_for(
-                    socket.recv(), timeout=self._request_timeout_s
-                )
+                try:
+                    raw = await asyncio.wait_for(
+                        socket.recv(), timeout=self._request_timeout_s
+                    )
+                except asyncio.TimeoutError:
+                    if self._approval_deadlines.get(session_key, 0) > int(
+                        time.time() * 1000
+                    ):
+                        continue
+                    raise
                 frame = self._decode(raw)
                 if frame.get("type") == "res" and frame.get("id") == request_id:
                     if frame.get("ok") is not True:
@@ -393,6 +406,36 @@ class OpenClawGatewayChatTransport:
                 except Exception:
                     pass
             await socket.close()
+            self._approval_deadlines.pop(session_key, None)
+
+    async def cos_approval_request(
+        self, method: str, ticket: dict[str, Any]
+    ) -> dict[str, Any]:
+        if method not in {
+            "administrateme.cosApprovals.list",
+            "administrateme.cosApprovals.resolve",
+        }:
+            raise MemberChatError(
+                "approval_unavailable", "Reply approval is unavailable"
+            )
+        socket = await self._connect()
+        try:
+            result = await self._request(socket, method, ticket)
+            rows = result.get("items")
+            if method.endswith(".list") and isinstance(rows, list):
+                deadlines = [
+                    row["expires_at_ms"]
+                    for row in rows
+                    if isinstance(row, dict)
+                    and type(row.get("expires_at_ms")) is int
+                    and row.get("session_key") == ticket.get("session_key")
+                    and row["expires_at_ms"] <= int(time.time() * 1000) + 120_000
+                ]
+                if deadlines:
+                    self._approval_deadlines[ticket["session_key"]] = max(deadlines)
+            return result
+        finally:
+            await socket.close()
 
     async def history(self, *, session_key: str, limit: int) -> list[dict[str, str]]:
         socket = await self._connect()
@@ -470,6 +513,14 @@ class DeterministicOpenClawChatTransport:
         self._cancelled.add(session_key)
         return True
 
+    async def cos_approval_request(
+        self, method: str, ticket: dict[str, Any]
+    ) -> dict[str, Any]:
+        del ticket
+        if method == "administrateme.cosApprovals.list":
+            return {"items": []}
+        raise MemberChatError("approval_unavailable", "Reply approval is unavailable")
+
 
 class UnavailableMemberChatTransport:
     async def stream(
@@ -490,6 +541,12 @@ class UnavailableMemberChatTransport:
     async def abort(self, *, session_key: str) -> bool:
         del session_key
         return False
+
+    async def cos_approval_request(
+        self, method: str, ticket: dict[str, Any]
+    ) -> dict[str, Any]:
+        del method, ticket
+        raise MemberChatError("approval_unavailable", "Reply approval is unavailable")
 
 
 __all__ = [

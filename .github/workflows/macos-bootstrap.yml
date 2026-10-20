@@ -201,6 +201,15 @@ jobs:
       - name: Build and verify the exact reviewed OpenClaw source
         run: bash scripts/acceptance/openclaw-source-install.sh
 
+      - name: Preserve isolated Gateway approval probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cos-approval-gateway-probe
+          path: ${{ runner.temp }}/adminme-approval-gateway-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Credential-free clean install and recovery rehearsal
         run: |
           poetry run ./scripts/acceptance/clean-install.sh

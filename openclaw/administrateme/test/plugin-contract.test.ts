@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,8 @@ import { approvalRequestFingerprint } from "../src/approval.js";
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
+import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
+import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 
 type ToolFactory = (context: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[];
 type GatewayRegistration = {
@@ -138,10 +140,10 @@ describe("native OpenClaw contract fixture", () => {
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
     expect([...runtime.tools]).toHaveLength(23);
     expect([...runtime.commands]).toHaveLength(9);
-    expect([...runtime.gateways]).toHaveLength(14);
+    expect([...runtime.gateways]).toHaveLength(16);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
-    expect(runtime.services).toHaveLength(1);
+    expect(runtime.services).toHaveLength(2);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
   });
 
@@ -494,6 +496,86 @@ describe("native OpenClaw contract fixture", () => {
       {},
     )) as { requireApproval?: { allowedDecisions?: string[] } };
     expect(decide.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
+  });
+
+  it.each(["allow-once", "deny"])("relays only exact native CoS approval with an explicit signed %s decision", async (decision) => {
+    const runtime = fakeApi();
+    const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay");
+    await service?.start();
+    const native = fixtureApprovalRuntimes.at(-1)!;
+    const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
+    const context = { sessionKey: "agent:adminme-a:portal-a", agentId: "adminme-a", toolCallId: "call-a" };
+    const toolParams = { request_id: "reply-a", approval_event_id: "event-private-a" };
+    await hook({ toolName: "administrateme_cos_response", params: toolParams }, context);
+    const now = Date.now();
+    const record: PluginApprovalRequest = {
+      id: "plugin:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMs: now, expiresAtMs: now + 120_000,
+      request: { pluginId: "administrateme", toolName: "administrateme_cos_response",
+        toolCallId: "call-a", agentId: context.agentId, sessionKey: context.sessionKey,
+        allowedDecisions: ["allow-once", "deny"] },
+    };
+    for (const mismatch of [
+      { pluginId: "other" }, { toolName: "exec" }, { toolCallId: "other-call" },
+      { agentId: "other-agent" }, { sessionKey: "other-session" }, { allowedDecisions: ["allow-always"] },
+    ]) {
+      expect(native.adapter.shouldHandle({ ...record, request: { ...record.request, ...mismatch } })).toBe(false);
+    }
+    expect(native.adapter.shouldHandle({ ...record, expiresAtMs: 1 })).toBe(false);
+    expect(native.adapter.shouldHandle(record)).toBe(true);
+    await native.adapter.deliverTarget({ request: record });
+    const ticket = (operation: string, overrides: Record<string, unknown> = {}) => {
+      const value = {
+        session_key: context.sessionKey, agent_id: context.agentId, member_id: "member-a",
+        approval_id: "", revision: "", decision: "", nonce: randomUUID().replaceAll("-", ""),
+        expires_at_ms: Date.now() + 8_000, ...overrides,
+      };
+      const fields = ["session_key", "agent_id", "member_id", "approval_id", "revision", "decision", "nonce"];
+      const material = ["cos-member-approval-v1", operation, ...fields.map((key) => value[key as keyof typeof value]), String(value.expires_at_ms)].join("|");
+      return { ...value, signature: createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!).update(material).digest("hex") };
+    };
+    const list = runtime.gateways.get("administrateme.cosApprovals.list")!.handler;
+    const resolve = runtime.gateways.get("administrateme.cosApprovals.resolve")!.handler;
+    const respond = vi.fn();
+    await list({ params: ticket("list", { session_key: "another-session" }), client: null, respond });
+    expect(respond).toHaveBeenLastCalledWith(true, { items: [] });
+    await list({ params: ticket("list"), client: null, respond });
+    const rows = respond.mock.lastCall?.[1].items as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.domain_approval_id).toBe("event-private-a");
+    expect(rows[0]?.receipt_id).toBeUndefined();
+    expect(native.calls).toEqual([]);
+    await resolve({ params: { ...ticket("resolve"), signature: "0".repeat(64) }, client: null, respond });
+    expect(respond.mock.lastCall?.[0]).toBe(false);
+    const exact = ticket("resolve", { approval_id: record.id, revision: rows[0]!.revision, decision });
+    await resolve({ params: exact, client: null, respond });
+    expect(respond).toHaveBeenLastCalledWith(true, { resolved: true });
+    expect(native.calls).toEqual([{ method: "plugin.approval.resolve", params: { id: record.id, decision } }]);
+    await resolve({ params: exact, client: null, respond });
+    expect(respond.mock.lastCall?.[0]).toBe(false);
+    expect(native.calls).toHaveLength(1);
+    await service?.stop();
+  });
+
+  it("waits for receipt publication even when the pinned host does not await onResolution", async () => {
+    const runtime = fakeApi();
+    const params = { request_id: "publication-race", approval_event_id: "approved-private" };
+    const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
+    const gated = await hook({ toolName: "administrateme_cos_response", params }, {}) as {
+      params: Record<string, unknown>;
+      requireApproval: { onResolution(decision: string): Promise<void> };
+    };
+    let complete!: (value: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { complete = resolve; }));
+    const publication = gated.requireApproval.onResolution("allow-once");
+    const tool = runtime.tools.get("administrateme_cos_response")!(toolContext()) as AnyAgentTool;
+    const execution = tool.execute("call-publication-race", gated.params);
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    complete(jsonResponse({ accepted: true }));
+    await publication;
+    await execution;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/tools/cos-response");
   });
 
   it("reports notification delivery through the typed result seam", async () => {

@@ -45,9 +45,13 @@ part of the response contract.
 
 OpenClaw remains the channel and native transport owner. The plugin uses its
 pinned public outbound adapter to send the admitted plain text. It does not
-expose the private dispatch body as model tool output. Markdown transformations
-that change confirmed text fail the final comparison rather than silently
-changing the member's message.
+expose the private dispatch body as model tool output. That adapter has no
+raw-text bypass: it normalizes tables, inline directives and Markdown.
+iMessage approvals therefore accept a conservative single-line literal subset
+without formatting syntax, control characters or boundary spaces. Email text
+is unchanged. The member receives an actionable validation message before any
+approval is recorded. The final claim still compares the entire confirmed
+body; the syntax restriction does not replace exact content enforcement.
 
 Every dedicated account uses the reviewed `cos-imsg-guard.mjs` executable as
 its actual CLI path. The wrapper forwards only supported read RPC methods and
@@ -63,6 +67,11 @@ bounded native result; it does not recall an already submitted message.
 The final claim opens the existing observation wrapper, which waits for the
 guard's terminal callback. Provider success is audited only after that callback.
 An absent, ambiguous or timed-out native result is unknown; it is never retried.
+If the sole invocation returns while its admission is still unclaimed, result
+collection retires that admission under the same lock used by native claim and
+records `denied` with zero effects. A late claim cannot use the retired
+admission. Claimed admissions and missing process state never support this
+zero-effect conclusion.
 The guard has separate exact binary, configuration and account checks.
 Hook cancellation and generic-tool blocking are defense in depth: the pinned
 OpenClaw hook alone is insufficient because some direct sends bypass it and
@@ -82,7 +91,13 @@ Production-composition coverage is in
 `tests/acceptance/test_cos_response_execution.py`; actual Gmail send and
 observation code run against a credential-free provider double. Native tests
 exercise exact claim, revocation, terminal callback, one-use authority and
-absence of unauthorized effects. Plugin tests cover ordinary reply
+absence of unauthorized effects. `test_cos_response_text.py` covers early
+validation, unchanged email text and the claimed/unclaimed result distinction.
+The hosted source-install gate runs a synthetic Unicode, spacing, directive,
+escape and formatting corpus through the exact pinned OpenClaw sender's pure
+formatting functions. This checks the supported literal subset and specific
+regressions; it does not prove arbitrary Markdown preserves exact content.
+Plugin tests cover ordinary reply
 cancellation, generic-tool bypass refusal and private native dispatch without
 retry. Operational activation and transport pin proofs remain separate
 prerequisites; code tests never claim a live sign-in or delivered message.

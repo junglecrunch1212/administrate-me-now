@@ -11,12 +11,42 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from typing import Any, Awaitable, Callable
+import unicodedata
 
 from adminme.lib.adapters import OutboundMessage
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 
 RESPONSE_CONTRACT = "cos-response-plain-text-v1"
+IMESSAGE_TEXT_GUIDANCE = (
+    "For iMessage, use one plain-text line without formatting marks, tabs, "
+    "or spaces at the beginning or end. Use email for multiple lines or text "
+    "containing formatting marks."
+)
+
+
+def validate_imessage_response_text(body: str) -> None:
+    """Conservative literal subset of the pinned OpenClaw Markdown sender.
+
+    That sender has no raw-text option. Reject syntax that can introduce
+    formatting, directives, entities, escapes or block structure before approval.
+    The final native guard still compares the entire text; this is not a
+    replacement for that guard or a claim to recognize all safe Markdown.
+    """
+    if (
+        not body
+        or body != body.strip()
+        or any(char in body for char in "*_~`[]<>\\&#|")
+        or any(
+            (char.isspace() and char != " ")
+            or unicodedata.category(char) in {"Cc", "Cs", "Zl", "Zp"}
+            for char in body
+        )
+        or re.match(r"^(?:[-+=]|\d+[.)] )", body)
+        or len(body.encode("utf-16-le")) // 2 > 8000
+    ):
+        raise ValueError(IMESSAGE_TEXT_GUIDANCE)
 
 
 def content_fingerprint(

@@ -78,6 +78,16 @@ contact intent is an accounted zero-effect request; unexecuted draft approvals
 are not provider activity. Closed observation windows preserve the prior proof
 without hiding later live effects.
 
+The hosted exact-source installation gate loads the actual CoS approval relay
+as a service in a fresh, credential-free Gateway. Independent loopback clients
+exercise the public native approval fallback, both decisions, session/revision
+and expiry refusals, terminal finalization and replay refusal against the real
+registry. Another ordinary approvals client cannot see or resolve the request;
+the process-local runtime authority remains inside Gateway. Startup and child
+cleanup are bounded, channels and background work are disabled, and diagnostics
+contain synthetic data only. This MODERNIZE validation follows the independent
+approval requirement in `ACCEPTANCE-CONTRACT.md`; no production test API is added.
+
 ## Recovery and live safety
 
 Use `--recover` after an interrupted operation. Failure recovery stops the

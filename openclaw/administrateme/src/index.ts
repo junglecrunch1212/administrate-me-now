@@ -7,6 +7,8 @@ import { registerHooks } from "./hooks.js";
 import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
 import { AdministrateMeTransport } from "./transport.js";
+import { registerCosApprovalRelay } from "./cos-approval-relay.js";
+import type { PluginRuntime } from "./runtime.js";
 
 export default definePluginEntry({
   id: PLUGIN_ID,
@@ -24,7 +26,7 @@ export default definePluginEntry({
       return;
     }
     const config = readPluginConfig(api.pluginConfig);
-    const runtime = {
+    const runtime: PluginRuntime = {
       transport: new AdministrateMeTransport(config),
       trackedSessions: new Map(),
     };
@@ -35,5 +37,6 @@ export default definePluginEntry({
     registerCommands(api, runtime);
     registerHooks(api, runtime);
     registerService(api, runtime);
+    runtime.cosApprovals = registerCosApprovalRelay(api, runtime);
   },
 });

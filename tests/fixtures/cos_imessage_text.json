@@ -1,0 +1,35 @@
+{
+  "openclaw_commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+  "cases": [
+    {"text": "Bring the passport.", "allowed": true},
+    {"text": "Meet  at  noon.", "allowed": true},
+    {"text": "Café à midi — résumé prêt. 😀", "allowed": true},
+    {"text": "Family 👨‍👩‍👧‍👦 arrives at 12:30.", "allowed": true},
+    {"text": "Price $12.50 (50% off); call +12025550101!", "allowed": true},
+    {"text": "Can we meet? Yes: it's fine / confirmed = ready.", "allowed": true},
+    {"text": "Bring **passport**", "allowed": false, "transformed": true},
+    {"text": "__x__", "allowed": false, "transformed": true},
+    {"text": "~~cancelled~~", "allowed": false, "transformed": true},
+    {"text": "<u>important</u>", "allowed": false, "transformed": true},
+    {"text": "[[reply_to_current]] Bring passport.", "allowed": false, "transformed": true},
+    {"text": "Bring \\*passport\\*.", "allowed": false, "transformed": true},
+    {"text": "A &amp; B", "allowed": false, "transformed": true},
+    {"text": "    `abc`", "allowed": false, "transformed": true},
+    {"text": "- bring passport", "allowed": false},
+    {"text": "1. bring passport", "allowed": false},
+    {"text": " Bring passport", "allowed": false},
+    {"text": "Bring passport ", "allowed": false},
+    {"text": "Bring\tpassport", "allowed": false},
+    {"text": "Bring\npassport", "allowed": false},
+    {"text": "Bring\r\npassport", "allowed": false},
+    {"text": "Bring passport", "allowed": false},
+    {"text": "Bring passport", "allowed": false},
+    {"text": "snake_case stays literal but is outside the conservative subset", "allowed": false},
+    {"text": "price * quantity", "allowed": false},
+    {"text": "a | b", "allowed": false},
+    {"text": "### Heading", "allowed": false},
+    {"text": "[passport](https://example.test)", "allowed": false},
+    {"text": "```text\npassport\n```", "allowed": false},
+    {"text": "", "allowed": false}
+  ]
+}

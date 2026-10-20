@@ -21,6 +21,14 @@ python_bin="$(command -v python3.14 || command -v python3 || command -v python)"
   --python "$python_bin"
 "$TEST_ROOT/bin/openclaw" --version
 
+openclaw_commit="$("$python_bin" -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["openclaw"]["commit"])' \
+  "$REPOSITORY_ROOT/bootstrap/versions.json")"
+node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
+  "$TEST_ROOT/app/openclaw/$openclaw_commit"
+node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
+  "$TEST_ROOT/app/openclaw/$openclaw_commit"
+
 PYTHONPATH="$REPOSITORY_ROOT" "$python_bin" - "$TEST_ROOT" <<'PY'
 import sys
 from pathlib import Path

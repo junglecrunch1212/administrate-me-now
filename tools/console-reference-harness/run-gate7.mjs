@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { auditTriageSourceControls } from "./triage-source-controls.mjs";
 import { auditCosReplyControls } from "./cos-reply-controls.mjs";
+import { auditCosSendingApproval } from "./cos-send-approval.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -159,7 +160,7 @@ async function waitForServer(baseUrl) {
   throw new Error(`Gate 7 fixture server did not become ready at ${baseUrl}`);
 }
 
-async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false) {
+async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false, cosReplies = false) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
@@ -177,6 +178,7 @@ async function startServer(port, modelConfigured, attentionEnabled = false, boun
         ADMINME_GATE7_ATTENTION_ENABLED: attentionEnabled ? "1" : "0",
         ADMINME_GATE7_BOUNDED_SAMPLE: boundedSample ? "1" : "0",
         ADMINME_GATE7_EXPLICIT_SUBMISSIONS: explicitSubmissions ? "1" : "0",
+        ADMINME_GATE7_COS_REPLIES: cosReplies ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -433,7 +435,7 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
     const isKnownLocalRead = request.method() === "GET"
       && errorText === "net::ERR_ABORTED"
       && requestUrl.hostname === "127.0.0.1"
-      && [basePort, basePort + 1, basePort + 2].includes(Number.parseInt(requestUrl.port, 10))
+      && [basePort, basePort + 1, basePort + 2, basePort + 3, basePort + 4].includes(Number.parseInt(requestUrl.port, 10))
       && (
         requestUrl.pathname === "/api/member/v1/bootstrap"
         || requestUrl.pathname === "/api/member/v1/chat/history"
@@ -819,6 +821,7 @@ async function run() {
   let degraded;
   let attentionServer;
   let boundedServer;
+  let cosReplyServer;
   const browser = await launchEdge();
   browserDescription = `${browserDescription}; engine ${browser.version()}`;
   console.log(`[Gate 7] Browser ready: ${browserDescription}`);
@@ -1918,6 +1921,11 @@ async function run() {
     record("Other member cannot see the private bounded sample", !otherBoundedText.includes("visual-bounded@example.invalid") && !otherBoundedText.includes("Bounded test sample:"), otherBoundedText);
     await closePageContext(otherBounded);
 
+    cosReplyServer = await startServer(basePort + 4, true, false, false, true, true);
+    const cosReplyBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    await auditCosSendingApproval({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility });
+    await closePageContext(cosReplyBrowser);
+
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
@@ -1951,6 +1959,7 @@ async function run() {
     if (degraded) await stopServer(degraded);
     if (attentionServer) await stopServer(attentionServer);
     if (boundedServer) await stopServer(boundedServer);
+    if (cosReplyServer) await stopServer(cosReplyServer);
   }
 
   const report = {
@@ -1968,7 +1977,7 @@ async function run() {
       contrast: "computed foreground composited over rendered ancestor backgrounds",
     },
     viewports: ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
-    states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
+    states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "cos-reply-confirmed", "cos-reply-sending-approval", "cos-reply-decision-result", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
     results,
     screenshots,
     console_errors: consoleErrors,

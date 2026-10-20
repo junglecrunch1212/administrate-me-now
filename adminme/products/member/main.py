@@ -72,6 +72,7 @@ from adminme.messages_reply import (
     validate_exact_body,
 )
 from adminme.member_chat import MemberChatError
+from adminme.member_chat_approvals import pending_cos_approvals, resolve_cos_approval
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.bridge.auth import EnrollmentMemberIdResolver
 from adminme.products.comms import main as comms
@@ -197,6 +198,13 @@ class ChatRequest(BaseModel):
     model_config = {"extra": "forbid"}
     message: str = Field(min_length=1, max_length=4_000)
     request_id: str = Field(min_length=8, max_length=120)
+
+
+class ChatApprovalDecision(BaseModel):
+    model_config = {"extra": "forbid"}
+    approval_id: str = Field(pattern=r"^plugin:[a-f0-9-]{36}$")
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    decision: Literal["allow-once", "deny"]
 
 
 class SettingsProfileRequest(BaseModel):
@@ -8117,6 +8125,32 @@ async def chat_abort(request: Request, session: SessionDep) -> dict[str, bool]:
     runtime = _runtime(request)
     _, session_key = _require_chat(runtime, session)
     return {"aborted": await runtime.member_chat.abort(session_key=session_key)}
+
+
+@router.get("/api/member/v1/chat/reply-approvals")
+async def chat_reply_approvals(request: Request, session: SessionDep) -> dict[str, Any]:
+    require_principal(session)
+    runtime = _runtime(request)
+    _, session_key = _require_chat(runtime, session)
+    try:
+        return {"items": await pending_cos_approvals(runtime, session, session_key)}
+    except MemberChatError as exc:
+        raise HTTPException(503, "Reply approval is temporarily unavailable") from exc
+
+
+@router.post("/api/member/v1/chat/reply-approvals")
+async def chat_reply_approval_decision(
+    body: ChatApprovalDecision, request: Request, session: SessionDep
+) -> dict[str, bool]:
+    require_principal(session)
+    runtime = _runtime(request)
+    _, session_key = _require_chat(runtime, session)
+    try:
+        return await resolve_cos_approval(
+            runtime, session, session_key, **body.model_dump()
+        )
+    except MemberChatError as exc:
+        raise HTTPException(503, "No sending decision is confirmed") from exc
 
 
 @router.get("/api/member/v1/evidence/{event_id}")

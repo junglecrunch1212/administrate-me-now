@@ -200,6 +200,29 @@ def test_exact_response_terminal_accounting(channel: str, status: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "channel,reason,healthy",
+    [
+        ("imessage", "native_dispatch_not_claimed", True),
+        ("email", "native_dispatch_not_claimed", False),
+        ("imessage", "transport_outcome_unknown", False),
+    ],
+)
+def test_zero_effect_after_attempt_requires_native_unclaimed_result(
+    channel: str, reason: str, healthy: bool
+) -> None:
+    # The native result endpoint alone emits this reason after atomically
+    # retiring an unclaimed admission. Other denied-after-attempt shapes are
+    # still incomplete evidence, including the same reason on email.
+    events = _chain("unknown", channel)
+    events[-1]["payload"].update(
+        status="denied", reason=reason, provider_effect_count=0
+    )
+    counts = _counts(events)
+    assert _provider_effect_integrity_healthy(counts) is healthy
+    assert counts["approval_correlation_missing"] == int(not healthy)
+
+
+@pytest.mark.parametrize(
     "removed,defect",
     [
         (0, "malformed_request"),

@@ -140,6 +140,7 @@ export type PluginHookModelCallEvent = {
 export type PluginHookBeforeToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  toolCallId?: string;
 };
 
 export type PluginHookBeforeToolCallResult = {
