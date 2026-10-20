@@ -100,6 +100,7 @@ def test_member_native_approval_is_explicit_private_exact_and_single_use(
         _settings(instance),
         member_chat_enabled_members=frozenset({A, B}),
         deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
     )
     with TestClient(create_application(settings)) as client:
         _prepare(client)
@@ -184,6 +185,7 @@ def test_native_approval_rejects_changed_scope_expiry_and_policy(
         _settings(instance),
         member_chat_enabled_members=frozenset({A}),
         deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
     )
     with TestClient(create_application(settings)) as client:
         _prepare(client)
@@ -239,7 +241,7 @@ def test_native_approval_rejects_changed_scope_expiry_and_policy(
                 runtime.events.write,
                 EventEnvelope(
                     event_at_ms=int(time.time() * 1000),
-                    tenant_id=settings.tenant_id,
+                    tenant_id=settings.instance.tenant_id,
                     type="cos.response.attempted",
                     schema_version=1,
                     occurred_at=EventEnvelope.now_utc_iso(),
