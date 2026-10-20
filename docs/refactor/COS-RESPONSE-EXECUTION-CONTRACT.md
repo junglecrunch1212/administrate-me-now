@@ -89,6 +89,15 @@ For Gmail, that seam attributes the effect to the CoS service principal while
 retaining the approving member's private scope and exact approval chain.
 The adapter supervisor's shared device identity is never presented as the sender.
 
+**MODERNIZE — historical attribution.** A CoS attempt is an internal
+`openclaw-plugin` / `cos-response` command, not a provider-source account.
+The deployment audit attributes only that exact command to its member's private
+workspace after matching the immutable approval's tenant, member, actor, scopes
+and correlation fields. Invalid internal coordinates remain unattributed even
+if a provider binding happens to match. Exported evidence remains content-free;
+the separate source-assurance audit still validates recipient policy, independent
+approvals, exact content and every terminal provider effect.
+
 Production-composition coverage is in
 `tests/acceptance/test_cos_response_execution.py`; actual Gmail send and
 observation code run against a credential-free provider double. Native tests

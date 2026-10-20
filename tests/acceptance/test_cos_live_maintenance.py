@@ -22,7 +22,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 from adminme.adapters.loader import load_builtin_adapters
+from adminme.adapters.credentials import credential_service_digest
 from adminme.cos_channel_operation import require_cos_response_activation
+from adminme.historical_attribution import audit_historical_attribution
 from adminme.lib.instance_config import load_instance_config
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.openclaw_topology import (
@@ -32,6 +34,7 @@ from adminme.openclaw_topology import (
 )
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import create_application
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from bootstrap import cos_channel_activation as operation
 from bootstrap.contracts import atomic_write
 from tests.acceptance.test_cos_channel_acquisition import _ReadOnlyGmail
@@ -121,6 +124,7 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
         openclaw_runtime_config_path=gateway,
         openclaw_model_configured=True,
         deterministic_member_chat_fixture=True,
+        deterministic_openclaw_fixture=True,
     )
 
     class Gmail(_ReadOnlyGmail):
@@ -146,8 +150,35 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
     adapters = json.loads((config / "adapters.json").read_bytes())
     adapter = load_builtin_adapters(adapters, repository_root=ROOT)[0]
     module = sys.modules[type(adapter).__module__]
-    monkeypatch.setattr(module, "_default_credentials_resolver", lambda _ref: {})
-    monkeypatch.setattr(module, "_default_service_factory", lambda *_args: gmail)
+
+    def synthetic_credentials(reference):
+        assert reference == "keychain://fixture-cos/credential"
+        return {
+            "owner_kind": "service_principal",
+            "owner_service_principal_digest": credential_service_digest(
+                COS_SERVICE_PRINCIPAL_ID
+            ),
+            "provider_account_id": EMAIL_ACCOUNT,
+            "scopes": [
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.send",
+            ],
+            "client_id": "synthetic-client",
+            "client_secret": "synthetic-client-secret",
+            "refresh_token": "synthetic-refresh-token",
+        }
+
+    def synthetic_service(credentials, scopes, subject):
+        assert credentials == synthetic_credentials("keychain://fixture-cos/credential")
+        assert scopes == [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+        ]
+        assert subject == EMAIL_ACCOUNT
+        return gmail
+
+    monkeypatch.setattr(module, "_default_credentials_resolver", synthetic_credentials)
+    monkeypatch.setattr(module, "_default_service_factory", synthetic_service)
     monkeypatch.setattr(type(adapter), "POLL_INTERVAL_S", 3600)
 
     class Services:
@@ -165,6 +196,9 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
             )
             self.client = TestClient(create_application(current))
             self.client.__enter__()
+            runtime = self.client.app.state.runtime
+            assert set(runtime.adapters.inventory()) == {"fixture-cos-gmail"}
+            assert runtime.fixture_adapter is None
             self.starts += 1
             health = self.client.post(
                 "/api/openclaw/v1/health/report",
@@ -217,8 +251,8 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
         "_settle",
         lambda _release: {"status": "healthy", "runtime": services.settle()},
     )
-    services.start()
     try:
+        services.start()
         client = services.client
         assert client is not None
         headers = {"Tailscale-User-Login": "maintenance.example.test"}
@@ -294,6 +328,23 @@ def test_live_observation_cli_restart_and_fresh_reactivation(
         assert sent.status_code == 200, sent.text
         assert sent.json()["status"] == "sent", sent.text
         assert gmail.calls == 1
+
+        async def attribution():
+            return await audit_historical_attribution(
+                client.app.state.runtime.event_log,
+                repository_root=ROOT,
+                provider_bindings=(),
+                hash_key=b"maintenance-fixture-hash-key" * 2,
+            )
+
+        attributed = client.portal.call(attribution)
+        assert attributed["state"] == "healthy", attributed
+        assert attributed["source_event_count"] == 1
+        assert attributed["attributed_event_count"] == 1
+        assert attributed["unattributed_event_count"] == 0
+        assert attributed["groups"][0]["binding_state"] == (
+            "internal_cos_member_source_reconciled"
+        )
         assert (
             services.settle()["deployment_readiness"]["dimensions"][
                 "observation_effects"

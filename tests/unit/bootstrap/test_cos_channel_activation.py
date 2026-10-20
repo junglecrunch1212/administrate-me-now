@@ -17,6 +17,7 @@ import yaml
 from adminme.cos_channel_operation import live_authorization
 from adminme.cos_response_policy import policy_from_event_log
 from adminme.events.log import EventLog
+from adminme.events.registry import EventValidationError, ensure_autoloaded, registry
 from adminme.lib.instance_config import load_instance_config
 from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.cos_channel_activation import (
@@ -93,7 +94,7 @@ def _controller(
     service = config["adapters"][1]["config"]
     service.pop("service_account_key_ref")
     service.update(
-        oauth_credentials_ref="op://fixture/cos/credential",
+        oauth_credentials_ref="keychain://fixture-cos/credential",
         binding_provenance="oauth-subject",
     )
     private = paths.instance_dir / "config"
@@ -459,6 +460,17 @@ def test_enter_observation_preserves_enrollment_policy_receipt_and_reactivates(
     policy_after, events_after = asyncio.run(_audit(controller))
     assert policy_after == policy_before
     assert events_after[: len(events_before)] == events_before
+    deactivated = [
+        event for event in events_after if event["type"] == "cos.channels.deactivated"
+    ]
+    assert len(deactivated) == 1
+    assert deactivated[0]["schema_version"] == 2
+    assert deactivated[0]["payload"] == {
+        "activation_id": pause.expected_activation_id,
+        "operator_principal_id": pause.operator_principal_id,
+        "reason": "deployment_observation",
+        "observation_active": True,
+    }
     with pytest.raises(CoSActivationError, match="no current durable"):
         asyncio.run(controller._live_predecessor(ROOT))
     monkeypatch.setattr(controller, "_settle", original_settle)
@@ -544,6 +556,45 @@ def test_interrupted_observation_recovers_to_containment_without_reseeding(
     assert current["prior_provider_effect_windows"] == [
         readiness["provider_effect_window"]
     ]
+
+
+@pytest.mark.parametrize(
+    "reason", ["operation_failed", "operator_requested", "interrupted_operation"]
+)
+def test_deactivation_v2_preserves_historical_schema_and_reason(reason: str) -> None:
+    ensure_autoloaded()
+    payload = {
+        "activation_id": "a" * 32,
+        "operator_principal_id": "operator:fixture-channel-enrollment",
+        "reason": reason,
+        "observation_active": True,
+    }
+    assert (
+        registry.validate("cos.channels.deactivated", 1, payload).model_dump()
+        == payload
+    )
+    upgraded = registry.upcast(
+        "cos.channels.deactivated", payload, from_version=1, to_version=2
+    )
+    assert upgraded == payload and upgraded is not payload
+    assert (
+        registry.validate("cos.channels.deactivated", 2, upgraded).model_dump()
+        == payload
+    )
+    new_payload = {**payload, "reason": "deployment_observation"}
+    assert (
+        registry.validate("cos.channels.deactivated", 2, new_payload).model_dump()
+        == new_payload
+    )
+    with pytest.raises(EventValidationError):
+        registry.validate("cos.channels.deactivated", 1, new_payload)
+    for invalid in (
+        {**new_payload, "reason": "unknown_reason"},
+        {**new_payload, "observation_active": False},
+        {**new_payload, "unexpected": True},
+    ):
+        with pytest.raises(EventValidationError):
+            registry.validate("cos.channels.deactivated", 2, invalid)
 
 
 @pytest.mark.parametrize(

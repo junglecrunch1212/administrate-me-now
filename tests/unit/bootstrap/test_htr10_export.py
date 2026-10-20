@@ -112,6 +112,10 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
     log = EventLog(paths.instance_dir / "events" / "events.db", key)
     try:
         for event in _chain("unknown" if placement == "unknown_between" else "sent"):
+            if event["type"] in {"cos.response.approved", "cos.response.attempted"}:
+                event.update(
+                    source_adapter="openclaw-plugin", source_account_id="cos-response"
+                )
             await log.append(EventEnvelope(**event))
     finally:
         await log.close()
@@ -126,6 +130,7 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
         test_mode=True,
     )
     audit = json.loads(source.read_bytes())
+    assert json.loads(historical.read_bytes())["state"] == "healthy"
     effects = audit["provider_effects"]
     assert audit["provider_effect_windows"] == evidence
     assert effects["observation_window"]["ended_at"] == "2026-10-20T13:00:00+00:00"

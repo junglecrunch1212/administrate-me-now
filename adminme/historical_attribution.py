@@ -6,13 +6,67 @@ import hashlib
 import hmac
 from typing import Any
 
+from adminme.cos_response_assurance import APPROVED, ATTEMPTED
+from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.events.log import EventLog
 from adminme.provider_bindings import ProviderBinding
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.source_assurance import load_source_obligations
 
 
 def _digest(key: bytes, value: str) -> str:
     return hmac.new(key, value.encode(), hashlib.sha256).hexdigest()[:20]
+
+
+async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> bool:
+    """Attribute the exact internal command without inventing a provider binding.
+
+    These envelope checks establish only ownership. Source assurance separately
+    validates recipient policy, both approvals, fingerprints and terminal effects.
+    Private payloads used for correlation never enter the exported report.
+    """
+    attempt = await event_log.get(event_id)
+    if attempt is None or attempt.get("type") != ATTEMPTED:
+        return False
+    payload = attempt.get("payload") or {}
+    member = payload.get("member_id")
+    approval_id = payload.get("approval_event_id")
+    if (
+        not isinstance(member, str)
+        or not member
+        or not isinstance(approval_id, str)
+        or not approval_id
+        or approval_id >= event_id
+    ):
+        return False
+    approved = await event_log.get(approval_id)
+    if approved is None or approved.get("type") != APPROVED:
+        return False
+    approval = approved.get("payload") or {}
+    scope = f"private:{member}"
+    return bool(
+        all(
+            row.get("schema_version") == 1
+            and row.get("source_adapter") == "openclaw-plugin"
+            and row.get("source_account_id") == "cos-response"
+            and row.get("owner_scope") == scope
+            and row.get("visibility_scope") == scope
+            and row.get("payload", {}).get("contract") == RESPONSE_CONTRACT
+            for row in (attempt, approved)
+        )
+        and attempt.get("tenant_id")
+        and attempt.get("tenant_id") == approved.get("tenant_id")
+        and approved.get("actor_identity") == member
+        and attempt.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}
+        and approval.get("member_id") == member
+        and payload.get("automatic_retry_allowed") is False
+        and payload.get("openclaw_approval_event_id")
+        and attempt.get("causation_id") == payload["openclaw_approval_event_id"]
+        and payload.get("content_fingerprint")
+        and payload.get("content_fingerprint") == approval.get("content_fingerprint")
+        and payload.get("policy_event_id")
+        and payload.get("policy_event_id") == approval.get("policy_event_id")
+    )
 
 
 async def audit_historical_attribution(
@@ -59,7 +113,15 @@ async def audit_historical_attribution(
         }
         binding_state = "unattributed"
         workspace = "unattributed"
-        if len(matching_coordinates) == 1:
+        if event_type == ATTEMPTED:
+            # This command is emitted by the governed internal reply route,
+            # not the enrolled provider adapter. Never fall back to provider
+            # matching when its member/private correlation is malformed.
+            if await _cos_response_owner_matches(event_log, str(event["event_id"])):
+                binding_state = "internal_cos_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif len(matching_coordinates) == 1:
             binding_state = "matched"
             workspace = next(iter(matching_coordinates))[2]
             attributed += 1

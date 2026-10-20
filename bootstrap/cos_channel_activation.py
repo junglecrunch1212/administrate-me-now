@@ -836,7 +836,12 @@ class CoSChannelActivator:
                 event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
                 tenant_id=instance.tenant_id,
                 type=ACTIVATED_EVENT if activation is not None else DEACTIVATED_EVENT,
-                schema_version=1,
+                schema_version=(
+                    2
+                    if activation is None
+                    and deactivate_reason == "deployment_observation"
+                    else 1
+                ),
                 occurred_at=now,
                 source_adapter="cos-channel-operation",
                 source_account_id="system",

@@ -212,8 +212,11 @@ An authenticated encrypted backup and isolated restore rehearsal precede the
 observation mutation. The controller revalidates source/configuration and policy,
 appends an idempotent deactivation of the previous live authority and an audited
 observation enable, archives the previous closed interval unchanged, and starts a
-new `cos_enter_observation` interval. Enrollment, routing, credentials, recipient
-policy, the old receipt and all activation/source history remain unchanged.
+new `cos_enter_observation` interval. The `deployment_observation` reason uses
+`cos.channels.deactivated` schema v2; v1 remains unchanged and its identity
+upcaster preserves historical reasons and authority boundaries. Enrollment,
+routing, credentials, recipient policy, the old receipt and all activation/source
+history remain unchanged.
 The retained receipt is historical: its deactivation prevents live dispatch.
 Healthy selected-release Doctor, current observation-on readiness and unchanged
 authoritative provider-effect counts are required before the journal is closed.

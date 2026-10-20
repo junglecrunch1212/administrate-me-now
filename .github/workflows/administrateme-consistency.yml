@@ -75,6 +75,7 @@ jobs:
             tests/unit/test_observation.py \
             tests/unit/bootstrap/test_candidate_readiness.py \
             tests/unit/bootstrap/test_htr10_export.py \
+            tests/unit/test_historical_attribution.py \
             tests/unit/bootstrap/test_cos_imessage.py \
             tests/unit/bootstrap/test_cos_guard_release.py \
             tests/unit/bootstrap/test_cos_permissions.py \

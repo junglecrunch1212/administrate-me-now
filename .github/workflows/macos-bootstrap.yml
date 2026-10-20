@@ -89,6 +89,7 @@ jobs:
           tests/unit/test_observation.py
           tests/unit/bootstrap/test_candidate_readiness.py
           tests/unit/bootstrap/test_htr10_export.py
+          tests/unit/test_historical_attribution.py
 
       - name: Validate the exact native plugin contract
         run: |

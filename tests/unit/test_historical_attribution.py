@@ -8,9 +8,112 @@ from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.historical_attribution import audit_historical_attribution
 from adminme.provider_bindings import ProviderBinding
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+from tests.unit.test_cos_response_assurance import MEMBER, _chain
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "none",
+        "service_actor",
+        "attempt_actor",
+        "approval_actor",
+        "payload_member",
+        "owner_scope",
+        "visibility_scope",
+        "account",
+        "adapter",
+        "approval_account",
+        "approval_tenant",
+        "attempt_tenant",
+        "missing_approval",
+        "future_approval",
+        "policy",
+        "fingerprint",
+    ],
+)
+async def test_internal_cos_attribution_requires_exact_private_approval_context(
+    tmp_path: Path, defect: str
+) -> None:
+    events = _chain()
+    approved, attempt = events[1], events[3]
+    for event in (approved, attempt):
+        event.update(source_adapter="openclaw-plugin", source_account_id="cos-response")
+    if defect == "service_actor":
+        attempt["actor_identity"] = COS_SERVICE_PRINCIPAL_ID
+    elif defect in {"attempt_actor", "approval_actor"}:
+        (attempt if defect == "attempt_actor" else approved)["actor_identity"] = (
+            "member-other-fixture"
+        )
+    elif defect == "payload_member":
+        attempt["payload"]["member_id"] = "member-other-fixture"
+    elif defect in {"owner_scope", "visibility_scope"}:
+        attempt[defect] = "private:member-other-fixture"
+    elif defect == "account":
+        attempt["source_account_id"] = "spoofed-provider@example.invalid"
+    elif defect == "adapter":
+        attempt["source_adapter"] = "unrelated-adapter"
+    elif defect == "approval_account":
+        approved["source_account_id"] = "unrelated-command"
+    elif defect in {"approval_tenant", "attempt_tenant"}:
+        (approved if defect == "approval_tenant" else attempt)["tenant_id"] = (
+            "tenant-other-fixture"
+        )
+    elif defect == "missing_approval":
+        attempt["payload"]["approval_event_id"] = "absent-approval"
+    elif defect == "future_approval":
+        approved["event_id"] = "cos-audit-9999"
+        attempt["payload"]["approval_event_id"] = approved["event_id"]
+    elif defect == "policy":
+        attempt["payload"]["policy_event_id"] = "unrelated-policy"
+    elif defect == "fingerprint":
+        attempt["payload"]["content_fingerprint"] = "f" * 64
+    log = EventLog(tmp_path / "cos-events.db", b"c" * 32)
+    try:
+        for event in events:
+            await log.append(EventEnvelope(**event))
+        proof = await audit_historical_attribution(
+            log,
+            repository_root=REPO_ROOT,
+            # Even a matching provider binding cannot rescue invalid internal
+            # command coordinates; this is not an external source account.
+            provider_bindings=(
+                ProviderBinding(
+                    adapter_id="fixture-spoofed-provider",
+                    kind="messaging-gmail-api",
+                    provider_family="google",
+                    owner_kind="member",
+                    owner_id=MEMBER,
+                    member_id=MEMBER,
+                    service_principal_id=None,
+                    provider_account_id="spoofed-provider@example.invalid",
+                    workspace="personal",
+                    permission_scope=("gmail.read",),
+                    binding_provenance="oauth-subject",
+                ),
+            ),
+            hash_key=b"cos-attribution-fixture" * 2,
+        )
+    finally:
+        await log.close()
+    valid = defect in {"none", "service_actor"}
+    assert proof["source_event_count"] == 1
+    assert proof["state"] == ("healthy" if valid else "degraded")
+    assert proof["attributed_event_count"] == int(valid)
+    assert proof["unattributed_event_count"] == int(not valid)
+    assert proof["groups"][0]["binding_state"] == (
+        "internal_cos_member_source_reconciled" if valid else "unattributed"
+    )
+    assert proof["content_exposed"] is proof["raw_identifiers_exposed"] is False
+    rendered = str(proof)
+    assert MEMBER not in rendered
+    assert "Synthetic private response" not in rendered
+    assert "member-audit@example.invalid" not in rendered
 
 
 @pytest.mark.asyncio

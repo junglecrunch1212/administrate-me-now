@@ -3862,7 +3862,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 352,
+    "technical_event_schemas": 353,
     "technical_event_types": 283,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -10142,6 +10142,46 @@
         "operator_principal_id"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.channels.deactivated",
+      "family": "governance",
+      "properties": {
+        "activation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Activation Id",
+          "type": "string"
+        },
+        "observation_active": {
+          "const": true,
+          "default": true,
+          "title": "Observation Active",
+          "type": "boolean"
+        },
+        "operator_principal_id": {
+          "maxLength": 240,
+          "pattern": "^operator:.+",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "operation_failed",
+            "operator_requested",
+            "interrupted_operation",
+            "deployment_observation"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "activation_id",
+        "reason",
+        "operator_principal_id"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
