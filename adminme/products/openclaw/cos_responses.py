@@ -630,16 +630,22 @@ async def _expire_native_admission(runtime: Any, dispatch_id: str) -> None:
     async with runtime.settings_command_locks.setdefault(
         f"cos-response:{admission['approval_event_id']}", asyncio.Lock()
     ):
-        if not admission["claimed"]:
-            admission["claimed"] = True
-            await _existing_or_terminal(
-                runtime,
-                admission["session"],
-                admission["payload"],
-                admission["approval_event_id"],
-                "unknown",
-                "native_dispatch_not_claimed",
-            )
+        # Match result retirement's lock order. A claim may be suspended in
+        # its final checks; expiry cannot retire its permit underneath it.
+        async with runtime.settings_command_locks.setdefault(
+            f"cos-response-native-claim:{runtime.settings.instance.tenant_id}",
+            asyncio.Lock(),
+        ):
+            if not admission["claimed"]:
+                admission["claimed"] = True
+                await _existing_or_terminal(
+                    runtime,
+                    admission["session"],
+                    admission["payload"],
+                    admission["approval_event_id"],
+                    "denied",
+                    "native_dispatch_not_claimed",
+                )
     task = admission["outbound_task"]
     if task is not None and not task.done():
         await asyncio.shield(task)
@@ -734,6 +740,8 @@ async def claim_imessage(
         await admission["final_check"](True)
         if await runtime.observation.is_active():
             raise HTTPException(403, "observation suppresses CoS response")
+        if admission["expires_monotonic"] <= time.monotonic():
+            raise HTTPException(403, "CoS response admission expired")
         admission["claimed"] = True
         admission["claim_id"] = secrets.token_urlsafe(32)
         loop = asyncio.get_running_loop()

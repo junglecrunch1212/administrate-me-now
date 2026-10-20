@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib.util
 import json
@@ -10,6 +11,7 @@ import time
 from typing import Any
 
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
 from adminme.lib.adapters import OutboundMessage
@@ -570,3 +572,119 @@ def test_native_response_observation_has_complete_zero_effect_audit(
         assert assurance["counts"]["provider_called_true"] == 0
         assert assurance["counts"]["provider_called_false"] == 1
         assert assurance["counts"]["suppressed_true"] == 1
+
+
+def test_native_expiry_cannot_retire_a_suspended_claim_then_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Coordinate the real claim route at its awaited final-check boundary."""
+    from adminme.products.openclaw import cos_responses as responses
+
+    async def activation(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"authorized": True}
+
+    monkeypatch.setattr(responses, "require_cos_response_activation", activation)
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client)
+        runtime = client.app.state.runtime
+        client.portal.call(runtime.observation.disable, A, "isolated expiry fixture")
+        approved = client.post(
+            BASE + "/approvals",
+            headers=HEADERS,
+            json={
+                "request_id": "native-expiry-race-approval",
+                "channel": "imessage",
+                "service_channel_id": "channel:cos:imessage",
+                "provider_account_id": IMESSAGE_ACCOUNT,
+                "recipient": PHONE,
+                "body": "Exact expiring fixture response.",
+            },
+        )
+        assert approved.status_code == 201, approved.text
+        approval = approved.json()["approval_event_id"]
+        execution = client.post(
+            EXECUTE, headers=AUTH, json=_execution(client, approval)
+        )
+        assert execution.status_code == 200, execution.text
+        dispatch = execution.json()["transport_dispatch"]
+
+        async def coordinate() -> None:
+            dispatch_id, admission = next(iter(responses._admissions(runtime).items()))
+            admission["expiry_task"].cancel()
+            await asyncio.gather(admission["expiry_task"], return_exceptions=True)
+            entered, resume, expiring = (
+                asyncio.Event(),
+                asyncio.Event(),
+                asyncio.Event(),
+            )
+            original_check = admission["final_check"]
+
+            async def suspended_check(provider_effect: bool = False) -> None:
+                await original_check(provider_effect)
+                entered.set()
+                await resume.wait()
+
+            class ExpiryClock:
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(asyncio, name)
+
+                async def sleep(self, seconds: float) -> None:
+                    assert seconds == 30
+                    expiring.set()
+
+            admission["final_check"] = suspended_check
+            # Replace only this module's expiry wait, preserving the actual
+            # claim route, policy checks, locks, audit writer and event loop.
+            monkeypatch.setattr(responses, "asyncio", ExpiryClock())
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=client.app),
+                base_url="http://fixture.test",
+            ) as api:
+                claim = asyncio.create_task(
+                    api.post(
+                        "/api/openclaw/v1/cos-responses/claim",
+                        headers=AUTH,
+                        json={
+                            "account_id": IMESSAGE_ACCOUNT,
+                            "recipient": PHONE,
+                            "body": dispatch["body"],
+                        },
+                    )
+                )
+                await asyncio.wait_for(entered.wait(), 2)
+                admission["expires_monotonic"] = 0
+                expiry = asyncio.create_task(
+                    responses._expire_native_admission(runtime, dispatch_id)
+                )
+                try:
+                    await asyncio.wait_for(expiring.wait(), 2)
+                    resume.set()
+                    result = await asyncio.wait_for(claim, 5)
+                    await asyncio.wait_for(expiry, 5)
+                    assert result.status_code == 403, result.text
+                    assert admission["provider_future"] is None
+                    assert admission["outbound_task"] is None
+                    assert responses._admissions(runtime) == {}
+                finally:
+                    resume.set()
+                    for task in (claim, expiry, admission["outbound_task"]):
+                        if task is not None and not task.done():
+                            task.cancel()
+                    await asyncio.gather(
+                        *(
+                            task
+                            for task in (claim, expiry, admission["outbound_task"])
+                            if task is not None
+                        ),
+                        return_exceptions=True,
+                    )
+
+        client.portal.call(coordinate)
+        terminals = client.portal.call(_events, runtime, ["cos.response.result"])
+        assert len(terminals) == 1
+        assert terminals[0]["payload"]["status"] == "denied"
+        assert terminals[0]["payload"]["provider_effect_count"] == 0
+        assert client.portal.call(_events, runtime, ["external.sent"]) == []
+        assert client.portal.call(_provider_assurance, runtime)["state"] == "healthy"

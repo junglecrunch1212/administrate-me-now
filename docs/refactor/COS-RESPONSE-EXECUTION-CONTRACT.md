@@ -67,12 +67,14 @@ bounded native result; it does not recall an already submitted message.
 The final claim opens the existing observation wrapper, which waits for the
 guard's terminal callback. Provider success is audited only after that callback.
 An absent, ambiguous or timed-out native result is unknown; it is never retried.
-If the sole invocation returns while its admission is still unclaimed, result
-collection retires that admission under the same lock used by native claim and
+If the sole invocation returns or its admission expires while still unclaimed,
+result collection and expiry retire it under the same lock used by native claim and
 records `denied` with zero effects. A late claim cannot use the retired
-admission. Claimed admissions and missing process state never support this
-zero-effect conclusion.
+admission; claims recheck their lifetime after awaited final checks. Claimed
+admissions and missing process state never support this zero-effect conclusion.
 The guard has separate exact binary, configuration and account checks.
+Its provider child receives only basic OS environment variables; Gateway
+credentials, credential aliases and runtime injection variables are excluded.
 Hook cancellation and generic-tool blocking are defense in depth: the pinned
 OpenClaw hook alone is insufficient because some direct sends bypass it and
 hook errors fail open.

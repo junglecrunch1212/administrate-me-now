@@ -83,9 +83,12 @@ export async function runGuard(config, args, dependencies = {}) {
   }
   // Only the pinned provider process gets provider RPC. It never inherits the
   // backend secret; the relay is the sole holder of transport admission.
-  const childEnv = { ...process.env };
-  delete childEnv[config.shared_secret_env];
-  delete childEnv.ADMINISTRATEME_COS_IMSG_GUARD_CONFIG;
+  // Gateway credentials may also exist under aliases such as
+  // OPENCLAW_GATEWAY_TOKEN. Allow only basic OS context into the provider.
+  const childEnv = { PATH: "/usr/bin:/bin" };
+  for (const key of ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"]) {
+    if (process.env[key]) childEnv[key] = process.env[key];
+  }
   const child = spawnChild(config.cli_path, ["rpc", "--json", "--db", config.db_path], {
     stdio: ["pipe", "pipe", "pipe"], env: childEnv,
   });

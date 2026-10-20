@@ -25,7 +25,12 @@ input.on("line", (line) => {
   const request = JSON.parse(line);
   appendFileSync(process.env.FIXTURE_AUDIT, JSON.stringify({
     ...request, secretInherited: Boolean(process.env.TEST_COS_GUARD_SECRET),
-    guardConfigInherited: Boolean(process.env.ADMINISTRATEME_COS_IMSG_GUARD_CONFIG)
+    guardConfigInherited: Boolean(process.env.ADMINISTRATEME_COS_IMSG_GUARD_CONFIG),
+    gatewayAliasInherited: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN),
+    standardSharedInherited: Boolean(process.env.ADMINME_OPENCLAW_SHARED_SECRET),
+    runtimeInjectionInherited: Boolean(process.env.NODE_OPTIONS),
+    homeInherited: process.env.HOME === process.env.FIXTURE_EXPECTED_HOME,
+    path: process.env.PATH
   }) + "\\n");
   if (request.method === "send" && process.env.FIXTURE_MODE === "silent") return;
   if (request.method === "send" && process.env.FIXTURE_MODE === "malformed") {
@@ -84,6 +89,9 @@ async function harness({ claims = 0, mode = "normal", claimFailure = false } = {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("fixture listener missing");
   vi.stubEnv("TEST_COS_GUARD_SECRET", SECRET);
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", SECRET);
+  vi.stubEnv("ADMINME_OPENCLAW_SHARED_SECRET", SECRET);
+  vi.stubEnv("NODE_OPTIONS", "--trace-warnings");
   vi.stubEnv("ADMINISTRATEME_COS_IMSG_GUARD_CONFIG", "fixture-config-not-for-child");
   const input = new PassThrough();
   const output = new PassThrough();
@@ -115,7 +123,7 @@ async function harness({ claims = 0, mode = "normal", claimFailure = false } = {
       spawnCount += 1;
       child = spawnProcess(process.execPath, [childPath], {
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...options.env, FIXTURE_AUDIT: auditPath, FIXTURE_MODE: mode },
+        env: { ...options.env, FIXTURE_AUDIT: auditPath, FIXTURE_MODE: mode, FIXTURE_EXPECTED_HOME: process.env.HOME },
       });
       return child;
     },
@@ -218,7 +226,11 @@ describe("CoS iMessage process admission boundary", () => {
     expect((await value.next()).id).toBe(17);
     const requests = await value.requests();
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ method: "status", secretInherited: false, guardConfigInherited: false });
+    expect(requests[0]).toMatchObject({
+      method: "status", secretInherited: false, guardConfigInherited: false,
+      gatewayAliasInherited: false, standardSharedInherited: false,
+      runtimeInjectionInherited: false, homeInherited: true, path: "/usr/bin:/bin",
+    });
     expect(value.calls).toEqual([]);
     expect(value.output).not.toContain("private provider diagnostic");
   });
