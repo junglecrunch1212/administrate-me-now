@@ -1,5 +1,7 @@
 // Real member routes and UI; only the isolated Gateway conversation is a fixture.
 export async function auditCosSendingApproval({ page, baseUrl, record, screenshot, auditAccessibility }) {
+  page.setDefaultTimeout(10_000);
+  page.setDefaultNavigationTimeout(20_000);
   const call = async (path, method = "GET", data = null) => {
     const response = await page.request.fetch(`${baseUrl}${path}`, { method, ...(data ? { data } : {}) });
     const value = await response.json();
@@ -57,9 +59,27 @@ export async function auditCosSendingApproval({ page, baseUrl, record, screensho
     const decisionBody = decided.request().postDataJSON();
     const resolution = await decided.json();
     record(`Member records only the exact ${decision} decision at ${width}`, decided.status() === 200 && resolution.resolved === true && resolution.sent === false && JSON.stringify(Object.keys(decisionBody).sort()) === JSON.stringify(["approval_id", "decision", "revision"]) && decisionBody.approval_id === rows.items[0].approval_id && decisionBody.revision === rows.items[0].revision && decisionBody.decision === decision, { decisionBody, resolution });
-    await page.locator("#chat-state").filter({ hasText: /^Ready$/ }).waitFor();
-    await stream.finished();
-    await page.waitForFunction(() => document.querySelectorAll(".cos-send-approval").length === 0 && !document.querySelector("#chat-send").disabled);
+    const immediateState = await page.locator("#chat-state").innerText({ timeout: 2_000 });
+    const immediateProof = await page.request.get(`${baseUrl}/__gate7/cos-reply-proof`, { timeout: 5_000 }).then((response) => response.json());
+    console.log(`[Gate 7] CoS decision settlement begins: ${JSON.stringify({ width, state: immediateState, fixture: immediateProof })}`);
+    try {
+      await page.locator("#chat-state").filter({ hasText: /^Ready$/ }).waitFor({ timeout: 10_000 });
+      record(`CoS terminal stream reports Ready at ${width}`, true);
+      let finishTimer;
+      try {
+        await Promise.race([
+          stream.finished(),
+          new Promise((_, reject) => { finishTimer = setTimeout(() => reject(new Error("CoS SSE response did not finish")), 10_000); }),
+        ]);
+      } finally { clearTimeout(finishTimer); }
+      record(`CoS terminal SSE response closes at ${width}`, true);
+      await page.waitForFunction(() => document.querySelectorAll(".cos-send-approval").length === 0 && !document.querySelector("#chat-send").disabled, null, { timeout: 10_000 });
+    } catch (error) {
+      const visible = await page.locator("#chat-panel").innerText({ timeout: 2_000 });
+      const diagnostic = await page.request.get(`${baseUrl}/__gate7/cos-reply-proof`, { timeout: 5_000 }).then((response) => response.json());
+      await screenshot(page, `cos-reply-settlement-failure-${width}.png`);
+      throw new Error(`CoS reply settlement failed at ${width}: ${error.message}; UI=${JSON.stringify(visible)}; fixture=${JSON.stringify(diagnostic)}`);
+    }
     completed += 1;
     const proof = await call("/__gate7/cos-reply-proof");
     record(`Terminal chat refresh removes stale approval controls at ${width}`, proof.decisions.length === completed && proof.completed.length === completed && proof.decisions.at(-1).decision === decision && proof.pending === false && proof.provider_effect_count === 0 && (await call(endpoint)).items.length === 0, proof);

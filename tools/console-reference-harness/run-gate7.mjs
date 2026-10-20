@@ -1959,7 +1959,10 @@ async function run() {
     if (degraded) await stopServer(degraded);
     if (attentionServer) await stopServer(attentionServer);
     if (boundedServer) await stopServer(boundedServer);
-    if (cosReplyServer) await stopServer(cosReplyServer);
+    if (cosReplyServer) {
+      await writeFile(join(evidenceDir, "cos-reply-fixture-output.txt"), cosReplyServer.output());
+      await stopServer(cosReplyServer);
+    }
   }
 
   const report = {
@@ -2020,6 +2023,7 @@ boundedRun.then(
     clearTimeout(hardTimeout);
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(join(evidenceDir, "visual-failure.txt"), `${error.stack || error}\n`);
+    await writeFile(join(evidenceDir, "visual-partial-results.json"), `${JSON.stringify({ status: "FAIL", results, screenshots, consoleErrors, pageErrors, requestFailures, unexpectedResponses }, null, 2)}\n`);
     console.error(error);
     process.exit(1);
   },

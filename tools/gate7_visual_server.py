@@ -237,6 +237,7 @@ def build_app():
             "decisions": runtime.member_chat.decisions,
             "completed": runtime.member_chat.completed,
             "pending": runtime.member_chat.pending is not None,
+            "phase": runtime.member_chat.phase,
             "provider_effect_count": len(effects),
         }
 

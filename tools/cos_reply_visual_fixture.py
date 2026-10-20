@@ -70,6 +70,7 @@ class CoSReplyVisualTransport(DeterministicOpenClawChatTransport):
         self.waiting: asyncio.Future[str] | None = None
         self.decisions: list[dict[str, str]] = []
         self.completed: list[str] = []
+        self.phase = "idle"
 
     async def stream(
         self, *, session_key: str, message: str, idempotency_key: str
@@ -112,9 +113,11 @@ class CoSReplyVisualTransport(DeterministicOpenClawChatTransport):
             "agent_id": member_agent_id(self.member_id),
         }
         self.waiting = asyncio.get_running_loop().create_future()
+        self.phase = "pending"
         yield MemberChatChunk(kind="status", phase="starting_model")
         try:
             decision = await asyncio.wait_for(self.waiting, timeout=90)
+            self.phase = "decision_received"
             response = (
                 "Sending allowed once. This isolated browser fixture contacts "
                 "no provider."
@@ -126,8 +129,10 @@ class CoSReplyVisualTransport(DeterministicOpenClawChatTransport):
                 {"role": "assistant", "text": response}
             )
             yield MemberChatChunk(kind="delta", text=response)
+            self.phase = "final_yielded"
             yield MemberChatChunk(kind="final")
         finally:
+            self.phase = "closed"
             self.pending = None
             self.waiting = None
 
