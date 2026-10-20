@@ -365,6 +365,8 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
     extraHTTPHeaders: headers(identity),
     colorScheme: "light",
   });
+  context.setDefaultTimeout(10_000);
+  context.setDefaultNavigationTimeout(20_000);
   await context.addInitScript(({ instant, contextId }) => {
     const RealDate = Date;
     const frozen = new RealDate(instant).getTime();
@@ -453,7 +455,17 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
 
 async function closePageContext(pageContext) {
   closingPages.add(pageContext.page);
-  await pageContext.context.close();
+  let closeTimeout;
+  try {
+    await Promise.race([
+      pageContext.context.close(),
+      new Promise((_, reject) => {
+        closeTimeout = setTimeout(() => reject(new Error("Browser context close exceeded 15000 ms")), 15_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(closeTimeout);
+  }
 }
 
 async function screenshot(page, name) {
@@ -1754,13 +1766,17 @@ async function run() {
     await adult.page.locator("#chat-input").fill("What is one kind next step?");
     const chatResponsePromise = adult.page.waitForResponse((response) =>
       response.url().includes("/api/member/v1/chat/stream")
-      && response.request().method() === "POST");
+      && response.request().method() === "POST", { timeout: 10_000 });
     await adult.page.locator("#chat-send").click();
     const chatResponse = await chatResponsePromise;
-    await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).last().waitFor();
-    await adult.page.locator("#chat-state").filter({ hasText: "Ready" }).waitFor();
-    await chatResponse.finished();
-    record("adult OpenClaw stream rendered", await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
+    await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).last().waitFor({ timeout: 10_000 });
+    await adult.page.locator("#chat-state").filter({ hasText: /^Ready$/ }).waitFor({ timeout: 10_000 });
+    // Response.finished() can remain pending after a streamed fetch reaches
+    // EOF. Require the production reader's final cleanup instead.
+    await adult.page.waitForFunction(() => !document.querySelector("#chat-send").disabled
+      && document.querySelector("#chat-stop").hidden
+      && document.querySelectorAll(".cos-send-approval").length === 0, null, { timeout: 10_000 });
+    record("adult OpenClaw stream rendered", chatResponse.ok() && await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
     await adult.page.locator("#chat-close").click();
     record("chat drawer returns focus to its opener", await adult.page.locator("#chat-open").evaluate((node) => node === document.activeElement && node.getAttribute("aria-expanded") === "false"), await adult.page.evaluate(() => document.activeElement?.id));
     await screenshot(adult.page, "adult-chat-streamed-tablet.png");
