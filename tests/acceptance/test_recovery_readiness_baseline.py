@@ -25,6 +25,7 @@ from adminme.settings_control import SettingsControlStore
 from bootstrap.activation_transaction import ActivationJournal
 from bootstrap.contracts import atomic_write
 from bootstrap.secrets import secret_store
+from bootstrap.release_history import retained_predecessor
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from tests.integration.test_runtime_application import (
     REPO_ROOT,
@@ -36,8 +37,12 @@ from tests.unit.bootstrap.test_recovery_readiness import _doctor
 
 
 @pytest.mark.parametrize("new_doctor_failure", [False, True])
+@pytest.mark.parametrize("pointer_depth", [1, 64])
 def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_doctor_failure: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    new_doctor_failure: bool,
+    pointer_depth: int,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     paths = _paths(tmp_path)
@@ -80,6 +85,19 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
         atomic_write(config / name, json.dumps(value).encode())
     original_readiness = (config / "deployment-readiness.json").read_bytes()
     journal_input = _journal_value(paths)
+    tail = None
+    for index in range(pointer_depth - 1):
+        commit = f"{index + 1:040x}"
+        release = paths.app_dir / "releases" / commit
+        release.mkdir(mode=0o700)
+        tail = {"commit": commit, "path": str(release), "previous": tail}
+    if tail is not None:
+        journal_input["initial_pointer"]["previous"] = tail
+    original_pointer = json.dumps(journal_input["initial_pointer"], indent=2).encode()
+    journal_input["initial_pointer_bytes"] = base64.b64encode(original_pointer).decode()
+    journal_input["initial_pointer_sha256"] = hashlib.sha256(
+        original_pointer
+    ).hexdigest()
     journal_input.update(
         {
             "initial_readiness": json.loads(original_readiness),
@@ -170,6 +188,16 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
         owner.create(journal_input)
         # Simulate interruption after candidate control selection. The durable
         # journal, not live mutable candidate controls, owns recovery authority.
+        atomic_write(
+            pointer,
+            json.dumps(
+                {
+                    "path": journal_input["candidate_path"],
+                    "commit": journal_input["candidate_commit"],
+                    "previous": retained_predecessor(journal_input["initial_pointer"]),
+                }
+            ).encode(),
+        )
         atomic_write(config / "deployment-readiness.json", b'{"candidate":true}')
         monkeypatch.setattr(
             manager, "_install_reviewed_openclaw", lambda _release: None
@@ -215,6 +243,7 @@ def test_interrupted_recovery_preserves_expired_evidence_and_restarts_real_runti
             assert saved["restored_readiness"] == "preexisting_attestation_gaps"
         assert full_calls == [True]
         assert services.starts == 2 and services.stops == 1
+        assert pointer.read_bytes() == original_pointer
         assert (config / "deployment-readiness.json").read_bytes() == original_readiness
         final = services.runtime_diagnostics()
         assert final["ready"] is False

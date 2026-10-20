@@ -1,5 +1,10 @@
 # Bootstrap and topology contract
 
+[CO-034](CHANGE-ORDER-034-BOUNDED-RELEASE-HISTORY.md) keeps the live release
+selector bounded while journaled activation preserves its complete predecessor
+bytes. Rollback and interrupted recovery restore those exact bytes; retained
+release directories and audit history are never pruned by selection.
+
 [CO-032](CHANGE-ORDER-032-FORWARDED-INTAKE-DEPLOYMENT-READINESS.md) completes the
 staged intake prerequisite and requires the encrypted policy epoch to constrain
 activation, rollback and recovery. It also distinguishes historical observation

@@ -21,6 +21,7 @@ from typing import Any
 
 from bootstrap.candidate_readiness import _json_no_duplicates, _read_private_file
 from bootstrap.contracts import DeploymentPaths, atomic_write, sha256_file
+from bootstrap.release_history import MAX_POINTER_DEPTH
 
 CONTRACT = "disposable-test-reset-v1"
 DATASET_CONTRACT = "disposable-test-dataset-v1"
@@ -652,6 +653,11 @@ def execute_reset(
             clear_active_reset()
             return record
         return restore_original()
+    # This distinct operation publishes an unshortened predecessor selector.
+    # Its accepted/recovery paths above must remain available at capacity, but
+    # starting a new reset cannot create a selector its readers would reject.
+    if len(upgrades._release_pointer_state()[4]) >= MAX_POINTER_DEPTH:
+        raise TestResetError("new test reset cannot extend full release history")
     validate_manifest(upgrades.paths, manifest)
     validate_candidate(
         candidate, active_root=previous_release, approve_runtime_migration=False

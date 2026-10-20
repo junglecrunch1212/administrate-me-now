@@ -93,6 +93,42 @@ def reset_fixture(tmp_path: Path) -> tuple[DeploymentPaths, dict]:
     return paths, manifest
 
 
+def test_new_reset_refuses_full_history_before_preparation_or_mutation(reset_fixture):
+    from types import SimpleNamespace
+
+    from bootstrap.disposable_test_reset import execute_reset
+
+    paths, manifest = reset_fixture
+    manifest_path = paths.root / "reset-manifest.json"
+    _json(manifest_path, manifest)
+    before = {
+        path: path.read_bytes() for path in paths.root.rglob("*") if path.is_file()
+    }
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("full-history reset crossed its mutation boundary")
+
+    manager = SimpleNamespace(
+        paths=paths,
+        approve_runtime_migration=False,
+        approve_source_assessment_repair=False,
+        approve_provider_binding_migration=False,
+        pending_attestation_id=None,
+        services=SimpleNamespace(stop=forbidden, start=forbidden),
+        _candidate_commit=lambda candidate: manifest["candidate_commit"],
+        _attest_controller_provenance=lambda *args: None,
+        _active_release_root=lambda: paths.root / "predecessor",
+        _release_pointer_state=lambda: (None, None, None, None, ({},) * 64),
+        _publish_release=forbidden,
+    )
+    with pytest.raises(ResetError, match="cannot extend full release history"):
+        execute_reset(manager, paths.root / "candidate", manifest_path)
+    assert {
+        path: path.read_bytes() for path in paths.root.rglob("*") if path.is_file()
+    } == before
+    assert not Path(manifest["archive"]).exists()
+
+
 def test_reset_retains_identity_and_failed_journal_without_claiming_recovery(
     reset_fixture,
 ):
@@ -404,6 +440,7 @@ def test_controller_failure_reverses_real_state_moves_and_retains_failure(
         _candidate_commit=lambda candidate: "c" * 40,
         _attest_controller_provenance=lambda *args: trace.append("attest"),
         _active_release_root=lambda: paths.root / "predecessor",
+        _release_pointer_state=lambda: (None, None, None, None, ({},)),
         _preflight_keychain_access=lambda *args: None,
         _publish_release=lambda *args: paths.root / "candidate",
         _consume_preparation_state=lambda *args: descriptor,

@@ -66,6 +66,7 @@ from bootstrap.provider_binding_transition import (
     prepare_live_provider_binding_transition,
 )
 from bootstrap.runtime_compatibility import retained_python_pin
+from bootstrap.release_history import retained_predecessor
 from bootstrap.recovery_readiness import (
     BASELINE_CONTROLS,
     capture_baseline,
@@ -731,7 +732,17 @@ class UpgradeManager:
         str,
         tuple[dict[str, str], ...],
     ]:
-        document = self._read_release_pointer()
+        return self._validate_release_pointer_state(self._read_release_pointer())
+
+    def _validate_release_pointer_state(
+        self, document: dict[str, Any] | None
+    ) -> tuple[
+        dict[str, Any] | None,
+        Path,
+        frozenset[Path],
+        str,
+        tuple[dict[str, str], ...],
+    ]:
         if document is None:
             digest = hashlib.sha256(b"[]").hexdigest()
             return None, self.root, frozenset(), digest, ()
@@ -2095,10 +2106,6 @@ class UpgradeManager:
         )
         if not pointer_rows:
             raise UpgradeError("activation requires an exact predecessor pointer")
-        if len(pointer_rows) >= _MAX_RELEASE_POINTER_DEPTH:
-            raise UpgradeError(
-                "active-release pointer chain is at its safe retention limit"
-            )
         target_release = self.paths.app_dir / "releases" / commit
         if target_release.resolve() in protected_roots:
             raise UpgradeError(
@@ -2499,7 +2506,7 @@ class UpgradeManager:
             candidate_pointer = {
                 "path": str(release),
                 "commit": commit,
-                "previous": pointer,
+                "previous": retained_predecessor(pointer),
             }
             journal = self.activation_journal.transition(
                 journal,
@@ -2985,12 +2992,15 @@ class UpgradeManager:
                 activation_history["initial_pointer_bytes"],
                 validate=True,
             )
+            target_pointer = json.loads(target_pointer_payload.decode("utf-8"))
+            self._validate_release_pointer_state(target_pointer)
+            target_retained_view = retained_predecessor(target_pointer)
         except (TypeError, ValueError) as exc:
             raise UpgradeError("rollback pointer history is invalid") from exc
         if (
             hashlib.sha256(target_pointer_payload).hexdigest()
             != activation_history["initial_pointer_sha256"]
-            or json.loads(target_pointer_payload.decode("utf-8")) != previous
+            or target_retained_view != previous
         ):
             raise UpgradeError("rollback pointer history does not match predecessor")
         target_readiness_payload: bytes | None
