@@ -42,6 +42,17 @@ the prerequisite as the rollback target. Do not edit installed manifests,
 releases, environment variables, encrypted history, or release pointers to
 simulate either stage. Both stages retain observation mode.
 
+The protected prerequisite release is
+`54ed1d753d2a7866743533bd6ab14d7a7a522d30` (PR #440). It includes the reviewed
+Python patch alignment and bounded release-history recovery, and passed the
+complete hosted Linux and macOS release gates before guarded activation.
+The subsequent cutover manifest defaults to `explicit-member-submission-v1`:
+production startup records the policy epoch and retires untouched automatic
+communication candidates before replay. Retain that prerequisite as the first
+rollback target. This **SUPERSEDE** activation applies CO-031's already-tested
+intake policy; it does not widen acquisition, enroll channels, enable provider
+writes, or change member decisions and source history.
+
 ## Evidence freshness and explicitly omitted device coverage
 
 The provider-effect window start is a historical boundary. A long observation
