@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import copy
 import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +12,10 @@ from adminme.events.envelope import EventEnvelope
 from adminme.events.log import AppendValidationError, EventLog
 from adminme.events.writer import EventWriter
 from adminme.direct_intake import DirectIntakeProcessor
-from adminme.historical_attribution import audit_historical_attribution
+from adminme.historical_attribution import (
+    _openclaw_submission_owner_matches,
+    audit_historical_attribution,
+)
 from adminme.provider_bindings import ProviderBinding
 from adminme.service_identities import (
     COS_SERVICE_PRINCIPAL_ID,
@@ -130,8 +135,8 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
         "direct_intake.routed",
     ]
     if defect == "member_surface":
-        # A separate member/OpenClaw submission retains its existing provider
-        # ownership rule; it does not claim a direct-intake receipt coordinate.
+        # An account binding cannot stand in for the native authenticated
+        # submission receipt, even when its claimed member matches.
         cue["source_adapter"] = "openclaw-submission"
         cue["source_account_id"] = "spoofed-provider@example.invalid"
         cue["actor_identity"] = MEMBER
@@ -232,7 +237,7 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
         if row["binding_state"] == "internal_forwarded_member_source_reconciled"
     ]
     assert bool(matched) is (defect == "none")
-    valid = defect in {"none", "member_surface"}
+    valid = defect == "none"
     assert proof["state"] == ("healthy" if valid else "degraded")
     assert proof["source_event_count"] == 2
     assert (
@@ -686,3 +691,233 @@ async def test_legacy_shared_visibility_requires_one_exact_gmail_binding(
     assert proof["state"] == "degraded"
     assert proof["unattributed_event_count"] == 1
     assert proof["groups"][0]["binding_state"] == "ambiguous_or_owner_mismatch"
+
+
+def _native_forward_pair(
+    version: int, call_kind: str, transport: str = "imessage"
+) -> tuple[dict, dict]:
+    account = "fixture-cos-native-account"
+    actor = "fixture-native-sender"
+    native = "fixture-native-message"
+    digest = hashlib.sha256(
+        json.dumps([transport, account, actor, native], separators=(",", ":")).encode()
+    ).hexdigest()
+    scope = f"private:{MEMBER}"
+    source = {
+        "event_id": "ev_01A",
+        "tenant_id": "fixture-native-tenant",
+        "type": "triage.intent.submitted",
+        "schema_version": 2,
+        "source_adapter": "openclaw-submission",
+        "source_account_id": account,
+        "owner_scope": scope,
+        "visibility_scope": scope,
+        "actor_identity": MEMBER,
+        "sensitivity": "normal",
+        "correlation_id": "fixture-original-call",
+        "causation_id": None,
+        "raw_ref": "request-sha256:" + "a" * 64,
+        "idempotency_key": f"openclaw-forward:{digest}",
+        "payload": {
+            "intent_id": f"forward_{digest[:48]}",
+            "member_id": MEMBER,
+            "client_request_id": digest,
+            "source_surface": "openclaw",
+            "submission_kind": "member_forwarded",
+            "source_event_id": None,
+            "kind_hint": None,
+            "intake_channel": "apple_imessage",
+            "text": "Synthetic private native forward.",
+            "evidence_issues": [],
+            "evidence_complete": True,
+        },
+    }
+    audit = {
+        "operation": "submissions.forward",
+        "result_event_ids": [source["event_id"]],
+        "channel_id": transport,
+        "account_id": account,
+        "message_id": native,
+        "call_kind": call_kind,
+    }
+    if version == 1:
+        audit.update(actor_id=actor, member_id=MEMBER, correlation_id="fixture-call")
+    else:
+        audit.update(
+            actor_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            represented_service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            operator_principal_id="operator:openclaw:automation",
+            context_scope="member_private",
+            context_member_id=MEMBER,
+            on_behalf_of_member_id=MEMBER,
+            resource_owner_principal_id=MEMBER,
+            audience=[MEMBER],
+            visibility=[scope],
+            approving_member_ids=[MEMBER],
+            approval_quorum="member_owner",
+            authority_grant_id="fixture-historical-grant",
+            permissions=["read_context"],
+            openclaw_actor_id=actor,
+            request_correlation_id="fixture-call",
+            causation_event_ids=[source["event_id"]],
+        )
+    receipt = {
+        "event_id": "ev_01B",
+        "type": "openclaw.tool_call.recorded",
+        "schema_version": version,
+        "tenant_id": source["tenant_id"],
+        "source_adapter": "openclaw-plugin",
+        "source_account_id": account,
+        "owner_scope": scope,
+        "visibility_scope": scope,
+        "actor_identity": MEMBER if version == 1 else COS_SERVICE_PRINCIPAL_ID,
+        "correlation_id": "fixture-call",
+        "causation_id": source["event_id"],
+        "idempotency_key": (
+            f"openclaw:{MEMBER}:openclaw.tool_call.recorded:submissions.forward:fixture-call"
+        ),
+        "payload": audit,
+    }
+    return source, receipt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("call_kind", ["bridge", "slash_command"])
+@pytest.mark.parametrize("transport", ["imessage", "bluebubbles"])
+async def test_native_submission_attribution_accepts_completed_original_or_retry_receipt(
+    version: int, call_kind: str, transport: str
+) -> None:
+    source, receipt = _native_forward_pair(version, call_kind, transport)
+    receipt["raw_ref"] = (
+        "request-sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                receipt["payload"], sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
+
+    class Receipts:
+        async def get_by_causation(self, event_id: str) -> list[dict]:
+            assert event_id == source["event_id"]
+            return [receipt]
+
+    # No current provider binding or delegation is needed for historical owner
+    # attribution. A completed retry may have a different request correlation.
+    assert await _openclaw_submission_owner_matches(Receipts(), source, "ev_01C")  # type: ignore[arg-type]
+    assert not await _openclaw_submission_owner_matches(Receipts(), source, "ev_01A")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "key", "value"),
+    [
+        ("source", "schema_version", 1),
+        ("source", "source_adapter", "messaging-gmail-api"),
+        ("source", "source_account_id", "other-account"),
+        ("source", "owner_scope", "private:other-member"),
+        ("source", "visibility_scope", "shared:household"),
+        ("source", "actor_identity", "other-member"),
+        ("source", "tenant_id", "other-tenant"),
+        ("source", "sensitivity", "privileged"),
+        ("source", "idempotency_key", "openclaw-forward:" + "0" * 64),
+        ("source", "raw_ref", None),
+        ("payload", "member_id", "other-member"),
+        ("payload", "intent_id", "forward_wrong"),
+        ("payload", "client_request_id", "0" * 64),
+        ("payload", "source_event_id", "unrelated-parent"),
+        ("payload", "submission_kind", "manual"),
+        ("payload", "intake_channel", "gmail"),
+        ("payload", "evidence_complete", False),
+        ("receipt", "event_id", "ev_019"),
+        ("receipt", "type", "openclaw.model_call.recorded"),
+        ("receipt", "schema_version", 3),
+        ("receipt", "source_adapter", "untrusted-adapter"),
+        ("receipt", "source_account_id", "other-account"),
+        ("receipt", "tenant_id", "other-tenant"),
+        ("receipt", "owner_scope", "private:other-member"),
+        ("receipt", "visibility_scope", "shared:household"),
+        ("receipt", "actor_identity", "other-service"),
+        ("receipt", "causation_id", "other-source"),
+        ("receipt", "correlation_id", "other-call"),
+        ("receipt", "idempotency_key", "unrelated-receipt"),
+        ("audit", "operation", "tools.state"),
+        ("audit", "result_event_ids", ["other-source"]),
+        ("audit", "account_id", "other-account"),
+        ("audit", "channel_id", "discord"),
+        ("audit", "openclaw_actor_id", "other-actor"),
+        ("audit", "message_id", "other-native-message"),
+        ("audit", "message_id", None),
+        ("audit", "call_kind", "tool"),
+        ("audit", "context_scope", "household_shared"),
+        ("audit", "context_member_id", "other-member"),
+        ("audit", "on_behalf_of_member_id", "other-member"),
+        ("audit", "resource_owner_principal_id", "other-member"),
+        ("audit", "represented_service_principal_id", "other-service"),
+        ("audit", "actor_principal_id", "other-service"),
+        ("audit", "operator_principal_id", "other-operator"),
+        ("audit", "audience", ["other-member"]),
+        ("audit", "visibility", ["shared:household"]),
+        ("audit", "approving_member_ids", ["other-member"]),
+        ("audit", "approval_quorum", "service_self"),
+        ("audit", "authority_grant_id", None),
+        ("audit", "permissions", ["prepare_external_actions"]),
+        ("audit", "request_correlation_id", "other-call"),
+        ("audit", "causation_event_ids", ["other-source"]),
+    ],
+)
+async def test_native_submission_attribution_refuses_inconsistent_receipt_coordinates(
+    target: str, key: str, value: object
+) -> None:
+    source, receipt = copy.deepcopy(_native_forward_pair(2, "bridge"))
+    {
+        "source": source,
+        "payload": source["payload"],
+        "receipt": receipt,
+        "audit": receipt["payload"],
+    }[target][key] = value
+    # Rehash altered receipt payloads so the ownership checks, not only the
+    # payload-integrity check, must reject every inconsistent coordinate.
+    receipt["raw_ref"] = (
+        "request-sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                receipt["payload"], sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
+
+    class Receipts:
+        async def get_by_causation(self, event_id: str) -> list[dict]:
+            return [receipt]
+
+    assert not await _openclaw_submission_owner_matches(Receipts(), source, "ev_01C")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["none", "missing_receipt", "payload_digest"])
+async def test_native_submission_attribution_keeps_sensitive_incomplete_sources_private(
+    defect: str,
+) -> None:
+    source, receipt = _native_forward_pair(2, "bridge")
+    source["sensitivity"] = "sensitive"
+    source["payload"]["evidence_complete"] = False
+    source["payload"]["evidence_issues"] = ["unsupported_channel_attachment"]
+    receipt["raw_ref"] = (
+        "request-sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                receipt["payload"], sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
+    if defect == "payload_digest":
+        receipt["raw_ref"] = "request-sha256:" + "0" * 64
+
+    class Receipts:
+        async def get_by_causation(self, event_id: str) -> list[dict]:
+            return [] if defect == "missing_receipt" else [receipt]
+
+    matched = await _openclaw_submission_owner_matches(Receipts(), source, "ev_01C")  # type: ignore[arg-type]
+    assert matched is (defect == "none")

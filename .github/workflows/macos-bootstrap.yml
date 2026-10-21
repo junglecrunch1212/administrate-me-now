@@ -87,6 +87,7 @@ jobs:
           tests/acceptance/test_cos_response_execution.py
           tests/acceptance/test_cos_identity_delegation_kernel.py
           tests/acceptance/test_member_chat_subscription.py
+          tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart
           tests/unit/test_member_chat_protocol.py
           tests/acceptance/test_forwarded_submission_recovery.py
           tests/acceptance/test_forwarded_submission_repair_operations.py
