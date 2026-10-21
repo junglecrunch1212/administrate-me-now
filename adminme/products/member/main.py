@@ -6406,7 +6406,17 @@ async def request_settings_bridge(
                     body.member_id, expected_revision=body.expected_revision
                 )
             except ValueError as exc:
-                raise HTTPException(409, str(exc)) from exc
+                # This refusal occurs under the command lock before any
+                # enrollment receipt or lifecycle event is appended.
+                raise HTTPException(
+                    409,
+                    {
+                        "error": "enrollment_not_started",
+                        "message": str(exc),
+                        "request_id": body.request_id,
+                        "request_recorded": False,
+                    },
+                ) from exc
             if (
                 isinstance(current, dict)
                 and current.get("state") in {"revoked", "expired", "failed"}

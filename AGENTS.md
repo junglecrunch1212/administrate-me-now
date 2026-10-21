@@ -42,6 +42,33 @@ Runtime or dependency migration, provider enrollment, write enablement, Keychain
 
 Use Python 3.14 and Node 24, matching the candidate manifests and ADR-0006. Existing Python 3.11/Node 22 deployments remain untouched until the separately approved runtime-migration gate. The bridge package must be importable when running the root suite.
 
+During development, select targeted behavioral checks by the changed behavior
+and its dependencies, with appropriate formatting, types, invariants, and
+privacy/security checks. Include a production-composition regression when a
+change crosses application boundaries. Run behavioral checks only in hosted CI
+or an authorized disposable lab; targeted testing does not authorize experiments
+on the family Mac, member acceptance devices, or the live instance.
+
+Keep the pull request in draft while iterating. The hosted development jobs run
+the selected bridge enrollment, installed-release identity, helper, and browser
+regressions; update that selection for the behavior and risk of the next change.
+The stable full-release job names deliberately fail on draft PRs, so a targeted
+pass cannot satisfy release approval. After a failure, reproduce and fix its
+concrete cause, batch related corrections, and pass the relevant regressions
+before requesting full release validation again. Return the PR to draft before
+publishing corrective development commits.
+
+When the candidate is settled, mark the same PR ready for review. This ordinary
+PR transition automatically runs the complete Linux and macOS release suites;
+it requires no label, staged review, or prescribed authorization phrase. Both
+complete suites must pass at the final candidate revision, along with every
+applicable protected check, before merge and the existing guarded deployment
+procedure. Missing, skipped, stale, or partial release results do not qualify.
+Preserve useful full checks already running at an unchanged revision. Do not
+restart them solely to adopt this workflow or repeat passed checks without new
+changes, failures, or unresolved concerns. Report targeted development results
+and complete release results distinctly, including failures and coverage gaps.
+
 ```bash
 poetry sync --with dev
 PYTHONPATH=bridge poetry run pytest -q

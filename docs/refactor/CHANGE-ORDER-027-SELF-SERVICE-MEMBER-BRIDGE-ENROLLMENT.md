@@ -35,6 +35,11 @@ G11.
 The central runtime creates a 30-minute AES-GCM-encrypted, HMAC-signed handoff
 bound to tenant/instance, member, request, enrollment, Tailscale identity,
 device class, exact release commit, exact capability-set digest, and expiry.
+For an installed central release, that commit comes from the captured deployment
+binding and must match the safe, owner-only source marker in the exact release
+root; missing, mismatched, or unsafe evidence cannot fall back to environment
+variables, Git discovery, or a directory name. The packaged member installer
+likewise verifies its archive-bound commit against the installed source marker.
 Package bytes are downloaded with no-store headers. The separately copied
 one-time code is never rendered, placed in a URL, written into ordinary
 Settings JSON, stored in the bridge index, or retained on the target after
@@ -46,8 +51,11 @@ so the target member does not need a source checkout or terminal. It passes the
 transfer code through an owner-only temporary file rather than argv, previews
 only safe binding metadata, obtains explicit local acceptance, verifies
 Tailscale and release identity, and routes signed wizard packages through the
-shared helper service. Native dialogs then carry every selected capability
-through its macOS Settings location, grant-or-deny continuation, local container
+shared helper service. The completed bundle receives a final local ad-hoc seal
+and strict signature verification before distribution; this is neither
+Developer ID signing nor notarization and grants no Gatekeeper waiver. Native
+dialogs then carry every selected capability through its macOS Settings
+location, grant-or-deny continuation, local container
 or folder selection, content-free test, signed adapter evidence, central
 attestation, and connector start. It cannot click or bypass TCC, run arbitrary
 central code, install an updater or remote shell, or start a connector merely
@@ -103,7 +111,8 @@ fail closed.
 - **MODERNIZE:** Settings now completes package preparation and owner controls;
   the target helper provides reviewed document-opening package acceptance,
   signed progress, independent capability states, restart recovery, and local
-  cleanup.
+  cleanup. Installed release identity uses the deployment-bound source marker,
+  and the completed helper bundle is sealed and verified before distribution.
 - **SUPERSEDE:** operator-only enrollment, terminal/YAML/LaunchAgent editing by
   members, pairing-as-provider-authority, Tailscale-as-consent, all-pack
   activation, secret-bearing Settings payloads, and ambiguous lifecycle state.
@@ -117,7 +126,10 @@ fail closed.
 production composition with two adults, package generation/transfer/opening,
 target install and LaunchAgent fixture, signed progress, exact attestation,
 partial success, restart/resume, pause/resume, expiry/regeneration, abuse,
-revocation, isolation, and zero provider effects.
+revocation, isolation, Git-free installed release handoffs, failed source proof,
+and zero provider effects. `tests/unit/test_bridge_release_identity.py` covers
+binding precedence, unsafe markers, helper/installer agreement, and the retained
+development-checkout identity path.
 `tests/unit/bootstrap/test_member_bridge_helper_app.py` verifies the compiled
 document handler, portable exact-release archive, installer binding, resumable
 native per-capability workflow, protected secret transport, and absence of

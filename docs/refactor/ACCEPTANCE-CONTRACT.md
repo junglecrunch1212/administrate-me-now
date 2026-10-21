@@ -1,5 +1,36 @@
 # Release acceptance contract
 
+Targeted development amendment (2026-10-21), **MODERNIZE** for AC-21 under
+the owner's standing testing instruction: development iterations use relevant
+regressions and their dependencies, including production composition for
+cross-boundary behavior, plus formatting, type, invariant, and privacy/security
+checks. These behavioral checks run only in hosted CI or an authorized
+disposable lab. A family Mac, member acceptance device, or live instance never
+becomes a candidate test target.
+
+Draft PRs run the explicitly selected development jobs. The current bridge
+selection covers enrollment, installed-release identity, the native helper,
+bridge authorization/ingest, runtime composition, and a focused enrollment
+browser slice. Select or expand those jobs for subsequent changes according to
+behavior and risk. A failed iteration must reproduce and fix the concrete
+cause, batch related corrections, and pass the relevant regressions before
+another full release run; return the PR to draft before publishing those
+development commits. Development evidence is not release evidence.
+
+The ordinary draft-to-ready PR transition triggers the complete existing Linux
+and macOS release validation. The stable `deterministic-consistency` and
+`credential-free-rehearsal` jobs always run and explicitly fail for a draft;
+they cannot become successful through a skipped release job or a targeted pass.
+There is no staged label, separate review artifact, or prescribed approval
+phrase. Both full suites and all applicable protected checks must pass at the
+final candidate revision; missing, cancelled, skipped, stale, or partial results
+cannot approve release. A manual macOS workflow dispatch also runs the full
+suite. Every full-stage requirement below remains in force. Unchanged running
+full checks are preserved, and a prior revision's pass never attests a successor.
+Independent jobs may run in parallel; caches remain keyed to relevant locked
+inputs, and no test-result cache is accepted as validation. Report targeted and
+complete results separately, including concrete failures and gaps.
+
 Retired-provider history amendment (2026-10-20), **MODERNIZE** under CO-031:
 `tests/acceptance/test_retired_provider_history.py` must prove historical
 ownership through the production composition and HTR-10 after personal
@@ -562,7 +593,7 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | AC-18 | `tests/acceptance/test_gate7_household_experience.py` and console harness `test:gate7` | Ten adult surfaces, three modes, Today Day Brief/Carousel/What Now controls, deterministic Comms focus/account/thread controls, deterministic Reminders activation/account/list controls, ordered Routine complete/skip progression, other typed actions, responsive/reduced-motion captures, chat/degraded states, and private/promoted/archived quest states pass without browser errors. |
 | AC-19 | Runtime loopback validation, bridge authorization/enrollment tests, Gate 7 direct-route abuse tests, and listener/config scan in the release report | Gateway stays on pinned loopback, portal and bridge authorization maps are independently revocable, member self identity and owner scope are bound, spoofed/cross-owner requests fail, and legacy listeners are absent. |
 | AC-20 | `tests/acceptance/test_release_candidate_hardening.py`, runtime shutdown tests, projection-affinity tests, and backup/restore tests | A real v1 encrypted file migrates through v4, including the source-assurance covering index; old facts survive, wrong keys and mutation fail, repeated/concurrent/cancelled shutdown is safe, startup unwinds on the owner worker, and a committed append survives forced exit. The guardian holds a shared activity lease across extraction, handoff, and replay, and every active worker holds its own shared lease. After proving and reaping worker terminality, the guardian must acquire the exclusive form before deleting plaintext; stale cleanup likewise requires exclusive. Controller-pipe EOF during the handoff, a hung extraction, or a hung replay makes the guardian terminate and reap the worker before removing payload. Guardian death leaves the live worker's lease in force, and ordered stale cleanup removes and fsyncs payload before control evidence, including across an interrupted cleanup. |
-| AC-21 | Protected `main`; one pull request from current `main`; required `deterministic-consistency`; automatically triggered credential-free macOS rehearsal for relevant paths as pre-deployment evidence; ordinary review-thread resolution; guarded updater, encrypted backup, rollback, full Doctor/settlement, privacy/isolation, authenticated read-only browser acceptance, and zero-provider-effect checks | Development uses one branch and one pull request. The branch-protection-required GitHub check must pass and the owner may approve merge in ordinary language; direct push, force-push, history rewrite, protection bypass, and hosted access to live credentials remain forbidden. A macOS rehearsal failure blocks deployment even though that context is not a branch-protection requirement. Deployment is separately requested and accepts only an immutable commit from protected `main`. Observation mode, backup verification, automatic rollback, Doctor, isolation, browser acceptance, and zero unintended provider effects remain mandatory. Runtime/dependency migration, Keychain/permission change, provider enrollment/write enablement, and unrelated repair require separate explicit authorization. |
+| AC-21 | Protected `main`; one pull request from current `main`; targeted draft development checks followed by complete `deterministic-consistency` and `credential-free-rehearsal` at the final candidate revision; all applicable protected checks; ordinary review-thread resolution; guarded updater, encrypted backup, rollback, full Doctor/settlement, privacy/isolation, authenticated read-only browser acceptance, and zero-provider-effect checks | Development uses one branch and one pull request, with the ordinary draft-to-ready transition triggering both complete release suites. Targeted success cannot approve release, and missing, skipped, stale, or partial full results are not a pass. Both full Linux and macOS validation and the branch-protection-required GitHub checks must pass before merge; the owner may approve merge in ordinary language. Direct push, force-push, history rewrite, protection bypass, and hosted access to live credentials remain forbidden. This preserves configured branch protection without relying on it as a substitute for the complete macOS gate. Deployment is separately requested and accepts only an immutable commit from protected `main`. Observation mode, backup verification, automatic rollback, Doctor, isolation, browser acceptance, and zero unintended provider effects remain mandatory. Runtime/dependency migration, Keychain/permission change, provider enrollment/write enablement, and unrelated repair require separate explicit authorization. |
 | AC-22 | `scripts/acceptance/architecture-negative-checks.sh` | No direct model SDK, manual pipeline/adapter bus publish, hardcoded tenant path/identity, direct projection write, executable/raw-log temporary view, or registered projection count other than fifteen. |
 | AC-23 | Gate 7 acceptance, `tests/unit/test_member_chat_gate7.py`, and OpenClaw checks | Adult chat is cancellable and bounded; sessions/transcripts/results cannot cross; ordinary chat emits no domain event; explicit proposals are private and guarded; temporary lenses are data-only, private, review-promoted, expirable, and non-contaminating. |
 | AC-24 | `tests/acceptance/test_triage_vertical_slice.py`, commitment acceptance, OpenClaw checks, and member browser checks | Derived candidates appear only in Triage; raw facts bypass it; no canonical record or provider write exists before confirmation; enrichment/routing is scope-filtered and bound to the published target contract; confirm/dismiss are idempotent and audited; confirmation returns the exact destination; a Task becomes visible under the same ID in Reminders/Today/Scoreboard without creating a provider item or Calendar event; legacy Inbox aliases are non-navigational compatibility only. |

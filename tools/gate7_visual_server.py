@@ -217,6 +217,46 @@ def build_app():
     )
     app = create_application(settings)
 
+    @app.post("/__gate7/bridge-preparation")
+    async def bridge_preparation_fixture(unavailable: bool = True):
+        """Inject only a release prerequisite failure in this disposable app."""
+
+        from adminme.bridge_enrollment import BridgeEnrollmentError
+
+        runtime = app.state.runtime
+        if not hasattr(app.state, "original_bridge_prepare"):
+            app.state.original_bridge_prepare = runtime.bridge_enrollment.prepare
+
+        def unavailable_prepare(**_values):
+            raise BridgeEnrollmentError(
+                "release_unavailable", "A reviewed release commit is required"
+            )
+
+        def available_prepare(**values):
+            # The browser fixture binds only to loopback. Substitute its
+            # synthetic private origin, retaining the real package preparation.
+            values["central_url"] = "https://fixture-central.ts.net"
+            return app.state.original_bridge_prepare(**values)
+
+        runtime.bridge_enrollment.prepare = (
+            unavailable_prepare if unavailable else available_prepare
+        )
+        return {"unavailable": unavailable}
+
+    @app.get("/__gate7/bridge-enrollment-proof")
+    async def bridge_enrollment_proof():
+        runtime = app.state.runtime
+        started = []
+        effects = 0
+        async for event in runtime.event_log.read_since(
+            types=["settings.bridge_enrollment_started", "external.sent"]
+        ):
+            if event["type"] == "external.sent":
+                effects += 1
+            else:
+                started.append(event["payload"]["request_id"])
+        return {"started_request_ids": started, "provider_effect_count": effects}
+
     @app.post("/__gate7/settings-observation")
     async def settings_observation(active: bool = True):
         if not COS_REPLIES:

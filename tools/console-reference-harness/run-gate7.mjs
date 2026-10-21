@@ -11,6 +11,9 @@ import { auditCosReplyControls } from "./cos-reply-controls.mjs";
 import { auditCosSendingApproval } from "./cos-send-approval.mjs";
 import { auditCosPrivatePermissions } from "./cos-private-permissions.mjs";
 import { auditSettingsChannelStatus } from "./settings-channel-status.mjs";
+import { auditBridgeEnrollment } from "./bridge-enrollment.mjs";
+
+const bridgeEnrollmentOnly = process.env.ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY === "1";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -872,6 +875,7 @@ async function run() {
     fixture = await seed(server.baseUrl);
     console.log("[Gate 7] Canonical fixtures seeded; beginning browser assertions");
 
+    if (!bridgeEnrollmentOnly) {
     const paginationBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     await visit(paginationBrowser.page, server.baseUrl, "/member/triage?view=all_candidates", "Triage");
     const servedAssetVersions = await paginationBrowser.page.locator("link[href*='/member-assets/member.css'], script[src*='/member-assets/member.js']").evaluateAll((nodes) => nodes.map((node) => new URL(node.href || node.src).searchParams.get("v")));
@@ -1979,18 +1983,27 @@ async function run() {
     await auditSettingsChannelStatus({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility });
     await closePageContext(cosReplyBrowser);
 
+    }
+    const bridgeBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    const bridgeOtherBrowser = await newContext(browser, identities.adult, { width: 1440, height: 1000 });
+    const bridgeStaleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    await auditBridgeEnrollment({ page: bridgeBrowser.page, otherPage: bridgeOtherBrowser.page, stalePage: bridgeStaleBrowser.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, expectHandledFailure, sourceVersion: source.asset_version });
+    await closePageContext(bridgeStaleBrowser);
+    await closePageContext(bridgeOtherBrowser);
+    await closePageContext(bridgeBrowser);
+
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
-    record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected controlled Triage and permission conflicts and ambiguous response handled", observedExpected409Console === 10 && observedExpected422Console === 1 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected422Console, observedExpected503Console }));
+    record("expected unavailable-view 404s handled", observedExpected404Console === (bridgeEnrollmentOnly ? 0 : 2), observedExpected404Console);
+    record("expected controlled Triage and permission conflicts and ambiguous response handled", observedExpected409Console === (bridgeEnrollmentOnly ? 2 : 12) && observedExpected422Console === (bridgeEnrollmentOnly ? 0 : 1) && observedExpected503Console === (bridgeEnrollmentOnly ? 0 : 8), JSON.stringify({ observedExpected409Console, observedExpected422Console, observedExpected503Console }));
     record(
       "no unexpected browser HTTP error responses",
       unexpectedResponses.length === 0
         && [...expectedHttpResponses.values()].every((count) => count === 0)
-        && observedExpectedHttpResponses.get(404) === 2
-        && observedExpectedHttpResponses.get(409) === 10
-        && observedExpectedHttpResponses.get(422) === 1
-        && observedExpectedHttpResponses.get(503) === 8,
+        && observedExpectedHttpResponses.get(404) === (bridgeEnrollmentOnly ? 0 : 2)
+        && observedExpectedHttpResponses.get(409) === (bridgeEnrollmentOnly ? 2 : 12)
+        && observedExpectedHttpResponses.get(422) === (bridgeEnrollmentOnly ? 0 : 1)
+        && observedExpectedHttpResponses.get(503) === (bridgeEnrollmentOnly ? 0 : 8),
       JSON.stringify({ unexpectedResponses, remaining: Object.fromEntries(expectedHttpResponses), observed: Object.fromEntries(observedExpectedHttpResponses) }),
     );
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
@@ -2024,6 +2037,7 @@ async function run() {
     generated_at: new Date().toISOString(),
     status: results.every((item) => item.status === "PASS") ? "PASS" : "FAIL",
     browser: browserDescription,
+    coverage: bridgeEnrollmentOnly ? "bridge-enrollment-only" : "full-member-browser",
     source,
     fixture,
     runtime: { node: process.version, python: fixture.python, playwright_core: "1.62.0" },
@@ -2033,8 +2047,8 @@ async function run() {
       pointer_target_min_css_px: 24,
       contrast: "computed foreground composited over rendered ancestor backgrounds",
     },
-    viewports: ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
-    states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "cos-reply-confirmed", "cos-reply-sending-approval", "cos-reply-decision-result", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
+    viewports: bridgeEnrollmentOnly ? ["1440x1000", "390x844"] : ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
+    states: bridgeEnrollmentOnly ? ["bridge-enrollment-failed", "bridge-enrollment-pending", "bridge-package-ready"] : ["bridge-enrollment-failed", "bridge-enrollment-pending", "bridge-package-ready", "day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "cos-reply-confirmed", "cos-reply-sending-approval", "cos-reply-decision-result", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
     results,
     screenshots,
     console_errors: consoleErrors,
@@ -2048,7 +2062,7 @@ async function run() {
   const lines = [
     "# Gate 7 rendered portal evidence", "", `Status: **${report.status}**`, "",
     "Run from the repository root:", "", "```powershell", "npm.cmd run test:gate7 --prefix tools/console-reference-harness", "```", "",
-    `The harness starts credential-free loopback fixtures, uses ${browserDescription}, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.`, "",
+    bridgeEnrollmentOnly ? "Focused bridge enrollment checks only; this is not the complete member browser release gate." : `The harness starts credential-free loopback fixtures, uses ${browserDescription}, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.`, "",
     "## Checks", "",
     ...results.map((item) => `- ${item.status}: ${item.name}`), "", "## Screenshots", "",
     ...Object.entries(screenshots).map(([name, meta]) => `- \`${name}\` — ${meta.bytes} bytes, SHA-256 \`${meta.sha256}\``),

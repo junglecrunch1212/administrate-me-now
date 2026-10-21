@@ -4486,8 +4486,35 @@ function behaviorSettings(data) {
   const persona = data.control.behavior.persona; const personaCard = document.createElement("section"); personaCard.className = "card"; personaCard.append(text("h2", "CoS voice"), text("p", persona.label || titleCase(persona.id)), text("small", "Instance-wide persona · wording only · cannot change authority or model routing")); fragment.append(personaCard); return fragment;
 }
 
+function bridgeEnrollmentReason(reason) {
+  if (reason === "release_unavailable") return "A reviewed release commit is required. Have the installed release checked before retrying enrollment.";
+  return reason ? "Enrollment could not finish. Review this recorded failure before retrying." : "Enrollment could not finish. Check its status before trying again.";
+}
+
 function bridgeSettings(data) {
   const fragment = document.createDocumentFragment(); const wizard = data.control.bridge_wizard || {}; const current = wizard.current;
+  const memberId = data.control.identity.authenticated_member_id;
+  const own = data.control.identity.can_mutate && !data.control.identity.viewing_as;
+  const pendingKey = `administrateme:bridge-enrollment-pending:${memberId}`;
+  let pending = null;
+  if (own) {
+    try {
+      pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null");
+      const sameRequest = current && pending && current.request_id === pending.request_id && current.member_id === pending.member_id && current.device_class === pending.device_class && JSON.stringify([...(current.capabilities || [])].sort()) === JSON.stringify(pending.capabilities);
+      if (sameRequest) { sessionStorage.removeItem(pendingKey); pending = null; }
+    } catch { pending = { request_id: "unavailable" }; }
+  }
+  async function checkEnrollmentStatus() {
+    try { await reloadActiveSurface(); }
+    catch { setBanner("The enrollment status is not confirmed. Do not repeat the request. Check status again when the connection returns."); }
+  }
+  if (pending) {
+    const uncertain = document.createElement("section"); uncertain.className = "card bridge-enrollment-pending";
+    const status = text("p", "The last enrollment request is not confirmed. Do not repeat it. Check status again or have this exact request reviewed before starting another enrollment.", "state-note"); status.setAttribute("role", "status");
+    const check = text("button", "Check enrollment status", "button button-secondary"); check.type = "button";
+    check.addEventListener("click", async () => { check.disabled = true; await checkEnrollmentStatus(); check.disabled = false; });
+    uncertain.append(status, text("small", `Request ${pending.request_id}`), check); fragment.append(uncertain);
+  }
   const intro = document.createElement("section"); intro.className = "hero-card bridge-wizard-intro"; intro.append(text("p", "PRIVATE DEVICE CONNECTION", "eyebrow"), text("h2", "Connect Apple Bridge"), text("p", "Native Apple access stays on your Mac. You choose each source, grant Apple permissions locally, and can pause or revoke the bridge at any time. AdministrateMe starts in observation mode and receives no write authority from enrollment.", "brief-summary"));
   const ownership = document.createElement("ul"); ownership.className = "settings-rule-list"; for (const value of ["Your signed-in identity owns this private bridge.", "Tailscale verifies the device relationship but never substitutes for your consent.", "Apple permission prompts stay under macOS control; the helper cannot click or bypass them.", "No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted."]) ownership.append(text("li", value)); intro.append(ownership); fragment.append(intro);
 
@@ -4495,11 +4522,14 @@ function bridgeSettings(data) {
 
   if (current) {
     const progress = document.createElement("section"); progress.className = "card bridge-wizard-progress"; progress.append(text("p", "ENROLLMENT PROGRESS", "eyebrow"), text("h2", titleCase(current.state)), text("p", `Request ${current.request_id} · ${titleCase(current.device_class)} · revision ${current.revision}`, "state-note"));
+    if (current.state === "failed") {
+      const failure = text("p", `This enrollment request was recorded as failed. ${bridgeEnrollmentReason(current.reason)}`, "state-note bridge-enrollment-failure"); failure.setAttribute("role", "status"); progress.append(failure);
+    }
     const stages = ["package_ready", "awaiting_transfer", "package_opened", "instance_verified", "member_confirmed", "device_identity_verified", "bridge_paired", "awaiting_permissions", "capabilities_testing", "settling", "active_observation"];
-    const stateIndex = (wizard.enrollment_states || []).indexOf(current.state); const timeline = document.createElement("ol"); timeline.className = "bridge-progress-list"; for (const stage of stages) { const item = text("li", titleCase(stage)); const index = (wizard.enrollment_states || []).indexOf(stage); item.dataset.complete = String(index >= 0 && index <= stateIndex); timeline.append(item); } progress.append(timeline);
+    const stateIndex = stages.includes(current.state) ? (wizard.enrollment_states || []).indexOf(current.state) : -1; const timeline = document.createElement("ol"); timeline.className = "bridge-progress-list"; for (const stage of stages) { const item = text("li", titleCase(stage)); const index = (wizard.enrollment_states || []).indexOf(stage); item.dataset.complete = String(index >= 0 && index <= stateIndex); timeline.append(item); } progress.append(timeline);
     const capabilityGrid = document.createElement("div"); capabilityGrid.className = "bridge-capability-status-grid"; const details = new Map((wizard.capabilities || []).map((item) => [item.capability_id, item])); for (const [capabilityId, capabilityState] of Object.entries(current.capability_states || {})) { const descriptor = details.get(capabilityId) || { label: titleCase(capabilityId) }; const cardNode = document.createElement("article"); cardNode.className = "state-card bridge-capability-status"; cardNode.append(text("strong", descriptor.label), text("span", titleCase(capabilityState.state), `pill state-label state-${String(capabilityState.state).replaceAll("_", "-")}`), text("small", capabilityState.last_successful_observation ? `Last observed ${new Date(capabilityState.last_successful_observation).toLocaleString()}` : capabilityState.reason ? titleCase(capabilityState.reason) : "No provider content is shown here.")); capabilityGrid.append(cardNode); } progress.append(capabilityGrid);
     const buttons = document.createElement("div"); buttons.className = "button-row";
-    if (["package_ready", "awaiting_transfer", "package_opened"].includes(current.state)) { const download = text("button", "Download secure handoff", "button button-primary"); download.type = "button"; download.disabled = !data.control.identity.can_mutate; download.addEventListener("click", async () => { download.disabled = true; setBanner("Preparing the encrypted, short-lived handoff…"); try { const response = await fetch(`/api/member/v1/settings/bridges/${encodeURIComponent(current.request_id)}/package`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "X-Correlation-Id": crypto.randomUUID() } }); if (!response.ok) throw new Error("The secure handoff is unavailable."); const transferCode = response.headers.get("X-AdministrateMe-Transfer-Code"); if (!transferCode || !navigator.clipboard?.writeText) throw new Error("Secure clipboard access is required to transfer the one-time code."); await navigator.clipboard.writeText(transferCode); const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "AdministrateMe Bridge Enrollment.adminmebridge"; anchor.click(); URL.revokeObjectURL(url); setBanner("Package downloaded. The one-time code is in your secure clipboard and was not displayed or placed in the URL."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} No transfer secret was displayed.`); download.disabled = false; } }); buttons.append(download); }
+    if (["package_ready", "awaiting_transfer", "package_opened"].includes(current.state)) { const download = text("button", "Download secure handoff", "button button-primary"); download.type = "button"; download.disabled = !own || Boolean(pending); download.addEventListener("click", async () => { download.disabled = true; setBanner("Preparing the encrypted, short-lived handoff…"); try { const response = await fetch(`/api/member/v1/settings/bridges/${encodeURIComponent(current.request_id)}/package`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "X-Correlation-Id": crypto.randomUUID() } }); if (!response.ok) throw new Error("The secure handoff is unavailable."); const transferCode = response.headers.get("X-AdministrateMe-Transfer-Code"); if (!transferCode || !navigator.clipboard?.writeText) throw new Error("Secure clipboard access is required to transfer the one-time code."); await navigator.clipboard.writeText(transferCode); const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "AdministrateMe Bridge Enrollment.adminmebridge"; anchor.click(); URL.revokeObjectURL(url); setBanner("Package downloaded. The one-time code is in your secure clipboard and was not displayed or placed in the URL."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} No transfer secret was displayed.`); download.disabled = false; } }); buttons.append(download); }
     const actions = current.state === "paused"
       ? ["resume", "revoke"]
       : ["partially_active", "degraded", "awaiting_permissions", "bridge_paired"].includes(current.state)
@@ -4511,7 +4541,7 @@ function bridgeSettings(data) {
             : ["revoked", "expired"].includes(current.state)
               ? []
               : ["revoke"];
-    for (const action of actions) { const button = text("button", titleCase(action), action === "revoke" ? "button button-quiet" : "button button-secondary"); button.type = "button"; button.disabled = !data.control.identity.can_mutate; button.addEventListener("click", async () => { button.disabled = true; try { const result = await api(`/api/member/v1/settings/bridges/${encodeURIComponent(current.request_id)}/control`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ command_id: crypto.randomUUID(), action }) }); setBanner(`Bridge is ${titleCase(result.state)}. No provider effect occurred.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge was not changed.`); button.disabled = false; } }); buttons.append(button); }
+    for (const action of actions) { const button = text("button", titleCase(action), action === "revoke" ? "button button-quiet" : "button button-secondary"); button.type = "button"; button.disabled = !own || Boolean(pending); button.addEventListener("click", async () => { button.disabled = true; try { const result = await api(`/api/member/v1/settings/bridges/${encodeURIComponent(current.request_id)}/control`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ command_id: crypto.randomUUID(), action }) }); setBanner(`Bridge is ${titleCase(result.state)}. No provider effect occurred.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge was not changed.`); button.disabled = false; } }); buttons.append(button); }
     progress.append(buttons); fragment.append(progress);
   }
 
@@ -4522,7 +4552,41 @@ function bridgeSettings(data) {
     const capabilities = document.createElement("fieldset"); capabilities.className = "bridge-capabilities"; capabilities.append(text("legend", "Choose read-only sources")); for (const descriptor of wizard.capabilities || []) { const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; const input = document.createElement("input"); input.type = "checkbox"; input.name = "capability"; input.value = descriptor.capability_id; input.checked = ["apple_calendar", "apple_reminders"].includes(descriptor.capability_id); input.disabled = !data.control.identity.can_mutate || descriptor.implementation !== "available" || descriptor.enrollment_selectable === false; const copy = document.createElement("span"); copy.append(text("strong", descriptor.label), text("small", `${descriptor.administrateme_read_ceiling} · Write ceiling: ${descriptor.administrateme_write_ceiling}`), text("small", descriptor.local_permission)); if (descriptor.enrollment_note) copy.append(text("small", descriptor.enrollment_note)); if (descriptor.implementation !== "available") copy.append(text("span", titleCase(descriptor.implementation), "pill state-label state-unknown")); wrap.append(input, copy); capabilities.append(wrap); } form.append(capabilities);
     const review = document.createElement("section"); review.className = "state-card bridge-review"; review.append(text("strong", "Review"), text("p", "The package binds this member, this instance, the selected device class, exact capabilities, compatible release, and expiry. Pairing alone activates no source. Each connector waits for local permission evidence, adapter authentication, central attestation, and compatible release."), text("p", "Revocation stops central ingestion. Enrollment never creates provider action authority.", "state-note")); form.append(review);
     const submit = text("button", "Prepare enrollment", "button button-primary"); submit.type = "submit"; submit.disabled = !data.control.identity.can_mutate || !selfCandidate; form.append(submit);
-    form.addEventListener("submit", async (event) => { event.preventDefault(); const selected = [...form.querySelectorAll('input[name="capability"]:checked')].map((input) => input.value); const deviceClass = form.querySelector('input[name="device_class"]:checked')?.value; if (!selected.length) { setBanner("Choose at least one available bridge capability."); return; } submit.disabled = true; setBanner("Creating an encrypted, signed, short-lived bridge handoff…"); try { const result = await api("/api/member/v1/settings/bridges", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), member_id: data.control.identity.authenticated_member_id, device_class: deviceClass, capabilities: selected }) }); setBanner(result.next_step); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge request was not created.`); submit.disabled = false; } }); fragment.append(form);
+    if (pending) for (const control of form.querySelectorAll("input,button")) control.disabled = true;
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault(); if (!own || pending || submit.disabled) return;
+      const selected = [...form.querySelectorAll('input[name="capability"]:checked')].map((input) => input.value).sort();
+      const deviceClass = form.querySelector('input[name="device_class"]:checked')?.value;
+      if (!selected.length) { setBanner("Choose at least one available bridge capability."); return; }
+      const body = { expected_revision: data.control.revision, request_id: crypto.randomUUID(), member_id: memberId, device_class: deviceClass, capabilities: selected };
+      try { sessionStorage.setItem(pendingKey, JSON.stringify(body)); pending = body; }
+      catch { setBanner("This browser cannot safely retain the request reference. No enrollment request was sent."); return; }
+      for (const control of form.querySelectorAll("input,button")) control.disabled = true;
+      setBanner("Creating an encrypted, signed, short-lived bridge handoff…");
+      try {
+        const result = await api("/api/member/v1/settings/bridges", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) });
+        setBanner(result.accepted === true ? result.next_step : "The enrollment response was incomplete. Checking the recorded request…");
+      } catch (error) {
+        const detail = error.body?.detail;
+        const notStarted = error.status === 409 && detail?.error === "enrollment_not_started" && detail.request_id === body.request_id && detail.request_recorded === false;
+        const invalidBody = error.status === 422 && Array.isArray(detail) && detail.length > 0 && detail.every((item) => Array.isArray(item.loc) && item.loc[0] === "body" && typeof item.type === "string");
+        if (notStarted || invalidBody) {
+          // Only these explicit pre-append refusals prove no enrollment was
+          // recorded. Every transport or preparation failure stays pending.
+          try { sessionStorage.removeItem(pendingKey); pending = null; } catch { /* Keep the safe lock if storage is unavailable. */ }
+          setBanner(notStarted ? "Settings changed or an enrollment is already active. Review the refreshed status before preparing another request." : "The enrollment choices were rejected before recording. Review the refreshed choices before trying again.");
+        } else {
+          setBanner(detail?.error === "release_unavailable" ? bridgeEnrollmentReason(detail.error) : "Enrollment did not return a confirmed result. Checking the recorded request…");
+        }
+      }
+      // A failed response can follow a durable Failed record. Never assume
+      // nothing was created, and never replay POST after an uncertain result.
+      await checkEnrollmentStatus();
+      if (form.isConnected) {
+        const check = text("button", "Check enrollment status", "button button-secondary"); check.type = "button";
+        check.addEventListener("click", async () => { check.disabled = true; await checkEnrollmentStatus(); check.disabled = false; }); form.append(check);
+      }
+    }); fragment.append(form);
   }
   const reply = data.control.apple_messages_replies || { state: "implementation_unavailable", revision: 0, prohibited: [] };
   const replyCard = document.createElement("section"); replyCard.className = "card apple-messages-reply-control";

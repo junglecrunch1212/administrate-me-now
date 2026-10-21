@@ -28,6 +28,12 @@ from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     validate_configured_pack_config,
 )
+from bootstrap.source_identity import (
+    SYSTEM_GIT_EXECUTABLE,
+    SourceIdentityError,
+    sanitized_git_environment,
+    verify_release_source_identity,
+)
 
 TRANSFER_FORMAT = "administrateme-bridge-transfer-v1"
 WIZARD_CONTRACT = "administrateme-member-bridge-wizard-v1"
@@ -466,16 +472,56 @@ def validate_central_url(value: str, *, allow_testserver: bool = False) -> str:
     return f"https://{authority}"
 
 
-def reviewed_release(root: Path) -> str:
-    supplied = os.environ.get("ADMINME_REVIEWED_COMMIT", "")
-    if re.fullmatch(r"[0-9a-f]{40}", supplied):
-        return supplied
-    result = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
+def reviewed_release(
+    root: Path,
+    *,
+    deployment_release_commit: str | None = None,
+    require_deployment_release: bool = False,
+) -> str:
+    """Bind an installed source marker to its independently supplied release.
+
+    Production uses the deployment snapshot, never an ambient environment or
+    Git fallback. The packaged member installer supplies its archive-verified
+    commit through the environment; that path must prove the same safe marker.
+    A development checkout without either binding retains its Git identity.
+    """
+    deployed = deployment_release_commit is not None or require_deployment_release
+    supplied = (
+        deployment_release_commit
+        if deployed
+        else os.environ.get("ADMINME_REVIEWED_COMMIT")
     )
+    if deployed or supplied is not None:
+        try:
+            if not isinstance(supplied, str) or not re.fullmatch(
+                r"[0-9a-f]{40}", supplied
+            ):
+                raise SourceIdentityError("reviewed release binding is missing")
+            verify_release_source_identity(
+                root,
+                repository=root,
+                commit=supplied,
+                allow_legacy_tree=False,
+            )
+        except SourceIdentityError as exc:
+            raise BridgeEnrollmentError(
+                "release_unavailable",
+                "The reviewed release binding and installed source must agree",
+            ) from exc
+        return supplied
+    try:
+        result = subprocess.run(
+            [str(SYSTEM_GIT_EXECUTABLE), "-C", str(root), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=sanitized_git_environment(),
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BridgeEnrollmentError(
+            "release_unavailable", "A reviewed release commit is required"
+        ) from exc
     value = result.stdout.strip()
     if result.returncode or not re.fullmatch(r"[0-9a-f]{40}", value):
         raise BridgeEnrollmentError(
@@ -701,10 +747,14 @@ class BridgeEnrollmentCoordinator:
         member_identities: Mapping[str, str],
         member_roles: Mapping[str, str],
         bridge_enrollments: dict[str, dict[str, Any]],
+        deployment_release_commit: str | None = None,
+        require_deployment_release: bool = False,
         now: Callable[[], datetime] = now_utc,
     ) -> None:
         self.instance_dir = instance_dir
-        self.repository_root = repository_root.resolve()
+        self.repository_root = Path(os.path.abspath(repository_root))
+        self.deployment_release_commit = deployment_release_commit
+        self.require_deployment_release = require_deployment_release
         self.tenant_id = tenant_id
         self.member_identities = dict(member_identities)
         self.member_roles = dict(member_roles)
@@ -794,7 +844,11 @@ class BridgeEnrollmentCoordinator:
                 )
 
         central = validate_central_url(central_url, allow_testserver=allow_testserver)
-        release = reviewed_release(self.repository_root)
+        release = reviewed_release(
+            self.repository_root,
+            deployment_release_commit=self.deployment_release_commit,
+            require_deployment_release=self.require_deployment_release,
+        )
         issued = self.now()
         expires = issued + timedelta(minutes=TRANSFER_TTL_MINUTES)
         enrollment_id = f"bridge-enrollment-{os.urandom(12).hex()}"

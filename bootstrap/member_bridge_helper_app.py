@@ -249,6 +249,22 @@ fi
         resources / "helper-manifest.json",
         (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
+    # osacompile seals the initial droplet before we add the reviewed resources
+    # and document metadata. Seal the completed bundle, then verify it before
+    # returning a distributable helper. This local ad-hoc signature makes no
+    # Developer ID or notarization claim and does not change Gatekeeper policy.
+    for arguments in (
+        ["--force", "--sign", "-", "--timestamp=none"],
+        ["--verify", "--deep", "--strict"],
+    ):
+        sealed = subprocess.run(
+            ["/usr/bin/codesign", *arguments, str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if sealed.returncode:
+            raise RuntimeError("the completed bridge helper signature is invalid")
     return HelperAppBuild(
         path=str(app),
         bundle_identifier=BUNDLE_IDENTIFIER,

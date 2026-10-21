@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,10 +19,12 @@ from adminme.bridge_enrollment import (
     inspect_transfer_package,
     progress_signature,
 )
+from adminme.capability_catalog import load_catalog
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
 from adminme_bridge.config import load_config
 from bootstrap.bridge_enrollment import MemberBridgeInstaller, MemberBridgePaths
+from bootstrap.source_identity import SOURCE_MARKER_NAME, write_source_marker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,11 +44,23 @@ ACCOUNT = (
 CALENDAR = "g09-calendar"
 
 
-def _settings(instance: Path) -> RuntimeSettings:
+def _settings(
+    instance: Path,
+    *,
+    repository_root: Path = REPO_ROOT,
+    deployment_binding: dict[str, Any] | None = None,
+    deployment_evidence_required: bool = False,
+) -> RuntimeSettings:
     return RuntimeSettings.credential_free(
         instance,
         encryption_key=KEY,
-        repository_root=REPO_ROOT,
+        repository_root=repository_root,
+        host_topology=(
+            {"deployment_binding": deployment_binding}
+            if deployment_binding is not None
+            else {}
+        ),
+        deployment_evidence_required=deployment_evidence_required,
         member_identities={A_LOGIN: A, B_LOGIN: B},
         member_roles={A: "principal", B: "principal"},
         household_mapping={
@@ -70,6 +85,138 @@ def _settings(instance: Path) -> RuntimeSettings:
             "relationships": [],
         },
     )
+
+
+def _installed_release_settings(tmp_path: Path) -> tuple[RuntimeSettings, str]:
+    """Exercise installed source layout, not the surrounding Git checkout."""
+    release = tmp_path / "installed-release"
+    release.mkdir(mode=0o700)
+    # Settings composes domain, central-adapter, bridge, and pinned OpenClaw
+    # capabilities from this root. Retain those real source artifacts, while
+    # excluding generated runtimes rather than copying the checkout's Git data.
+    for directory in (
+        "adminme",
+        "bridge",
+        "packs",
+        "bootstrap",
+        "docs/refactor",
+        "openclaw/administrateme",
+    ):
+        shutil.copytree(
+            REPO_ROOT / directory,
+            release / directory,
+            ignore=shutil.ignore_patterns(
+                "__pycache__", ".venv", "node_modules", "dist", ".pytest_cache"
+            ),
+        )
+    assert load_catalog(release) == load_catalog(REPO_ROOT)
+    commit = "a" * 40
+    write_source_marker(release, commit)
+    assert not (release / ".git").exists()
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    return (
+        _settings(
+            instance,
+            repository_root=release,
+            deployment_binding={"release_commit": commit},
+            deployment_evidence_required=True,
+        ),
+        commit,
+    )
+
+
+def test_g09_installed_release_binds_handoff_without_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    # An inherited helper environment must never select the central release.
+    monkeypatch.setenv("ADMINME_REVIEWED_COMMIT", "b" * 40)
+    settings, commit = _installed_release_settings(tmp_path)
+    app = create_application(settings)
+    request_id = "g09-installed-release"
+    with TestClient(app, base_url="https://central-fixture.ts.net") as client:
+        prepared = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=A_HEADERS,
+            json={
+                "expected_revision": 0,
+                "request_id": request_id,
+                "member_id": A,
+                "device_class": "this_mac",
+                "capabilities": ["apple_calendar", "apple_reminders", "apple_notes"],
+            },
+        )
+        assert prepared.status_code == 202, prepared.text
+        assert prepared.json()["state"] == "package_ready"
+        surface = client.get("/api/member/v1/surfaces/settings", headers=A_HEADERS)
+        assert surface.status_code == 200, surface.text
+        control = surface.json()["control"]
+        assert control["bridge_wizard"]["current"]["request_id"] == request_id
+        assert control["bridge_wizard"]["current"]["state"] == "package_ready"
+        assert (
+            control["capabilities"]["catalog_version"]
+            == load_catalog(REPO_ROOT)["catalog_version"]
+        )
+        handoff = client.post(
+            f"/api/member/v1/settings/bridges/{request_id}/package",
+            headers=A_HEADERS,
+        )
+        assert handoff.status_code == 200, handoff.text
+        transfer = inspect_transfer_package(
+            handoff.content, handoff.headers["X-AdministrateMe-Transfer-Code"]
+        )
+        assert transfer["release_commit"] == commit
+        assert transfer["member_id"] == A
+        assert transfer["capability_set_sha256"] == capability_set_digest(
+            ["apple_calendar", "apple_reminders", "apple_notes"]
+        )
+        assert transfer["enabled_packs"] == []
+        assert transfer["restrictions"]["provider_writes"] == "deny"
+        record = app.state.runtime.bridge_enrollment.bridge_enrollments[A_LOGIN]
+        assert record["release_commit"] == commit
+        assert client.portal.call(_provider_effect_count, app.state.runtime) == 0
+
+
+@pytest.mark.parametrize("mutation", ["missing", "mismatch", "unsafe", "unbound"])
+def test_g09_installed_release_refuses_unproven_source_before_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    settings, commit = _installed_release_settings(tmp_path)
+    marker = settings.repository_root / SOURCE_MARKER_NAME
+    monkeypatch.setenv("ADMINME_REVIEWED_COMMIT", commit)
+    if mutation == "missing":
+        marker.unlink()
+    elif mutation == "mismatch":
+        write_source_marker(settings.repository_root, "b" * 40)
+    elif mutation == "unsafe":
+        marker.chmod(0o644)
+    else:
+        settings.host_topology["deployment_binding"] = {}
+    app = create_application(settings)
+    with TestClient(app, base_url="https://central-fixture.ts.net") as client:
+        prepared = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=A_HEADERS,
+            json={
+                "expected_revision": 0,
+                "request_id": "g09-unproven-release",
+                "member_id": A,
+                "device_class": "this_mac",
+                "capabilities": ["apple_calendar"],
+            },
+        )
+        assert prepared.status_code == 409, prepared.text
+        assert prepared.json()["detail"]["error"] == "release_unavailable"
+        wizard = client.get(
+            "/api/member/v1/surfaces/settings", headers=A_HEADERS
+        ).json()["control"]["bridge_wizard"]["current"]
+        assert wizard["state"] == "failed"
+        coordinator = app.state.runtime.bridge_enrollment
+        assert coordinator.bridge_enrollments == {}
+        assert not list(coordinator.package_dir.glob("*.adminmebridge"))
+        assert client.portal.call(_provider_effect_count, app.state.runtime) == 0
 
 
 async def _provider_effect_count(runtime: Any) -> int:
@@ -753,4 +900,98 @@ def test_g09_failed_preparation_can_retry_without_operator_enrollment(
         )
         assert retried.status_code == 200, retried.text
         assert retried.json()["state"] == "package_ready"
+        assert client.portal.call(_provider_effect_count, runtime) == 0
+
+
+def test_g09_failed_preparation_reason_replays_privately_and_clears_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real route appends a failure before returning its HTTP refusal."""
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    instance = tmp_path / "instance-failure-replay"
+    instance.mkdir()
+    settings = _settings(instance)
+    app = create_application(settings)
+    request_id = "g09-release-failure-replay"
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+
+        def unavailable(**_values: Any) -> Any:
+            raise BridgeEnrollmentError(
+                "release_unavailable", "A reviewed release commit is required"
+            )
+
+        monkeypatch.setattr(runtime.bridge_enrollment, "prepare", unavailable)
+        failed = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=A_HEADERS,
+            json={
+                "expected_revision": 0,
+                "request_id": request_id,
+                "member_id": A,
+                "device_class": "this_mac",
+                "capabilities": ["apple_calendar", "apple_notes", "apple_reminders"],
+            },
+        )
+        assert failed.status_code == 409
+        assert failed.json()["detail"] == {
+            "error": "release_unavailable",
+            "message": "A reviewed release commit is required",
+        }
+        failed_record = client.get(
+            "/api/member/v1/surfaces/settings", headers=A_HEADERS
+        ).json()["control"]["bridge_wizard"]["current"]
+        assert failed_record["state"] == "failed"
+        assert failed_record["reason"] == "release_unavailable"
+        assert failed_record["request_id"] == request_id
+        assert failed_record["writes_authorized"] is False
+        assert failed_record["provider_effects"] is False
+        assert "package_sha256" not in failed_record
+        assert client.portal.call(_provider_effect_count, runtime) == 0
+        stale = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=A_HEADERS,
+            json={
+                "expected_revision": 0,
+                "request_id": "g09-stale-preparation-request",
+                "member_id": A,
+                "device_class": "this_mac",
+                "capabilities": ["apple_calendar"],
+            },
+        )
+        assert stale.status_code == 409
+        assert stale.json()["detail"] == {
+            "error": "enrollment_not_started",
+            "message": "Settings changed; refresh before saving",
+            "request_id": "g09-stale-preparation-request",
+            "request_recorded": False,
+        }
+        assert runtime.settings_control.bridge_request_for(A) == failed_record
+
+    # Startup replays the encrypted event history rather than relying on the
+    # prior in-memory projection; the failed request stays attributable.
+    restarted = create_application(settings)
+    with TestClient(restarted) as client:
+        runtime = restarted.state.runtime
+        replayed = client.get(
+            "/api/member/v1/surfaces/settings", headers=A_HEADERS
+        ).json()["control"]["bridge_wizard"]["current"]
+        assert replayed == failed_record
+        other = client.get(
+            "/api/member/v1/surfaces/settings", headers=B_HEADERS
+        ).json()["control"]["bridge_wizard"]["current"]
+        assert other is None
+        retried = client.post(
+            f"/api/member/v1/settings/bridges/{request_id}/control",
+            headers=A_HEADERS,
+            json={"command_id": "g09-release-retry-command", "action": "retry"},
+        )
+        assert retried.status_code == 200, retried.text
+        current = client.get(
+            "/api/member/v1/surfaces/settings", headers=A_HEADERS
+        ).json()["control"]["bridge_wizard"]["current"]
+        assert current["state"] == "package_ready"
+        assert current["reason"] is None
+        assert current["request_id"] == request_id
         assert client.portal.call(_provider_effect_count, runtime) == 0
