@@ -1,5 +1,14 @@
 # Release acceptance contract
 
+Retired-provider history amendment (2026-10-20), **MODERNIZE** under CO-031:
+`tests/acceptance/test_retired_provider_history.py` must prove historical
+ownership through the production composition and HTR-10 after personal
+acquisition is disabled. Fully reviewed retained bindings may attribute
+existing facts but grant no operational authority. Require refusal for
+malformed or conflicting ownership, no authority from optional placeholders,
+unchanged encrypted facts, disabled personal workers, and zero provider effects.
+The operational binding inventory remains active-only.
+
 Forwarded-submission recovery amendment (2026-10-20), **MODERNIZE** under
 CO-031: require the exact-source, append-only retry and private deployment
 manifest boundaries in

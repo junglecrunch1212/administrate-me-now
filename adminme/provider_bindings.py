@@ -150,6 +150,33 @@ class ProviderBinding:
         )
 
 
+@dataclass(frozen=True)
+class HistoricalProviderBinding:
+    """Ownership evidence for an audit, never an operational provider binding.
+
+    Permission scopes are validated at the configuration boundary but are not
+    carried into this view. It deliberately has no dispatch, write, capability,
+    credential, or active-readiness interface.
+    """
+
+    adapter_id: str
+    kind: str
+    provider_family: str
+    owner_kind: str
+    owner_id: str
+    member_id: str | None
+    service_principal_id: str | None
+    provider_account_id: str
+    workspace: str
+    binding_provenance: str
+
+    @property
+    def owner_scope(self) -> str:
+        if self.owner_kind == "service_principal":
+            return service_private_scope(self.owner_id)
+        return f"private:{self.owner_id}"
+
+
 def _provider_family(kind: str) -> str:
     normalized = kind.casefold()
     if "bluebubbles" in normalized:
@@ -219,21 +246,16 @@ def _known_member_ids(
     return known
 
 
-def validate_provider_bindings(
+def _validate_provider_binding_inventory(
     config: dict[str, Any],
     *,
     member_roles: dict[str, str],
     household_mapping: dict[str, Any],
     service_principal_ids: set[str] | None = None,
     service_principal_provider_authorizations: Mapping[str, Set[str]] | None = None,
+    include_retired_member_bindings: bool = False,
 ) -> tuple[ProviderBinding, ...]:
-    """Validate every enabled provider row as one explicit owned binding.
-
-    Disabled rows may remain incomplete so optional integrations can be kept
-    truthfully off. Every enabled row must carry complete binding evidence;
-    fixture-only adapters bypass this production validator rather than looking
-    indistinguishable from an unbound OS-permission provider.
-    """
+    """Share exact ownership checks without exposing a public enablement switch."""
 
     adapters = config.get("adapters", [])
     if not isinstance(adapters, list):
@@ -255,7 +277,32 @@ def validate_provider_bindings(
         if not isinstance(entry, dict):
             raise ValueError(f"adapter entry {index} must be a mapping")
         if entry.get("enabled") is False:
-            continue
+            if not include_retired_member_bindings:
+                continue
+            retired_config = entry.get("config") or {}
+            if not isinstance(retired_config, dict):
+                raise ValueError(f"adapter entry {index} config must be a mapping")
+            if retired_config.get("ownership_attested") is not True:
+                # Optional unenrolled rows are not ownership evidence. A fact
+                # relying on one remains unattributed in the historical audit.
+                continue
+            if (
+                retired_config.get("member_id") is None
+                and retired_config.get("service_principal_id") is not None
+            ):
+                # Retired service authority is outside this member-history
+                # contract. Enabled services still pass all ordinary checks.
+                continue
+            if (
+                any(
+                    not isinstance(entry.get(key), str) or not entry[key].strip()
+                    for key in ("id", "kind")
+                )
+                or not str(entry["kind"]).removeprefix("adapter:").strip()
+            ):
+                raise ValueError(
+                    f"retired provider adapter {index} requires an exact id and kind"
+                )
         kind = str(entry.get("kind") or "").removeprefix("adapter:")
         adapter_config = entry.get("config") or {}
         if not isinstance(adapter_config, dict):
@@ -533,6 +580,70 @@ def validate_provider_bindings(
     return tuple(bindings)
 
 
+def validate_provider_bindings(
+    config: dict[str, Any],
+    *,
+    member_roles: dict[str, str],
+    household_mapping: dict[str, Any],
+    service_principal_ids: set[str] | None = None,
+    service_principal_provider_authorizations: Mapping[str, Set[str]] | None = None,
+) -> tuple[ProviderBinding, ...]:
+    """Validate every enabled provider row as one explicit owned binding.
+
+    Disabled rows may remain incomplete so optional integrations can be kept
+    truthfully off. Every enabled row must carry complete binding evidence;
+    fixture-only adapters bypass this production validator rather than looking
+    indistinguishable from an unbound OS-permission provider.
+    """
+    return _validate_provider_binding_inventory(
+        config,
+        member_roles=member_roles,
+        household_mapping=household_mapping,
+        service_principal_ids=service_principal_ids,
+        service_principal_provider_authorizations=(
+            service_principal_provider_authorizations
+        ),
+    )
+
+
+def validate_historical_provider_bindings(
+    config: dict[str, Any],
+    *,
+    member_roles: dict[str, str],
+    household_mapping: dict[str, Any],
+    service_principal_ids: set[str] | None = None,
+) -> tuple[HistoricalProviderBinding, ...]:
+    """Validate active and retained member ownership solely for attribution.
+
+    A disabled member row must retain its explicit ownership attestation and
+    satisfy every ordinary binding rule. Incomplete optional rows grant no
+    attribution; an attested malformed or conflicting claim fails closed.
+    Validation never changes enabled flags or returns operational bindings.
+    """
+    bindings = _validate_provider_binding_inventory(
+        config,
+        member_roles=member_roles,
+        household_mapping=household_mapping,
+        service_principal_ids=service_principal_ids,
+        include_retired_member_bindings=True,
+    )
+    return tuple(
+        HistoricalProviderBinding(
+            adapter_id=binding.adapter_id,
+            kind=binding.kind,
+            provider_family=binding.provider_family,
+            owner_kind=binding.owner_kind,
+            owner_id=binding.owner_id,
+            member_id=binding.member_id,
+            service_principal_id=binding.service_principal_id,
+            provider_account_id=binding.provider_account_id,
+            workspace=binding.workspace,
+            binding_provenance=binding.binding_provenance,
+        )
+        for binding in bindings
+    )
+
+
 def public_binding_inventory(bindings: Iterable[ProviderBinding]) -> dict[str, Any]:
     rows = [binding.public() for binding in bindings]
     kind_counts = Counter(str(row["kind"]) for row in rows)
@@ -608,9 +719,11 @@ __all__ = [
     "SERVICE_OWNER_ADAPTER_KINDS",
     "SERVICE_OWNER_READONLY_SCOPES",
     "ProviderBinding",
+    "HistoricalProviderBinding",
     "WORKSPACES",
     "adapter_owner_coordinate_id",
     "public_binding_inventory",
     "public_service_source_readiness",
     "validate_provider_bindings",
+    "validate_historical_provider_bindings",
 ]

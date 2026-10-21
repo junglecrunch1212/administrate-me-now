@@ -19,7 +19,7 @@ from typing import Any
 
 from adminme.events.log import EventLog
 from adminme.historical_attribution import audit_historical_attribution
-from adminme.provider_bindings import validate_provider_bindings
+from adminme.provider_bindings import validate_historical_provider_bindings
 from adminme.source_assurance import audit_source_assurance
 from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths, ensure_within
@@ -302,7 +302,7 @@ async def export_htr10_audits(
         member_ids=member_ids,
         household_party_ids=household_party_ids,
     )
-    bindings = validate_provider_bindings(
+    bindings = validate_historical_provider_bindings(
         reviewed_config,
         member_roles=roles,
         household_mapping=mapping,

@@ -70,6 +70,7 @@ jobs:
             tests/acceptance/test_cos_live_maintenance.py \
             tests/acceptance/test_forwarded_submission_recovery.py \
             tests/acceptance/test_forwarded_submission_repair_operations.py \
+            tests/acceptance/test_retired_provider_history.py \
             tests/acceptance/test_forwarded_submission_extraction.py::test_full_forward_uses_bounded_model_budget_before_creating_triage \
             tests/unit/test_submission_recovery.py \
             tests/unit/bootstrap/test_submission_repair.py \
