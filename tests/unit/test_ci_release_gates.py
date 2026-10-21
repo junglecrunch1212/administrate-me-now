@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,24 @@ def _workflow(filename: str) -> dict[str, Any]:
     return yaml.load((WORKFLOWS / filename).read_text(), Loader=yaml.BaseLoader)
 
 
+def _assert_storage_diagnostics_only(script: str) -> None:
+    # An unconditional post-failure step may inspect storage, but cannot execute
+    # a test suite. Check complete command tokens: the fixture directory itself
+    # legitimately contains "pytest". Reject wrappers, compound commands, and
+    # substitutions instead of trying to recognize every possible test runner.
+    directory = "${RUNNER_TEMP}/adminme-consistency-pytest"
+    allowed = {
+        ("df", "-h", "${RUNNER_TEMP}"),
+        ("if", "[[", "-d", directory, "]];", "then"),
+        ("du", "-sh", directory),
+        ("fi",),
+    }
+    for line in script.splitlines():
+        tokens = tuple(shlex.split(line, comments=True))
+        if tokens:
+            assert tokens in allowed
+
+
 def _assert_complete_release_gate(job: dict[str, Any], job_id: str) -> None:
     # GitHub considers a skipped job successful for branch protection. Never
     # implement this boundary as job-level "if" or a soft-failing dependency.
@@ -60,7 +79,7 @@ def _assert_complete_release_gate(job: dict[str, Any], job_id: str) -> None:
             continue  # Default success() cannot run after the draft refusal.
         if step.get("name") == "Record hosted test storage":
             assert step["if"] == "${{ always() }}"
-            assert "pytest" not in step["run"]
+            _assert_storage_diagnostics_only(step["run"])
             continue
         # These diagnostics/checks still run after ordinary full-suite failure,
         # but never after the draft refusal.
@@ -112,6 +131,34 @@ def test_gate_contract_rejects_false_release_success(
         job["steps"][-1]["if"] = "${{ false }}"
     with pytest.raises(AssertionError):
         _assert_complete_release_gate(job, job_id)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -q",
+        "python -m pytest -q",
+        "poetry run pytest -q",
+        "npm test",
+        "bash scripts/acceptance/release-candidate.sh",
+        'du -sh "${RUNNER_TEMP}/adminme-consistency-pytest"; pytest -q',
+        'df -h "$(pytest -q)"',
+    ],
+)
+def test_unconditional_storage_diagnostics_cannot_execute_tests(command: str) -> None:
+    job = _workflow("administrateme-consistency.yml")["jobs"][
+        "deterministic-consistency"
+    ]
+    diagnostics = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Record hosted test storage"
+    )
+    # The real df/du commands, including their "pytest" directory, are allowed.
+    _assert_storage_diagnostics_only(diagnostics["run"])
+    diagnostics["run"] += f"\n{command}\n"
+    with pytest.raises(AssertionError):
+        _assert_complete_release_gate(job, "deterministic-consistency")
 
 
 @pytest.mark.parametrize(("filename", "job_id"), RELEASE_JOBS)

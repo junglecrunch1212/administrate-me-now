@@ -19,6 +19,7 @@ from adminme.bridge_enrollment import (
     inspect_transfer_package,
     progress_signature,
 )
+from adminme.capability_catalog import load_catalog
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
 from adminme_bridge.config import load_config
@@ -90,8 +91,25 @@ def _installed_release_settings(tmp_path: Path) -> tuple[RuntimeSettings, str]:
     """Exercise installed source layout, not the surrounding Git checkout."""
     release = tmp_path / "installed-release"
     release.mkdir(mode=0o700)
-    for directory in ("packs", "bootstrap", "docs/refactor"):
-        shutil.copytree(REPO_ROOT / directory, release / directory)
+    # Settings composes domain, central-adapter, bridge, and pinned OpenClaw
+    # capabilities from this root. Retain those real source artifacts, while
+    # excluding generated runtimes rather than copying the checkout's Git data.
+    for directory in (
+        "adminme",
+        "bridge",
+        "packs",
+        "bootstrap",
+        "docs/refactor",
+        "openclaw/administrateme",
+    ):
+        shutil.copytree(
+            REPO_ROOT / directory,
+            release / directory,
+            ignore=shutil.ignore_patterns(
+                "__pycache__", ".venv", "node_modules", "dist", ".pytest_cache"
+            ),
+        )
+    assert load_catalog(release) == load_catalog(REPO_ROOT)
     commit = "a" * 40
     write_source_marker(release, commit)
     assert not (release / ".git").exists()
@@ -131,6 +149,15 @@ def test_g09_installed_release_binds_handoff_without_git(
         )
         assert prepared.status_code == 202, prepared.text
         assert prepared.json()["state"] == "package_ready"
+        surface = client.get("/api/member/v1/surfaces/settings", headers=A_HEADERS)
+        assert surface.status_code == 200, surface.text
+        control = surface.json()["control"]
+        assert control["bridge_wizard"]["current"]["request_id"] == request_id
+        assert control["bridge_wizard"]["current"]["state"] == "package_ready"
+        assert (
+            control["capabilities"]["catalog_version"]
+            == load_catalog(REPO_ROOT)["catalog_version"]
+        )
         handoff = client.post(
             f"/api/member/v1/settings/bridges/{request_id}/package",
             headers=A_HEADERS,
