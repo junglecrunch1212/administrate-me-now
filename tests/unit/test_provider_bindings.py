@@ -12,7 +12,10 @@ import pytest
 from adminme.adapters.cos_channel_acquisition import CosAcquisitionPolicy
 from adminme.adapters.disposable_test_acquisition import DisposableTestAcquisition
 from adminme.provider_bindings import (
+    HistoricalProviderBinding,
+    ProviderBinding,
     public_binding_inventory,
+    validate_historical_provider_bindings,
     validate_provider_bindings,
 )
 
@@ -150,6 +153,181 @@ def test_disabled_optional_provider_may_remain_unconfigured() -> None:
         )
         == ()
     )
+
+
+def _retired_entry() -> dict[str, Any]:
+    entry = copy.deepcopy(_entry())
+    entry["enabled"] = False
+    return entry
+
+
+def _historical(config: dict[str, Any]) -> tuple[HistoricalProviderBinding, ...]:
+    return validate_historical_provider_bindings(
+        config,
+        member_roles={"member-a": "principal", "member-b": "principal"},
+        household_mapping={},
+        service_principal_ids={"service-principal:chief-of-staff"},
+    )
+
+
+def test_retired_reviewed_member_binding_is_ownership_evidence_only() -> None:
+    config = {
+        "adapters": [
+            _retired_entry(),
+            {"kind": "calendaring-google-calendar", "enabled": False},
+        ]
+    }
+    original = copy.deepcopy(config)
+    [binding] = _historical(config)
+    assert isinstance(binding, HistoricalProviderBinding)
+    assert not isinstance(binding, ProviderBinding)
+    assert binding.owner_scope == "private:member-a"
+    assert binding.provider_account_id == "account-a@example.invalid"
+    assert binding.workspace == "personal"
+    assert binding.binding_provenance == "oauth-subject"
+    assert not any(
+        hasattr(binding, attribute)
+        for attribute in (
+            "permission_scope",
+            "permitted_operations",
+            "write_binding_state",
+            "b03_dispatch_coordinate",
+            "coordinate",
+            "public",
+        )
+    )
+    assert (
+        validate_provider_bindings(
+            config, member_roles={"member-a": "principal"}, household_mapping={}
+        )
+        == ()
+    )
+    assert config == original
+
+
+@pytest.mark.parametrize("attestation", [None, False, "true", 1])
+def test_unattested_disabled_row_never_gains_historical_ownership(
+    attestation: Any,
+) -> None:
+    entry = _retired_entry()
+    entry["config"]["ownership_attested"] = attestation
+    assert _historical({"adapters": [entry]}) == ()
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "reason"),
+    [
+        ("member_id", None, "exactly one owner principal"),
+        ("member_id", "unknown", "unknown member"),
+        ("service_principal_id", "service-principal:chief-of-staff", "exactly one"),
+        ("workspace", None, "explicit workspace"),
+        ("workspace", "service", "cannot fake member ownership"),
+        ("permission_scope", [], "unique permission_scope"),
+        ("permission_scope", ["gmail.read", "gmail.read"], "unique permission_scope"),
+        ("binding_provenance", "unreviewed", "reviewed binding_provenance"),
+        ("provider_account_id", "member-a", "collapses owner and provider account"),
+    ],
+)
+def test_attested_retired_member_binding_keeps_exact_ownership_checks(
+    key: str,
+    value: Any,
+    reason: str,
+) -> None:
+    entry = _retired_entry()
+    entry["config"][key] = value
+    with pytest.raises(ValueError, match=reason):
+        _historical({"adapters": [entry]})
+    # An unusable historical claim must never become an active adapter.
+    assert (
+        validate_provider_bindings(
+            {"adapters": [entry]}, member_roles={}, household_mapping={}
+        )
+        == ()
+    )
+
+
+def test_attested_retired_member_binding_requires_an_account() -> None:
+    entry = _retired_entry()
+    entry["config"].pop("provider_account_id")
+    entry["config"].pop("user_email")
+    with pytest.raises(ValueError, match="requires provider_account_id"):
+        _historical({"adapters": [entry]})
+
+
+@pytest.mark.parametrize("active_second", [False, True])
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("owner", "contradictory owner or workspace"),
+        ("workspace", "contradictory owner or workspace"),
+        ("coordinate", "full owner/account/adapter coordinate"),
+        ("id", "duplicate enabled adapter id"),
+    ],
+)
+def test_retired_inventory_rejects_combined_active_and_historical_conflicts(
+    active_second: bool,
+    mutation: str,
+    reason: str,
+) -> None:
+    first = _retired_entry()
+    second = _retired_entry()
+    second["id"] = "calendar-second"
+    second["kind"] = "calendaring-google-calendar"
+    second["enabled"] = active_second
+    if mutation == "owner":
+        second["config"]["member_id"] = "member-b"
+    elif mutation == "workspace":
+        second["config"]["workspace"] = "work"
+    elif mutation == "coordinate":
+        second["kind"] = first["kind"]
+    elif mutation == "id":
+        second["id"] = first["id"]
+    config = {"adapters": [first, second]}
+    original = copy.deepcopy(config)
+    with pytest.raises(ValueError, match=reason):
+        _historical(config)
+    assert config == original
+
+
+def test_active_service_cannot_claim_a_retired_member_account() -> None:
+    service = _service_entry(
+        "calendaring-google-calendar",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    )
+    assert isinstance(service["config"], dict)
+    service["config"]["provider_account_id"] = "account-a@example.invalid"
+    service["config"]["user_email"] = "account-a@example.invalid"
+    with pytest.raises(ValueError, match="contradictory owner or workspace"):
+        _historical({"adapters": [_retired_entry(), service]})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("id", None), ("kind", None), ("kind", "adapter:"), ("kind", "adapter: ")],
+)
+def test_retired_member_inventory_requires_stable_row_identity(
+    key: str,
+    value: Any,
+) -> None:
+    entry = _retired_entry()
+    entry[key] = value
+    with pytest.raises(ValueError, match="exact id and kind"):
+        _historical({"adapters": [entry]})
+
+
+def test_historical_member_inventory_does_not_admit_retired_service_authority() -> None:
+    entry = _service_entry(
+        "messaging-gmail-api", "https://www.googleapis.com/auth/gmail.readonly"
+    )
+    entry["enabled"] = False
+    assert _historical({"adapters": [entry]}) == ()
+
+
+def test_historical_inventory_preserves_bridge_only_rejection() -> None:
+    entry = _apple_entry()
+    entry["enabled"] = False
+    with pytest.raises(ValueError, match="bridge-only"):
+        _historical({"adapters": [entry]})
 
 
 def test_enabled_unbound_provider_never_becomes_a_fixture_exemption() -> None:
@@ -377,6 +555,29 @@ def _validate_cos_oauth(config: dict[str, Any]) -> Any:
         household_mapping={},
         service_principal_ids={"service-principal:chief-of-staff"},
     )
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_cos_overlay_keeps_retired_members_only_in_historical_inventory(
+    live: bool,
+) -> None:
+    config = _cos_oauth_configuration(live=live)
+    retired = _retired_entry()
+    retired["id"] = "personal-paused"
+    config["adapters"][0] = retired
+    original = copy.deepcopy(config)
+    [active] = _validate_cos_oauth(config)
+    historical = _historical(config)
+    assert active.owner_kind == "service_principal"
+    assert active.adapter_id == "cos-oauth"
+    assert {binding.adapter_id for binding in historical} == {
+        "personal-paused",
+        "cos-oauth",
+    }
+    assert all(isinstance(binding, HistoricalProviderBinding) for binding in historical)
+    assert all(not hasattr(binding, "permitted_operations") for binding in historical)
+    assert _validate_cos_oauth(config) == (active,)
+    assert config == original
 
 
 @pytest.mark.parametrize("live", [False, True])

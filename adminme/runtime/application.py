@@ -110,6 +110,7 @@ from adminme.bridge_authorization import validate_bridge_record_set
 from adminme.provider_bindings import (
     ProviderBinding,
     public_service_source_readiness,
+    validate_historical_provider_bindings,
     validate_provider_bindings,
 )
 from adminme.service_identities import (
@@ -3526,10 +3527,22 @@ async def historical_attribution(
         b"administrateme-historical-attribution-v1",
         hashlib.sha256,
     ).digest()
+    try:
+        historical_bindings = validate_historical_provider_bindings(
+            runtime.settings.adapter_config,
+            member_roles=runtime.settings.member_roles,
+            household_mapping=runtime.settings.household_mapping,
+            service_principal_ids={
+                principal.service_principal_id
+                for principal in runtime.settings.service_principals
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(503, "historical ownership evidence is invalid") from exc
     return await audit_historical_attribution(
         runtime.event_log,
         repository_root=runtime.settings.repository_root,
-        provider_bindings=runtime.settings.provider_bindings,
+        provider_bindings=historical_bindings,
         hash_key=hash_key,
     )
 

@@ -81,6 +81,17 @@ malformed linkage never falls back to a member/provider account match. This
 implements the CO-023 direct-intake provenance and CO-031 forwarding boundary
 above without re-resolving a later route configuration or authorizing a send.
 
+MODERNIZE historical ownership auditing when CoS activation disables personal
+acquisition: retain reviewed member/account ownership through a separate
+historical-only binding inventory. Disabled entries contribute only after the
+same exact ownership, workspace and provenance validation and joint uniqueness
+checks as active entries. Unattested optional placeholders contribute nothing;
+malformed or conflicting retained claims fail the audit. This inventory carries
+no acquisition, dispatch, scope or capability authority. PRESERVE active-only
+operational bindings, disabled personal workers, immutable source facts and
+content-free historical exports. Both HTR-10 and the runtime historical audit
+consume the ownership view without changing provider configuration or events.
+
 Gmail accepts a reviewed exact sender route only with trusted receiver
 authentication and domain alignment, or the more restrictive configured exact
 DKIM identity policy. Receiver domain authentication plus a reviewed sender is

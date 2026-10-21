@@ -245,6 +245,16 @@ merged release with fresh actual sender/transport evidence. Omit
 a fresh activation boundary; suppressed and pre-boundary requests are never
 released or retried automatically.
 
+The historical audit retains ownership evidence from fully reviewed disabled
+personal bindings through the separate CO-031 historical-only inventory. This
+does not enable their workers or add operational provider authority. If a later
+protected-main candidate replaces the originally prepared candidate after
+containment, remain in observation and bind a new repair manifest, preliminary
+restore rehearsal, HTR-10 review and pending attestation to that exact successor.
+An existing authenticated backup may support the new preliminary rehearsal;
+it is never restored over the current contained state. The guarded updater must
+still create and rehearse its own fresh backup before switching releases.
+
 The retained dataset remains an accepted bounded predecessor. This operation
 does not relabel the discarded pre-reset history as a proven production
 rollback. Physical browser acceptance and external sign-in coverage are

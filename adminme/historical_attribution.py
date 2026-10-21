@@ -11,9 +11,12 @@ from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
 from adminme.events.log import EventLog
-from adminme.provider_bindings import ProviderBinding
+from adminme.provider_bindings import HistoricalProviderBinding, ProviderBinding
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID, service_private_scope
 from adminme.source_assurance import load_source_obligations
+
+
+type AttributionBinding = ProviderBinding | HistoricalProviderBinding
 
 
 def _digest(key: bytes, value: str) -> str:
@@ -74,7 +77,7 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
 async def _direct_intake_owner_matches(
     event_log: EventLog,
     cue: dict[str, Any],
-    bindings: tuple[ProviderBinding, ...],
+    bindings: tuple[AttributionBinding, ...],
     watermark: str,
 ) -> bool:
     """Reconcile frozen member ownership through its original service receipt.
@@ -196,7 +199,7 @@ async def audit_historical_attribution(
     event_log: EventLog,
     *,
     repository_root: Any,
-    provider_bindings: tuple[ProviderBinding, ...],
+    provider_bindings: tuple[AttributionBinding, ...],
     hash_key: bytes,
     through_event_id: str | None = None,
 ) -> dict[str, Any]:
@@ -209,7 +212,7 @@ async def audit_historical_attribution(
     watermark = through_event_id
     if watermark is None:
         watermark = await event_log.latest_event_id()
-    bindings_by_account: dict[str, list[ProviderBinding]] = {}
+    bindings_by_account: dict[str, list[AttributionBinding]] = {}
     for binding in provider_bindings:
         bindings_by_account.setdefault(
             binding.provider_account_id.casefold(), []
