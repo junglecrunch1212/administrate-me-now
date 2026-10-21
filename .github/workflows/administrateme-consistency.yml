@@ -52,9 +52,15 @@ jobs:
           tests/acceptance/test_self_service_member_bridge_enrollment.py
           tests/acceptance/test_member_bridge_knowledge_vertical_slice.py
           tests/acceptance/test_cos_member_bridge_acquisition.py
+          tests/acceptance/test_member_bridge_historical_attribution.py
+          tests/acceptance/test_bridge_readiness_transition.py
           tests/acceptance/test_cos_channel_acquisition.py
           tests/acceptance/test_disposable_test_acquisition.py
           tests/acceptance/test_forwarded_channel_intake.py
+          tests/acceptance/test_retired_provider_history.py
+          tests/unit/test_historical_attribution.py
+          tests/unit/bootstrap/test_htr10_export.py
+          tests/unit/bootstrap/test_candidate_readiness.py
           tests/unit/test_cos_member_bridge_acquisition_policy.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_member_bridge_helper_app.py

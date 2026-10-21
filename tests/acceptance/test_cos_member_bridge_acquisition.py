@@ -7,8 +7,10 @@ Apple permission/provider boundaries are synthetic; run in hosted CI or a lab.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
+import json
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -19,8 +21,10 @@ from fastapi.testclient import TestClient
 
 from adminme.adapters.cos_channel_acquisition import CONFIG_KEY as COS_KEY
 from adminme.adapters.disposable_test_acquisition import CONFIG_KEY as TEST_KEY
-from adminme.bridge_enrollment import inspect_transfer_package
+from adminme.bridge_enrollment import BridgeEnrollmentError, inspect_transfer_package
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import EventLog
+from adminme.historical_attribution import audit_historical_attribution
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme_bridge.config import load_config
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
@@ -46,6 +50,33 @@ PACKS = {
 REQUEST_ID = "cos-member-bridge-fixture"
 DEVICE = "cos-member-bridge-fixture-node"
 NOW = "2031-01-01T12:00:00+00:00"
+
+
+async def _history(log: EventLog, watermark: str | None = None) -> dict[str, Any]:
+    # Member bridge ownership is proven by immutable enrollment/source receipts,
+    # not a central provider binding or today's mutable enrollment dictionary.
+    return await audit_historical_attribution(
+        log,
+        repository_root=ROOT,
+        provider_bindings=(),
+        hash_key=b"fixture-member-bridge-history",
+        through_event_id=watermark,
+    )
+
+
+def _assert_history(report: dict[str, Any], *, source_count: int = 3) -> None:
+    assert report["state"] == "healthy", report
+    assert report["source_event_count"] == source_count
+    assert report["attributed_event_count"] == source_count
+    assert report["unattributed_event_count"] == 0
+    assert {row["binding_state"] for row in report["groups"]} == {
+        "member_bridge_source_reconciled"
+    }
+    assert report["content_exposed"] is False
+    assert report["raw_identifiers_exposed"] is False
+    encoded = json.dumps(report)
+    for private_value in (MEMBER_A, MEMBER_B, DEVICE, "Submit the fixture form"):
+        assert private_value not in encoded
 
 
 def _configuration_settings(tmp_path: Path) -> RuntimeSettings:
@@ -94,27 +125,36 @@ def _manual_policies(client: TestClient) -> None:
 
 
 def _prepare_helper(
-    client: TestClient, tmp_path: Path, capabilities: list[str]
+    client: TestClient,
+    tmp_path: Path,
+    capabilities: list[str],
+    *,
+    owner_id: str = MEMBER_A,
+    owner_headers: dict[str, str] | None = None,
+    device_id: str = DEVICE,
 ) -> tuple[MemberBridgeEnrollmentHelper, dict[str, Any]]:
+    owner_headers = owner_headers or MEMBER_HEADERS
     request_body = {
-        "expected_revision": _control(client)["revision"],
+        "expected_revision": _control(client, owner_headers)["revision"],
         "request_id": REQUEST_ID,
-        "member_id": MEMBER_A,
+        "member_id": owner_id,
         "device_class": "this_mac",
         "capabilities": capabilities,
     }
     response = client.post(
         "/api/member/v1/settings/bridges",
-        headers=MEMBER_HEADERS,
+        headers=owner_headers,
         json=request_body,
     )
     assert response.status_code == 202, response.text
     assert response.json()["state"] == "package_ready"
     runtime = client.app.state.runtime
-    record = runtime.settings.bridge_enrollments[MEMBER_HEADERS["Tailscale-User-Login"]]
+    record = runtime.settings.bridge_enrollments[owner_headers["Tailscale-User-Login"]]
     marker = record["acquisition_policy"]
     assert marker == "cos-member-source-observation-v1"
-    before_current = copy.deepcopy(_control(client)["bridge_wizard"]["current"])
+    before_current = copy.deepcopy(
+        _control(client, owner_headers)["bridge_wizard"]["current"]
+    )
     event_types = ("settings.bridge_enrollment_started", "bridge.enrollment_progressed")
     before_events = {
         kind: client.portal.call(_events, runtime, kind) for kind in event_types
@@ -124,6 +164,55 @@ def _prepare_helper(
         for path in runtime.bridge_enrollment.package_dir.glob("*.adminmebridge")
     }
     assert len(before_packages) == 1
+    other_id, other_headers = (
+        (MEMBER_B, OTHER_HEADERS)
+        if owner_id == MEMBER_A
+        else (MEMBER_A, MEMBER_HEADERS)
+    )
+    before_other = copy.deepcopy(_control(client, other_headers))
+    protected_files = (
+        runtime.bridge_enrollment.index_path,
+        runtime.bridge_enrollment.vault.path,
+        *runtime.bridge_enrollment.package_dir.glob("*.adminmebridge"),
+    )
+    before_files = {path: path.read_bytes() for path in protected_files}
+    before_index = copy.deepcopy(runtime.settings.bridge_enrollments)
+    collision = client.post(
+        "/api/member/v1/settings/bridges",
+        headers=other_headers,
+        json={
+            **request_body,
+            "expected_revision": before_other["revision"],
+            "member_id": other_id,
+        },
+    )
+    assert collision.status_code == 409, collision.text
+    assert collision.json()["detail"]["error"] == "request_id_unavailable"
+    with pytest.raises(BridgeEnrollmentError) as refused_prepare:
+        runtime.bridge_enrollment.prepare(
+            request_id=REQUEST_ID,
+            member_id=other_id,
+            device_class="this_mac",
+            capabilities=capabilities,
+            central_url="https://central-fixture.ts.net",
+        )
+    assert refused_prepare.value.code == "request_id_unavailable"
+    assert {path: path.read_bytes() for path in protected_files} == before_files
+    assert runtime.settings.bridge_enrollments == before_index
+    assert (
+        _control(client, other_headers)["bridge_wizard"]
+        == before_other["bridge_wizard"]
+    )
+    assert _control(client, owner_headers)["revision"] == before_other["revision"]
+    assert {
+        kind: client.portal.call(_events, runtime, kind) for kind in event_types
+    } == before_events
+    retry = client.post(
+        "/api/member/v1/settings/bridges", headers=owner_headers, json=request_body
+    )
+    assert retry.status_code == 202, retry.text
+    assert retry.json()["idempotent"] is True
+    assert {path: path.read_bytes() for path in protected_files} == before_files
     # An older pending handoff cannot acquire this new authority through the
     # idempotent prepare shortcut or the download endpoint. Both refusals must
     # precede any lifecycle append, secret response or artifact replacement.
@@ -137,12 +226,15 @@ def _prepare_helper(
                 ("/api/member/v1/settings/bridges", request_body),
                 (f"/api/member/v1/settings/bridges/{REQUEST_ID}/package", None),
             ):
-                refused = client.post(endpoint, headers=MEMBER_HEADERS, json=body)
+                refused = client.post(endpoint, headers=owner_headers, json=body)
                 assert refused.status_code == 409, refused.text
                 assert "X-AdministrateMe-Transfer-Code" not in refused.headers
                 assert "transfer_code" not in refused.text.casefold()
                 assert "transfer_key" not in refused.text.casefold()
-            assert _control(client)["bridge_wizard"]["current"] == before_current
+            assert (
+                _control(client, owner_headers)["bridge_wizard"]["current"]
+                == before_current
+            )
             assert {
                 kind: client.portal.call(_events, runtime, kind) for kind in event_types
             } == before_events
@@ -156,7 +248,7 @@ def _prepare_helper(
             record["acquisition_policy"] = marker
     handoff = client.post(
         f"/api/member/v1/settings/bridges/{REQUEST_ID}/package",
-        headers=MEMBER_HEADERS,
+        headers=owner_headers,
     )
     assert handoff.status_code == 200, handoff.text
     code = handoff.headers["X-AdministrateMe-Transfer-Code"]
@@ -207,8 +299,8 @@ def _prepare_helper(
         paths, root=ROOT, test_mode=True, submitter=submitter
     )
     installer._tailscale_identity = lambda: (  # type: ignore[method-assign]
-        MEMBER_HEADERS["Tailscale-User-Login"],
-        DEVICE,
+        owner_headers["Tailscale-User-Login"],
+        device_id,
     )
     helper = MemberBridgeEnrollmentHelper(
         paths,
@@ -331,6 +423,8 @@ def _assert_denied_batch_is_atomic(
         ("source_adapter", "contacts-apple-contacts"),
         ("payload.calendar_external_id", "unselected-container"),
         ("payload.member_id", MEMBER_B),
+        ("event_id", "ev_fixture_forged_historical_order"),
+        ("recorded_at", NOW),
     ):
         bad = copy.deepcopy(good)
         bad["idempotency_key"] = f"fixture-batch-bad-{field}"
@@ -532,6 +626,23 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
         client.portal.call(
             runtime.wait_for_projection, "member_knowledge", event_ids["apple_notes"]
         )
+        historical = client.get(
+            "/api/system/historical-attribution", headers=MEMBER_HEADERS
+        )
+        assert historical.status_code == 200, historical.text
+        _assert_history(historical.json())
+        history_watermark = historical.json()["watermark_event_id"]
+        immutable_history = client.portal.call(
+            _history, runtime.event_log, history_watermark
+        )
+        _assert_history(immutable_history)
+        diagnostics = client.portal.call(runtime.diagnostics)
+        assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+        assert assurance["state"] == "healthy", assurance
+        assert assurance["counts"]["source_facts"] == 3
+        assert all(
+            assurance["counts"][name] == 0 for name in ("failed", "missing", "pending")
+        )
         assert client.portal.call(_events, runtime, "triage.item.proposed") == []
         sources = _control(client)["candidate_identification"]["sources"]
         for capability in CAPABILITIES:
@@ -564,6 +675,10 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
                     "/api/bridge/ingest", headers=headers, json=envelope
                 )
                 assert refused.status_code == 403, refused.text
+                assert (
+                    client.portal.call(_history, runtime.event_log, history_watermark)
+                    == immutable_history
+                )
             assert (
                 client.portal.call(
                     runtime.event_log.get_by_idempotency,
@@ -619,6 +734,10 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
         )
         assert paused.status_code == 200, paused.text
         assert (
+            client.portal.call(_history, runtime.event_log, history_watermark)
+            == immutable_history
+        )
+        assert (
             client.post(
                 "/api/bridge/ingest",
                 headers=headers,
@@ -642,6 +761,7 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
 
     restarted = create_application(settings)
     with TestClient(restarted) as client:
+        runtime = restarted.state.runtime
         current = _control(client)["bridge_wizard"]["current"]
         assert current["state"] == "active_observation"
         assert all(
@@ -665,6 +785,42 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
             )
             == 1
         )
+        revoked = client.post(
+            f"/api/member/v1/settings/bridges/{REQUEST_ID}/control",
+            headers=MEMBER_HEADERS,
+            json={"command_id": "fixture-revoke-bridge", "action": "revoke"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json()["state"] == "revoked"
+        assert (
+            client.post(
+                "/api/bridge/ingest",
+                headers=headers,
+                json=_observation(
+                    runtime, "apple_notes", "fixture-revoked-observation"
+                ),
+            ).status_code
+            == 403
+        )
+        assert (
+            client.portal.call(_history, runtime.event_log, history_watermark)
+            == immutable_history
+        )
+
+    async def audit_closed_encrypted_log() -> dict[str, Any]:
+        log = EventLog(
+            settings.instance.event_log_path,
+            settings.encryption_key,
+            read_only=True,
+        )
+        try:
+            return await _history(log, history_watermark)
+        finally:
+            await log.close()
+
+    # The HTR-10 exporter opens this same encrypted log read-only and calls the
+    # same audit. No active runtime, current grant or enrollment config is needed.
+    assert asyncio.run(audit_closed_encrypted_log()) == immutable_history
 
 
 def test_retained_test_without_cos_overlay_cannot_start_a_member_bridge(

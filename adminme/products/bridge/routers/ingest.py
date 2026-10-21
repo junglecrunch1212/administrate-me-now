@@ -25,9 +25,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
 from adminme.adapters.cos_channel_acquisition import (
+    MEMBER_BRIDGE_ACQUISITION_CONTRACT,
     authorized_member_bridge_packs,
     member_bridge_capability_ceiling,
 )
+from adminme.bridge_source_contract import validate_member_source_coordinates
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     BridgeAuthorization,
@@ -44,6 +46,11 @@ from adminme.bridge_enrollment import (
     canonical_bytes,
     validate_capability_transition,
     validate_enrollment_transition,
+)
+from adminme.bridge_history import (
+    SOURCE_AUTHORIZED,
+    SOURCE_AUTHORITY_ACTOR,
+    SOURCE_AUTHORITY_ADAPTER,
 )
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import AppendValidationError
@@ -185,6 +192,26 @@ def _require_acquisition_envelope(
         not in {"observation_starting", "observing", "settling", "settled", "degraded"}
     ):
         raise HTTPException(403, detail="member_bridge_observation_not_enabled")
+
+
+def _stamp_acquisition_device(
+    request: Request,
+    identity: str,
+    envelope: EventEnvelope,
+    packs: frozenset[str] | None,
+) -> EventEnvelope:
+    if packs is None or envelope.type.startswith("external_sync."):
+        return envelope
+    if envelope.event_id or envelope.recorded_at:
+        raise HTTPException(403, detail="member_bridge_central_event_identity_required")
+    actor = (
+        f"bridge-device:{_bridge_record(request, identity)['device_identity_sha256']}"
+    )
+    if envelope.actor_identity not in {None, actor}:
+        raise HTTPException(403, detail="member_bridge_device_actor_mismatch")
+    return envelope.model_copy(
+        update={"actor_identity": actor, "event_at_ms": int(time.time() * 1000)}
+    )
 
 
 def _get_resolver(request: Request) -> MemberIdResolver:
@@ -867,6 +894,9 @@ async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, 
         provisional_proof_validated=provisional,
     )
     _enforce_member_knowledge_contract(request, envelope, member_id)
+    envelope = _stamp_acquisition_device(
+        request, tailscale_identity, envelope, acquisition_packs
+    )
     try:
         event_id = await _get_event_sink(request).write(envelope)
     except AppendValidationError as exc:
@@ -913,6 +943,9 @@ async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, 
                 provisional_proof_validated=False,
             )
             _enforce_member_knowledge_contract(request, envelope, member_id)
+            envelope = _stamp_acquisition_device(
+                request, tailscale_identity, envelope, acquisition_packs
+            )
             stamped.append(envelope)
         except HTTPException as exc:
             # Per F-3 + §7 c2: whole-batch reject with offset of first bad envelope.
@@ -984,6 +1017,16 @@ async def enrollment_progress(
         and body.pack_config.get("shared_container_ids", []) != []
     ):
         raise HTTPException(403, detail="member_bridge_private_sources_required")
+    if acquisition_packs is not None and body.pack_config is not None:
+        try:
+            validate_member_source_coordinates(
+                str(CAPABILITIES.get(str(body.capability_id), {}).get("pack") or ""),
+                body.pack_config,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                422, detail="member_bridge_source_coordinate_invalid"
+            ) from exc
     if wizard.get("state") != body.previous_state:
         raise HTTPException(409, detail="bridge_progress_previous_state_mismatch")
     try:
@@ -1007,14 +1050,144 @@ async def enrollment_progress(
 
     unsigned = body.model_dump(mode="json", exclude={"signature"})
     try:
-        runtime.bridge_enrollment.verify_progress(
+        with runtime.bridge_enrollment.progress_operation(
             request_id=body.request_id,
             enrollment_id=body.enrollment_id,
             member_id=body.member_id,
             tailscale_identity=tailscale_identity,
             payload=unsigned,
             signature=body.signature,
-        )
+        ):
+            device_digest = hashlib.sha256(
+                body.device_node_id.encode("utf-8")
+            ).hexdigest()
+            try:
+                runtime.bridge_enrollment.bind_device(
+                    request_id=body.request_id,
+                    member_id=body.member_id,
+                    node_id=body.device_node_id,
+                )
+            except BridgeEnrollmentError as exc:
+                raise HTTPException(
+                    403, detail={"error": exc.code, "message": str(exc)}
+                ) from exc
+
+            evidence_event: dict[str, Any] | None = None
+            evidence_sha256: str | None = None
+            if body.state == "bridge_paired":
+                if not body.enrollment_event_id:
+                    raise HTTPException(422, detail="bridge_enrollment_event_required")
+                evidence_event = await runtime.event_log.get(body.enrollment_event_id)
+                payload = evidence_event.get("payload") if evidence_event else None
+                if (
+                    not evidence_event
+                    or evidence_event.get("type") != "bridge.enrolled"
+                    or evidence_event.get("source_account_id") != body.enrollment_id
+                    or evidence_event.get("owner_scope") != f"private:{body.member_id}"
+                    or not isinstance(payload, dict)
+                    or payload.get("member_id") != body.member_id
+                    or payload.get("bridge_node_id") != body.device_node_id
+                    or str(payload.get("tailscale_identity", "")).casefold()
+                    != tailscale_identity.casefold()
+                ):
+                    raise HTTPException(403, detail="bridge_enrollment_event_mismatch")
+                try:
+                    runtime.bridge_enrollment.activate_transport(
+                        request_id=body.request_id,
+                        member_id=body.member_id,
+                        bridge_node_id=body.device_node_id,
+                        event_id=body.enrollment_event_id,
+                    )
+                except BridgeEnrollmentError as exc:
+                    raise HTTPException(
+                        409, detail={"error": exc.code, "message": str(exc)}
+                    ) from exc
+                resolver = EnrollmentMemberIdResolver(
+                    runtime.settings.bridge_enrollments
+                )
+                runtime.member_id_resolver = resolver
+                request.app.state.member_id_resolver = resolver
+
+            if body.capability_id is not None:
+                capability = CAPABILITIES.get(body.capability_id)
+                if (
+                    capability is None
+                    or capability.get("implementation") != "available"
+                ):
+                    raise HTTPException(422, detail="bridge_capability_unavailable")
+                if body.capability_state == "permission_verified":
+                    if not isinstance(body.pack_config, dict):
+                        raise HTTPException(
+                            422, detail="exact_source_coordinate_required"
+                        )
+                    try:
+                        evidence_sha256 = (
+                            runtime.bridge_enrollment.configure_capability(
+                                request_id=body.request_id,
+                                member_id=body.member_id,
+                                capability_id=body.capability_id,
+                                pack_config=body.pack_config,
+                            )
+                        )
+                    except BridgeEnrollmentError as exc:
+                        raise HTTPException(
+                            422, detail={"error": exc.code, "message": str(exc)}
+                        ) from exc
+                elif body.pack_config is not None:
+                    raise HTTPException(422, detail="source_coordinate_not_expected")
+                if body.capability_state == "adapter_authenticated":
+                    if body.capability_event_id:
+                        evidence_event = await runtime.event_log.get(
+                            body.capability_event_id
+                        )
+                        if evidence_event is not None:
+                            evidence_sha256 = hashlib.sha256(
+                                canonical_bytes(evidence_event)
+                            ).hexdigest()
+                    try:
+                        runtime.bridge_enrollment.attest_capability(
+                            request_id=body.request_id,
+                            member_id=body.member_id,
+                            capability_id=body.capability_id,
+                            evidence_event=evidence_event,
+                        )
+                    except BridgeEnrollmentError as exc:
+                        raise HTTPException(
+                            409, detail={"error": exc.code, "message": str(exc)}
+                        ) from exc
+                if body.capability_state == "observation_starting":
+                    try:
+                        runtime.bridge_enrollment.mark_observation_started(
+                            request_id=body.request_id,
+                            member_id=body.member_id,
+                            capability_id=body.capability_id,
+                        )
+                    except BridgeEnrollmentError as exc:
+                        raise HTTPException(
+                            409, detail={"error": exc.code, "message": str(exc)}
+                        ) from exc
+                if body.capability_state == "settled":
+                    if (
+                        not body.capability_event_id
+                        or not body.last_successful_observation
+                    ):
+                        raise HTTPException(
+                            422, detail="settlement_observation_evidence_required"
+                        )
+                    observed = await runtime.event_log.get(body.capability_event_id)
+                    policy = BRIDGE_PACK_POLICIES[str(capability["pack"])]
+                    if (
+                        observed is None
+                        or observed.get("source_adapter") != policy.source_adapter
+                        or observed.get("owner_scope") != f"private:{body.member_id}"
+                    ):
+                        raise HTTPException(
+                            403, detail="settlement_observation_evidence_mismatch"
+                        )
+                    evidence_sha256 = hashlib.sha256(
+                        canonical_bytes(observed)
+                    ).hexdigest()
+
     except BridgeEnrollmentError as exc:
         if exc.code == "expired":
             try:
@@ -1029,118 +1202,6 @@ async def enrollment_progress(
         raise HTTPException(
             code, detail={"error": exc.code, "message": str(exc)}
         ) from exc
-
-    device_digest = hashlib.sha256(body.device_node_id.encode("utf-8")).hexdigest()
-    try:
-        runtime.bridge_enrollment.bind_device(
-            request_id=body.request_id,
-            member_id=body.member_id,
-            node_id=body.device_node_id,
-        )
-    except BridgeEnrollmentError as exc:
-        raise HTTPException(
-            403, detail={"error": exc.code, "message": str(exc)}
-        ) from exc
-
-    evidence_event: dict[str, Any] | None = None
-    evidence_sha256: str | None = None
-    if body.state == "bridge_paired":
-        if not body.enrollment_event_id:
-            raise HTTPException(422, detail="bridge_enrollment_event_required")
-        evidence_event = await runtime.event_log.get(body.enrollment_event_id)
-        payload = evidence_event.get("payload") if evidence_event else None
-        if (
-            not evidence_event
-            or evidence_event.get("type") != "bridge.enrolled"
-            or evidence_event.get("source_account_id") != body.enrollment_id
-            or evidence_event.get("owner_scope") != f"private:{body.member_id}"
-            or not isinstance(payload, dict)
-            or payload.get("member_id") != body.member_id
-            or payload.get("bridge_node_id") != body.device_node_id
-            or str(payload.get("tailscale_identity", "")).casefold()
-            != tailscale_identity.casefold()
-        ):
-            raise HTTPException(403, detail="bridge_enrollment_event_mismatch")
-        try:
-            runtime.bridge_enrollment.activate_transport(
-                request_id=body.request_id,
-                member_id=body.member_id,
-                bridge_node_id=body.device_node_id,
-                event_id=body.enrollment_event_id,
-            )
-        except BridgeEnrollmentError as exc:
-            raise HTTPException(
-                409, detail={"error": exc.code, "message": str(exc)}
-            ) from exc
-        resolver = EnrollmentMemberIdResolver(runtime.settings.bridge_enrollments)
-        runtime.member_id_resolver = resolver
-        request.app.state.member_id_resolver = resolver
-
-    if body.capability_id is not None:
-        capability = CAPABILITIES.get(body.capability_id)
-        if capability is None or capability.get("implementation") != "available":
-            raise HTTPException(422, detail="bridge_capability_unavailable")
-        if body.capability_state == "permission_verified":
-            if not isinstance(body.pack_config, dict):
-                raise HTTPException(422, detail="exact_source_coordinate_required")
-            try:
-                evidence_sha256 = runtime.bridge_enrollment.configure_capability(
-                    request_id=body.request_id,
-                    member_id=body.member_id,
-                    capability_id=body.capability_id,
-                    pack_config=body.pack_config,
-                )
-            except BridgeEnrollmentError as exc:
-                raise HTTPException(
-                    422, detail={"error": exc.code, "message": str(exc)}
-                ) from exc
-        elif body.pack_config is not None:
-            raise HTTPException(422, detail="source_coordinate_not_expected")
-        if body.capability_state == "adapter_authenticated":
-            if body.capability_event_id:
-                evidence_event = await runtime.event_log.get(body.capability_event_id)
-                if evidence_event is not None:
-                    evidence_sha256 = hashlib.sha256(
-                        canonical_bytes(evidence_event)
-                    ).hexdigest()
-            try:
-                runtime.bridge_enrollment.attest_capability(
-                    request_id=body.request_id,
-                    member_id=body.member_id,
-                    capability_id=body.capability_id,
-                    evidence_event=evidence_event,
-                )
-            except BridgeEnrollmentError as exc:
-                raise HTTPException(
-                    409, detail={"error": exc.code, "message": str(exc)}
-                ) from exc
-        if body.capability_state == "observation_starting":
-            try:
-                runtime.bridge_enrollment.mark_observation_started(
-                    request_id=body.request_id,
-                    member_id=body.member_id,
-                    capability_id=body.capability_id,
-                )
-            except BridgeEnrollmentError as exc:
-                raise HTTPException(
-                    409, detail={"error": exc.code, "message": str(exc)}
-                ) from exc
-        if body.capability_state == "settled":
-            if not body.capability_event_id or not body.last_successful_observation:
-                raise HTTPException(
-                    422, detail="settlement_observation_evidence_required"
-                )
-            observed = await runtime.event_log.get(body.capability_event_id)
-            policy = BRIDGE_PACK_POLICIES[str(capability["pack"])]
-            if (
-                observed is None
-                or observed.get("source_adapter") != policy.source_adapter
-                or observed.get("owner_scope") != f"private:{body.member_id}"
-            ):
-                raise HTTPException(
-                    403, detail="settlement_observation_evidence_mismatch"
-                )
-            evidence_sha256 = hashlib.sha256(canonical_bytes(observed)).hexdigest()
 
     lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
     async with lock:
@@ -1172,25 +1233,74 @@ async def enrollment_progress(
             "provider_effects": False,
         }
         nonce_digest = hashlib.sha256(body.nonce.encode("utf-8")).hexdigest()
-        event_id = await runtime.events.write(
-            EventEnvelope(
-                event_at_ms=int(time.time() * 1000),
-                tenant_id=runtime.settings.instance.tenant_id,
-                type="bridge.enrollment_progressed",
-                schema_version=1,
-                occurred_at=progress_at,
-                source_adapter="member-bridge-enrollment-helper",
-                source_account_id=body.enrollment_id,
-                owner_scope=f"private:{body.member_id}",
-                visibility_scope=f"private:{body.member_id}",
-                sensitivity="normal",
-                actor_identity=f"bridge-device:{device_digest}",
-                idempotency_key=f"bridge-progress:{body.request_id}:{nonce_digest}",
-                raw_ref="signature-sha256:"
-                + hashlib.sha256(body.signature.encode("ascii")).hexdigest(),
-                payload=event_payload,
-            )
+        progress_envelope = EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=runtime.settings.instance.tenant_id,
+            type="bridge.enrollment_progressed",
+            schema_version=1,
+            occurred_at=progress_at,
+            source_adapter="member-bridge-enrollment-helper",
+            source_account_id=body.enrollment_id,
+            owner_scope=f"private:{body.member_id}",
+            visibility_scope=f"private:{body.member_id}",
+            sensitivity="normal",
+            actor_identity=f"bridge-device:{device_digest}",
+            idempotency_key=f"bridge-progress:{body.request_id}:{nonce_digest}",
+            raw_ref="signature-sha256:"
+            + hashlib.sha256(body.signature.encode("ascii")).hexdigest(),
+            payload=event_payload,
         )
+        envelopes = [progress_envelope]
+        if (
+            acquisition_packs is not None
+            and body.capability_state == "observation_starting"
+        ):
+            record = _bridge_record(request, tailscale_identity)
+            pack = str(CAPABILITIES[str(body.capability_id)]["pack"])
+            authentication = (record.get("capability_attestations") or {}).get(
+                pack
+            ) or {}
+            envelopes.append(
+                EventEnvelope(
+                    event_at_ms=progress_envelope.event_at_ms,
+                    tenant_id=progress_envelope.tenant_id,
+                    type=SOURCE_AUTHORIZED,
+                    schema_version=1,
+                    occurred_at=progress_at,
+                    source_adapter=SOURCE_AUTHORITY_ADAPTER,
+                    source_account_id=body.enrollment_id,
+                    owner_scope=f"private:{body.member_id}",
+                    visibility_scope=f"private:{body.member_id}",
+                    actor_identity=SOURCE_AUTHORITY_ACTOR,
+                    idempotency_key=f"bridge-source-authorized:{progress_envelope.idempotency_key}",
+                    raw_ref=f"event:{record['event_id']}",
+                    payload={
+                        "contract": MEMBER_BRIDGE_ACQUISITION_CONTRACT,
+                        "request_id": body.request_id,
+                        "enrollment_id": body.enrollment_id,
+                        "member_id": body.member_id,
+                        "instance_id": body.instance_id,
+                        "release_commit": body.release_commit,
+                        "capability_set_sha256": body.capability_set_sha256,
+                        "device_identity_sha256": device_digest,
+                        "tailscale_identity_sha256": hashlib.sha256(
+                            tailscale_identity.casefold().encode()
+                        ).hexdigest(),
+                        "capability_id": body.capability_id,
+                        "pack": pack,
+                        "pack_config": record["pack_config"][pack],
+                        "enrollment_event_id": record["event_id"],
+                        "authentication_event_id": authentication.get("event_id"),
+                        "progress_idempotency_key": progress_envelope.idempotency_key,
+                        "observation_only": True,
+                        "provider_writes": "deny",
+                        "content_exposed": False,
+                    },
+                )
+            )
+        # Progress and frozen admission coordinates commit together, before the
+        # helper can start observations. A partial receipt cannot grant access.
+        event_id = (await runtime.events.write_batch(envelopes))[0]
         try:
             mutation = runtime.settings_control.apply_bridge_enrollment_event(
                 event_payload

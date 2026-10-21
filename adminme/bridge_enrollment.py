@@ -9,6 +9,7 @@ create a second bridge transport or provider authorization path.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import hmac
 import json
@@ -16,10 +17,12 @@ import os
 import re
 import subprocess
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Iterator, Literal, Mapping, Protocol
 from urllib.parse import urlparse
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -28,6 +31,7 @@ from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     validate_configured_pack_config,
 )
+from adminme.lib.session import Session
 from bootstrap.source_identity import (
     SYSTEM_GIT_EXECUTABLE,
     SourceIdentityError,
@@ -39,6 +43,22 @@ TRANSFER_FORMAT = "administrateme-bridge-transfer-v1"
 WIZARD_CONTRACT = "administrateme-member-bridge-wizard-v1"
 PROGRESS_CONTRACT = "administrateme-member-bridge-progress-v1"
 TRANSFER_TTL_MINUTES = 30
+
+
+class BridgeIndexCommitter(Protocol):
+    """Deployment-owned commit seam; it never accepts an after-binding."""
+
+    @property
+    def pending(self) -> bool: ...
+
+    def commit(
+        self,
+        *,
+        previous_payload: bytes | None,
+        next_payload: bytes,
+        authority: Mapping[str, Any],
+    ) -> dict[str, Any]: ...
+
 
 EnrollmentState = Literal[
     "not_requested",
@@ -750,6 +770,8 @@ class BridgeEnrollmentCoordinator:
         deployment_release_commit: str | None = None,
         require_deployment_release: bool = False,
         adapter_config: dict[str, Any] | None = None,
+        index_committer: BridgeIndexCommitter | None = None,
+        on_index_committed: Callable[[dict[str, Any]], None] | None = None,
         now: Callable[[], datetime] = now_utc,
     ) -> None:
         self.instance_dir = instance_dir
@@ -764,6 +786,16 @@ class BridgeEnrollmentCoordinator:
         self.now = now
         self.package_dir = instance_dir / "bridges" / "handoffs"
         self.index_path = instance_dir / "bridges" / "member-mapping.json"
+        self.index_committer = index_committer
+        self.index_commit_failed = False
+        self.on_index_committed = on_index_committed
+        self._persisted_payload = (
+            self.index_path.read_bytes() if self.index_path.exists() else None
+        )
+        self._persisted_records = copy.deepcopy(bridge_enrollments)
+        self._index_authority: ContextVar[dict[str, Any] | None] = ContextVar(
+            "bridge_index_authority", default=None
+        )
         self.vault = EncryptedHandoffVault(
             instance_dir / "bridges" / "handoff-secrets.json.enc", encryption_key
         )
@@ -781,17 +813,188 @@ class BridgeEnrollmentCoordinator:
             )
         return matches[0]
 
-    def _save_index(self) -> None:
-        _atomic_bytes(
-            self.index_path,
-            (
-                json.dumps(self.bridge_enrollments, indent=2, sort_keys=True) + "\n"
-            ).encode("utf-8"),
+    @contextmanager
+    def member_operation(
+        self, session: Session, *, request_id: str, member_id: str
+    ) -> Iterator[None]:
+        """Bind a Settings mutation to the server's authenticated Session."""
+
+        if (
+            session.tenant_id != self.tenant_id
+            or session.source not in {"node_console", "member_portal"}
+            or session.auth_role != "principal"
+            or session.is_view_as
+            or self.member_roles.get(session.auth_member_id) != "principal"
+            or (
+                member_id != session.auth_member_id
+                and self.member_roles.get(member_id) != "child"
+            )
+        ):
+            raise BridgeEnrollmentError(
+                "index_authority_invalid",
+                "Bridge setup requires its authenticated owner",
+            )
+        token = self._index_authority.set(
+            {
+                "kind": "member",
+                "actor_member_id": session.auth_member_id,
+                "member_id": member_id,
+                "request_id": request_id,
+                "proof_sha256": hashlib.sha256(
+                    canonical_bytes(
+                        {
+                            "tenant_id": session.tenant_id,
+                            "source": session.source,
+                            "actor": session.auth_member_id,
+                            "correlation_id": session.correlation_id,
+                            "request_id": request_id,
+                        }
+                    )
+                ).hexdigest(),
+            }
         )
+        try:
+            yield
+        finally:
+            self._index_authority.reset(token)
+
+    @contextmanager
+    def progress_operation(
+        self,
+        *,
+        request_id: str,
+        enrollment_id: str,
+        member_id: str,
+        tailscale_identity: str,
+        payload: Mapping[str, Any],
+        signature: str,
+    ) -> Iterator[dict[str, Any]]:
+        verified = self.verify_progress(
+            request_id=request_id,
+            enrollment_id=enrollment_id,
+            member_id=member_id,
+            tailscale_identity=tailscale_identity,
+            payload=payload,
+            signature=signature,
+        )
+        token = self._index_authority.set(
+            {
+                "kind": "helper",
+                "actor_member_id": member_id,
+                "member_id": member_id,
+                "request_id": request_id,
+                "proof_sha256": hashlib.sha256(
+                    canonical_bytes({"payload": verified, "signature": signature})
+                ).hexdigest(),
+            }
+        )
+        try:
+            yield verified
+        finally:
+            self._index_authority.reset(token)
+
+    def _save_index(self, *, operation: str, request_id: str, member_id: str) -> None:
+        payload = (
+            json.dumps(self.bridge_enrollments, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        evidence: dict[str, Any] | None = None
+        try:
+            if self.index_commit_failed:
+                raise BridgeEnrollmentError(
+                    "index_commit_failed", "Bridge runtime readiness needs recovery"
+                )
+            if self.index_committer is None:
+                _atomic_bytes(self.index_path, payload)
+            else:
+                authority = self._index_authority.get()
+                if (
+                    authority is None
+                    or authority.get("member_id") != member_id
+                    or authority.get("request_id") != request_id
+                    or (
+                        authority.get("kind") == "member"
+                        and operation not in {"prepare", "pause", "resume", "revoke"}
+                    )
+                    or (
+                        authority.get("kind") == "helper"
+                        and operation
+                        not in {"bind", "activate", "configure", "attest", "start"}
+                    )
+                ):
+                    raise BridgeEnrollmentError(
+                        "index_authority_invalid",
+                        "Bridge mutation has no exact authenticated authority",
+                    )
+                evidence = self.index_committer.commit(
+                    previous_payload=self._persisted_payload,
+                    next_payload=payload,
+                    authority={
+                        **authority,
+                        "operation": operation,
+                        "tenant_id": self.tenant_id,
+                        "identity": self._identity_for_member(member_id),
+                        "role": self.member_roles[member_id],
+                    },
+                )
+        except Exception as exc:
+            self.bridge_enrollments.clear()
+            self.bridge_enrollments.update(copy.deepcopy(self._persisted_records))
+            if isinstance(exc, BridgeEnrollmentError):
+                raise
+            raise BridgeEnrollmentError(
+                "index_commit_failed",
+                "Bridge readiness transition could not be committed",
+            ) from exc
+        self._persisted_payload = payload
+        self._persisted_records = copy.deepcopy(self.bridge_enrollments)
+        if evidence is not None and self.on_index_committed is not None:
+            try:
+                self.on_index_committed(evidence)
+            except Exception as exc:
+                # Publication already committed; retain that index and block
+                # readiness until restart reloads both exact durable documents.
+                self.index_commit_failed = True
+                raise BridgeEnrollmentError(
+                    "index_commit_failed",
+                    "Committed bridge readiness needs runtime recovery",
+                ) from exc
 
     def _package_path(self, request_id: str) -> Path:
         digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
         return self.package_dir / f"{digest}.adminmebridge"
+
+    def require_request_owner(self, *, request_id: str, member_id: str) -> None:
+        """A global artifact key must never be rebound to another member.
+
+        This check is read-only, including for expired or revoked records. The
+        authenticated route additionally checks retained enrollment receipts.
+        Same-owner retry and duplicate-enrollment handling stay in prepare().
+        """
+        records = [
+            record
+            for record in self.bridge_enrollments.values()
+            if isinstance(record, dict) and record.get("request_id") == request_id
+        ]
+        secrets = self.vault.read()
+        secret = secrets.get(request_id)
+        conflicting = any(record.get("member_id") != member_id for record in records)
+        if request_id in secrets:
+            conflicting = (
+                conflicting
+                or not isinstance(secret, dict)
+                or secret.get("member_id") != member_id
+            )
+        package = self._package_path(request_id)
+        if (
+            (package.exists() or package.is_symlink())
+            and not records
+            and secret is None
+        ):
+            conflicting = True
+        if conflicting:
+            raise BridgeEnrollmentError(
+                "request_id_unavailable", "Choose a new bridge request identifier"
+            )
 
     def prepare(
         self,
@@ -803,6 +1006,7 @@ class BridgeEnrollmentCoordinator:
         central_url: str,
         allow_testserver: bool = False,
     ) -> PreparedHandoff:
+        self.require_request_owner(request_id=request_id, member_id=member_id)
         if device_class not in {"this_mac", "another_mac"}:
             raise BridgeEnrollmentError(
                 "invalid_device_class", "Choose this Mac or another Mac"
@@ -975,8 +1179,14 @@ class BridgeEnrollmentCoordinator:
                     else {}
                 ),
             }
-            self._save_index()
+            self._save_index(
+                operation="prepare", request_id=request_id, member_id=member_id
+            )
         except Exception:
+            if self.index_commit_failed:
+                # The durable enrollment exists; do not remove its package or
+                # replace its index because only the in-memory refresh failed.
+                raise
             self.bridge_enrollments.clear()
             self.bridge_enrollments.update(prior_records)
             if prior_package is None:
@@ -1133,7 +1343,7 @@ class BridgeEnrollmentCoordinator:
                 "wrong_device", "Enrollment package was opened on another Mac"
             )
         record["device_identity_sha256"] = digest
-        self._save_index()
+        self._save_index(operation="bind", request_id=request_id, member_id=member_id)
 
     def activate_transport(
         self, *, request_id: str, member_id: str, bridge_node_id: str, event_id: str
@@ -1164,7 +1374,9 @@ class BridgeEnrollmentCoordinator:
             }
         )
         record.pop("expires_at", None)
-        self._save_index()
+        self._save_index(
+            operation="activate", request_id=request_id, member_id=member_id
+        )
         self._package_path(request_id).unlink(missing_ok=True)
         secret = self.vault.get(request_id)
         secret.pop("transfer_key", None)
@@ -1241,7 +1453,9 @@ class BridgeEnrollmentCoordinator:
                 "provider_capability_state": "not_attested",
             }
         )
-        self._save_index()
+        self._save_index(
+            operation="configure", request_id=request_id, member_id=member_id
+        )
         return hashlib.sha256(canonical_bytes(normalized[pack])).hexdigest()
 
     def attest_capability(
@@ -1334,7 +1548,7 @@ class BridgeEnrollmentCoordinator:
                 "provider_capability_state": global_state,
             }
         )
-        self._save_index()
+        self._save_index(operation="attest", request_id=request_id, member_id=member_id)
 
     def mark_observation_started(
         self, *, request_id: str, member_id: str, capability_id: str
@@ -1348,7 +1562,7 @@ class BridgeEnrollmentCoordinator:
         record["enabled_packs"] = sorted(
             set(record.get("enabled_packs") or []) | {pack}
         )
-        self._save_index()
+        self._save_index(operation="start", request_id=request_id, member_id=member_id)
 
     def record(self, *, request_id: str, member_id: str) -> dict[str, Any]:
         matches = [
@@ -1376,7 +1590,7 @@ class BridgeEnrollmentCoordinator:
         record["paused_authorized_packs"] = list(record.get("authorized_packs") or [])
         record["paused_enabled_packs"] = list(record.get("enabled_packs") or [])
         record["enabled_packs"] = []
-        self._save_index()
+        self._save_index(operation="pause", request_id=request_id, member_id=member_id)
 
     def resume(self, *, request_id: str, member_id: str) -> None:
         record = self.record(request_id=request_id, member_id=member_id)
@@ -1390,7 +1604,7 @@ class BridgeEnrollmentCoordinator:
             record.pop("paused_authorized_packs", record.get("authorized_packs") or [])
         )
         record["enabled_packs"] = list(record.pop("paused_enabled_packs", []))
-        self._save_index()
+        self._save_index(operation="resume", request_id=request_id, member_id=member_id)
 
     def revoke(self, *, request_id: str, member_id: str) -> None:
         record = self.record(request_id=request_id, member_id=member_id)
@@ -1405,16 +1619,32 @@ class BridgeEnrollmentCoordinator:
         )
         record.pop("paused_authorized_packs", None)
         record.pop("paused_enabled_packs", None)
-        self._save_index()
+        self._save_index(operation="revoke", request_id=request_id, member_id=member_id)
         self._package_path(request_id).unlink(missing_ok=True)
         self.vault.delete(request_id)
 
     def expire(self, *, request_id: str, member_id: str) -> None:
         record = self.record(request_id=request_id, member_id=member_id)
         if record.get("status") == "package-exported":
-            record["status"] = "revoked"
-            record["expired_at"] = self.now().isoformat()
-            self._save_index()
+            if self.now() < parse_time(record.get("expires_at")):
+                raise BridgeEnrollmentError("not_expired", "Enrollment has not expired")
+            token = self._index_authority.set(
+                {
+                    "kind": "expiry",
+                    "actor_member_id": member_id,
+                    "member_id": member_id,
+                    "request_id": request_id,
+                    "proof_sha256": hashlib.sha256(canonical_bytes(record)).hexdigest(),
+                }
+            )
+            try:
+                record["status"] = "revoked"
+                record["expired_at"] = self.now().isoformat()
+                self._save_index(
+                    operation="expire", request_id=request_id, member_id=member_id
+                )
+            finally:
+                self._index_authority.reset(token)
         self._package_path(request_id).unlink(missing_ok=True)
         self.vault.delete(request_id)
 

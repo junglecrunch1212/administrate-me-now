@@ -83,6 +83,49 @@ npm --prefix openclaw/administrateme test
 
 Before a deployment, also run the full unscoped lint suite, all pack/package validators, identity and instance-path scans, replay/isolation/backup tests, and the clean macOS lab rehearsal in `docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and failures verbatim.
 
+## Readiness before full release validation
+
+Owner-directed policy (2026-10-21): before declaring a behavioral candidate
+ready, trace the affected user workflow through its real production boundaries.
+Keep a compact impact map in the existing PR/task: affected contract, concrete
+test or evidence, and unresolved gap. Consider identity and permission,
+acquisition policy, events and derived state, historical ownership, readiness,
+restart, revocation, and upgrade/restore/rollback where affected. Bound this
+review to the change and its dependencies; justify exclusions rather than
+retesting every subsystem.
+
+Use production composition and representative installed-release conditions in
+isolated CI: packaged code without Git metadata, existing configuration and
+retained events, disabled/revoked sources, and restart/recovery where relevant.
+Assert user-visible outcomes and preserved invariants. A successful setup call
+alone does not prove continued usability or maintainability.
+
+When a late defect exposes a missing assumption, review the finite equivalent
+paths before correcting just that example: other new intake routes for an
+ownership gap, related loaders and installed entrypoints for source identity or
+cache gaps. Extend shared regressions and batch related corrections without an
+unrelated broad refactor. Check discoverable deployment/device prerequisites
+with supported read-only diagnostics before promising readiness or entering
+maintenance; candidate behavior still runs only in isolated CI or an authorized
+disposable lab. Preserve consent, permission, evidence-expiry and operational
+guards.
+
+Complete this bounded review and the relevant lifecycle checks before marking
+a draft ready or launching long release suites. Resolve known blockers and
+actionable findings, pass focused checks, and settle the candidate first. A new
+invalidating defect returns the PR to draft and relevant focused validation;
+explain the concrete reason for restarting. Preserve useful unchanged evidence
+and every required final-candidate gate. Report focused checks passed, full
+checks passed, deployed, and verified usable separately. Remaining dependencies
+are distinct from CI duration; test estimates are not completion promises.
+Summarize late defects and added coverage in the existing PR without another
+tracking/review task or permission ceremony.
+
+Carry this policy into applicable focused checks through normal PR review.
+Instruction-only changes need document checks, not invented behavioral tests or
+a fresh release cycle merely to synchronize prose. Do not interrupt otherwise
+valid running release checks for an instruction-only update.
+
 ## Definition of done
 
 A claim is complete only when a process-level test demonstrates it through the production composition root. Unit tests for isolated layers are necessary but insufficient. Update governing documentation when behavior or scope changes, but do not create evidence-only follow-up work. Classify semantic changes as PRESERVE, MODERNIZE, SUPERSEDE, or DEFER and cite the governing source. DEFER is never valid for a required product function, projection capability, privacy/governance invariant, workbook round trip, or bootstrap safety.

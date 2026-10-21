@@ -148,7 +148,7 @@ from adminme.reconciliation import ReconciliationAdmissionEvaluator
 from adminme.settings_control import SettingsControlStore, public_capability_summary
 from adminme.messages_reply_reconciliation import MessagesReplyReconciler
 from adminme.google_tasks_execution_reconciliation import GoogleTasksExecutionReconciler
-from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
+from adminme.bridge_enrollment import BridgeEnrollmentCoordinator, BridgeIndexCommitter
 from adminme.source_policy import source_policy_event_types
 from adminme.source_policy_shadow import SourcePolicyShadowEvaluator
 from adminme.source_assurance import audit_source_assurance
@@ -177,6 +177,9 @@ class RuntimeSettings:
     member_identities: dict[str, str] = field(default_factory=dict)
     household_mapping: dict[str, Any] = field(default_factory=dict)
     bridge_enrollments: dict[str, dict[str, Any]] = field(default_factory=dict)
+    bridge_index_committer: BridgeIndexCommitter | None = field(
+        default=None, repr=False
+    )
     adapter_config: dict[str, Any] = field(
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
@@ -686,6 +689,7 @@ class RuntimeSettings:
         member_identities: dict[str, str] | None = None,
         household_mapping: dict[str, Any] | None = None,
         bridge_enrollments: dict[str, dict[str, Any]] | None = None,
+        bridge_index_committer: BridgeIndexCommitter | None = None,
         deterministic_openclaw_fixture: bool = False,
         member_roles: dict[str, str] | None = None,
         fixture_member_id: str | None = None,
@@ -718,6 +722,7 @@ class RuntimeSettings:
             bridge_enrollments={
                 key: dict(value) for key, value in (bridge_enrollments or {}).items()
             },
+            bridge_index_committer=bridge_index_committer,
             deterministic_openclaw_fixture=deterministic_openclaw_fixture,
             member_roles=dict(member_roles or {}),
             fixture_member_id=fixture_member_id,
@@ -838,6 +843,8 @@ class AdministrateMeRuntime:
                 else None
             ),
             require_deployment_release=settings.deployment_evidence_required,
+            index_committer=settings.bridge_index_committer,
+            on_index_committed=self._bridge_index_committed,
         )
         self.source_policy_shadow: SourcePolicyShadowEvaluator | None = None
         self.reconciliation_admission: ReconciliationAdmissionEvaluator | None = None
@@ -3159,6 +3166,14 @@ class AdministrateMeRuntime:
             return {"name": product, "state": "blocked", "reason": "not registered"}
         return record.public()
 
+    def _bridge_index_committed(self, evidence: dict[str, Any]) -> None:
+        # This callback runs synchronously only after both durable publications.
+        self.settings.deployment_evidence.clear()
+        self.settings.deployment_evidence.update(evidence)
+        self.settings.host_topology["deployment_binding"] = dict(
+            evidence["deployment_binding"]
+        )
+
     def _deployment_readiness(self, *, observation_active: bool) -> dict[str, Any]:
         reported_topology = dict(self.openclaw_topology_report)
         if (
@@ -3187,9 +3202,15 @@ class AdministrateMeRuntime:
             if source_assurance_capability is not None
             else self._source_assurance_cache
         )
+        host_topology = self.settings.host_topology
+        committer = self.settings.bridge_index_committer
+        if self.bridge_enrollment.index_commit_failed or (
+            committer is not None and committer.pending
+        ):
+            host_topology = {**host_topology, "deployment_binding": {}}
         return evaluate_deployment_readiness(
             required=self.settings.deployment_evidence_required,
-            host_topology=self.settings.host_topology,
+            host_topology=host_topology,
             deployment_evidence=self.settings.deployment_evidence,
             member_roles=self.settings.member_roles,
             portal_member_ids=set(self.settings.member_identities.values()),

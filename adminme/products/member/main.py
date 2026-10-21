@@ -6417,6 +6417,28 @@ async def request_settings_bridge(
         },
     )
     async with lock:
+        try:
+            runtime.bridge_enrollment.require_request_owner(
+                request_id=body.request_id, member_id=body.member_id
+            )
+            # Failed/retired requests remain bound after their package and
+            # secret are removed, and after a later request replaces the index.
+            # These typed receipts contain no provider content.
+            async for prior_start in runtime.event_log.read_since(
+                types=["settings.bridge_enrollment_started"]
+            ):
+                prior_payload = prior_start.get("payload") or {}
+                if (
+                    prior_start.get("tenant_id") == session.tenant_id
+                    and prior_payload.get("request_id") == body.request_id
+                    and prior_payload.get("member_id") != body.member_id
+                ):
+                    raise BridgeEnrollmentError(
+                        "request_id_unavailable",
+                        "Choose a new bridge request identifier",
+                    )
+        except BridgeEnrollmentError as exc:
+            raise _bridge_http_error(exc) from exc
         prior_receipt = await _prior_settings_receipt(
             runtime,
             session,
@@ -6454,10 +6476,15 @@ async def request_settings_bridge(
                 and current.get("request_id") != body.request_id
             ):
                 try:
-                    runtime.bridge_enrollment.revoke(
+                    with runtime.bridge_enrollment.member_operation(
+                        session,
                         request_id=str(current["request_id"]),
                         member_id=body.member_id,
-                    )
+                    ):
+                        runtime.bridge_enrollment.revoke(
+                            request_id=str(current["request_id"]),
+                            member_id=body.member_id,
+                        )
                 except BridgeEnrollmentError as exc:
                     if exc.code != "enrollment_missing_or_ambiguous":
                         raise _bridge_http_error(exc) from exc
@@ -6572,17 +6599,20 @@ async def request_settings_bridge(
                 suffix="package-preparing",
             )
         try:
-            prepared = runtime.bridge_enrollment.prepare(
-                request_id=body.request_id,
-                member_id=body.member_id,
-                device_class=body.device_class,
-                capabilities=sorted(set(body.capabilities)),
-                central_url=_settings_central_url(
-                    request,
+            with runtime.bridge_enrollment.member_operation(
+                session, request_id=body.request_id, member_id=body.member_id
+            ):
+                prepared = runtime.bridge_enrollment.prepare(
+                    request_id=body.request_id,
+                    member_id=body.member_id,
+                    device_class=body.device_class,
+                    capabilities=sorted(set(body.capabilities)),
+                    central_url=_settings_central_url(
+                        request,
+                        allow_testserver=not runtime.settings.deployment_evidence_required,
+                    ),
                     allow_testserver=not runtime.settings.deployment_evidence_required,
-                ),
-                allow_testserver=not runtime.settings.deployment_evidence_required,
-            )
+                )
             _refresh_bridge_ingress(request)
         except BridgeEnrollmentError as exc:
             if current.get("state") == "package_preparing":
@@ -6748,23 +6778,38 @@ async def control_settings_bridge(
 
         if body.action == "pause":
             try:
-                runtime.bridge_enrollment.pause(
-                    request_id=wizard_request_id, member_id=session.auth_member_id
-                )
+                with runtime.bridge_enrollment.member_operation(
+                    session,
+                    request_id=wizard_request_id,
+                    member_id=session.auth_member_id,
+                ):
+                    runtime.bridge_enrollment.pause(
+                        request_id=wizard_request_id, member_id=session.auth_member_id
+                    )
             except BridgeEnrollmentError as exc:
                 raise _bridge_http_error(exc) from exc
         elif body.action == "resume":
             try:
-                runtime.bridge_enrollment.resume(
-                    request_id=wizard_request_id, member_id=session.auth_member_id
-                )
+                with runtime.bridge_enrollment.member_operation(
+                    session,
+                    request_id=wizard_request_id,
+                    member_id=session.auth_member_id,
+                ):
+                    runtime.bridge_enrollment.resume(
+                        request_id=wizard_request_id, member_id=session.auth_member_id
+                    )
             except BridgeEnrollmentError as exc:
                 raise _bridge_http_error(exc) from exc
         elif body.action == "revoke":
             try:
-                runtime.bridge_enrollment.revoke(
-                    request_id=wizard_request_id, member_id=session.auth_member_id
-                )
+                with runtime.bridge_enrollment.member_operation(
+                    session,
+                    request_id=wizard_request_id,
+                    member_id=session.auth_member_id,
+                ):
+                    runtime.bridge_enrollment.revoke(
+                        request_id=wizard_request_id, member_id=session.auth_member_id
+                    )
             except BridgeEnrollmentError as exc:
                 if exc.code != "enrollment_missing_or_ambiguous":
                     raise _bridge_http_error(exc) from exc
@@ -6804,17 +6849,22 @@ async def control_settings_bridge(
         current = mutation.current
         if retry_preparation:
             try:
-                prepared = runtime.bridge_enrollment.prepare(
+                with runtime.bridge_enrollment.member_operation(
+                    session,
                     request_id=wizard_request_id,
                     member_id=session.auth_member_id,
-                    device_class=str(record["device_class"]),
-                    capabilities=list(record["capabilities"]),
-                    central_url=_settings_central_url(
-                        request,
+                ):
+                    prepared = runtime.bridge_enrollment.prepare(
+                        request_id=wizard_request_id,
+                        member_id=session.auth_member_id,
+                        device_class=str(record["device_class"]),
+                        capabilities=list(record["capabilities"]),
+                        central_url=_settings_central_url(
+                            request,
+                            allow_testserver=not runtime.settings.deployment_evidence_required,
+                        ),
                         allow_testserver=not runtime.settings.deployment_evidence_required,
-                    ),
-                    allow_testserver=not runtime.settings.deployment_evidence_required,
-                )
+                    )
             except BridgeEnrollmentError as exc:
                 await _record_central_bridge_progress(
                     runtime,

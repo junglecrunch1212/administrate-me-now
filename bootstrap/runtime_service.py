@@ -9,6 +9,7 @@ from pathlib import Path
 import uvicorn
 
 from adminme.runtime.application import RuntimeSettings, create_application
+from bootstrap.bridge_readiness_transition import BridgeReadinessTransition
 from bootstrap.candidate_readiness import (
     CandidateReadinessError,
     capture_deployment_snapshot,
@@ -30,6 +31,12 @@ def main() -> None:
     references = json.loads(
         (paths.instance_dir / "config" / "secret-references.json").read_text("utf-8")
     )["references"]
+    store = secret_store(paths)
+    event_key = store.get(references["event_log"])
+    bridge_transition = BridgeReadinessTransition(paths, event_key)
+    # Resolve an interrupted exact enrollment transaction before any bridge
+    # authorization or current readiness snapshot enters runtime memory.
+    bridge_transition.recover()
     mapping = json.loads(
         (paths.instance_dir / "config" / "member-mapping.json").read_text("utf-8")
     )
@@ -66,7 +73,6 @@ def main() -> None:
             )
     actor_identities = adapter_config.get("openclaw_actor_identities", {})
     chat_members = frozenset(adapter_config.get("member_chat_enabled_members", []))
-    store = secret_store(paths)
     shared = store.get(references["openclaw_shared"]).decode("ascii")
     host_topology = sample_host_topology(
         paths,
@@ -89,13 +95,14 @@ def main() -> None:
     deployment_evidence = load_deployment_evidence(paths)
     settings = RuntimeSettings.credential_free(
         paths.instance_dir,
-        encryption_key=store.get(references["event_log"]),
+        encryption_key=event_key,
         repository_root=Path(
             os.environ.get("ADMINME_REPOSITORY_ROOT", str(repository_root()))
         ),
         member_identities=member_identities,
         household_mapping=mapping,
         bridge_enrollments=bridge_enrollments,
+        bridge_index_committer=bridge_transition,
         member_roles=roles,
         deterministic_openclaw_fixture=False,
         openclaw_enabled=bool(actor_identities or chat_members),

@@ -834,6 +834,57 @@ class EventLog:
         row = await self._run_locked(self._get_one, event_id)
         return _row_to_event(row) if row else None
 
+    async def get_bridge_attribution_coordinates(
+        self, event_id: str
+    ) -> dict[str, Any] | None:
+        """Read exact bridge ownership coordinates without provider content.
+
+        The fixed scalar allowlist excludes note bodies, event descriptions,
+        titles, attachments, and other source content from historical auditing.
+        """
+        return await self._run_locked(
+            self._get_bridge_attribution_coordinates, event_id
+        )
+
+    def _get_bridge_attribution_coordinates(
+        self, event_id: str
+    ) -> dict[str, Any] | None:
+        keys = (
+            "member_id",
+            "source_kind",
+            "provider",
+            "provider_account_id",
+            "calendar_identifier",
+            "calendar_external_id",
+            "calendar_id",
+            "target_list_identifier",
+            "destination_list_external_id",
+            "list_external_id",
+            "list_identifier",
+        )
+        columns = ", ".join(
+            f"json_extract(payload, '$.{key}') AS coordinate_{key}" for key in keys
+        )
+        row = self._conn.execute(
+            "SELECT event_id, tenant_id, type, schema_version, owner_scope, "
+            "visibility_scope, source_adapter, source_account_id, actor_identity, "
+            + columns
+            + " FROM events WHERE event_id = ? AND source_adapter IN "
+            "('calendaring-apple-calendar', 'reminders-apple-eventkit', 'knowledge-apple-notes')",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value["payload"] = {
+            key: value.pop(f"coordinate_{key}")
+            for key in keys
+            if value[f"coordinate_{key}"] is not None
+        }
+        for key in keys:
+            value.pop(f"coordinate_{key}", None)
+        return value
+
     def _get_one(self, event_id: str) -> sqlcipher3.Row | None:
         cur = self._conn.cursor()
         cur.execute(

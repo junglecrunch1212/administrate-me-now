@@ -31,6 +31,27 @@ Independent jobs may run in parallel; caches remain keyed to relevant locked
 inputs, and no test-result cache is accepted as validation. Report targeted and
 complete results separately, including concrete failures and gaps.
 
+Readiness-before-release amendment (2026-10-21), **MODERNIZE** under the
+owner's standing instruction: finish a bounded production-workflow impact map
+in the existing PR/task before draft-to-ready. Map each affected contract to a
+concrete test/evidence and any open gap; consider identity/permission,
+acquisition, event/projection state, historical ownership, readiness,
+restart/revocation and upgrade/restore/rollback where affected. Justify excluded
+subsystems. Use installed-release composition with retained configuration and
+events, disabled/revoked sources, and relevant recovery paths, not merely a
+successful setup response. A late defect requires checking its finite equivalent
+paths and batching corrections before focused validation and another full run.
+
+Supported read-only diagnostics must establish discoverable deployment/device
+prerequisites before readiness promises or maintenance. Candidate experiments
+remain isolated. Resolve known blockers, actionable review and focused failures
+before declaring a settled candidate or launching full suites. Distinguish
+focused pass, full pass, deployment and verified usability; list outstanding
+dependencies separately from test duration. Record late defects and new coverage
+in the same PR. No extra approval ceremony, separate tracking task, invented
+behavioral test or new release cycle is required solely for policy prose, and
+valid running release checks are not interrupted to synchronize instructions.
+
 Retired-provider history amendment (2026-10-20), **MODERNIZE** under CO-031:
 `tests/acceptance/test_retired_provider_history.py` must prove historical
 ownership through the production composition and HTR-10 after personal
@@ -82,6 +103,19 @@ central plus edge read-only enforcement while independent CoS replies are live.
 Suppressed commands retain terminal audit with zero provider calls. Targeted
 Linux/macOS development checks include these dependencies; both complete
 protected release checks and guarded immutable deployment remain mandatory.
+
+The same process proof must cover historical source attribution and deployment
+readiness after enrollment. Historical attribution follows immutable enrollment,
+device, capability and selected-container authority at each source event's
+boundary; a later pause or revocation does not erase earlier valid provenance.
+Missing, future, contradictory or cross-member authority remains unattributed.
+Encrypted reopen and the operator audit/export path must agree without trusting
+the current mutable bridge index as historical evidence. Supported enrollment
+changes preserve the exact deployment binding through a guarded transition,
+including interruption recovery, while retaining every original physical
+attestation date. Unrelated configuration drift, another member's changes and
+tampered transition evidence must fail closed. Restart and the next guarded
+maintenance operation must remain available after the authorized enrollment.
 
 CO-034 amendment (2026-10-19): prove forward activation at the 64-entry
 selector limit, exact rollback, fresh forward activation, unchanged retained

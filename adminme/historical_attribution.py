@@ -8,6 +8,7 @@ import json
 import re
 from typing import Any
 
+from adminme.bridge_history import BridgeHistory, SOURCE_ADAPTERS
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
@@ -345,6 +346,7 @@ async def audit_historical_attribution(
         bindings_by_account.setdefault(
             binding.provider_account_id.casefold(), []
         ).append(binding)
+    bridge_history = await BridgeHistory.load(event_log, watermark or "")
     groups: dict[tuple[str, str, str, str, str], int] = {}
     total = 0
     attributed = 0
@@ -412,6 +414,19 @@ async def audit_historical_attribution(
                 event_log, submission, watermark or ""
             ):
                 binding_state = "internal_openclaw_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif adapter in SOURCE_ADAPTERS:
+            # Bridge accounts and Notes source kinds are not central provider
+            # bindings: Calendar/Reminders are rejected from central inventory,
+            # and Notes has no central adapter pack. The old generic match could
+            # only borrow an unrelated account. Missing or contradictory evidence must
+            # never borrow a matching owner/account from current configuration.
+            source = await event_log.get_bridge_attribution_coordinates(
+                str(event["event_id"])
+            )
+            if source is not None and await bridge_history.matches(source):
+                binding_state = "member_bridge_source_reconciled"
                 workspace = "personal"
                 attributed += 1
         elif len(matching_coordinates) == 1:
