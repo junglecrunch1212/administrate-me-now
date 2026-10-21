@@ -6,12 +6,22 @@ ADR-0001-OPENCLAW-ADMINISTRATEME-BOUNDARY.md and UX-BEHAVIOR-CONTRACT.md.
 scope, observation suppression, exact content, recipient policy, immutable
 terminal audits, and no automatic provider retries.
 
-The member first approves the exact plain-text reply in Settings → CoS replies.
+Before a reply, Settings checks the member-private delegation described in
+COS-RESPONSE-EXECUTION-CONTRACT.md. How my CoS works exposes explicit owner-only
+permission setup, scope and expiry review, and revocation; channel enrollment
+alone never grants these permissions. Missing permission is shown before a new
+text approval, and an uncertain grant result is reconciled through its exact
+authenticated request identity without automatic retry.
+
+The member then approves the exact plain-text reply in Settings → CoS replies.
 “Continue to sending approval” opens their existing private conversation and
 asks CoS to submit that exact approved reply to the existing response tool.
 This button does not approve OpenClaw execution. The conversation separately
 shows the approved channel, recipient, subject and text, with “Allow this reply
 once” and “Don’t send”. Neither a chat message nor a timeout is a decision.
+These are approval actions on the member's device. The actual sender remains
+the enrolled CoS account; iMessage transport runs on the central Mac, regardless
+of the operating system used to view the member dashboard.
 
 The response plugin records a short-lived binding at `before_tool_call`, using
 the host's exact tool call, agent and session plus the domain approval ID and

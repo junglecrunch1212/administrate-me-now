@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from adminme.events.envelope import EventEnvelope
@@ -28,6 +29,7 @@ from adminme.delegated_execution import (
 )
 from adminme.lib.session import Session
 from adminme.products.auth import require_principal, session_from_request
+from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import (
     effective_operating_agreements,
     get_operating_agreement,
@@ -86,6 +88,16 @@ class DelegationRequest(BaseModel):
         ]
     ] = Field(min_length=1, max_length=8)
     expires_at: AwareDatetime | None = None
+    require_no_active_private_grant: bool = False
+
+    @model_validator(mode="after")
+    def _private_setup_guard(self) -> "DelegationRequest":
+        if (
+            self.require_no_active_private_grant
+            and self.context_scope != "member_private"
+        ):
+            raise ValueError("the private setup guard requires member-private scope")
+        return self
 
 
 class DelegationDecision(BaseModel):
@@ -321,11 +333,35 @@ def _envelope(
 
 
 @router.get("/delegations")
-async def delegations(request: Request, session: SessionDep) -> dict[str, Any]:
+async def delegations(
+    request: Request,
+    session: SessionDep,
+    request_id: str | None = Query(default=None, min_length=8, max_length=120),
+) -> dict[str, Any]:
     _require_self_principal(session)
     runtime = _runtime(request)
     if runtime.projections is None:
         raise HTTPException(503, "CoS delegation projection is unavailable")
+    confirmation = None
+    if request_id is not None:
+        # A lost creation response must be reconciled to the exact immutable
+        # request, never inferred from another grant with similar permissions.
+        prior = await runtime.event_log.get_by_idempotency(
+            session.tenant_id,
+            f"member-cos:service.delegation.requested:{session.auth_member_id}:"
+            f"{request_id}",
+        )
+        recorded = (
+            prior is not None
+            and prior["type"] == "service.delegation.requested"
+            and prior["actor_identity"] == session.auth_member_id
+            and prior["payload"]["requested_by_member_id"] == session.auth_member_id
+        )
+        confirmation = {
+            "request_id": request_id,
+            "state": "recorded" if recorded else "not_recorded",
+            "grant_id": prior["payload"]["grant_id"] if recorded and prior else None,
+        }
     return {
         "contract": "household-cos-delegation-v1",
         "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
@@ -337,6 +373,7 @@ async def delegations(request: Request, session: SessionDep) -> dict[str, Any]:
         ),
         "provider_authority": False,
         "external_write_requests": 0,
+        "request_confirmation": confirmation,
     }
 
 
@@ -348,6 +385,54 @@ async def request_delegation(
     runtime = _runtime(request)
     if runtime.events is None or runtime.projections is None:
         raise HTTPException(503, "CoS delegation authority is unavailable")
+    if body.context_scope == "member_private":
+        # All private creates share this lock, including older clients. The
+        # conditional setup command cannot race another tab between its state
+        # check and the append/projection settlement.
+        key = f"cos-private-delegation:{session.tenant_id}:{session.auth_member_id}"
+        async with runtime.settings_command_locks.setdefault(key, asyncio.Lock()):
+            return await _request_delegation_locked(body, request, session)
+    return await _request_delegation_locked(body, request, session)
+
+
+async def _request_delegation_locked(
+    body: DelegationRequest, request: Request, session: Session
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    if body.require_no_active_private_grant:
+        if (
+            body.context_member_id not in {None, session.auth_member_id}
+            or body.owner_party_id
+        ):
+            raise HTTPException(403, "member-private authority is self-owned")
+        # A preceding create can have committed even when its projection wait
+        # failed. Settle to the durable watermark under the same member lock
+        # before deciding that no active grant exists.
+        watermark = await runtime.event_log.latest_event_id(
+            types=PartiesProjection.subscribes_to
+        )
+        if watermark is not None:
+            await _wait_for_delegation_projection(runtime, watermark)
+        active = [
+            item
+            for item in list_service_delegations(
+                runtime.projections.connection("parties"),
+                session,
+                service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            )
+            if item["active"]
+            and item["context_scope"] == "member_private"
+            and item["context_member_id"] == session.auth_member_id
+            and item["owner_party_id"] is None
+        ]
+        if active:
+            raise HTTPException(
+                409,
+                {
+                    "code": "private_delegation_already_active",
+                    "reason": "Your private CoS permissions changed. Review the active grant before creating another.",
+                },
+            )
     context_member_id = body.context_member_id
     owner_party_id = body.owner_party_id
     principals = sorted(
@@ -451,7 +536,7 @@ async def request_delegation(
         event_ids = await runtime.events.write_batch(envelopes)
     except IdempotencyConflict as exc:
         raise HTTPException(409, str(exc)) from exc
-    await runtime.wait_for_projection("parties", max(event_ids))
+    await _wait_for_delegation_projection(runtime, max(event_ids))
     projected = next(
         item
         for item in list_service_delegations(
@@ -469,6 +554,19 @@ async def request_delegation(
         "provider_authority": False,
         "external_write_requests": 0,
     }
+
+
+async def _wait_for_delegation_projection(runtime: Any, event_id: str) -> None:
+    try:
+        await runtime.wait_for_projection("parties", event_id)
+    except (TimeoutError, RuntimeError) as exc:
+        raise HTTPException(
+            503,
+            {
+                "code": "private_delegation_state_unsettled",
+                "reason": "CoS permission status is still settling. Check the saved request status before making another change.",
+            },
+        ) from exc
 
 
 def _grant_for_decision(runtime: Any, session: Session, grant_id: str) -> Any:

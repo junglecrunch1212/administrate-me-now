@@ -14,6 +14,41 @@ impersonation or another member's private context is authorized.
 
 ## Confirmation and execution
 
+**MODERNIZE — visible member permission setup.** Account enrollment and live
+channel activation do not establish a member-private service delegation.
+Settings → How my CoS works lets an authenticated principal explicitly choose
+their own private-context reading and external-action preparation permissions,
+review their scope and expiry, grant them, and revoke their own grant. It never
+grants another adult's consent or replaces an existing active grant silently.
+The Settings creation command requires no active private grant. The server
+serializes private creation per member through append and projection settlement,
+so a stale second tab receives a definitive conflict instead of overlapping
+authority. Under that lock, the parties projection must reach the current durable
+checkpoint of its subscribed event types before checking for an active grant.
+Unrelated events do not advance that subscriber's checkpoint. A failed settlement returns
+an uncertain status without allowing another creation against stale state.
+Only an explicit pre-append conflict clears the UI's pending change;
+an uncertain transport result still requires exact readback.
+Private-context reading concerns AdministrateMe's authorized private context;
+it does not enroll, reconnect, or resume personal inbox acquisition. Preparation
+permission is not provider execution authority and is not limited to one reply:
+it remains effective until its displayed expiry or revocation.
+
+The reply options report current delegation readiness before text approval.
+Email requires `prepare_external_actions`; the full native iMessage path also
+requires `read_context` for its private result lookup. Forwarded iMessage intake
+independently requires `read_context`. Missing, expired, revoked, ambiguous, or
+insufficient grants prevent a new reply approval with an actionable explanation.
+Execution and final result lookup retain their independent existing permission
+checks. An idempotent readback of an earlier exact text approval never refreshes
+its expiry, restores revoked permission, or authorizes execution.
+
+After an uncertain grant-creation response, the member may reconcile the exact
+request through the read-only delegation listing's `request_id` query. This
+looks up that authenticated member's immutable request, not a similar grant's
+permissions. An absent record is not proof that an in-flight request failed;
+the UI keeps the operation unresolved and never automatically repeats it.
+
 The authenticated member confirms exact account, destination, subject and text
 through `/api/member/v1/cos/responses/approvals`. A private encrypted
 `cos.response.approved` fact records a ten-minute expiry, content fingerprint
@@ -27,6 +62,10 @@ OpenClaw receipt and the normal allowlist, governance and rate-limit sequence.
 A durable `cos.response.attempted` precedes contact. There is at most one
 contact attempt per approval event, including after restart, cancellation,
 timeout, provider error or missing terminal evidence.
+
+The member device supplies the authenticated review and approval surface.
+It is not the sending identity or iMessage transport: the enrolled CoS account
+and guarded OpenClaw transport on the central Mac perform the actual send.
 
 At the final boundary the application rechecks exact service ownership,
 content, member-scoped recipient policy, expiry, observation and separate

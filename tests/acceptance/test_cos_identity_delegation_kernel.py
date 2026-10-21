@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from adminme.lib.session import Session
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
+from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import (
     ServiceDelegationResolutionError,
     resolve_service_delegation,
@@ -130,6 +132,225 @@ def _grant_private(client: TestClient, member: str, request_id: str) -> str:
     assert response.json()["provider_authority"] is False
     assert response.json()["external_write_requests"] == 0
     return str(response.json()["grant_id"])
+
+
+def test_exact_delegation_request_readback_is_private_and_read_only(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        request_id = "member-permission-readback"
+        path = f"/api/member/v1/cos/delegations?request_id={request_id}"
+        missing = client.get(path, headers=A_HEADERS)
+        assert missing.status_code == 200, missing.text
+        assert missing.json()["request_confirmation"] == {
+            "request_id": request_id,
+            "state": "not_recorded",
+            "grant_id": None,
+        }
+        grant = _grant_private(client, A, request_id)
+        runtime = client.app.state.runtime
+        before = client.portal.call(runtime.event_log.count)
+        found = client.get(path, headers=A_HEADERS)
+        assert found.status_code == 200, found.text
+        assert found.json()["request_confirmation"] == {
+            "request_id": request_id,
+            "state": "recorded",
+            "grant_id": grant,
+        }
+        assert any(row["grant_id"] == grant for row in found.json()["items"])
+        other = client.get(path, headers=B_HEADERS)
+        assert other.status_code == 200, other.text
+        assert other.json()["request_confirmation"]["state"] == "not_recorded"
+        assert other.json()["request_confirmation"]["grant_id"] is None
+        assert other.json()["items"] == []
+        assert client.portal.call(runtime.event_log.count) == before
+        assert (
+            client.get(
+                "/api/member/v1/cos/delegations?request_id=short", headers=A_HEADERS
+            ).status_code
+            == 422
+        )
+
+        revoked = client.request(
+            "DELETE",
+            f"/api/member/v1/cos/delegations/{grant}",
+            headers=A_HEADERS,
+            json={"request_id": "readback-revoke", "reason": "fixture"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        before = client.portal.call(runtime.event_log.count)
+        retained = client.get(path, headers=A_HEADERS)
+        assert retained.status_code == 200, retained.text
+        assert retained.json()["request_confirmation"]["grant_id"] == grant
+        row = next(
+            item for item in retained.json()["items"] if item["grant_id"] == grant
+        )
+        assert row["active"] is False
+        assert row["revoked_at"]
+        assert client.portal.call(runtime.event_log.count) == before
+
+
+def test_private_permission_setup_serializes_stale_tabs_without_granting_twice(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        path = "/api/member/v1/cos/delegations"
+        assert client.get(path, headers=A_HEADERS).json()["items"] == []
+        assert client.get(path, headers=A_HEADERS).json()["items"] == []
+
+        def submit(suffix: str) -> Any:
+            return client.post(
+                path,
+                headers=A_HEADERS,
+                json={
+                    "request_id": f"concurrent-private-setup-{suffix}",
+                    "context_scope": "member_private",
+                    "permissions": ["read_context", "prepare_external_actions"],
+                    "require_no_active_private_grant": True,
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(submit, suffix) for suffix in ("a", "b")]
+            responses = [future.result(timeout=20) for future in futures]
+        assert sorted(response.status_code for response in responses) == [201, 409]
+        rejected = next(
+            response for response in responses if response.status_code == 409
+        )
+        assert rejected.json()["detail"]["code"] == "private_delegation_already_active"
+        grants = client.get(path, headers=A_HEADERS).json()["items"]
+        assert len(grants) == 1 and grants[0]["active"]
+        # The guard applies only to this member's private grant, not another
+        # adult's independent authority or a household approval quorum.
+        other = client.post(
+            path,
+            headers=B_HEADERS,
+            json={
+                "request_id": "independent-private-setup",
+                "context_scope": "member_private",
+                "permissions": ["read_context"],
+                "require_no_active_private_grant": True,
+            },
+        )
+        assert other.status_code == 201, other.text
+        wrong_scope = client.post(
+            path,
+            headers=A_HEADERS,
+            json={
+                "request_id": "invalid-shared-setup-guard",
+                "context_scope": "household_shared",
+                "permissions": ["read_context"],
+                "require_no_active_private_grant": True,
+            },
+        )
+        assert wrong_scope.status_code == 422
+        runtime = client.app.state.runtime
+
+        async def sent_count() -> int:
+            return await runtime.event_log.count_since(None, types=["external.sent"])
+
+        assert client.portal.call(sent_count) == 0
+
+
+def test_private_permission_setup_waits_for_durable_state_after_uncertain_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        original_wait = runtime.wait_for_projection
+        baseline = client.portal.call(runtime.event_log.latest_event_id)
+        checkpoints: list[str] = []
+
+        async def interrupted_settlement(
+            projection_name: str, event_id: str, *, timeout_s: float = 8.0
+        ) -> None:
+            if projection_name == "parties":
+                checkpoints.append(event_id)
+                if baseline is None or event_id > baseline:
+                    raise TimeoutError("fixture: grant committed before settlement")
+            await original_wait(projection_name, event_id, timeout_s=timeout_s)
+
+        monkeypatch.setattr(runtime, "wait_for_projection", interrupted_settlement)
+        path = "/api/member/v1/cos/delegations"
+
+        def submit(request_id: str) -> Any:
+            return client.post(
+                path,
+                headers=A_HEADERS,
+                json={
+                    "request_id": request_id,
+                    "context_scope": "member_private",
+                    "permissions": ["read_context", "prepare_external_actions"],
+                    "require_no_active_private_grant": True,
+                },
+            )
+
+        first_id = "private-setup-uncertain-first"
+        first = submit(first_id)
+        assert first.status_code == 503, first.text
+        assert first.json()["detail"]["code"] == "private_delegation_state_unsettled"
+        exact = client.get(f"{path}?request_id={first_id}", headers=A_HEADERS)
+        assert exact.json()["request_confirmation"]["state"] == "recorded"
+        grant_id = exact.json()["request_confirmation"]["grant_id"]
+        committed_checkpoint = client.portal.call(runtime.event_log.latest_event_id)
+        before = client.portal.call(runtime.event_log.count)
+        wait_count = len(checkpoints)
+
+        second_id = "private-setup-uncertain-second"
+        second = submit(second_id)
+        assert second.status_code == 503, second.text
+        assert second.json()["detail"]["code"] == "private_delegation_state_unsettled"
+        assert checkpoints[wait_count:] == [committed_checkpoint]
+        assert client.portal.call(runtime.event_log.count) == before
+        absent = client.get(f"{path}?request_id={second_id}", headers=A_HEADERS)
+        assert absent.json()["request_confirmation"]["state"] == "not_recorded"
+
+        monkeypatch.setattr(runtime, "wait_for_projection", original_wait)
+        settled = submit("private-setup-after-settlement")
+        assert settled.status_code == 409, settled.text
+        assert settled.json()["detail"]["code"] == "private_delegation_already_active"
+        grants = client.get(path, headers=A_HEADERS).json()["items"]
+        assert len(grants) == 1 and grants[0]["active"]
+        assert grants[0]["grant_id"] == grant_id
+        assert client.portal.call(runtime.event_log.count) == before
+        assert runtime.fixture_adapter.delivered == []
+
+
+def test_private_permission_setup_ignores_unrelated_log_tail(tmp_path: Path) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _grant_private(client, A, "permission-before-unrelated-tail")
+        _service_work(client, A, "unrelated-service-work-tail", "Prepare fixture brief")
+        runtime = client.app.state.runtime
+
+        async def parties_tail() -> str | None:
+            return await runtime.event_log.latest_event_id(
+                types=PartiesProjection.subscribes_to
+            )
+
+        relevant = client.portal.call(parties_tail)
+        latest = client.portal.call(runtime.event_log.latest_event_id)
+        assert relevant is not None and latest is not None and latest > relevant
+        for member, expected_status in ((A, 409), (B, 201)):
+            response = client.post(
+                "/api/member/v1/cos/delegations",
+                headers=A_HEADERS if member == A else B_HEADERS,
+                json={
+                    "request_id": f"permission-after-unrelated-tail-{member}",
+                    "context_scope": "member_private",
+                    "permissions": ["read_context"],
+                    "require_no_active_private_grant": True,
+                },
+            )
+            assert response.status_code == expected_status, response.text
+        assert runtime.fixture_adapter.delivered == []
 
 
 def _service_work(

@@ -1026,13 +1026,20 @@ class EventLog:
             )
         )
 
-    async def latest_event_id(self) -> str | None:
-        return await self._run_locked(self._latest_event_id)
+    async def latest_event_id(self, *, types: list[str] | None = None) -> str | None:
+        return await self._run_locked(
+            self._latest_event_id, tuple(types) if types else None
+        )
 
-    def _latest_event_id(self) -> str | None:
+    def _latest_event_id(self, types: tuple[str, ...] | None = None) -> str | None:
         cur = self._conn.cursor()
+        where = ""
+        if types:
+            placeholders = ",".join("?" for _ in types)
+            where = f" WHERE type IN ({placeholders})"
         row = cur.execute(
-            "SELECT event_id FROM events ORDER BY event_id DESC LIMIT 1"
+            "SELECT event_id FROM events" + where + " ORDER BY event_id DESC LIMIT 1",
+            types or (),
         ).fetchone()
         return row[0] if row else None
 

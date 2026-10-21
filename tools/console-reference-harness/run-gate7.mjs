@@ -9,6 +9,7 @@ import { chromium } from "playwright-core";
 import { auditTriageSourceControls } from "./triage-source-controls.mjs";
 import { auditCosReplyControls } from "./cos-reply-controls.mjs";
 import { auditCosSendingApproval } from "./cos-send-approval.mjs";
+import { auditCosPrivatePermissions } from "./cos-private-permissions.mjs";
 import { auditSettingsChannelStatus } from "./settings-channel-status.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -1969,6 +1970,11 @@ async function run() {
 
     cosReplyServer = await startServer(basePort + 4, true, false, false, true, true);
     const cosReplyBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    const cosOtherBrowser = await newContext(browser, identities.adult, { width: 1440, height: 1000 });
+    const cosStaleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+    await auditCosPrivatePermissions({ page: cosReplyBrowser.page, otherPage: cosOtherBrowser.page, stalePage: cosStaleBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility, expectHandledFailure });
+    await closePageContext(cosStaleBrowser);
+    await closePageContext(cosOtherBrowser);
     await auditCosSendingApproval({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility, markCompletedStream });
     await auditSettingsChannelStatus({ page: cosReplyBrowser.page, baseUrl: cosReplyServer.baseUrl, record, screenshot, auditAccessibility });
     await closePageContext(cosReplyBrowser);
@@ -1976,13 +1982,13 @@ async function run() {
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("no unexpected browser console warnings", consoleWarnings.length === 0, consoleWarnings);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 9 && observedExpected422Console === 1 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected422Console, observedExpected503Console }));
+    record("expected controlled Triage and permission conflicts and ambiguous response handled", observedExpected409Console === 10 && observedExpected422Console === 1 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected422Console, observedExpected503Console }));
     record(
       "no unexpected browser HTTP error responses",
       unexpectedResponses.length === 0
         && [...expectedHttpResponses.values()].every((count) => count === 0)
         && observedExpectedHttpResponses.get(404) === 2
-        && observedExpectedHttpResponses.get(409) === 9
+        && observedExpectedHttpResponses.get(409) === 10
         && observedExpectedHttpResponses.get(422) === 1
         && observedExpectedHttpResponses.get(503) === 8,
       JSON.stringify({ unexpectedResponses, remaining: Object.fromEntries(expectedHttpResponses), observed: Object.fromEntries(observedExpectedHttpResponses) }),

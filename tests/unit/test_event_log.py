@@ -533,6 +533,16 @@ async def test_latest_event_id(log: EventLog) -> None:
     assert await log.latest_event_id() == second
 
 
+async def test_latest_event_id_respects_subscriber_types(log: EventLog) -> None:
+    assert await log.latest_event_id(types=["foo"]) is None
+    first = await log.append(_event(1, type="foo"))
+    second = await log.append(_event(2, type="bar"))
+    await log.append(_event(3))
+    assert await log.latest_event_id(types=["foo"]) == first
+    assert await log.latest_event_id(types=["foo", "bar"]) == second
+    assert await log.latest_event_id(types=["missing"]) is None
+
+
 async def test_metadata_read_is_watermarked_and_payload_selective(
     log: EventLog,
 ) -> None:
