@@ -69,6 +69,20 @@ Browser acceptance checks actual rendered visibility with observation both
 on and off, distinguishes CoS accounts from personal connections, and retains
 actionable binding failures for enabled personal connections.
 
+Explicit member bridge amendment (2026-10-21), **MODERNIZE** under CO-027 and
+the CoS activation contract: `test_cos_member_bridge_acquisition.py` must prove
+the real authenticated enrollment, sealed handoff, signed device progress,
+per-source permission/attestation and independent observation settlement with
+the retained dataset and valid CoS overlay present. Only the member-selected
+Calendar, Reminders and Notes exception is admitted. Retained-only, legacy,
+unselected, malformed, cross-member, shared-scope and mixed-batch inputs remain
+closed. Manual source policies must produce no mined obligation candidates.
+Require accurate Settings source readiness, restart/replay isolation, and
+central plus edge read-only enforcement while independent CoS replies are live.
+Suppressed commands retain terminal audit with zero provider calls. Targeted
+Linux/macOS development checks include these dependencies; both complete
+protected release checks and guarded immutable deployment remain mandatory.
+
 CO-034 amendment (2026-10-19): prove forward activation at the 64-entry
 selector limit, exact rollback, fresh forward activation, unchanged retained
 release files and audit history, and real-runtime interrupted recovery of the

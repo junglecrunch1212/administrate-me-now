@@ -9,6 +9,14 @@ CO-004, CO-019, CO-023, CO-026, AC-57
 
 ## Objective and boundary
 
+The retained-data CoS deployment admits only the explicit Calendar, Reminders
+and Notes exception in
+[`COS-CHANNEL-ACTIVATION-CONTRACT.md`](COS-CHANNEL-ACTIVATION-CONTRACT.md#explicit-member-bridge-sources).
+This MODERNIZE uses the existing member-owned request as read authority; it
+does not require or manufacture another consent event. Settings must refuse
+unavailable selections before creating a handoff, and the read-only bridge
+ceiling remains effective when independent CoS channel replies are live.
+
 G09 modernizes the existing bridge request, encrypted transfer, provisional
 `bridge.enrolled@v1` proof, Tailscale binding, finalization, connector-pack
 authorization, and revocation ceremony into a member-owned Settings wizard. It
@@ -136,3 +144,9 @@ native per-capability workflow, protected secret transport, and absence of
 updater, remote-shell, arbitrary-code, TCC bypass, and write authority. Existing
 bootstrap, bridge-ingest, Calendar, Reminders, Settings, replay, browser,
 clean-macOS rehearsal, and aggregate release gates remain required.
+
+`tests/acceptance/test_cos_member_bridge_acquisition.py` covers the explicit
+read-only source exception through that same production composition with the
+retained dataset and CoS overlay present. Its policy unit tests exercise exact
+request/device/capability boundaries; edge command tests ensure the sealed
+read-only ceiling cannot be lost when installing the member daemon.

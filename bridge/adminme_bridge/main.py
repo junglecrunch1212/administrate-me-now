@@ -409,6 +409,13 @@ class BridgeSupervisor:
     ) -> Any:
         """Validate the central command again at the provider-process edge."""
 
+        if (
+            self._config.observation_only is True
+            or self._config.provider_writes == "deny"
+        ):
+            raise ValueError(
+                "member bridge enrollment is read-only; provider writes denied"
+            )
         violations: list[str] = []
         if int(command.get("schema_version") or 0) != 2:
             violations.append("schema_version")

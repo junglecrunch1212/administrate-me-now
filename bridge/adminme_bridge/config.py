@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 
 LogLevel = Literal["debug", "info", "warning", "error"]
@@ -38,9 +38,25 @@ class BridgeConfig(BaseModel):
     release_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     capability_set_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     requested_capabilities: list[str] = Field(default_factory=list)
+    acquisition_policy: Literal["cos-member-source-observation-v1"] | None = None
+    observation_only: StrictBool | None = None
+    provider_writes: Literal["deny"] | None = None
     command_poll_interval_s: float = Field(default=5.0, ge=1.0, le=300.0)
 
     def model_post_init(self, __context: object) -> None:
+        explicit_ceiling = (
+            self.observation_only is not None or self.provider_writes is not None
+        )
+        if (self.acquisition_policy is not None or explicit_ceiling) and (
+            self.observation_only is not True or self.provider_writes != "deny"
+        ):
+            raise ValueError(
+                "self-service bridge requires its sealed read-only ceiling"
+            )
+        if self.acquisition_policy is not None and self.wizard_contract != (
+            "administrateme-member-bridge-wizard-v1"
+        ):
+            raise ValueError("member source acquisition requires its sealed wizard")
         if len(set(self.configured_packs)) != len(self.configured_packs):
             raise ValueError("configured_packs must be unique")
         if len(set(self.enabled_packs)) != len(self.enabled_packs):

@@ -749,12 +749,14 @@ class BridgeEnrollmentCoordinator:
         bridge_enrollments: dict[str, dict[str, Any]],
         deployment_release_commit: str | None = None,
         require_deployment_release: bool = False,
+        adapter_config: dict[str, Any] | None = None,
         now: Callable[[], datetime] = now_utc,
     ) -> None:
         self.instance_dir = instance_dir
         self.repository_root = Path(os.path.abspath(repository_root))
         self.deployment_release_commit = deployment_release_commit
         self.require_deployment_release = require_deployment_release
+        self.adapter_config = adapter_config if adapter_config is not None else {}
         self.tenant_id = tenant_id
         self.member_identities = dict(member_identities)
         self.member_roles = dict(member_roles)
@@ -810,6 +812,21 @@ class BridgeEnrollmentCoordinator:
             raise BridgeEnrollmentError(
                 "invalid_capabilities", "Enrollment capabilities are invalid"
             )
+        from adminme.adapters.cos_channel_acquisition import (
+            MEMBER_BRIDGE_ACQUISITION_CONTRACT,
+            member_bridge_capability_ceiling,
+        )
+
+        acquisition_ceiling = member_bridge_capability_ceiling(self.adapter_config)
+        if acquisition_ceiling is not None and (
+            not acquisition_ceiling
+            or not set(selected) <= acquisition_ceiling
+            or self.member_roles.get(member_id) != "principal"
+        ):
+            raise BridgeEnrollmentError(
+                "acquisition_policy_blocked",
+                "The current acquisition policy does not admit these member sources",
+            )
         role = self.member_roles.get(member_id)
         if role not in {"principal", "child"}:
             raise BridgeEnrollmentError(
@@ -824,6 +841,9 @@ class BridgeEnrollmentCoordinator:
                 record.get("request_id") == request_id
                 and record.get("status") == "package-exported"
             ):
+                self.require_acquisition_binding(
+                    request_id=request_id, member_id=member_id
+                )
                 secret = self.vault.get(request_id)
                 return PreparedHandoff(
                     request_id=request_id,
@@ -882,6 +902,11 @@ class BridgeEnrollmentCoordinator:
                 "provider_writes": "deny",
                 "remote_shell": "deny",
                 "automatic_updates": "deny",
+                **(
+                    {"acquisition_policy": MEMBER_BRIDGE_ACQUISITION_CONTRACT}
+                    if acquisition_ceiling is not None
+                    else {}
+                ),
             },
             "central_url": central,
             "release_commit": release,
@@ -944,6 +969,11 @@ class BridgeEnrollmentCoordinator:
                 "exported_at": issued.isoformat(),
                 "expires_at": expires.isoformat(),
                 "observation_only": True,
+                **(
+                    {"acquisition_policy": MEMBER_BRIDGE_ACQUISITION_CONTRACT}
+                    if acquisition_ceiling is not None
+                    else {}
+                ),
             }
             self._save_index()
         except Exception:
@@ -963,7 +993,44 @@ class BridgeEnrollmentCoordinator:
             capability_set_sha256=capability_digest,
         )
 
+    def require_acquisition_binding(self, *, request_id: str, member_id: str) -> None:
+        """Refuse an old handoff before lifecycle, secret or artifact mutation."""
+
+        from adminme.adapters.cos_channel_acquisition import (
+            MEMBER_BRIDGE_ACQUISITION_CONTRACT,
+            member_bridge_capability_ceiling,
+        )
+
+        ceiling = member_bridge_capability_ceiling(self.adapter_config)
+        if ceiling is None:
+            return
+        record = self.record(request_id=request_id, member_id=member_id)
+        selected = record.get("requested_capabilities")
+        if (
+            not ceiling
+            or record.get("acquisition_policy") != MEMBER_BRIDGE_ACQUISITION_CONTRACT
+            or record.get("instance_id") != self.tenant_id
+            or record.get("owner_scope") != f"private:{member_id}"
+            or record.get("role") != "principal"
+            or record.get("observation_only") is not True
+            or not isinstance(selected, list)
+            or not selected
+            or any(not isinstance(item, str) for item in selected)
+            or len(set(selected)) != len(selected)
+            or not set(selected) <= ceiling
+            or record.get("capability_set_sha256") != capability_set_digest(selected)
+            or record.get("allowed_packs")
+            != sorted({str(CAPABILITIES[item]["pack"]) for item in selected})
+            or not isinstance(record.get("release_commit"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", record["release_commit"]) is None
+        ):
+            raise BridgeEnrollmentError(
+                "acquisition_policy_requires_new_enrollment",
+                "Start a new enrollment with the current member source read-only ceiling",
+            )
+
     def download(self, *, request_id: str, member_id: str) -> tuple[bytes, str]:
+        self.require_acquisition_binding(request_id=request_id, member_id=member_id)
         secret = self.vault.get(request_id)
         if secret.get("member_id") != member_id:
             raise BridgeEnrollmentError(

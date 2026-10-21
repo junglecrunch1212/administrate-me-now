@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Any, AsyncIterator, Literal, cast
+from typing import Annotated, Any, AsyncIterator, Literal, Sequence, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
@@ -23,6 +23,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field, ValidationError
 
 from adminme.comms import validate_outbound_communication
+from adminme.adapters.cos_channel_acquisition import member_bridge_capability_ceiling
 from adminme.bridge_authorization import authorization_from_record
 from adminme.bridge_enrollment import (
     BridgeEnrollmentError,
@@ -908,6 +909,30 @@ def _refresh_bridge_ingress(request: Request) -> None:
 def _bridge_http_error(exc: BridgeEnrollmentError) -> HTTPException:
     status_code = 410 if exc.code == "expired" else 409
     return HTTPException(status_code, {"error": exc.code, "message": str(exc)})
+
+
+def _require_bridge_acquisition(
+    runtime: Any, capabilities: Sequence[str], *, member_id: str, request_id: str
+) -> None:
+    ceiling = member_bridge_capability_ceiling(runtime.settings.adapter_config)
+    if ceiling is not None and (
+        not ceiling
+        or not set(capabilities) <= ceiling
+        or runtime.settings.member_roles.get(member_id) != "principal"
+    ):
+        raise HTTPException(
+            409,
+            {
+                "error": "enrollment_not_started",
+                "message": (
+                    "An adult can connect their own Calendar, Reminders and Notes for read-only use."
+                    if ceiling
+                    else "Member bridge setup is paused for the current data configuration."
+                ),
+                "request_id": request_id,
+                "request_recorded": False,
+            },
+        )
 
 
 def _settings_central_url(request: Request, *, allow_testserver: bool) -> str:
@@ -6401,6 +6426,12 @@ async def request_settings_bridge(
         )
         current = runtime.settings_control.bridge_request_for(body.member_id)
         if prior_receipt is None:
+            _require_bridge_acquisition(
+                runtime,
+                body.capabilities,
+                member_id=body.member_id,
+                request_id=body.request_id,
+            )
             try:
                 revision = runtime.settings_control.prepare_bridge_start(
                     body.member_id, expected_revision=body.expected_revision
@@ -6512,6 +6543,12 @@ async def request_settings_bridge(
             "degraded",
             "paused",
         }:
+            try:
+                runtime.bridge_enrollment.require_acquisition_binding(
+                    request_id=body.request_id, member_id=body.member_id
+                )
+            except BridgeEnrollmentError as exc:
+                raise _bridge_http_error(exc) from exc
             return {
                 "accepted": True,
                 "member_id": body.member_id,
@@ -6607,6 +6644,12 @@ async def download_settings_bridge_package(
         raise HTTPException(404, "bridge enrollment request was not found")
     lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
     async with lock:
+        try:
+            runtime.bridge_enrollment.require_acquisition_binding(
+                request_id=wizard_request_id, member_id=session.auth_member_id
+            )
+        except BridgeEnrollmentError as exc:
+            raise _bridge_http_error(exc) from exc
         if record.get("state") == "package_ready":
             record = await _record_central_bridge_progress(
                 runtime,
@@ -6672,6 +6715,13 @@ async def control_settings_bridge(
         ):
             raise HTTPException(404, "bridge enrollment request was not found")
         previous = str(record["state"])
+        if body.action in {"resume", "repair", "retry"}:
+            _require_bridge_acquisition(
+                runtime,
+                list(record["capabilities"]),
+                member_id=session.auth_member_id,
+                request_id=body.command_id,
+            )
         retry_preparation = False
         if body.action == "pause":
             next_state = "paused"

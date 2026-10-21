@@ -24,7 +24,10 @@ import time
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
-from adminme.adapters.disposable_test_acquisition import policy_from_adapter_config
+from adminme.adapters.cos_channel_acquisition import (
+    authorized_member_bridge_packs,
+    member_bridge_capability_ceiling,
+)
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     BridgeAuthorization,
@@ -97,11 +100,91 @@ def _get_event_sink(request: Request) -> EventSink:
     return events
 
 
-def _require_local_ingestion_enabled(request: Request) -> None:
+def _member_source_acquisition(
+    request: Request, tailscale_identity: str, *, require_device: bool = True
+) -> frozenset[str] | None:
     runtime = getattr(request.app.state, "runtime", None)
     settings = getattr(runtime, "settings", None)
-    if settings is not None and policy_from_adapter_config(settings.adapter_config):
+    if settings is None:
+        return None
+    ceiling = member_bridge_capability_ceiling(settings.adapter_config)
+    if ceiling is None:
+        return None
+    if not ceiling:
         raise HTTPException(403, detail="bridge_ingestion_paused_for_disposable_test")
+    record = _bridge_record(request, tailscale_identity)
+    member_id = str(record.get("member_id") or "")
+    control = getattr(runtime, "settings_control", None)
+    wizard = control.bridge_request_for(member_id) if control is not None else None
+    if not isinstance(wizard, dict):
+        raise HTTPException(403, detail="member_bridge_explicit_enrollment_required")
+    try:
+        return authorized_member_bridge_packs(
+            settings.adapter_config,
+            member_id=member_id,
+            instance_id=_expected_tenant_id(request) or "",
+            record=record,
+            wizard=wizard,
+            require_device=require_device,
+        )
+    except ValueError as exc:
+        raise HTTPException(403, detail=str(exc)) from exc
+
+
+def _require_acquisition_envelope(
+    request: Request,
+    tailscale_identity: str,
+    envelope: EventEnvelope,
+    packs: frozenset[str] | None,
+    *,
+    provisional: bool,
+) -> None:
+    if packs is None:
+        return
+    record = _bridge_record(request, tailscale_identity)
+    wizard = request.app.state.runtime.settings_control.bridge_request_for(
+        str(record["member_id"])
+    )
+    if provisional:
+        node = envelope.payload.get("bridge_node_id")
+        if (
+            wizard.get("state") != "device_identity_verified"
+            or not isinstance(node, str)
+            or hashlib.sha256(node.encode()).hexdigest()
+            != record.get("device_identity_sha256")
+        ):
+            raise HTTPException(403, detail="member_bridge_device_proof_required")
+        return
+    # Already attempted actions still need their exact terminal audit. Existing
+    # command/result correlation guards below remain mandatory; admitting a
+    # result neither delivers a command nor authorizes a provider effect.
+    if envelope.type in {"external_sync.write_completed", "external_sync.write_failed"}:
+        return
+    selected = [
+        BRIDGE_PACK_POLICIES[pack]
+        for pack in packs
+        if BRIDGE_PACK_POLICIES[pack].source_adapter == envelope.source_adapter
+    ]
+    if len(selected) != 1:
+        raise HTTPException(403, detail="member_bridge_source_not_selected")
+    policy = selected[0]
+    if policy.pack not in record.get("configured_packs", []):
+        raise HTTPException(403, detail="member_bridge_source_not_configured")
+    if envelope.type in {"adapter.authenticated", "adapter.error"}:
+        # The established exact capability-evidence guard validates these before
+        # attestation. It does not admit content or an enabled connector.
+        return
+    capability_id = next(
+        key for key, value in CAPABILITIES.items() if value["pack"] == policy.pack
+    )
+    capability = (wizard.get("capability_states") or {}).get(capability_id) or {}
+    if (
+        policy.pack not in record.get("enabled_packs", [])
+        or policy.pack not in record.get("authorized_packs", [])
+        or capability.get("state")
+        not in {"observation_starting", "observing", "settling", "settled", "degraded"}
+    ):
+        raise HTTPException(403, detail="member_bridge_observation_not_enabled")
 
 
 def _get_resolver(request: Request) -> MemberIdResolver:
@@ -764,11 +847,18 @@ async def _settle_bridge_capability_from_observation(
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, str]:
     tailscale_identity = resolve_tailscale_identity(request)
-    _require_local_ingestion_enabled(request)
+    acquisition_packs = _member_source_acquisition(request, tailscale_identity)
     member_id, provisional = _resolve_single_ingest_member(
         request, tailscale_identity, payload
     )
     envelope = _stamp_owner_scope(payload, member_id, _expected_tenant_id(request))
+    _require_acquisition_envelope(
+        request,
+        tailscale_identity,
+        envelope,
+        acquisition_packs,
+        provisional=provisional,
+    )
     envelope = await _enforce_active_bridge_contract(
         request,
         tailscale_identity,
@@ -798,7 +888,7 @@ async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, 
 @router.post("/ingest/batch", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, Any]:
     tailscale_identity = resolve_tailscale_identity(request)
-    _require_local_ingestion_enabled(request)
+    acquisition_packs = _member_source_acquisition(request, tailscale_identity)
     member_id = resolve_member_id(tailscale_identity, _get_resolver(request))
     record = _bridge_record(request, tailscale_identity)
     if record.get("status") != "active" or record.get("member_id") != member_id:
@@ -808,6 +898,13 @@ async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, 
     for offset, raw in enumerate(body.envelopes):
         try:
             envelope = _stamp_owner_scope(raw, member_id, _expected_tenant_id(request))
+            _require_acquisition_envelope(
+                request,
+                tailscale_identity,
+                envelope,
+                acquisition_packs,
+                provisional=False,
+            )
             envelope = await _enforce_active_bridge_contract(
                 request,
                 tailscale_identity,
@@ -878,6 +975,15 @@ async def enrollment_progress(
     wizard = runtime.settings_control.bridge_request_for(body.member_id)
     if not isinstance(wizard, dict) or wizard.get("request_id") != body.request_id:
         raise HTTPException(403, detail="bridge_wizard_missing_or_ambiguous")
+    acquisition_packs = _member_source_acquisition(
+        request, tailscale_identity, require_device=False
+    )
+    if (
+        acquisition_packs is not None
+        and body.pack_config is not None
+        and body.pack_config.get("shared_container_ids", []) != []
+    ):
+        raise HTTPException(403, detail="member_bridge_private_sources_required")
     if wizard.get("state") != body.previous_state:
         raise HTTPException(409, detail="bridge_progress_previous_state_mismatch")
     try:
@@ -1202,6 +1308,8 @@ async def pending_commands(
 
     identity = resolve_tailscale_identity(request)
     member_id = resolve_member_id(identity, _get_resolver(request))
+    acquisition_packs = _member_source_acquisition(request, identity)
+    acquisition_read_only = acquisition_packs is not None
     authorization = _active_authorization(request, identity)
     if authorization is None or authorization.member_id != member_id:
         raise HTTPException(403, detail="bridge_pack_authorization_missing")
@@ -1332,7 +1440,7 @@ async def pending_commands(
         commands = permitted
     observation = getattr(runtime, "observation", None)
     observation_active = True if observation is None else await observation.is_active()
-    if observation_active and commands:
+    if (observation_active or acquisition_read_only) and commands:
         sink = _get_event_sink(request)
         for command in commands:
             now = EventEnvelope.now_utc_iso()
@@ -1346,7 +1454,11 @@ async def pending_commands(
                 "provider_revision": None,
                 "result": {
                     "outcome": "suppressed",
-                    "reason": "observation_mode_active",
+                    "reason": (
+                        "member_bridge_acquisition_read_only"
+                        if acquisition_read_only
+                        else "observation_mode_active"
+                    ),
                     "interaction_id": (command.get("payload") or {}).get(
                         "interaction_id"
                     ),
@@ -1376,7 +1488,11 @@ async def pending_commands(
                     type="external_sync.write_completed",
                     schema_version=2 if is_v2 else 1,
                     occurred_at=now,
-                    source_adapter="bridge-command-observation-gate",
+                    source_adapter=(
+                        "bridge-command-acquisition-gate"
+                        if acquisition_read_only
+                        else "bridge-command-observation-gate"
+                    ),
                     source_account_id=str(command["provider_account_id"]),
                     owner_scope=owner_scope,
                     visibility_scope=owner_scope,
@@ -1391,6 +1507,7 @@ async def pending_commands(
         "commands": commands,
         "count": len(commands),
         "observation_active": observation_active,
+        "acquisition_read_only": acquisition_read_only,
     }
 
 

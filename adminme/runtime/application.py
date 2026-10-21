@@ -831,6 +831,7 @@ class AdministrateMeRuntime:
             member_identities=settings.member_identities,
             member_roles=settings.member_roles,
             bridge_enrollments=settings.bridge_enrollments,
+            adapter_config=settings.adapter_config,
             deployment_release_commit=(
                 deployment_binding.get("release_commit")
                 if isinstance(deployment_binding, dict)
