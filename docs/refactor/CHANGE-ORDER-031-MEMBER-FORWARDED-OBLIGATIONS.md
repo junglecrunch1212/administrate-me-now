@@ -81,6 +81,20 @@ malformed linkage never falls back to a member/provider account match. This
 implements the CO-023 direct-intake provenance and CO-031 forwarding boundary
 above without re-resolving a later route configuration or authorizing a send.
 
+MODERNIZE historical attribution for native OpenClaw submissions: a CoS
+transport account alias is not a personal provider account. Reconcile each
+`openclaw-submission` source through its exact private
+`openclaw.tool_call.recorded` receipt for `submissions.forward` within the audit
+watermark. The immutable source, member, tenant, account, result linkage,
+receipt fingerprint and member/service identity axes must agree; native bridge
+receipts must also reproduce the source's channel/account/sender/message
+digest. A completed duplicate request may supply the receipt. Missing or
+contradictory receipts cannot fall back to provider-account matching. PRESERVE
+the original events, historical owner evidence after later grant/configuration
+changes, content-free exports, and independent current authorization and effect
+checks. This applies to ownership audit only and never enables acquisition or
+sending.
+
 MODERNIZE historical ownership auditing when CoS activation disables personal
 acquisition: retain reviewed member/account ownership through a separate
 historical-only binding inventory. Disabled entries contribute only after the

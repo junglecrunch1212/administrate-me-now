@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from typing import Any
 
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
@@ -12,7 +13,11 @@ from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
 from adminme.events.log import EventLog
 from adminme.provider_bindings import HistoricalProviderBinding, ProviderBinding
-from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID, service_private_scope
+from adminme.service_identities import (
+    COS_AUTOMATION_OPERATOR_ID,
+    COS_SERVICE_PRINCIPAL_ID,
+    service_private_scope,
+)
 from adminme.source_assurance import load_source_obligations
 
 
@@ -195,6 +200,129 @@ async def _direct_intake_owner_matches(
     )
 
 
+async def _openclaw_submission_owner_matches(
+    event_log: EventLog, source: dict[str, Any], watermark: str
+) -> bool:
+    """Attribute native forwards through their immutable authenticated receipt.
+
+    An OpenClaw account alias is not a provider account. The original or a
+    completed duplicate request must link this exact private source to its
+    authenticated member inside the audit snapshot. Current grants and channel
+    configuration cannot retrospectively grant or revoke historical ownership.
+    """
+    payload = source.get("payload") or {}
+    member = payload.get("member_id")
+    digest = payload.get("client_request_id")
+    account = source.get("source_account_id")
+    source_id = str(source.get("event_id") or "")
+    scope = f"private:{member}"
+    issues = payload.get("evidence_issues")
+    if not (
+        isinstance(member, str)
+        and member
+        and isinstance(digest, str)
+        and re.fullmatch(r"[a-f0-9]{64}", digest)
+        and isinstance(account, str)
+        and account
+        and source_id
+        and source.get("tenant_id")
+        and source.get("type") == "triage.intent.submitted"
+        and source.get("schema_version") == 2
+        and source.get("source_adapter") == "openclaw-submission"
+        and source.get("owner_scope") == source.get("visibility_scope") == scope
+        and source.get("actor_identity") == member
+        and source.get("sensitivity") in {"normal", "sensitive"}
+        and source.get("causation_id") is None
+        and source.get("idempotency_key") == f"openclaw-forward:{digest}"
+        and re.fullmatch(r"request-sha256:[a-f0-9]{64}", str(source.get("raw_ref")))
+        and payload.get("intent_id") == f"forward_{digest[:48]}"
+        and payload.get("source_surface") == "openclaw"
+        and payload.get("submission_kind") == "member_forwarded"
+        and payload.get("source_event_id") is None
+        and payload.get("kind_hint") is None
+        and payload.get("intake_channel") in {"apple_imessage", "imessage"}
+        and isinstance(payload.get("text"), str)
+        and 0 < len(payload["text"]) <= 32_000
+        and issues in ([], ["unsupported_channel_attachment"])
+        and payload.get("evidence_complete") is (not issues)
+    ):
+        return False
+    for receipt in await event_log.get_by_causation(source_id):
+        audit = receipt.get("payload") or {}
+        correlation = receipt.get("correlation_id")
+        if not (
+            source_id < str(receipt.get("event_id")) <= watermark
+            and receipt.get("type") == "openclaw.tool_call.recorded"
+            and receipt.get("tenant_id") == source.get("tenant_id")
+            and receipt.get("source_adapter") == "openclaw-plugin"
+            and receipt.get("source_account_id") == account
+            and receipt.get("owner_scope") == receipt.get("visibility_scope") == scope
+            and receipt.get("causation_id") == source_id
+            and isinstance(correlation, str)
+            and correlation
+            and receipt.get("idempotency_key")
+            == f"openclaw:{member}:openclaw.tool_call.recorded:submissions.forward:{correlation}"
+            and receipt.get("raw_ref")
+            == "request-sha256:"
+            + hashlib.sha256(
+                json.dumps(audit, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            and audit.get("operation") == "submissions.forward"
+            and audit.get("account_id") == account
+            and audit.get("channel_id") in {"imessage", "bluebubbles"}
+            and audit.get("result_event_ids") == [source_id]
+            and audit.get("call_kind") in {"bridge", "slash_command"}
+        ):
+            continue
+        if receipt.get("schema_version") == 1:
+            actor = audit.get("actor_id")
+            owner_matches = (
+                receipt.get("actor_identity") == member
+                and audit.get("member_id") == member
+                and audit.get("correlation_id") == correlation
+            )
+        elif receipt.get("schema_version") == 2:
+            actor = audit.get("openclaw_actor_id")
+            owner_matches = (
+                receipt.get("actor_identity")
+                == audit.get("actor_principal_id")
+                == audit.get("represented_service_principal_id")
+                == COS_SERVICE_PRINCIPAL_ID
+                and audit.get("operator_principal_id") == COS_AUTOMATION_OPERATOR_ID
+                and audit.get("context_scope") == "member_private"
+                and audit.get("context_member_id")
+                == audit.get("on_behalf_of_member_id")
+                == audit.get("resource_owner_principal_id")
+                == member
+                and audit.get("audience") == [member]
+                and audit.get("visibility") == [scope]
+                and audit.get("approving_member_ids") == [member]
+                and audit.get("approval_quorum") == "member_owner"
+                and bool(audit.get("authority_grant_id"))
+                and "read_context" in audit.get("permissions", [])
+                and audit.get("request_correlation_id") == correlation
+                and audit.get("causation_event_ids") == [source_id]
+            )
+        else:
+            continue
+        if not owner_matches or not isinstance(actor, str) or not actor:
+            continue
+        if audit["call_kind"] == "bridge":
+            native = audit.get("message_id")
+            if not isinstance(native, str) or not native:
+                continue
+            identity = [audit["channel_id"], account, actor, native]
+            if (
+                hashlib.sha256(
+                    json.dumps(identity, separators=(",", ":")).encode()
+                ).hexdigest()
+                != digest
+            ):
+                continue
+        return True
+    return False
+
+
 async def audit_historical_attribution(
     event_log: EventLog,
     *,
@@ -267,6 +395,23 @@ async def audit_historical_attribution(
                 event_log, submission, provider_bindings, watermark or ""
             ):
                 binding_state = "internal_forwarded_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif submission is not None and (
+            adapter == "openclaw-submission"
+            or str(submission.get("idempotency_key") or "").startswith(
+                "openclaw-forward:"
+            )
+            or str((submission.get("payload") or {}).get("intent_id") or "").startswith(
+                "forward_"
+            )
+        ):
+            # Account aliases never borrow an unrelated provider binding when
+            # the authenticated submission receipt is absent or contradictory.
+            if await _openclaw_submission_owner_matches(
+                event_log, submission, watermark or ""
+            ):
+                binding_state = "internal_openclaw_member_source_reconciled"
                 workspace = "personal"
                 attributed += 1
         elif len(matching_coordinates) == 1:

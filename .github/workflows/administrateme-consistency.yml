@@ -88,6 +88,7 @@ jobs:
             tests/unit/bootstrap/test_candidate_readiness.py \
             tests/unit/bootstrap/test_htr10_export.py \
             tests/unit/test_historical_attribution.py \
+            tests/acceptance/test_forwarded_channel_intake.py::test_channel_submission_extracts_privately_and_deduplicates_after_restart \
             tests/unit/bootstrap/test_cos_imessage.py \
             tests/unit/bootstrap/test_cos_guard_release.py \
             tests/unit/bootstrap/test_cos_permissions.py \

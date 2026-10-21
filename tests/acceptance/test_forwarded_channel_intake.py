@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from adminme.events.envelope import EventEnvelope
+from adminme.historical_attribution import audit_historical_attribution
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.service_identities import (
@@ -218,6 +219,16 @@ async def _events(runtime: Any, kind: str) -> list[dict[str, Any]]:
     return [event async for event in runtime.event_log.read_since(types=[kind])]
 
 
+async def _historical_audit(runtime: Any, through: str | None = None) -> dict[str, Any]:
+    return await audit_historical_attribution(
+        runtime.event_log,
+        repository_root=ROOT,
+        provider_bindings=(),
+        hash_key=b"native-forwarded-audit-fixture-key",
+        through_event_id=through,
+    )
+
+
 def _settle(client: TestClient, intent_event_id: str) -> list[dict[str, Any]]:
     runtime = client.app.state.runtime
     client.portal.call(
@@ -269,6 +280,20 @@ def test_channel_submission_extracts_privately_and_deduplicates_after_restart(
         assert intent["actor_identity"] == MEMBER_A
         assert intent["payload"]["submission_kind"] == "member_forwarded"
         assert intent["payload"]["intake_channel"] == "apple_imessage"
+        historical = client.portal.call(_historical_audit, client.app.state.runtime)
+        assert historical["state"] == "healthy"
+        assert historical["source_event_count"] == 1
+        assert historical["attributed_event_count"] == 1
+        assert historical["unattributed_event_count"] == 0
+        assert historical["groups"][0]["binding_state"] == (
+            "internal_openclaw_member_source_reconciled"
+        )
+        assert all(value not in str(historical) for value in (TEXT, MEMBER_A, ACCOUNT))
+        before_receipt = client.portal.call(
+            _historical_audit, client.app.state.runtime, result["intent_event_id"]
+        )
+        assert before_receipt["state"] == "degraded"
+        assert before_receipt["unattributed_event_count"] == 1
         assert (
             client.portal.call(
                 _events, client.app.state.runtime, "external_sync.write_requested"
@@ -283,6 +308,9 @@ def test_channel_submission_extracts_privately_and_deduplicates_after_restart(
         )
         assert retry.status_code == 200, retry.text
         assert retry.json()["duplicate"] is True
+        historical = client.portal.call(_historical_audit, client.app.state.runtime)
+        assert historical["state"] == "healthy"
+        assert historical["source_event_count"] == 1
         assert retry.json()["intent_event_id"] == result["intent_event_id"]
         assert (
             len(
