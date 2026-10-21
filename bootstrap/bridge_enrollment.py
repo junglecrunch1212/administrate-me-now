@@ -1171,6 +1171,17 @@ class MemberBridgeInstaller:
         restrictions = transfer.get("restrictions")
         if not isinstance(restrictions, dict):
             raise BridgeEnrollmentError("bridge restrictions are missing")
+        from adminme.adapters.cos_channel_acquisition import (
+            MEMBER_BRIDGE_ACQUISITION_CONTRACT,
+            MEMBER_BRIDGE_CAPABILITIES,
+        )
+
+        acquisition_policy = restrictions.get("acquisition_policy")
+        if "acquisition_policy" in restrictions and (
+            acquisition_policy != MEMBER_BRIDGE_ACQUISITION_CONTRACT
+            or transfer.get("wizard_contract") != WIZARD_CONTRACT
+        ):
+            raise BridgeEnrollmentError("bridge acquisition ceiling is invalid")
         if restrictions.get("kid") and "knowledge-obsidian" in allowed:
             raise BridgeEnrollmentError(
                 "child bridge package incorrectly allows Obsidian"
@@ -1190,6 +1201,25 @@ class MemberBridgeInstaller:
                 raise BridgeEnrollmentError(
                     "bridge wizard package is not observation-only"
                 )
+            if acquisition_policy == MEMBER_BRIDGE_ACQUISITION_CONTRACT:
+                from adminme.bridge_enrollment import CAPABILITIES
+
+                if (
+                    not requested_capabilities
+                    or not set(requested_capabilities) <= MEMBER_BRIDGE_CAPABILITIES
+                    or set(allowed)
+                    != {
+                        str(CAPABILITIES[item]["pack"])
+                        for item in requested_capabilities
+                    }
+                    or set(requested) != set(allowed)
+                    or transfer.get("role") != "principal"
+                    or any(
+                        config.get("shared_container_ids", []) != []
+                        for config in normalized_config.values()
+                    )
+                ):
+                    raise BridgeEnrollmentError("bridge acquisition ceiling is invalid")
         observed_identity, observed_node = self._tailscale_identity()
         if identity_override is not None:
             if not self.test_mode:
@@ -1262,6 +1292,10 @@ class MemberBridgeInstaller:
             "pack_config": normalized_config,
             "log_level": "info",
         }
+        if acquisition_policy == MEMBER_BRIDGE_ACQUISITION_CONTRACT:
+            config["acquisition_policy"] = acquisition_policy
+            config["observation_only"] = restrictions["observation_only"]
+            config["provider_writes"] = restrictions["provider_writes"]
         try:
             atomic_write(
                 self.paths.config_path,
@@ -1326,6 +1360,12 @@ class MemberBridgeInstaller:
                 ),
                 "transfer_material_retained": False,
             }
+            if acquisition_policy == MEMBER_BRIDGE_ACQUISITION_CONTRACT:
+                receipt.update(
+                    acquisition_policy=acquisition_policy,
+                    observation_only=True,
+                    provider_writes="deny",
+                )
             atomic_write(
                 self.paths.receipt_path,
                 json.dumps(receipt, indent=2, sort_keys=True).encode("utf-8"),

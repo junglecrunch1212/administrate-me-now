@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from adminme.bridge_enrollment import (
     progress_signature,
 )
 from adminme.capability_catalog import load_catalog
+from adminme.events.envelope import EventEnvelope
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
 from adminme_bridge.config import load_config
@@ -176,6 +178,73 @@ def test_g09_installed_release_binds_handoff_without_git(
         record = app.state.runtime.bridge_enrollment.bridge_enrollments[A_LOGIN]
         assert record["release_commit"] == commit
         assert client.portal.call(_provider_effect_count, app.state.runtime) == 0
+        for name in ("commitment_extraction", "thank_you_detection"):
+            pack = app.state.runtime.pipelines._packs[f"pipeline:{name}"]
+            assert (
+                pack.pack_root
+                == settings.repository_root / "packs" / "pipelines" / name
+            )
+
+    # A later runtime in this process must not reuse classes whose __file__
+    # still points at a now-removed installed source. The focused hosted suite
+    # retains only failed tmp_path trees, exposing this actual lifetime edge.
+    assert settings.repository_root == tmp_path / "installed-release"
+    shutil.rmtree(settings.repository_root)
+    next_instance = tmp_path / "next-instance"
+    next_instance.mkdir()
+    next_settings = replace(
+        _settings(next_instance),
+        deterministic_openclaw_fixture=True,
+        legacy_personal_obligation_compatibility=True,
+    )
+    next_app = create_application(next_settings)
+    with TestClient(next_app) as client:
+        runtime = next_app.state.runtime
+        now = EventEnvelope.now_utc_iso()
+        event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=next_settings.instance.tenant_id,
+                type="messaging.received",
+                schema_version=1,
+                occurred_at=now,
+                source_adapter="fixture-installed-source-lifetime",
+                source_account_id="fixture-source-account",
+                owner_scope=f"private:{A}",
+                visibility_scope=f"private:{A}",
+                sensitivity="privileged",
+                idempotency_key="g09-source-lifetime-observation",
+                payload={
+                    "source_channel": "fixture",
+                    "from_identifier": "sender@example.invalid",
+                    "to_identifier": "recipient@example.invalid",
+                    "body_text": "Synthetic private source lifetime proof.",
+                    "received_at": now,
+                },
+            ),
+        )
+        for name in ("commitment_extraction", "thank_you_detection"):
+            pack = runtime.pipelines._packs[f"pipeline:{name}"]
+            assert pack.pack_root == REPO_ROOT / "packs" / "pipelines" / name
+            client.portal.call(
+                runtime.wait_for_subscriber, f"pipeline:pipeline:{name}", event_id
+            )
+        # Both handlers read their packaged config before their privileged
+        # content refusal. Terminal receipts therefore prove real handler
+        # execution, with neither a language call nor a provider effect.
+        derived = client.portal.call(runtime.event_log.get_by_causation, event_id)
+        assert {
+            event["source_adapter"]
+            for event in derived
+            if event["type"] == "commitment.suppressed"
+            and event["payload"]["reason"] == "privileged_input"
+        } == {"commitment_extraction", "thank_you_detection"}
+        assert not any(
+            event["type"] in {"skill.call.recorded", "skill.call.failed"}
+            for event in derived
+        )
+        assert client.portal.call(_provider_effect_count, runtime) == 0
 
 
 @pytest.mark.parametrize("mutation", ["missing", "mismatch", "unsafe", "unbound"])

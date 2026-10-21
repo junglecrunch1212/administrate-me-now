@@ -9,6 +9,14 @@ CO-004, CO-019, CO-023, CO-026, AC-57
 
 ## Objective and boundary
 
+The retained-data CoS deployment admits only the explicit Calendar, Reminders
+and Notes exception in
+[`COS-CHANNEL-ACTIVATION-CONTRACT.md`](COS-CHANNEL-ACTIVATION-CONTRACT.md#explicit-member-bridge-sources).
+This MODERNIZE uses the existing member-owned request as read authority; it
+does not require or manufacture another consent event. Settings must refuse
+unavailable selections before creating a handoff, and the read-only bridge
+ceiling remains effective when independent CoS channel replies are live.
+
 G09 modernizes the existing bridge request, encrypted transfer, provisional
 `bridge.enrolled@v1` proof, Tailscale binding, finalization, connector-pack
 authorization, and revocation ceremony into a member-owned Settings wizard. It
@@ -99,7 +107,27 @@ ingest, removes the handoff and protected proof key, and supports a bridge-owned
 local uninstall. Expiry deletes transfer material and permits only a fresh
 request ID. Duplicate, replayed, wrong-member, wrong-device, wrong-instance,
 wrong-release, wrong-capability-set, altered, missing, and ambiguous operations
-fail closed.
+fail closed. Request identifiers remain bound to their original member even
+after failure, revocation or artifact cleanup. A different member cannot reuse
+one to replace a handoff or proof key. Historical proof lookup also includes the
+member coordinate, preserving valid retained histories with overlapping client
+request identifiers without allowing future collisions.
+
+The explicit CoS source exception appends a typed, encrypted
+`bridge.source_authorized@1` receipt with the exact device, selected source
+configuration and earlier enrollment/permission evidence. Historical attribution
+uses those immutable event-time coordinates, including selected containers, and
+never substitutes the current bridge index for historical authority. Later
+pause or revocation closes future admission while preserving earlier facts.
+
+For a deployed instance, supported self-service index mutations share the
+existing operation lock and a narrowly authenticated readiness transition. The
+transaction changes only the exact authorized enrollment and resulting bridge
+configuration fingerprint, preserving original physical attestation dates and
+all unrelated deployment evidence. Startup resolves an authenticated interrupted
+transition before loading bridge mappings; unexplained drift or tampered
+transition evidence fails closed. This MODERNIZE preserves the release-bound
+readiness contract across enrollment, restart and later guarded maintenance.
 
 ## Constitutional disposition
 
@@ -136,3 +164,16 @@ native per-capability workflow, protected secret transport, and absence of
 updater, remote-shell, arbitrary-code, TCC bypass, and write authority. Existing
 bootstrap, bridge-ingest, Calendar, Reminders, Settings, replay, browser,
 clean-macOS rehearsal, and aggregate release gates remain required.
+
+`tests/acceptance/test_cos_member_bridge_acquisition.py` covers the explicit
+read-only source exception through that same production composition with the
+retained dataset and CoS overlay present. Its policy unit tests exercise exact
+request/device/capability boundaries; edge command tests ensure the sealed
+read-only ceiling cannot be lost when installing the member daemon.
+
+`tests/acceptance/test_member_bridge_historical_attribution.py` proves immutable
+source ownership and refuses missing, future, contradictory or cross-member
+history. `tests/acceptance/test_bridge_readiness_transition.py` covers the guarded
+index/readiness transaction, exact restart recovery and refusal of unrelated
+configuration drift. These remain isolated hosted proofs, not live enrollment
+or member-device permission evidence.

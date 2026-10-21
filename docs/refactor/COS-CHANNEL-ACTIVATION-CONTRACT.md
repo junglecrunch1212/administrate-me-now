@@ -11,8 +11,9 @@ selection of an actively polled mailbox. It PRESERVES the exact
 personal-mail lifetime ledger, and old decisions. The overlay admits one exact
 enrolled CoS Gmail account, pauses every member adapter, disables historical
 mailbox expansion, and optionally enrolls one dedicated OpenClaw Messages
-channel. Member bridge ingestion and workbook reverse remain paused under the
-retained dataset boundary. Other product functions and their implementations
+channel. Workbook reverse remains paused under the retained dataset boundary.
+The explicit member bridge exception below admits only selected read-only
+Calendar, Reminders and Notes sources. Other product functions and their implementations
 remain present. Settings connection resumes cannot widen the acquisition policy.
 
 Accounts, credentials and member contacts are private runtime configuration.
@@ -27,6 +28,33 @@ preparation permissions in that member's own authenticated Settings context.
 The member device is an approval surface; the CoS account on the central Mac is
 the sender. A skipped second-member device check cannot establish that member's
 private authority or end-to-end behavior.
+
+### Explicit member bridge sources
+
+MODERNIZE: an authenticated self-service enrollment under the fully validated
+CoS overlay can admit Calendar, Reminders and Notes. This SUPERSEDES the blanket
+bridge-ingestion pause for those exact member requests, while PRESERVING the
+retained test policy, selected-message lifetime ledger and all historical facts.
+The retained dataset without the CoS overlay remains closed to bridge ingest.
+Legacy enrollment, the presence of an overlay alone, and availability of a pack
+are insufficient authority. Settings exposes the applicable source ceiling and
+refuses unavailable selections before preparing a handoff.
+
+The existing owner request, sealed handoff, exact member/device/release binding,
+capability selection and signed progress remain mandatory. The one provisional
+enrollment proof does not admit content. Each selected source still needs its
+own permission, account/container configuration, capability attestation and
+enabled-pack authorization before its observation can settle. Personal Messages,
+Contacts, Voice Memos and Obsidian are outside this exception. Scope, tenant,
+member, account, container, event-kind and whole-batch guards remain in force.
+
+These bridges are read-only even when CoS email and iMessage replies are live.
+CoS channel activation cannot release queued member bridge writes; terminal
+suppression remains audited. Source acquisition does not change a member's
+candidate-extraction preferences or grant provider-write authority. Personal
+inbox polling remains off and explicit forwarded intake remains the obligation
+entry point. Live setup verifies the selected sources' manual extraction policy,
+independent settlement, private member visibility and zero provider effects.
 
 ## Supported operation
 

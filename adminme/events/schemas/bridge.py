@@ -23,8 +23,11 @@ validate the envelope shape end-to-end and so downstream consumers
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from adminme.bridge_source_contract import validate_member_source_coordinates
 
 from adminme.events.registry import registry
 
@@ -47,4 +50,37 @@ class BridgeEnrolledV1(BaseModel):
 registry.register("bridge.enrolled", 1, BridgeEnrolledV1)
 
 
-__all__ = ["BridgeEnrolledV1"]
+class BridgeSourceAuthorizedV1(BaseModel):
+    """Frozen private source coordinates, not permission for provider writes."""
+
+    model_config = {"extra": "forbid"}
+
+    contract: Literal["cos-member-source-observation-v1"]
+    request_id: str = Field(min_length=8, max_length=120)
+    enrollment_id: str = Field(min_length=1, max_length=160)
+    member_id: str = Field(min_length=1, max_length=240)
+    instance_id: str = Field(min_length=1, max_length=240)
+    release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    capability_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    device_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tailscale_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    capability_id: Literal["apple_calendar", "apple_reminders", "apple_notes"]
+    pack: str = Field(min_length=1)
+    pack_config: dict[str, Any]
+    enrollment_event_id: str = Field(min_length=1)
+    authentication_event_id: str | None = None
+    progress_idempotency_key: str = Field(min_length=1, max_length=240)
+    observation_only: Literal[True]
+    provider_writes: Literal["deny"]
+    content_exposed: Literal[False]
+
+    @model_validator(mode="after")
+    def content_free_coordinates(self) -> BridgeSourceAuthorizedV1:
+        validate_member_source_coordinates(self.pack, self.pack_config)
+        return self
+
+
+registry.register("bridge.source_authorized", 1, BridgeSourceAuthorizedV1)
+
+
+__all__ = ["BridgeEnrolledV1", "BridgeSourceAuthorizedV1"]

@@ -320,13 +320,38 @@ def capture_deployment_snapshot(
     paths: DeploymentPaths,
     *,
     adapters_payload_override: bytes | None = None,
+    bridge_payload_override: bytes | None = None,
+    bridge_index_absent: bool = False,
 ) -> DeploymentSnapshot:
     """Capture content-free binding material for rehearsal and pending evidence."""
 
+    if bridge_index_absent and bridge_payload_override is not None:
+        raise CandidateReadinessError("bridge snapshot override is contradictory")
+    if (
+        bridge_payload_override is None
+        and not bridge_index_absent
+        and os.path.lexists(paths.app_dir / "bridge-readiness-transition.json")
+    ):
+        raise CandidateReadinessError("bridge readiness transition recovery is pending")
     predecessor, pointer_sha256, pointer_chain_sha256 = _pointer_snapshot(paths)
     config_rows = []
     for relative, required in _CONFIG_COORDINATES:
-        if (
+        if relative == "state/bridges/member-mapping.json" and bridge_index_absent:
+            config_rows.append({"path": relative, "present": False})
+        elif (
+            relative == "state/bridges/member-mapping.json"
+            and bridge_payload_override is not None
+        ):
+            config_rows.append(
+                {
+                    "path": relative,
+                    "present": True,
+                    "sha256": hashlib.sha256(bridge_payload_override).hexdigest(),
+                    "size": len(bridge_payload_override),
+                    "mode": 0o600,
+                }
+            )
+        elif (
             relative == "state/config/adapters.json"
             and adapters_payload_override is not None
         ):

@@ -7,6 +7,7 @@ paths the loader is supposed to raise on.
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -46,6 +47,40 @@ def test_load_pipeline_pack_cache_hit() -> None:
     second = load_pipeline_pack(ECHO_LOGGER_ROOT)
     assert first is second
     assert first.instance is second.instance
+
+
+async def test_same_version_pipeline_never_reuses_another_release_root(
+    tmp_path: Path,
+) -> None:
+    roots = [tmp_path / "installed-release", tmp_path / "operational-release"]
+    for root, value in zip(roots, ("installed", "operational"), strict=True):
+        shutil.copytree(ECHO_LOGGER_ROOT, root)
+        (root / "source.txt").write_text(value, encoding="utf-8")
+        (root / "handler.py").write_text(
+            "from pathlib import Path\n"
+            "_PACK_ROOT = Path(__file__).parent\n"
+            "class EchoLoggerPipeline:\n"
+            "    pack_id = 'pipeline:echo_logger'\n"
+            "    version = '1.0.0'\n"
+            "    triggers = {'events': ['messaging.received']}\n"
+            "    async def handle(self, event, ctx):\n"
+            "        ctx.append((_PACK_ROOT / 'source.txt').read_text())\n",
+            encoding="utf-8",
+        )
+    first = load_pipeline_pack(roots[0])
+    shutil.rmtree(roots[0])
+    second = load_pipeline_pack(roots[1])
+    assert second is not first
+    assert second.instance is not first.instance
+    assert second.pack_root == roots[1].resolve()
+    observed: list[str] = []
+    await second.instance.handle({}, observed)  # type: ignore[arg-type]
+    assert observed == ["operational"]
+
+    alias = tmp_path / "current-release"
+    alias.symlink_to(roots[1], target_is_directory=True)
+    assert load_pipeline_pack(alias) is second
+    assert load_pipeline_pack(roots[1] / ".." / roots[1].name) is second
 
 
 def test_missing_pipeline_yaml_raises(tmp_path: Path) -> None:

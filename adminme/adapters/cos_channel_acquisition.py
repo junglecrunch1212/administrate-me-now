@@ -9,12 +9,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from typing import Any, Literal
+import re
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, Field
 
 CONFIG_KEY = "cos_channel_acquisition"
 CONTRACT = "cos-forwarded-acquisition-v1"
+MEMBER_BRIDGE_ACQUISITION_CONTRACT = "cos-member-source-observation-v1"
+MEMBER_BRIDGE_CAPABILITIES = frozenset(
+    {"apple_calendar", "apple_reminders", "apple_notes"}
+)
 
 
 class CosAcquisitionPolicy(BaseModel):
@@ -143,3 +148,143 @@ def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
     config["historical_related_max_participants"] = 0
     config["historical_related_messages_per_participant"] = 0
     return result
+
+
+def member_bridge_capability_ceiling(
+    value: dict[str, Any],
+) -> frozenset[str] | None:
+    """Return the additional read-only ceiling without granting any bridge.
+
+    Ordinary installations retain their existing enrollment behavior. A bounded
+    dataset alone stays closed. Only the fully validated CoS overlay may admit
+    the three explicitly selected member source capabilities; retaining its
+    history never re-enables a central member adapter or personal inbox.
+    """
+
+    from adminme.adapters.disposable_test_acquisition import CONFIG_KEY as TEST_KEY
+
+    if TEST_KEY not in value and CONFIG_KEY not in value:
+        return None
+    try:
+        if policy_from_config(value) is None:
+            return frozenset()
+        restrict_cos_adapter_config(value)
+    except (ValueError, TypeError, AttributeError):
+        return frozenset()
+    return MEMBER_BRIDGE_CAPABILITIES
+
+
+def authorized_member_bridge_packs(
+    value: dict[str, Any],
+    *,
+    member_id: str,
+    instance_id: str,
+    record: Mapping[str, Any],
+    wizard: Mapping[str, Any],
+    require_device: bool = True,
+) -> frozenset[str]:
+    """Validate the existing member-owned enrollment, never invent authority.
+
+    This is an additional acquisition ceiling. The caller must still enforce
+    transport authentication, provisional proof, per-pack source/container
+    contracts, local permission, attestation and enabled-state admission.
+    Content-free signed progress may establish its device binding; content and
+    the provisional proof must already have that binding.
+    """
+
+    from adminme.bridge_enrollment import CAPABILITIES, capability_set_digest
+
+    ceiling = member_bridge_capability_ceiling(value)
+    if not ceiling:
+        raise ValueError("member_bridge_acquisition_not_enabled")
+    selected = record.get("requested_capabilities")
+    if (
+        not isinstance(selected, list)
+        or not selected
+        or any(not isinstance(item, str) for item in selected)
+        or len(set(selected)) != len(selected)
+        or not set(selected) <= ceiling
+        or wizard.get("capabilities") != sorted(selected)
+    ):
+        raise ValueError("member_bridge_capability_selection_mismatch")
+    packs = frozenset(str(CAPABILITIES[item]["pack"]) for item in selected)
+    if record.get("allowed_packs") != sorted(packs):
+        raise ValueError("member_bridge_pack_selection_mismatch")
+    digest = capability_set_digest(selected)
+    release = record.get("release_commit")
+    if (
+        record.get("member_id") != member_id
+        or wizard.get("member_id") != member_id
+        or wizard.get("requested_by_member_id") != member_id
+        or record.get("instance_id") != instance_id
+        or record.get("owner_scope") != f"private:{member_id}"
+        or record.get("role") != "principal"
+        or record.get("observation_only") is not True
+        or record.get("acquisition_policy") != MEMBER_BRIDGE_ACQUISITION_CONTRACT
+        or wizard.get("observation_only") is not True
+        or wizard.get("writes_authorized") is not False
+        or not isinstance(release, str)
+        or re.fullmatch(r"[0-9a-f]{40}", release) is None
+        or record.get("capability_set_sha256") != digest
+        or wizard.get("capability_set_sha256") != digest
+        or any(
+            not isinstance(record.get(key), str)
+            or not record.get(key)
+            or record.get(key) != wizard.get(key)
+            for key in ("request_id", "enrollment_id", "release_commit")
+        )
+        or record.get("status") not in {"package-exported", "active"}
+        or wizard.get("state")
+        not in {
+            "package_ready",
+            "awaiting_transfer",
+            "package_opened",
+            "instance_verified",
+            "member_confirmed",
+            "device_identity_verified",
+            "bridge_paired",
+            "awaiting_permissions",
+            "capabilities_testing",
+            "settling",
+            "active_observation",
+            "partially_active",
+            "degraded",
+        }
+    ):
+        raise ValueError("member_bridge_enrollment_binding_mismatch")
+    for key in ("configured_packs", "authorized_packs", "enabled_packs"):
+        entries = record.get(key)
+        if (
+            not isinstance(entries, list)
+            or any(not isinstance(item, str) for item in entries)
+            or len(set(entries)) != len(entries)
+            or not set(entries) <= packs
+        ):
+            raise ValueError("member_bridge_pack_selection_mismatch")
+    pack_config = record.get("pack_config")
+    if (
+        not isinstance(pack_config, dict)
+        or set(pack_config) != set(record["configured_packs"])
+        or any(
+            not isinstance(config, dict) or config.get("shared_container_ids", []) != []
+            for config in pack_config.values()
+        )
+    ):
+        raise ValueError("member_bridge_private_sources_required")
+    if require_device:
+        device_digest = record.get("device_identity_sha256")
+        if (
+            not isinstance(device_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", device_digest) is None
+            or wizard.get("device_identity_sha256") != device_digest
+            or (
+                record.get("status") == "active"
+                and (
+                    not isinstance(record.get("bridge_node_id"), str)
+                    or hashlib.sha256(record["bridge_node_id"].encode()).hexdigest()
+                    != device_digest
+                )
+            )
+        ):
+            raise ValueError("member_bridge_device_binding_mismatch")
+    return packs

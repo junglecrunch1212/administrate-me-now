@@ -23,9 +23,17 @@ from adminme.adapters.disposable_test_acquisition import (
     restrict_adapter_config,
 )
 from adminme.adapters.cos_channel_acquisition import (
+    authorized_member_bridge_packs,
+    member_bridge_capability_ceiling,
     policy_from_config as cos_policy_from_config,
 )
+from adminme.bridge_authorization import (
+    BRIDGE_PACK_POLICIES,
+    authorization_from_record,
+    configuration_from_record,
+)
 from adminme.bridge_enrollment import (
+    CAPABILITIES,
     CAPABILITY_STATES,
     ENROLLMENT_STATES,
     PROGRESS_CONTRACT,
@@ -69,6 +77,7 @@ from adminme.source_policy import (
     SourcePolicyV2,
     policy_for_preset,
     parent_source_coordinate,
+    source_coordinate_for_event,
 )
 
 
@@ -1485,6 +1494,94 @@ def public_capability_summary(
     return result
 
 
+def _admitted_cos_bridge_sources(runtime: Any, member_id: str) -> list[dict[str, Any]]:
+    """Describe only independently proved sources admitted by the CoS ceiling.
+
+    An enrollment and a local permission are not observation evidence. Each
+    capability keeps its own state and timestamp; a sibling's successful sync
+    cannot make it appear connected. Existing deployments without this overlay
+    continue through their ordinary inventory paths.
+    """
+
+    if not member_bridge_capability_ceiling(runtime.settings.adapter_config):
+        return []
+    if runtime.settings.member_roles.get(member_id) != "principal":
+        return []
+    records = [
+        record
+        for record in runtime.settings.bridge_enrollments.values()
+        if isinstance(record, dict)
+        and record.get("member_id") == member_id
+        and record.get("status") == "active"
+    ]
+    if len(records) != 1:
+        return []
+    record = records[0]
+    wizard = runtime.settings_control.bridge_request_for(member_id)
+    if not isinstance(wizard, dict):
+        return []
+    try:
+        packs = authorized_member_bridge_packs(
+            runtime.settings.adapter_config,
+            member_id=member_id,
+            instance_id=runtime.settings.instance.tenant_id,
+            record=record,
+            wizard=wizard,
+        )
+    except ValueError:
+        return []
+    configuration = configuration_from_record(record)
+    authorization = authorization_from_record(record)
+    if configuration is None:
+        return []
+    result = []
+    for capability_id in wizard["capabilities"]:
+        pack = str(CAPABILITIES[capability_id]["pack"])
+        if pack not in packs or pack not in configuration.packs:
+            continue
+        policy = BRIDGE_PACK_POLICIES[pack]
+        config = configuration.pack_config[pack]
+        if config.get("shared_container_ids"):
+            # A private inventory never treats a shared container as private.
+            continue
+        capability = (wizard.get("capability_states") or {}).get(capability_id)
+        if not isinstance(capability, dict):
+            continue
+        authorized = authorization is not None and pack in authorization.packs
+        enabled = authorized and pack in record.get("enabled_packs", [])
+        state = str(capability.get("state") or "requested")
+        observing = enabled and state in {
+            "observation_starting",
+            "observing",
+            "settling",
+            "settled",
+        }
+        observed_at = capability.get("last_successful_observation")
+        last_sync = None
+        if isinstance(observed_at, str) and observed_at:
+            try:
+                parsed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    last_sync = observed_at
+            except ValueError:
+                pass
+        result.append(
+            {
+                "connection_id": f"bridge:{record['enrollment_id']}:{pack}",
+                "record": record,
+                "capability": capability,
+                "policy": policy,
+                "config": config,
+                "authorized": authorized,
+                "observing": observing,
+                "settled": observing and state == "settled" and last_sync is not None,
+                "last_sync_at": last_sync,
+                "source_account_id": configuration.source_account_for(policy),
+            }
+        )
+    return result
+
+
 def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
     adapter_supervisor = getattr(runtime, "adapters", None)
     inventory = adapter_supervisor.inventory() if adapter_supervisor is not None else {}
@@ -1690,6 +1787,57 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                 "actions": ["pause"],
             }
         )
+    for source in _admitted_cos_bridge_sources(runtime, member_id):
+        policy = source["policy"]
+        meta = PROVIDER_CATALOG[policy.source_adapter]
+        record = source["record"]
+        config = source["config"]
+        capability = source["capability"]
+        rows.append(
+            {
+                "id": source["connection_id"],
+                "provider": meta["provider"],
+                "provider_label": meta["label"],
+                "label": f"{meta['label']} (read-only)",
+                "account_hint": config.get("provider_account_id"),
+                "product": meta["product"],
+                "workspace": "personal",
+                "binding": {
+                    "state": "healthy" if source["authorized"] else "unverified",
+                    "ownership_attested": source["authorized"],
+                    "provenance": "member-bridge-enrollment",
+                    "permission_count": len(policy.permission_scopes),
+                    "content_exposed": False,
+                    "identity_bound": True,
+                    "bridge_enrollment_id": record["enrollment_id"],
+                    "device_identity_sha256": record["device_identity_sha256"],
+                },
+                "deployment": "member bridge",
+                "setup": "connected" if source["settled"] else "configured",
+                "runtime": "running"
+                if source["settled"]
+                else "starting"
+                if source["observing"]
+                else "degraded"
+                if capability.get("state") == "degraded"
+                else "not_running",
+                "permissions": {
+                    "read": list(meta["read"]),
+                    "write": [],
+                    "credential_reference_present": False,
+                    "write_capability_source": "none_cos_member_bridge_read_only",
+                },
+                "safety": {
+                    "observation_only": True,
+                    "human_gate_required": False,
+                    "openclaw_approval_required": False,
+                    "writes_execute": False,
+                },
+                "last_sync_at": source["last_sync_at"],
+                "error": capability.get("reason"),
+                "actions": [],
+            }
+        )
     return sorted(rows, key=lambda row: (row["product"], row["label"].casefold()))
 
 
@@ -1715,6 +1863,8 @@ def compose_source_policy_v2_sources(
     connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
     test_policy = policy_from_adapter_config(runtime.settings.adapter_config)
     sources: list[dict[str, Any]] = []
+    admitted_bridge_keys: set[str] = set()
+    admitted_bridge_containers: dict[str, tuple[str, frozenset[str] | None]] = {}
     for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
         if not isinstance(entry, dict):
             continue
@@ -1918,6 +2068,97 @@ def compose_source_policy_v2_sources(
             }
         )
 
+    for source in _admitted_cos_bridge_sources(runtime, member_id):
+        policy = source["policy"]
+        record = source["record"]
+        config = source["config"]
+        meta = PROVIDER_CATALOG[policy.source_adapter]
+        # This is the exact admitted connector source, not a claim of complete
+        # calendar/list/folder coverage. Its sealed allowlist is displayed
+        # separately; one observation cannot attest every selected container.
+        # Reuse the event mapping, including honestly missing attribution. Do
+        # not invent an enrollment/workspace field absent from the source
+        # schema: a fabricated policy key would not control the observed facts.
+        coordinate = source_coordinate_for_event(
+            {
+                "tenant_id": runtime.settings.instance.tenant_id,
+                "type": {
+                    "apple_calendar": "calendar.event_added",
+                    "apple_reminders": "list_item.added",
+                    "apple_notes": "member_knowledge.note_added",
+                }[str(meta["provider"])],
+                "source_adapter": policy.source_adapter,
+                "source_account_id": source["source_account_id"],
+                "owner_scope": f"private:{member_id}",
+                "payload": {
+                    "member_id": member_id,
+                    **(
+                        {
+                            "provider": policy.provider,
+                            "provider_account_id": source["source_account_id"],
+                        }
+                        if policy.requires_provider_account
+                        else {"source_kind": policy.source_account_kind}
+                    ),
+                },
+            },
+            provider_bindings=getattr(runtime.settings, "provider_bindings", ()),
+        )
+        admitted_bridge_keys.add(coordinate.key)
+        admitted_bridge_containers[coordinate.key] = (
+            "calendar"
+            if policy.provider == "apple_calendar"
+            else "list"
+            if policy.provider == "apple_reminders"
+            else "folder",
+            frozenset(config["allowed_container_ids"])
+            if policy.requires_provider_account
+            else None,
+        )
+        effective = runtime.settings_control.effective_source_policy_v2(
+            member_id, coordinate, state=state
+        )
+        sources.append(
+            {
+                "policy_key": coordinate.key,
+                "label": f"{meta['label']} (read-only)",
+                "provider_label": meta["label"],
+                "account_hint": config.get("provider_account_id"),
+                "workspace": coordinate.workspace,
+                "adapter_instance_id": coordinate.adapter_instance_id,
+                "source_kind": coordinate.source_kind,
+                "coordinate": coordinate.model_dump(mode="json"),
+                "coordinate_state": "exact" if coordinate.exact else "ambiguous",
+                "configurable": coordinate.exact,
+                "bridge_binding": {
+                    "enrollment_id": record["enrollment_id"],
+                    "device_identity_sha256": record["device_identity_sha256"],
+                    "member_id": member_id,
+                    "source_account_id": source["source_account_id"],
+                    "private_only": True,
+                },
+                "connection_state": "connected" if source["settled"] else "configured",
+                "retained_candidate_count": 0,
+                "source_scope": "account"
+                if policy.requires_provider_account
+                else "source",
+                "selected_container_ids": list(config.get("allowed_container_ids", [])),
+                "last_successful_observation": source["last_sync_at"],
+                "acquisition": {
+                    "state": "active" if source["observing"] else "paused",
+                    "coverage": "partial",
+                    "freshness": "observed" if source["last_sync_at"] else "unknown",
+                    "provider_capability": "available"
+                    if source["authorized"]
+                    else "unavailable",
+                    "scope_widening": False,
+                    "credential_creation": False,
+                    "provider_writes": False,
+                },
+                **effective,
+            }
+        )
+
     for source in SOURCE_CATALOG:
         source_id = str(source["id"])
         if not source_id.startswith("surface:"):
@@ -1968,9 +2209,30 @@ def compose_source_policy_v2_sources(
             }
         )
     sources = _merge_retained_source_inventory(runtime, member_id, state, sources)
+    for source in sources:
+        raw_coordinate = source.get("coordinate")
+        if not isinstance(raw_coordinate, dict):
+            continue
+        coordinate = SourceCoordinate.model_validate(raw_coordinate)
+        parent_key = parent_source_coordinate(coordinate).key
+        if parent_key not in admitted_bridge_containers or coordinate.key == parent_key:
+            continue
+        container_kind, allowed_containers = admitted_bridge_containers[parent_key]
+        if coordinate.native_container_kind == container_kind and (
+            allowed_containers is None
+            or coordinate.native_container_id in allowed_containers
+        ):
+            admitted_bridge_keys.add(coordinate.key)
+        else:
+            # An older observation outside the current sealed container
+            # selection remains history, never current acquisition evidence.
+            source["connection_state"] = "disconnected"
     if test_policy is not None:
         for source in sources:
-            if source.get("direct_authenticated_intent"):
+            if (
+                source.get("direct_authenticated_intent")
+                or source.get("policy_key") in admitted_bridge_keys
+            ):
                 continue
             source.setdefault("acquisition", {}).update(
                 test_policy.coverage()
@@ -2205,6 +2467,20 @@ def _merge_retained_source_inventory(
 
 def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
     state = runtime.settings_control.read()
+    bridge_capabilities = capability_catalog()
+    bridge_ceiling = member_bridge_capability_ceiling(runtime.settings.adapter_config)
+    if bridge_ceiling is not None:
+        for capability in bridge_capabilities:
+            capability["enrollment_selectable"] = bool(
+                capability.get("enrollment_selectable", True)
+                and capability["capability_id"] in bridge_ceiling
+            )
+            if capability["capability_id"] not in bridge_ceiling:
+                capability["enrollment_note"] = (
+                    "This connection supports read-only Calendar, Reminders and Notes."
+                    if bridge_ceiling
+                    else "Member bridge setup is paused for the current data configuration."
+                )
     auth_id = session.auth_member_id
     view_id = session.view_member_id
     viewing_as = auth_id != view_id
@@ -2667,7 +2943,7 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
             "progress_contract": PROGRESS_CONTRACT,
             "enrollment_states": list(ENROLLMENT_STATES),
             "capability_states": list(CAPABILITY_STATES),
-            "capabilities": capability_catalog(),
+            "capabilities": bridge_capabilities,
             "current": copy.deepcopy(bridge_requests.get(view_id))
             if private_owner_visible and isinstance(bridge_requests.get(view_id), dict)
             else None,
