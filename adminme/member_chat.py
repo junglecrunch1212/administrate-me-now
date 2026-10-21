@@ -202,7 +202,12 @@ class OpenClawGatewayChatTransport:
                 raise MemberChatError(
                     "incompatible", "Chat transport version is incompatible"
                 )
-            required = {"chat.send", "chat.abort", "chat.history"}
+            required = {
+                "chat.send",
+                "chat.abort",
+                "chat.history",
+                "sessions.messages.subscribe",
+            }
             if not isinstance(methods, list) or not required.issubset(set(methods)):
                 raise MemberChatError(
                     "incompatible", "Chat transport methods are incompatible"
@@ -282,10 +287,25 @@ class OpenClawGatewayChatTransport:
     ) -> AsyncIterator[MemberChatChunk]:
         socket = await self._connect()
         terminal = False
+        send_started = False
         run_id: str | None = None
         saw_delta = False
         try:
+            # The pinned Gateway requires an explicit subscription for clients
+            # advertising session-scoped-events. Subscribe before chat.send so
+            # even an immediate terminal response reaches this connection.
+            subscription = await self._request(
+                socket, "sessions.messages.subscribe", {"key": session_key}
+            )
+            if (
+                subscription.get("subscribed") is not True
+                or subscription.get("key") != session_key
+            ):
+                raise MemberChatError(
+                    "protocol_error", "Chat subscription was not confirmed"
+                )
             request_id = str(uuid.uuid4())
+            send_started = True
             await socket.send(
                 json.dumps(
                     {
@@ -393,7 +413,7 @@ class OpenClawGatewayChatTransport:
                 "timeout", "Chat response timed out", retryable=True
             ) from exc
         finally:
-            if not terminal:
+            if not terminal and send_started:
                 try:
                     await self._request(
                         socket,

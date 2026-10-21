@@ -79,12 +79,13 @@ async function freePort() {
   return port;
 }
 
-async function connect(port, scopes) {
+async function connect(port, scopes, caps = []) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
   const pending = new Map();
   let challenge = false;
   let sequence = 0;
   const client = {
+    events: [],
     close() {
       for (const entry of pending.values()) {
         clearTimeout(entry.timer);
@@ -110,6 +111,7 @@ async function connect(port, scopes) {
   socket.addEventListener("message", ({ data }) => {
     const frame = JSON.parse(String(data));
     if (frame.type === "event" && frame.event === "connect.challenge") challenge = true;
+    if (frame.type === "event") client.events.push(frame);
     if (frame.type !== "res") return;
     const entry = pending.get(frame.id);
     if (!entry) return; // A two-phase request also emits its terminal response.
@@ -136,7 +138,7 @@ async function connect(port, scopes) {
     },
     role: "operator",
     scopes,
-    caps: [],
+    caps,
     auth: { token },
   });
   assert.equal(hello.type, "hello-ok");
@@ -314,6 +316,30 @@ try {
   };
   await assert.rejects(dashboard.request(permissionMethod, permissionTicket()), /RPC refused/);
   const operator = await connect(port, ["operator.admin"]);
+  evidence.phase = "member-session-subscription";
+  const scoped = await connect(port, ["operator.read", "operator.write"], ["session-scoped-events"]);
+  const unrelated = await connect(port, ["operator.read", "operator.write"], ["session-scoped-events"]);
+  const emit = (key) => operator.request("administrateme.probe.chat.emit", { key });
+  const chatEvents = (client) => client.events.filter((frame) => frame.event === "chat");
+  await emit(session);
+  await delay(100);
+  assert.deepEqual(chatEvents(scoped), []);
+  assert.deepEqual(await scoped.request("sessions.messages.subscribe", { key: session }), {
+    subscribed: true, key: session,
+  });
+  await unrelated.request("sessions.messages.subscribe", { key: `agent:${agent}:other` });
+  await emit(session);
+  await until(() => chatEvents(scoped).length === 1, "subscribed member terminal delivery");
+  assert.equal(chatEvents(scoped)[0].payload.state, "final");
+  assert.equal(chatEvents(scoped)[0].payload.sessionKey, session);
+  assert.deepEqual(chatEvents(unrelated), []);
+  await scoped.request("sessions.messages.unsubscribe", { key: session });
+  await emit(session);
+  await delay(100);
+  assert.equal(chatEvents(scoped).length, 1);
+  assert.deepEqual(chatEvents(unrelated), []);
+  evidence.checks.push("scoped-chat-requires-exact-subscription-and-isolates-other-member");
+  evidence.phase = "no-send-permission-check";
   await assert.rejects(operator.request(permissionMethod, { ...permissionTicket(), signature: "0".repeat(64) }), /RPC refused/);
   await assert.rejects(operator.request(permissionMethod, { ...permissionTicket(), operation: "request" }), /RPC refused/);
   const permissionAuthorization = permissionTicket();

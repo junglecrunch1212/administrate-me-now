@@ -86,6 +86,8 @@ jobs:
           tests/acceptance/test_cos_live_maintenance.py
           tests/acceptance/test_cos_response_execution.py
           tests/acceptance/test_cos_identity_delegation_kernel.py
+          tests/acceptance/test_member_chat_subscription.py
+          tests/unit/test_member_chat_protocol.py
           tests/acceptance/test_forwarded_submission_recovery.py
           tests/acceptance/test_forwarded_submission_repair_operations.py
           tests/acceptance/test_retired_provider_history.py
