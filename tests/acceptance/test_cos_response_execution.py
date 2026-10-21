@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
 import json
@@ -103,7 +104,14 @@ def _settings(instance: Path) -> RuntimeSettings:
     )
 
 
-def _prepare(client: TestClient) -> None:
+def _prepare(
+    client: TestClient,
+    *,
+    permissions: tuple[str, ...] | None = (
+        "read_context",
+        "prepare_external_actions",
+    ),
+) -> None:
     result = client.put(
         POLICY,
         headers=HEADERS,
@@ -117,31 +125,37 @@ def _prepare(client: TestClient) -> None:
         },
     )
     assert result.status_code == 202, result.text
+    if permissions is None:
+        return
     grant = client.post(
         "/api/member/v1/cos/delegations",
         headers=HEADERS,
         json={
             "request_id": "response-cos-delegation",
             "context_scope": "member_private",
-            "permissions": ["read_context", "prepare_external_actions"],
+            "permissions": list(permissions),
         },
     )
     assert grant.status_code in {200, 201}, grant.text
+
+
+def _approval_body(key: str = "response-exact-approval") -> dict[str, Any]:
+    return {
+        "request_id": key,
+        "channel": "email",
+        "service_channel_id": "channel:cos:response",
+        "provider_account_id": ACCOUNT,
+        "recipient": RECIPIENT,
+        "subject": "Fixture response",
+        "body": "Your selected obligation is ready for review.",
+    }
 
 
 def _approve(client: TestClient, key: str = "response-exact-approval") -> str:
     response = client.post(
         BASE + "/approvals",
         headers=HEADERS,
-        json={
-            "request_id": key,
-            "channel": "email",
-            "service_channel_id": "channel:cos:response",
-            "provider_account_id": ACCOUNT,
-            "recipient": RECIPIENT,
-            "subject": "Fixture response",
-            "body": "Your selected obligation is ready for review.",
-        },
+        json=_approval_body(key),
     )
     assert response.status_code == 201, response.text
     return response.json()["approval_event_id"]
@@ -245,6 +259,299 @@ async def _provider_assurance(runtime: Any) -> dict[str, Any]:
         runtime.event_log, repository_root=ROOT, capabilities={}
     )
     return report["provider_effects"]
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected_state"),
+    [
+        ("missing", "missing"),
+        ("read_only", "permission_missing"),
+        ("expired", "missing"),
+        ("revoked", "missing"),
+        ("ambiguous", "ambiguous"),
+    ],
+)
+def test_response_permission_prerequisite_blocks_before_approval_or_contact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    condition: str,
+    expected_state: str,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client, permissions=None)
+        runtime = client.app.state.runtime
+        service = FakeGmailService()
+        _install_gmail(runtime, service)
+        if condition != "missing":
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+            grant_body = {
+                "request_id": "response-prerequisite-grant",
+                "context_scope": "member_private",
+                "permissions": (
+                    ["read_context"]
+                    if condition == "read_only"
+                    else ["read_context", "prepare_external_actions"]
+                ),
+                "expires_at": expires_at.isoformat(),
+            }
+            created = client.post(
+                "/api/member/v1/cos/delegations",
+                headers=HEADERS,
+                json=grant_body,
+            )
+            assert created.status_code == 201, created.text
+            if condition == "revoked":
+                revoked = client.request(
+                    "DELETE",
+                    f"/api/member/v1/cos/delegations/{created.json()['grant_id']}",
+                    headers=HEADERS,
+                    json={"request_id": "revoke-response-prerequisite"},
+                )
+                assert revoked.status_code == 200, revoked.text
+            elif condition == "expired":
+
+                class AfterExpiry(datetime):
+                    @classmethod
+                    def now(cls, tz: Any = None) -> datetime:
+                        return (expires_at + timedelta(seconds=1)).astimezone(tz)
+
+                monkeypatch.setattr(
+                    "adminme.projections.parties.queries.datetime", AfterExpiry
+                )
+            elif condition == "ambiguous":
+                duplicate = client.post(
+                    "/api/member/v1/cos/delegations",
+                    headers=HEADERS,
+                    json={**grant_body, "request_id": "second-response-grant"},
+                )
+                assert duplicate.status_code == 201, duplicate.text
+        before = client.portal.call(_events, runtime, ["service.delegation.requested"])
+        options = client.get(BASE + "/options", headers=HEADERS)
+        assert options.status_code == 200, options.text
+        authority = options.json()["authority"]
+        assert authority["state"] == expected_state
+        assert authority["can_prepare"] is False
+        assert authority["can_read_context"] is (condition == "read_only")
+        assert all(not channel["ready"] for channel in authority["channels"].values())
+        assert authority["reason"]
+        denied = client.post(
+            BASE + "/approvals", headers=HEADERS, json=_approval_body()
+        )
+        assert denied.status_code == 403, denied.text
+        assert denied.json()["detail"]["code"] == "cos_response_authority_required"
+        assert denied.json()["detail"]["authority"] == authority
+        assert (
+            client.portal.call(
+                _events,
+                runtime,
+                ["cos.response.approved", "cos.response.attempted", "external.sent"],
+            )
+            == []
+        )
+        assert (
+            client.portal.call(_events, runtime, ["service.delegation.requested"])
+            == before
+        )
+        assert service.calls == []
+
+
+def test_response_permission_status_stays_with_authenticated_owner(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client)
+        own = client.get(BASE + "/options", headers=HEADERS)
+        assert own.status_code == 200, own.text
+        assert own.json()["authority"]["state"] == "ready"
+        other_headers = {"Tailscale-User-Login": "response-b.example.test"}
+        other = client.get(BASE + "/options", headers=other_headers)
+        assert other.status_code == 200, other.text
+        assert other.json()["authority"]["state"] == "missing"
+        assert other.json()["recipients"] == []
+        assert RECIPIENT not in other.text and PHONE not in other.text
+        assert "grant_id" not in other.json()["authority"]
+        for headers in (
+            {**HEADERS, "X-AdminMe-View-Member": B},
+            {**other_headers, "X-AdminMe-View-Member": A},
+        ):
+            assert client.get(BASE + "/options", headers=headers).status_code == 403
+            assert (
+                client.post(
+                    BASE + "/approvals", headers=headers, json=_approval_body()
+                ).status_code
+                == 403
+            )
+        assert (
+            client.post(
+                BASE + "/approvals", headers=other_headers, json=_approval_body()
+            ).status_code
+            == 403
+        )
+        assert (
+            client.portal.call(
+                _events,
+                client.app.state.runtime,
+                ["cos.response.approved", "cos.response.attempted", "external.sent"],
+            )
+            == []
+        )
+
+
+def test_imessage_approval_requires_permission_to_collect_its_result(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client, permissions=("prepare_external_actions",))
+        authority = client.get(BASE + "/options", headers=HEADERS).json()["authority"]
+        assert authority["state"] == "permission_missing"
+        assert authority["can_prepare"] is True
+        assert authority["can_read_context"] is False
+        assert authority["channels"]["email"]["ready"] is True
+        assert authority["channels"]["imessage"]["ready"] is False
+        assert "sending result" in authority["channels"]["imessage"]["reason"]
+        body = {
+            "request_id": "native-result-permission-approval",
+            "channel": "imessage",
+            "service_channel_id": "channel:cos:imessage",
+            "provider_account_id": IMESSAGE_ACCOUNT,
+            "recipient": PHONE,
+            "body": "Exact private fixture response.",
+        }
+        denied = client.post(BASE + "/approvals", headers=HEADERS, json=body)
+        assert denied.status_code == 403, denied.text
+        runtime = client.app.state.runtime
+        assert client.portal.call(_events, runtime, ["cos.response.approved"]) == []
+        grants = client.get("/api/member/v1/cos/delegations", headers=HEADERS).json()
+        revoked = client.request(
+            "DELETE",
+            f"/api/member/v1/cos/delegations/{grants['items'][0]['grant_id']}",
+            headers=HEADERS,
+            json={"request_id": "replace-prepare-only-permission"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        created = client.post(
+            "/api/member/v1/cos/delegations",
+            headers=HEADERS,
+            json={
+                "request_id": "native-prepare-and-result-permission",
+                "context_scope": "member_private",
+                "permissions": ["prepare_external_actions", "read_context"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        authority = client.get(BASE + "/options", headers=HEADERS).json()["authority"]
+        assert authority["state"] == "ready"
+        assert all(channel["ready"] for channel in authority["channels"].values())
+        approved = client.post(BASE + "/approvals", headers=HEADERS, json=body)
+        assert approved.status_code == 201, approved.text
+        approval_id = approved.json()["approval_event_id"]
+        executed = client.post(
+            EXECUTE, headers=AUTH, json=_execution(client, approval_id)
+        )
+        assert executed.status_code == 200, executed.text
+        assert executed.json()["status"] == "suppressed"
+        assert client.portal.call(_events, runtime, ["external.sent"]) == []
+
+
+def test_exact_approval_retry_after_revocation_never_renews_authority(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client)
+        first = client.post(BASE + "/approvals", headers=HEADERS, json=_approval_body())
+        assert first.status_code == 201, first.text
+        grant = client.get("/api/member/v1/cos/delegations", headers=HEADERS).json()
+        revoked = client.request(
+            "DELETE",
+            f"/api/member/v1/cos/delegations/{grant['items'][0]['grant_id']}",
+            headers=HEADERS,
+            json={"request_id": "revoke-before-approval-recovery"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        recovered = client.post(
+            BASE + "/approvals", headers=HEADERS, json=_approval_body()
+        )
+        assert recovered.status_code == 201, recovered.text
+        assert recovered.json() == first.json()
+        approval_id = first.json()["approval_event_id"]
+        denied = client.post(
+            EXECUTE, headers=AUTH, json=_execution(client, approval_id)
+        )
+        assert denied.status_code == 403, denied.text
+        assert (
+            client.post(
+                BASE + "/approvals",
+                headers=HEADERS,
+                json=_approval_body("new-approval-after-revocation"),
+            ).status_code
+            == 403
+        )
+        runtime = client.app.state.runtime
+        assert len(client.portal.call(_events, runtime, ["cos.response.approved"])) == 1
+        assert (
+            client.portal.call(
+                _events, runtime, ["cos.response.attempted", "external.sent"]
+            )
+            == []
+        )
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    [None, ("prepare_external_actions",), ("read_context",)],
+)
+def test_forwarded_intake_requires_own_private_context_permission(
+    tmp_path: Path,
+    permissions: tuple[str, ...] | None,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _prepare(client, permissions=permissions)
+        forwarded = client.post(
+            "/api/openclaw/v1/submissions/forward",
+            headers=AUTH,
+            json={
+                "request_id": "response-permission-forward",
+                "text": "Please put the fixture appointment in review.",
+                "consent": True,
+                "submission_gesture": "dedicated_intake",
+                "provenance": {
+                    "actor_id": PHONE,
+                    "channel_id": "imessage",
+                    "account_id": IMESSAGE_ACCOUNT,
+                    "message_id": "fixture-forward-native-receipt",
+                    "correlation_id": "response-permission-forward",
+                    "call_kind": "bridge",
+                    "openclaw_version": OPENCLAW_VERSION,
+                    "openclaw_commit": OPENCLAW_COMMIT,
+                },
+            },
+        )
+        allowed = permissions == ("read_context",)
+        assert forwarded.status_code == (200 if allowed else 403), forwarded.text
+        runtime = client.app.state.runtime
+        intents = client.portal.call(_events, runtime, ["triage.intent.submitted"])
+        assert len(intents) == int(allowed)
+        if allowed:
+            assert intents[0]["actor_identity"] == A
+            assert intents[0]["owner_scope"] == f"private:{A}"
+            assert intents[0]["payload"]["submission_kind"] == "member_forwarded"
+            assert forwarded.json()["provider_effect_permitted"] is False
+        assert (
+            client.portal.call(
+                _events, runtime, ["cos.response.attempted", "external.sent"]
+            )
+            == []
+        )
 
 
 def test_response_observation_independent_approval_and_adapter_bypass(
@@ -367,10 +674,18 @@ def test_response_rejects_other_member_group_attachment_and_revocation(
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        ("read_context", "prepare_external_actions"),
+        ("prepare_external_actions",),
+    ],
+)
 def test_response_exact_delivery_or_ambiguity_never_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     ambiguous: bool,
+    permissions: tuple[str, ...],
 ) -> None:
     # Operational receipt validation has its own contract tests. This boundary
     # fixture admits activation so the production API and actual Gmail adapter
@@ -388,7 +703,7 @@ def test_response_exact_delivery_or_ambiguity_never_retries(
     with TestClient(
         create_application(settings), raise_server_exceptions=False
     ) as client:
-        _prepare(client)
+        _prepare(client, permissions=permissions)
         runtime = client.app.state.runtime
         service = FakeGmailService(ambiguous=ambiguous)
         _install_gmail(runtime, service)

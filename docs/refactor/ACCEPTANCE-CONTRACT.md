@@ -121,6 +121,18 @@ credential-free production-composition and disposable-target evidence. It uses
 no family Mac, Apple account, provider credential, live permission, deployment,
 runtime migration, write enablement, or provider effect.
 
+CoS permission setup amendment (2026-10-20, **MODERNIZE** AC-31 and the
+CoS response execution contract): production composition must prove missing,
+expired, revoked, ambiguous, and insufficient private delegations block new
+reply approval before any provider effect. Email preparation and native
+iMessage result-reading prerequisites remain distinct. Exact grant-request
+readback is authenticated, member-scoped, immutable, and read-only. Hosted
+browser coverage verifies explicit scope/permission/expiry confirmation,
+owner-only revocation, disabled reply controls, and uncertainty reconciliation
+without repeated mutation. Account/channel activation alone is not proof of
+usable member forwarding or replies. Existing native approval and terminal
+delivery evidence are still required.
+
 G08 CoS Settings capability-catalog amendment (2026-09-03): AC-56 is Phase A,
 credential-free production-composition evidence. Capability requests install,
 pair, enroll, authorize, or execute nothing. No live provider write, credential,

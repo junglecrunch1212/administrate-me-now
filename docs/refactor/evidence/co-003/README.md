@@ -89,7 +89,7 @@ without claiming a configured provider.
   healthy, five of five managed OpenClaw jobs reconciled, exact OpenClaw
   version/commit/plugin contract discovered, and zero live provider claims;
 - Tailscale-served member route:
-  `https://coss-mac-mini.tailabab12.ts.net/member/people`;
+  `/member/people` on the private Tailscale HTTPS origin (host coordinates remain in the owner-only connection inventory);
 - live browser: canonical ten-surface navigation, People active after Calendar
   and before Notes, five scoped reviewed identities, perspective-relative
   relationship labels, honest no-source/no-interaction states, URL-backed

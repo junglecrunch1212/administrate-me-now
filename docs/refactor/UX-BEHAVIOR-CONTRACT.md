@@ -513,6 +513,21 @@ another member's private context. View-as and non-principals receive no
 recipient addresses. Controls use labeled fields, native buttons, visible
 pending/error text and the existing narrow-screen form layout.
 
+CoS permission setup amendment (2026-10-20, **MODERNIZE** CO-026 and the
+CoS response execution contract): How my CoS works exposes an explicit
+self-private grant form with separate reading and preparation choices,
+scope/expiry confirmation, and owner revocation. Connected accounts and an
+allowlisted address do not imply that the member has granted CoS permission.
+The reply composer checks the selected channel's required permissions before
+enabling a new exact-text approval. Expired, revoked, ambiguous, unavailable,
+or insufficient authority stays visible and cannot become a successful badge.
+Another adult's context and view-as have no grant controls. Unknown creation
+results stay locked until read-only reconciliation matches the exact request;
+similar permission values are never sufficient and no send is automatically
+retried. The member device provides approval, while the enrolled CoS account
+on the central Mac remains the sender. This preserves the separate member,
+service, transport, domain approval, and native approval identities.
+
 Member-bridge amendment (2026-09-02): CO-027 advances UX-38 into UX-61. Add
 Bridge now prepares the established encrypted package and carries the member
 through target verification, local consent, signed content-free progress, and

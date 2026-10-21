@@ -41,7 +41,15 @@ from adminme.lib.observation import (
 from adminme.lib.session import Session, build_internal_session
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw import main as seam
-from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+from adminme.projections.parties.queries import (
+    ServiceDelegationResolutionError,
+    list_service_delegations,
+    resolve_service_delegation,
+)
+from adminme.service_identities import (
+    COS_AUTOMATION_OPERATOR_ID,
+    COS_SERVICE_PRINCIPAL_ID,
+)
 
 router = APIRouter(tags=["cos-responses"])
 SessionDep = Annotated[Session, Depends(session_from_request)]
@@ -154,6 +162,106 @@ async def _receipt(
     return event_id
 
 
+def _response_authority(runtime: Any, session: Session) -> dict[str, Any]:
+    """Explain the caller's exact preparation prerequisite without granting it."""
+
+    def status(
+        state: str,
+        reason: str,
+        *,
+        can_prepare: bool = False,
+        can_read_context: bool = False,
+    ) -> dict[str, Any]:
+        ready_reason = (
+            "Your private CoS permission is ready. Each reply still needs "
+            "exact-text and separate sending approvals."
+        )
+        return {
+            "state": state,
+            "can_prepare": can_prepare,
+            "can_read_context": can_read_context,
+            "reason": reason,
+            "channels": {
+                "email": {
+                    "ready": can_prepare,
+                    "reason": ready_reason if can_prepare else reason,
+                },
+                # The native sender's result route independently requires
+                # read_context. Never admit a reply whose result is inaccessible.
+                "imessage": {
+                    "ready": can_prepare and can_read_context,
+                    "reason": (
+                        ready_reason if can_prepare and can_read_context else reason
+                    ),
+                },
+            },
+        }
+
+    chief_of_staff = [
+        principal
+        for principal in runtime.settings.service_principals
+        if principal.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+        and principal.kind == "chief_of_staff"
+    ]
+    if runtime.projections is None or len(chief_of_staff) != 1:
+        return status(
+            "unavailable",
+            "CoS permission status is unavailable. Try again when the service is healthy.",
+        )
+    connection = runtime.projections.connection("parties")
+    try:
+        context = resolve_service_delegation(
+            connection,
+            tenant_id=session.tenant_id,
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
+            context_scope="member_private",
+            context_member_id=session.auth_member_id,
+        )
+    except ServiceDelegationResolutionError:
+        active = [
+            grant
+            for grant in list_service_delegations(
+                connection,
+                session,
+                service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            )
+            if grant["active"]
+            and grant["context_scope"] == "member_private"
+            and grant["context_member_id"] == session.auth_member_id
+            and grant["owner_party_id"] is None
+        ]
+        if len(active) > 1:
+            return status(
+                "ambiguous",
+                "More than one private CoS permission is active. Review your CoS permissions before approving a reply.",
+            )
+        return status(
+            "missing",
+            "Approve your own private CoS permission to prepare replies before approving a reply. Expired or revoked permission cannot be used.",
+        )
+    can_prepare = "prepare_external_actions" in context.permissions
+    can_read_context = "read_context" in context.permissions
+    if not can_prepare:
+        return status(
+            "permission_missing",
+            "Your private CoS permission does not allow reply preparation. Review your CoS permissions before approving a reply.",
+            can_read_context=can_read_context,
+        )
+    if not can_read_context:
+        return status(
+            "permission_missing",
+            "Email reply permission is ready. iMessage also needs your private context permission to confirm the sending result. Review your CoS permissions before approving an iMessage reply.",
+            can_prepare=True,
+        )
+    return status(
+        "ready",
+        "Your private CoS permission allows reply preparation and sending-result checks. Each reply still needs exact-text and separate sending approvals.",
+        can_prepare=True,
+        can_read_context=True,
+    )
+
+
 @router.get("/api/member/v1/cos/responses/options")
 async def response_options(request: Request, session: SessionDep) -> dict[str, Any]:
     require_principal(session)
@@ -184,6 +292,7 @@ async def response_options(request: Request, session: SessionDep) -> dict[str, A
             continue
         accounts.append({**account, "label": channel.display_name})
     return {
+        "authority": _response_authority(runtime, session),
         "accounts": accounts + _imessage_options(runtime),
         "recipients": [
             {"channel": entry["channel"], "address": entry["address"]}
@@ -256,6 +365,17 @@ async def approve_response(
                 "provider_effect_count": 0,
                 "state": "awaiting_openclaw_approval",
             }
+        authority = _response_authority(runtime, session)
+        channel_authority = authority["channels"][body.channel]
+        if not channel_authority["ready"]:
+            raise HTTPException(
+                503 if authority["state"] == "unavailable" else 403,
+                {
+                    "code": "cos_response_authority_required",
+                    "reason": channel_authority["reason"],
+                    "authority": authority,
+                },
+            )
         await seam._guard(runtime, session, "cos.response.approved", values)
         payload = {
             **values,

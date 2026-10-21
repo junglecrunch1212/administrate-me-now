@@ -4603,11 +4603,164 @@ function accountSettings(data) {
   const fragment = document.createDocumentFragment(); fragment.append(identitySummary(data.control.identity)); const explanation = document.createElement("section"); explanation.className = "card"; explanation.append(text("h2", "How sign-in works"), text("p", "Tailscale Serve authenticates the connecting user. AdministrateMe accepts that identity only from its loopback ingress and maps it to one reviewed household member."), text("p", "There is no separate AdministrateMe password or simulated logout. To change identity, switch the signed-in Tailscale user; bootstrap enrollment must review any mapping change.", "state-note")); fragment.append(explanation); return fragment;
 }
 
+const COS_PRIVATE_PERMISSIONS = [
+  ["read_context", "Read my private AdministrateMe context", "Includes interpreting material I forward to CoS and checking my reply results. This does not connect or monitor my personal inboxes."],
+  ["prepare_external_actions", "Prepare external actions", "Needed to prepare replies. Every actual send still needs my exact-text approval and a separate sending approval."],
+];
+
+function cosPermissionLink() {
+  const link = text("a", "Review my CoS permissions", "button button-secondary");
+  link.href = "/member/settings?section=cos-work";
+  return link;
+}
+
+function cosPrivatePermissionsCard(data, updateDelegations) {
+  const card = document.createElement("section"); card.className = "card cos-private-permissions";
+  const identity = data.control.identity;
+  const own = identity.can_mutate && identity.authenticated_role === "principal" && !identity.viewing_as && identity.authenticated_member_id === identity.view_member_id && identity.actions_as === identity.reads_as;
+  card.append(text("h2", "My CoS permissions"), text("p", "Choose what CoS may do in your private AdministrateMe context. These permissions do not grant access to credentials, personal inboxes, another adult’s information, or automatic sending.", "state-note"));
+  if (!own) {
+    card.append(text("p", "Only a principal in their own private view can review or change these permissions. Return to your own view to continue.", "empty"));
+    return card;
+  }
+  const memberId = identity.authenticated_member_id;
+  const pendingKey = `administrateme:cos-permission-pending:${memberId}`;
+  let pending = null; let busy = false; let loaded = false; let rows = [];
+  try { pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null"); } catch { pending = { action: "unknown" }; }
+  const list = document.createElement("ul"); list.className = "settings-contract-list";
+  const status = text("p", "Checking your current permissions…", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  const form = document.createElement("form"); form.className = "cos-permission-form";
+  const choices = document.createElement("fieldset"); choices.append(text("legend", "Permissions I choose"));
+  for (const [value, label, description] of COS_PRIVATE_PERMISSIONS) {
+    const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice";
+    const input = document.createElement("input"); input.type = "checkbox"; input.name = "permission"; input.value = value;
+    const copy = document.createElement("span"); copy.append(text("strong", label), text("small", description)); wrap.append(input, copy); choices.append(wrap);
+  }
+  const duration = selectControl([{ value: "15", label: "15 minutes" }, { value: "60", label: "1 hour" }, { value: "until_revoked", label: "Until revoked" }], "15", "");
+  const review = text("button", "Review permissions", "button button-primary"); review.type = "submit";
+  const refresh = text("button", "Check permission status", "button button-secondary"); refresh.type = "button";
+  form.append(choices, field("Permission duration", duration), review);
+  card.append(list, form, status, refresh);
+  function ownRows(items) { return items.filter((item) => item.context_scope === "member_private" && item.context_member_id === memberId && item.requested_by_member_id === memberId); }
+  function active(item) { return item.active && !item.revoked_at && (!item.expires_at || Date.parse(item.expires_at) > Date.now()); }
+  function expiry(item) { return item.expires_at ? `Expires ${new Date(item.expires_at).toLocaleString()}` : "Until revoked"; }
+  function permissionLabels(permissions) { return permissions.map((value) => COS_PRIVATE_PERMISSIONS.find(([key]) => key === value)?.[1] || titleCase(value)).join(", "); }
+  function lock() {
+    const blocked = busy || !loaded || Boolean(pending) || rows.some(active);
+    for (const control of form.querySelectorAll("input,select,button")) control.disabled = blocked;
+    review.disabled = blocked || !form.querySelector('input[name="permission"]:checked');
+    for (const button of list.querySelectorAll("button")) button.disabled = busy || Boolean(pending);
+    refresh.disabled = busy;
+  }
+  function savePending(value) {
+    // Persist before the request so navigation cannot turn an uncertain write
+    // into a fresh grant. An uncertain result is reconciled by its exact ID.
+    if (value) sessionStorage.setItem(pendingKey, JSON.stringify(value));
+    else sessionStorage.removeItem(pendingKey);
+    pending = value;
+  }
+  function renderRows() {
+    list.replaceChildren();
+    for (const item of rows) {
+      const row = document.createElement("li"); row.dataset.grantId = item.grant_id;
+      const stateLabel = item.revoked_at ? "Revoked" : item.expires_at && Date.parse(item.expires_at) <= Date.now() ? "Expired" : active(item) ? "Active" : "Inactive";
+      row.append(text("strong", `${identity.authenticated_display_name} · Private · ${stateLabel}`), text("small", permissionLabels(item.permissions || [])), text("small", expiry(item)));
+      if (active(item)) {
+        const revoke = text("button", "Revoke these permissions…", "button button-quiet"); revoke.type = "button";
+        revoke.addEventListener("click", () => confirmRevocation(item)); row.append(revoke);
+      }
+      list.append(row);
+    }
+    if (!rows.length) list.append(text("li", "You have no private CoS permission grants.", "empty"));
+    lock();
+  }
+  async function reconcile() {
+    busy = true; lock();
+    try {
+      const query = pending?.action === "create" && pending.request_id ? `?request_id=${encodeURIComponent(pending.request_id)}` : "";
+      const result = await api(`/api/member/v1/cos/delegations${query}`);
+      rows = ownRows(result.items || []); loaded = true;
+      updateDelegations?.(result.items || []);
+      if (pending) {
+        const confirmation = result.request_confirmation;
+        const requestedId = confirmation?.request_id === pending.request_id && confirmation.state === "recorded" ? confirmation.grant_id : null;
+        const confirmedId = pending.action === "create" ? (requestedId && (!pending.grant_id || pending.grant_id === requestedId) ? requestedId : null) : pending.grant_id;
+        const match = confirmedId ? rows.find((item) => item.grant_id === confirmedId) : null;
+        const sameCreate = match && pending.action === "create" && pending.body && match.context_scope === pending.body.context_scope && match.context_member_id === pending.body.context_member_id && JSON.stringify([...(match.permissions || [])].sort()) === JSON.stringify(pending.body.permissions) && (match.expires_at ? Date.parse(match.expires_at) : null) === (pending.body.expires_at ? Date.parse(pending.body.expires_at) : null);
+        if (sameCreate || (match && pending.action === "revoke" && match.revoked_at)) savePending(null);
+      }
+      status.textContent = pending ? "The last permission change is not confirmed. Do not repeat it. Check status again or have this exact request reviewed before making another change." : rows.some(active) ? "Your permissions are shown above. Revoke an active grant before choosing a replacement; existing permissions are never changed automatically." : "Choose each permission explicitly, then review its scope and expiry. Nothing is granted by opening this page.";
+    } catch (error) {
+      loaded = false;
+      status.textContent = `${error.message} Current permission status is unconfirmed. No new change is allowed until it can be checked.`;
+    } finally { busy = false; renderRows(); }
+  }
+  async function submitChange(change, method, path, body) {
+    if (busy || pending || !loaded) return;
+    try { savePending(change); } catch {
+      status.textContent = "This browser cannot safely retain the request reference. No permission change was requested."; return;
+    }
+    busy = true; lock(); closeActionDialog(); status.textContent = "Recording your exact permission decision…";
+    try {
+      const result = await api(path, { method, headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) });
+      if (change.action === "create" && result.grant_id) savePending({ ...change, grant_id: result.grant_id });
+    } catch (error) {
+      if (change.action === "create" && error.status === 409 && error.body?.detail?.code === "private_delegation_already_active") {
+        // This exact rejection is definitive: the serialized creation guard
+        // refused the append. Every other uncertain result retains its lock.
+        savePending(null); setBanner(error.message);
+      }
+      // Never replay POST/DELETE after any error. Refresh the authoritative
+      // list, including when another tab already created the active grant.
+    } finally { busy = false; await reconcile(); }
+  }
+  function confirmRevocation(item) {
+    if (busy || pending || !loaded || !active(item)) return;
+    const content = document.createElement("form"); content.className = "dialog-form";
+    content.append(text("p", `${identity.authenticated_display_name} · My private AdministrateMe context`), text("p", permissionLabels(item.permissions || [])), text("p", expiry(item)), text("p", "Revoke this grant? CoS will no longer have these permissions from it. This does not delete your history or recall messages already sent.", "state-note"));
+    const cancel = text("button", "Keep permissions", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+    const confirm = text("button", "Revoke these permissions", "button button-primary"); confirm.type = "submit"; content.append(cancel, confirm);
+    content.addEventListener("submit", (event) => { event.preventDefault(); confirm.disabled = true; const requestId = crypto.randomUUID(); void submitChange({ action: "revoke", request_id: requestId, grant_id: item.grant_id }, "DELETE", `/api/member/v1/cos/delegations/${encodeURIComponent(item.grant_id)}`, { request_id: requestId, reason: "Member revoked own private CoS permissions in Settings" }); });
+    openActionDialog("Revoke my CoS permissions?", content);
+  }
+  form.addEventListener("change", lock);
+  refresh.addEventListener("click", () => { void reconcile(); });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault(); if (busy || pending || !loaded || rows.some(active)) return;
+    const permissions = [...form.querySelectorAll('input[name="permission"]:checked')].map((input) => input.value).sort(); if (!permissions.length) return;
+    const expiresAt = duration.value === "until_revoked" ? null : new Date(Date.now() + Number(duration.value) * 60_000).toISOString();
+    const content = document.createElement("form"); content.className = "dialog-form cos-permission-confirmation";
+    content.append(text("p", `${identity.authenticated_display_name} · My private AdministrateMe context`), text("p", permissionLabels(permissions)), text("p", expiry({ expires_at: expiresAt })), text("p", "Only these selected permissions will be granted to the household CoS for my private context. Personal inbox access and automatic sending remain off. Every actual reply still needs both approvals.", "state-note"));
+    const cancel = text("button", "Go back", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+    const confirm = text("button", "Grant these permissions", "button button-primary"); confirm.type = "submit"; content.append(cancel, confirm);
+    content.addEventListener("submit", (submit) => {
+      submit.preventDefault(); if (expiresAt && Date.parse(expiresAt) <= Date.now()) { confirm.disabled = true; content.append(text("p", "This review has expired. Go back and review a new expiry.", "state-note")); return; }
+      confirm.disabled = true; const requestId = crypto.randomUUID();
+      const body = { request_id: requestId, context_scope: "member_private", context_member_id: memberId, permissions, expires_at: expiresAt, require_no_active_private_grant: true };
+      void submitChange({ action: "create", request_id: requestId, body }, "POST", "/api/member/v1/cos/delegations", body);
+    });
+    openActionDialog("Grant my CoS permissions?", content);
+  });
+  lock(); void reconcile(); return card;
+}
+
 function howCosWorksSettings(data) {
   const fragment = document.createDocumentFragment(); const model = data.control.how_my_cos_works || {}; const identity = data.control.cos_identity || {};
   const identityCard = document.createElement("section"); identityCard.className = "card settings-safety"; identityCard.append(text("p", "SAME COS · ISOLATED MEMBER CONTEXT", "eyebrow"), text("h2", "One household service principal, one private adult context")); const facts = document.createElement("dl"); facts.className = "settings-facts"; for (const [label, value] of [["Service principal", identity.service_principal_id], ["Household Party", identity.party_id], ["Active member", identity.active_member_context], ["OpenClaw agent", identity.openclaw_agent_id], ["Shared generic memory", identity.generic_member_memory_shared ? "Yes" : "No"], ["Raw cross-member context", identity.raw_cross_member_context ? "Yes" : "No"]]) facts.append(text("dt", label), text("dd", value)); identityCard.append(facts); fragment.append(identityCard);
   const agreements = document.createElement("section"); agreements.className = "card"; agreements.append(text("h2", "Effective operating agreements"), text("p", "Typed, versioned agreements are authority. Markdown and conversational wording are not.", "state-note")); const agreementList = document.createElement("ul"); agreementList.className = "settings-contract-list"; for (const item of model.agreements || []) { const row = document.createElement("li"); row.append(text("strong", `${titleCase(item.layer)} · ${titleCase(item.trust_stage)}`), text("small", `${titleCase(item.authority_scope)} · revision ${item.revision} · ${titleCase(item.effective_state)}`), text("small", `May observe: ${(item.may_observe || []).map(titleCase).join(", ") || "None"} · May prepare: ${(item.may_prepare || []).map(titleCase).join(", ") || "None"}`), text("small", item.provider_execution_permitted ? "Provider execution may still require exact approval." : "No provider execution authority.")); agreementList.append(row); } if (!agreementList.children.length) agreementList.append(text("li", "No effective agreement is visible in this context.", "empty")); agreements.append(agreementList); fragment.append(agreements);
-  const delegations = document.createElement("section"); delegations.className = "card"; delegations.append(text("h2", "Exact delegations")); const delegationList = document.createElement("ul"); delegationList.className = "settings-contract-list"; for (const item of model.delegations || []) { const row = document.createElement("li"); row.append(text("strong", item.grant_id), text("small", `${titleCase(item.context_scope)} · ${item.active ? "Active" : "Inactive"}`), text("small", (item.permissions || []).map(titleCase).join(", ") || "No permissions")); delegationList.append(row); } if (!delegationList.children.length) delegationList.append(text("li", "No private delegation is visible in this context.", "empty")); delegations.append(delegationList); fragment.append(delegations);
+  const delegations = document.createElement("details"); delegations.className = "card settings-advanced"; delegations.append(text("summary", "Exact delegations"));
+  const delegationList = document.createElement("ul"); delegationList.className = "settings-contract-list"; delegations.append(delegationList);
+  function updateDelegations(items) {
+    delegationList.replaceChildren();
+    for (const item of items) {
+      const row = document.createElement("li");
+      row.append(text("strong", item.grant_id), text("small", `${titleCase(item.context_scope)} · ${item.active ? "Active" : "Inactive"}`), text("small", (item.permissions || []).map(titleCase).join(", ") || "No permissions"), text("small", item.expires_at ? `Expires ${new Date(item.expires_at).toLocaleString()}` : "Until revoked"));
+      delegationList.append(row);
+    }
+    if (!items.length) delegationList.append(text("li", "No delegation is visible in this context.", "empty"));
+  }
+  updateDelegations(model.delegations || []);
+  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), delegations);
   const compiled = model.compiled_context; if (compiled) { const contextCard = document.createElement("details"); contextCard.className = "card settings-advanced"; contextCard.append(text("summary", "Compiled effective CoS context"), text("p", `Digest ${compiled.digest} · built only from typed state.`, "state-note")); contextCard.append(permissionList("Explicitly excluded", compiled.excluded || [])); fragment.append(contextCard); }
   return fragment;
 }
@@ -4650,6 +4803,11 @@ function cosResponseApprovalCard() {
       const accounts = options.accounts || [];
       const recipients = (options.recipients || []).filter((recipient) => recipient.channel === "email" || (recipient.channel === "imessage" && /^\+[1-9][0-9]{7,14}$/.test(recipient.address)));
       content.replaceChildren();
+      const authority = options.authority;
+      if (!authority?.can_prepare) {
+        content.append(text("p", authority?.reason || "Your private CoS permissions must be checked before approving a reply.", "state-note"), cosPermissionLink());
+        return;
+      }
       if (!accounts.length || !recipients.length) {
         content.append(text("p", !accounts.length ? "A connected CoS account is needed before you can approve a reply." : "Add your email address or iMessage phone number to CoS replies before approving a reply to yourself.", "empty"));
         return;
@@ -4664,7 +4822,7 @@ function cosResponseApprovalCard() {
       form.append(field("Reply channel", channel), field("From", account), field("To", recipient), subjectField, field("Exact reply text", body), text("p", "iMessage replies use one plain-text line without formatting marks, tabs, or spaces at the beginning or end. Use email for multiple lines or text containing formatting marks. Replies have no attachments or group recipients.", "state-note"));
       const approve = text("button", "Approve this exact reply", "button button-primary"); approve.type = "submit";
       const status = text("p", "", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
-      form.append(approve, status); content.append(form);
+      form.append(approve, status, cosPermissionLink()); content.append(form);
       let pending = false; let retry = null;
       function updateChoices() {
         const accountOptions = accounts.map((value, index) => ({ ...value, index })).filter((value) => value.channel === channel.value).map((value) => ({ value: String(value.index), label: value.label }));
@@ -4672,8 +4830,9 @@ function cosResponseApprovalCard() {
         replaceSelectOptions(account, accountOptions, accountOptions[0]?.value || "", accountOptions.length ? "" : "No connected account");
         replaceSelectOptions(recipient, recipientOptions, recipientOptions[0]?.value || "", recipientOptions.length ? "" : "No allowed recipient");
         subjectField.style.display = channel.value === "imessage" ? "none" : "";
-        approve.disabled = !accountOptions.length || !recipientOptions.length;
-        status.textContent = !accountOptions.length ? "This CoS channel is not connected for replies." : !recipientOptions.length ? "List your own address for this channel before approving a reply." : "";
+        const channelAuthority = authority.channels?.[channel.value];
+        approve.disabled = !accountOptions.length || !recipientOptions.length || channelAuthority?.ready !== true;
+        status.textContent = channelAuthority?.ready !== true ? channelAuthority?.reason || "Review your CoS permissions before approving a reply on this channel." : !accountOptions.length ? "This CoS channel is not connected for replies." : !recipientOptions.length ? "List your own address for this channel before approving a reply." : "";
         retry = null;
       }
       function unlock() { pending = false; for (const control of form.querySelectorAll("input,select,textarea,button")) control.disabled = false; }
@@ -4681,7 +4840,7 @@ function cosResponseApprovalCard() {
       form.addEventListener("submit", async (event) => {
         event.preventDefault(); if (pending) return;
         const selected = accounts[Number(account.value)];
-        if (!selected || selected.channel !== channel.value || !recipient.value) return;
+        if (!selected || selected.channel !== channel.value || !recipient.value || authority.channels?.[channel.value]?.ready !== true) return;
         const values = { channel: channel.value, service_channel_id: selected.service_channel_id, provider_account_id: selected.provider_account_id, recipient: recipient.value, subject: channel.value === "imessage" ? "" : subject.value, body: body.value };
         const fingerprint = JSON.stringify(values);
         if (!retry || retry.fingerprint !== fingerprint) retry = { fingerprint, requestId: crypto.randomUUID() };
@@ -4706,8 +4865,12 @@ function cosResponseApprovalCard() {
           // Leave the approved content immutable in this view. A new approval
           // requires a fresh form and never extends this approval's expiry.
         } catch (error) {
-          status.textContent = `${error.message} No send is confirmed. Retrying the same approval is safe.`;
-          unlock();
+          if (error.body?.detail?.code === "cos_response_authority_required") {
+            status.textContent = `${error.message} Review your CoS permissions before approving a reply. No send is confirmed.`;
+          } else {
+            status.textContent = `${error.message} No send is confirmed. Retrying the same approval is safe.`;
+            unlock();
+          }
         }
       });
     } catch (error) {

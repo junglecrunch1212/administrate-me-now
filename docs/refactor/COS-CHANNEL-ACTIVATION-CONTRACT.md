@@ -20,6 +20,13 @@ The operation does not create accounts or manufacture proof of a sign-in.
 An email channel can become ready independently of Messages. Messages requires
 the pinned, verified guarded transport and an exact sender identity; signing in
 to Messages alone is insufficient. No activation test sends a provider message.
+Channel readiness is also separate from each member's private CoS delegation.
+Activation does not manufacture member grants. Before claiming a member can
+forward through iMessage or approve replies, verify the applicable reading and
+preparation permissions in that member's own authenticated Settings context.
+The member device is an approval surface; the CoS account on the central Mac is
+the sender. A skipped second-member device check cannot establish that member's
+private authority or end-to-end behavior.
 
 ## Supported operation
 
