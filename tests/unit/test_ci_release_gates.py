@@ -26,6 +26,7 @@ REQUIRED_STAGES = {
         "Validate candidate diff",
     },
     "credential-free-rehearsal": {
+        "Require packaged member installation",
         "Build and verify the exact reviewed OpenClaw source",
         "Validate member browser behavior",
         "Credential-free clean install and recovery rehearsal",
@@ -58,10 +59,26 @@ def _assert_storage_diagnostics_only(script: str) -> None:
 
 
 def _assert_complete_release_gate(job: dict[str, Any], job_id: str) -> None:
-    # GitHub considers a skipped job successful for branch protection. Never
-    # implement this boundary as job-level "if" or a soft-failing dependency.
-    assert "if" not in job
-    assert "needs" not in job
+    # GitHub considers a skipped job successful for branch protection. A new
+    # dependency must therefore run this gate even after failure/cancellation,
+    # and its exact success must be asserted before any release stages.
+    if job_id == "credential-free-rehearsal":
+        assert job.get("if") == "${{ always() }}"
+        assert job.get("needs") == ["bridge-installed-runtime"]
+        prerequisite = job["steps"][1]
+        assert prerequisite.get("name") == "Require packaged member installation"
+        assert "if" not in prerequisite
+        assert prerequisite["env"] == {
+            "BRIDGE_INSTALLATION_RESULT": (
+                "${{ needs.bridge-installed-runtime.result }}"
+            )
+        }
+        assert prerequisite["run"].strip() == (
+            'test "$BRIDGE_INSTALLATION_RESULT" = "success"'
+        )
+    else:
+        assert "if" not in job
+        assert "needs" not in job
     assert "continue-on-error" not in job
     steps = job["steps"]
     refusal = steps[0]
@@ -131,6 +148,45 @@ def test_gate_contract_rejects_false_release_success(
         job["steps"][-1]["if"] = "${{ false }}"
     with pytest.raises(AssertionError):
         _assert_complete_release_gate(job, job_id)
+
+
+def test_packaged_installation_cannot_skip_or_reuse_harness_environment() -> None:
+    job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
+    assert "if" not in job
+    assert "continue-on-error" not in job
+    assert job["runs-on"] == "macos-26"
+    python = next(step for step in job["steps"] if step.get("id") == "bridge-python")
+    assert python["with"]["python-version"] == "3.14.8"
+    install = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Validate packaged member installation and partial recovery"
+    )
+    assert "if" not in install
+    assert "continue-on-error" not in install
+    assert install["env"]["ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME"] == "1"
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_PYTHON"] == (
+        "${{ steps.bridge-python.outputs.python-path }}"
+    )
+    assert "tests/acceptance/test_member_bridge_installer_runtime.py" in install["run"]
+    assert "suites) > 0" in install["run"]
+    assert '("skipped", "failures", "errors")' in install["run"]
+
+
+@pytest.mark.parametrize("regression", ["skipped_dependency", "no_assertion", "soft"])
+def test_full_mac_gate_refuses_missing_installer_success(regression: str) -> None:
+    job = copy.deepcopy(
+        _workflow("macos-bootstrap.yml")["jobs"]["credential-free-rehearsal"]
+    )
+    if regression == "skipped_dependency":
+        del job["if"]
+    elif regression == "no_assertion":
+        job["steps"].pop(1)
+    else:
+        job["steps"][1]["continue-on-error"] = "true"
+    with pytest.raises(AssertionError):
+        _assert_complete_release_gate(job, "credential-free-rehearsal")
 
 
 @pytest.mark.parametrize(

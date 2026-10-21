@@ -51,6 +51,7 @@ jobs:
           poetry run pytest -p no:cacheprovider --runxfail -q -ra
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
+          tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_release_identity.py
@@ -97,8 +98,74 @@ jobs:
           git diff --check
           test -z "$(git status --porcelain)"
 
-  # Keep this full-release job name stable. Drafts fail rather than skip it.
+  # Exercise the packaged installer on the current supported member platform,
+  # with fresh tooling and dependency caches rather than the harness's venv.
+  bridge-installed-runtime:
+    name: Packaged member bridge installation
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        id: bridge-python
+        with:
+          python-version: "3.14.8"
+
+      - name: Record isolated member installation platform
+        run: |
+          uname -m
+          sw_vers
+          python --version
+          xcode-select -p
+          xcrun --find clang
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Install locked test harness
+        run: |
+          python -m pip install "poetry==2.4.1"
+          poetry sync --with dev --no-interaction
+
+      - name: Validate packaged member installation and partial recovery
+        env:
+          ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME: "1"
+          ADMINME_BRIDGE_INSTALLER_PYTHON: ${{ steps.bridge-python.outputs.python-path }}
+          ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR: ${{ runner.temp }}/adminme-packaged-bridge-evidence
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="${RUNNER_TEMP}/adminme-packaged-bridge" \
+            --junitxml="${RUNNER_TEMP}/adminme-packaged-bridge.xml" \
+            tests/acceptance/test_member_bridge_installer_runtime.py
+          python - "${RUNNER_TEMP}/adminme-packaged-bridge.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          suites = list(ET.parse(sys.argv[1]).getroot().iter("testsuite"))
+          assert sum(int(s.get("tests", "0")) for s in suites) > 0
+          assert all(int(s.get(k, "0")) == 0 for s in suites for k in ("skipped", "failures", "errors"))
+          PY
+
+      - name: Retain isolated installation result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packaged-member-bridge-installation
+          path: |
+            ${{ runner.temp }}/adminme-packaged-bridge.xml
+            ${{ runner.temp }}/adminme-packaged-bridge-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+  # Keep this full-release job name stable. Drafts and failed/missing installer
+  # prerequisites fail explicitly; an unsuccessful dependency cannot skip it.
   credential-free-rehearsal:
+    needs: [bridge-installed-runtime]
+    if: ${{ always() }}
     runs-on: macos-15
     # The complete rehearsal exceeded 90 minutes after all Python tests passed.
     # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
@@ -112,6 +179,11 @@ jobs:
         run: |
           echo "::error::Development-only draft: targeted checks cannot approve a release. Mark this PR ready after relevant regressions pass to run complete Linux and macOS validation."
           exit 1
+
+      - name: Require packaged member installation
+        env:
+          BRIDGE_INSTALLATION_RESULT: ${{ needs.bridge-installed-runtime.result }}
+        run: test "$BRIDGE_INSTALLATION_RESULT" = "success"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

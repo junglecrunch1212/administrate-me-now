@@ -25,6 +25,172 @@ HELPER_APP_CONTRACT = "administrateme-member-bridge-helper-app-v1"
 BUNDLE_IDENTIFIER = "com.administrateme.member-bridge-helper"
 
 
+def _helper_launcher(commit: str, archive_sha256: str) -> bytes:
+    """Render the sealed launcher; no runtime diagnostic or UI override exists."""
+
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(
+        r"[0-9a-f]{64}", archive_sha256
+    ):
+        raise ValueError("helper launcher requires exact source coordinates")
+    template = r"""#!/bin/bash
+set -Eeuo pipefail
+umask 077
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+PACKAGE="${1:-}"
+CONTENTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+RESOURCES="$CONTENTS_DIR/Resources"
+INSTALLER="$RESOURCES/install-member-bridge.sh"
+RELEASE_ARCHIVE="$RESOURCES/administrateme-reviewed-release.tar"
+EXPECTED_COMMIT=@COMMIT@
+RELEASE_ARCHIVE_SHA256=@ARCHIVE_SHA256@
+BRIDGE_ROOT="$HOME/Library/Application Support/AdministrateMe Bridge"
+CODE_FILE=""
+PREVIEW_FILE=""
+LOG_FILE=""
+ATTEMPT_DIR=""
+PHASE="diagnostics_setup"
+OPERATION="enroll"
+OUTCOME="running"
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+remove_temporary_files() {
+  [[ -z "$CODE_FILE" ]] || rm -f "$CODE_FILE"
+  [[ -z "$PREVIEW_FILE" ]] || rm -f "$PREVIEW_FILE"
+  [[ -z "$LOG_FILE" ]] || rm -f "$LOG_FILE"
+  return 0
+}
+
+read_phase() {
+  [[ -n "$ATTEMPT_DIR" ]] || return 0
+  while IFS= read -r item; do
+    case "$item" in
+      preflight|python_setup|release_preparation|tooling_setup|environment_setup|dependency_install|package_preview|local_acceptance|permission_setup) PHASE="$item" ;;
+    esac
+  done <"$ATTEMPT_DIR/phases"
+}
+
+write_receipt() {
+  local exit_code="$1" receipt_temp
+  [[ -n "$ATTEMPT_DIR" && -d "$ATTEMPT_DIR" && ! -L "$ATTEMPT_DIR" && -O "$ATTEMPT_DIR" ]] || return 0
+  receipt_temp="$(mktemp "$ATTEMPT_DIR/.receipt.XXXXXX")" || return 1
+  printf '{"contract":"administrateme-bridge-setup-diagnostic-v1","release_commit":"%s","operation":"%s","phase":"%s","outcome":"%s","exit_code":%s,"started_at":"%s","updated_at":"%s","dependency_log_limit_bytes":262144}\n' \
+    "$EXPECTED_COMMIT" "$OPERATION" "$PHASE" "$OUTCOME" "$exit_code" "$STARTED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$receipt_temp"
+  mv -f "$receipt_temp" "$ATTEMPT_DIR/receipt.json"
+}
+
+finish() {
+  local exit_code="$?"
+  trap - EXIT
+  if [[ "$OUTCOME" == "running" ]]; then
+    OUTCOME="failed"
+    read_phase || true
+  fi
+  remove_temporary_files
+  write_receipt "$exit_code" || true
+  exit "$exit_code"
+}
+trap finish EXIT
+
+fail_closed() {
+  local exit_code="${1:-1}"
+  OUTCOME="failed"
+  read_phase
+  remove_temporary_files
+  write_receipt "$exit_code" || true
+  /usr/bin/osascript "$RESOURCES/failed.applescript" "$PHASE" >/dev/null 2>&1 || true
+  exit "$exit_code"
+}
+
+# Descend only through owned, non-writable-by-others, non-symlink directories.
+# Each attempt gets a fresh private directory; no caller-selected output path
+# or existing diagnostic file is opened for writing.
+safe_directory() {
+  local directory="$1" mode
+  [[ -d "$directory" && ! -L "$directory" && -O "$directory" ]] || return 1
+  mode="$(stat -f '%Lp' "$directory" 2>/dev/null)" || mode="$(stat -c '%a' "$directory")"
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 ))
+}
+[[ "$HOME" == /* && "$HOME" != "/" && "$(cd "$HOME" && pwd -P)" == "$HOME" ]] || fail_closed
+safe_directory "$HOME" || fail_closed
+diagnostic_root="$HOME"
+for component in Library Logs "AdministrateMe Bridge" Setup; do
+  diagnostic_root="$diagnostic_root/$component"
+  if [[ ! -e "$diagnostic_root" && ! -L "$diagnostic_root" ]]; then
+    mkdir -m 700 "$diagnostic_root" || fail_closed
+  fi
+  safe_directory "$diagnostic_root" || fail_closed
+done
+ATTEMPT_DIR="$(mktemp -d "$diagnostic_root/attempt.XXXXXX")" || fail_closed
+: >"$ATTEMPT_DIR/phases"
+: >"$ATTEMPT_DIR/dependency-install.log"
+write_receipt 0
+CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-code.XXXXXX")"
+PREVIEW_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-preview.XXXXXX")"
+LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-helper.XXXXXX")"
+
+if [[ "$PACKAGE" == "--manage" ]]; then
+  OPERATION="manage"
+  PHASE="manage"
+  if action="$(/usr/bin/osascript "$RESOURCES/manage.applescript")"; then :; else
+    OUTCOME="cancelled"
+    exit 0
+  fi
+  release_root="$BRIDGE_ROOT/app/releases/$EXPECTED_COMMIT"
+  release_python="$release_root/.venv/bin/python"
+  [[ -d "$release_root" && ! -L "$release_root" && -x "$release_python" ]] || fail_closed
+  export ADMINME_REPOSITORY_ROOT="$release_root"
+  export ADMINME_REVIEWED_COMMIT="$EXPECTED_COMMIT"
+  cd "$release_root"
+  case "$action" in
+    "Continue Enrollment") OPERATION="continue"; PHASE="continue_enrollment"; command="bridge-complete" ;;
+    "Uninstall Locally") OPERATION="uninstall"; PHASE="uninstall"; command="bridge-uninstall" ;;
+    *) OUTCOME="cancelled"; exit 0 ;;
+  esac
+  if "$release_python" -m bootstrap.cli "$command" --bridge-root "$BRIDGE_ROOT" >"$LOG_FILE" 2>&1; then
+    OUTCOME="succeeded"
+    exit 0
+  else
+    fail_closed "$?"
+  fi
+fi
+
+PHASE="handoff_selection"
+[[ -n "$PACKAGE" && "$PACKAGE" == *.adminmebridge && -f "$PACKAGE" && ! -L "$PACKAGE" ]] || fail_closed
+PHASE="transfer_code"
+if TRANSFER_CODE="$(/usr/bin/osascript "$RESOURCES/secure-code.applescript")"; then :; else
+  OUTCOME="cancelled"
+  exit 0
+fi
+[[ -n "$TRANSFER_CODE" && "$TRANSFER_CODE" != *$'\n'* && "$TRANSFER_CODE" != *$'\r'* ]] || fail_closed
+/usr/bin/printf '%s' "$TRANSFER_CODE" >"$CODE_FILE"
+/bin/chmod 600 "$CODE_FILE"
+unset TRANSFER_CODE
+
+if ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --preview-only --transfer-code-file "$CODE_FILE" "$PACKAGE" >"$PREVIEW_FILE" 2>"$LOG_FILE" 3>"$ATTEMPT_DIR/phases" 4<>"$ATTEMPT_DIR/dependency-install.log"; then :; else
+  fail_closed "$?"
+fi
+PHASE="review"
+if /usr/bin/osascript "$RESOURCES/review.applescript" "$PREVIEW_FILE" >/dev/null; then :; else
+  OUTCOME="cancelled"
+  exit 0
+fi
+if ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --complete-wizard --transfer-code-file "$CODE_FILE" "$PACKAGE" >"$LOG_FILE" 2>&1 3>"$ATTEMPT_DIR/phases" 4<>"$ATTEMPT_DIR/dependency-install.log"; then :; else
+  fail_closed "$?"
+fi
+PHASE="complete"
+OUTCOME="succeeded"
+remove_temporary_files
+write_receipt 0
+/usr/bin/osascript "$RESOURCES/complete.applescript" >/dev/null || true
+"""
+    return (
+        template.replace("@COMMIT@", shlex.quote(commit))
+        .replace("@ARCHIVE_SHA256@", shlex.quote(archive_sha256))
+        .encode("utf-8")
+    )
+
+
 @dataclass(frozen=True)
 class HelperAppBuild:
     path: str
@@ -154,7 +320,25 @@ end run
 
     secure_code_script = b"""set response to display dialog "Paste the one-time code copied by AdministrateMe Settings. The code stays hidden and is never placed in a URL or command argument." default answer "" hidden answer true buttons {"Cancel", "Continue"} default button "Continue" cancel button "Cancel" with title "AdministrateMe Bridge Helper"\nreturn text returned of response\n"""
     review_script = b"""on run argv\n  set summaryFile to POSIX file (item 1 of argv)\n  set summaryText to read summaryFile\n  display dialog summaryText & return & return & "The helper will verify Tailscale, ask macOS - not the helper - for each selected permission, and start no connector until central attestation." buttons {"Cancel", "Accept on this Mac"} default button "Accept on this Mac" cancel button "Cancel" with title "Review Bridge Enrollment"\nend run\n"""
-    failed_script = b"""display dialog "Enrollment did not finish. No provider write was authorized. Return to AdministrateMe Settings to repair, retry, regenerate, or revoke this request." buttons {"OK"} default button "OK" with icon caution with title "Bridge Enrollment Stopped"\n"""
+    failed_script = b"""on run argv
+  set phase to item 1 of argv
+  set explanation to "Enrollment did not finish. A private setup diagnostic was saved on this Mac. Return to AdministrateMe Settings to review the request before retrying."
+  if phase is "diagnostics_setup" then
+    set explanation to "The helper could not safely create its private diagnostic folder. Repair the local setup folder permissions before retrying."
+  else if phase is in {"preflight", "python_setup", "release_preparation"} then
+    set explanation to "Local installation prerequisites or reviewed release preparation stopped. A private setup diagnostic was saved. Repair the reported local setup problem before retrying this request in AdministrateMe Settings."
+  else if phase is in {"tooling_setup", "environment_setup", "dependency_install"} then
+    set explanation to "Required software installation stopped before enrollment. A private installation log and setup diagnostic were saved. Repair the installation problem before retrying this request in AdministrateMe Settings."
+  else if phase is in {"handoff_selection", "transfer_code", "package_preview"} then
+    set explanation to "The secure handoff could not be opened. Check this request in AdministrateMe Settings and download a fresh handoff if it has expired. Keep its one-time code private."
+  else if phase is in {"local_acceptance", "permission_setup", "continue_enrollment"} then
+    set explanation to "Local enrollment or a selected permission step stopped. Review this request in AdministrateMe Settings, then use Continue Enrollment only after the reported problem is repaired."
+  else if phase is "uninstall" then
+    set explanation to "Local removal did not finish. A private setup diagnostic was saved. Review the bridge in AdministrateMe Settings; revoke it there to stop central ingestion."
+  end if
+  display dialog explanation & return & return & "No provider write was authorized." buttons {"OK"} default button "OK" with icon caution with title "Bridge Enrollment Stopped"
+end run
+"""
     complete_script = b"""display dialog "The reviewed bridge enrollment flow finished. AdministrateMe Settings shows each source independently while observations settle. No provider write was authorized." buttons {"OK"} default button "OK" with title "Bridge Enrollment Complete"\n"""
     manage_script = b"""set answer to display dialog "Continue selected local permission steps, or uninstall bridge-owned files from this Mac. Revoke the bridge in AdministrateMe Settings to stop central ingestion." buttons {"Cancel", "Uninstall Locally", "Continue Enrollment"} default button "Continue Enrollment" cancel button "Cancel" with title "Manage AdministrateMe Bridge"\nreturn button returned of answer\n"""
     for name, value in (
@@ -166,63 +350,9 @@ end run
     ):
         atomic_write(resources / name, value)
 
-    quoted_commit = shlex.quote(commit)
     installer_sha256 = hashlib.sha256(bundled_installer.read_bytes()).hexdigest()
     release_archive_sha256 = hashlib.sha256(release_archive.read_bytes()).hexdigest()
-    quoted_archive_sha256 = shlex.quote(release_archive_sha256)
-    launcher = f"""#!/bin/bash
-set -Eeuo pipefail
-umask 077
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-PACKAGE="${{1:-}}"
-CONTENTS_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/.." && pwd -P)"
-RESOURCES="$CONTENTS_DIR/Resources"
-INSTALLER="$RESOURCES/install-member-bridge.sh"
-RELEASE_ARCHIVE="$RESOURCES/administrateme-reviewed-release.tar"
-EXPECTED_COMMIT={quoted_commit}
-RELEASE_ARCHIVE_SHA256={quoted_archive_sha256}
-BRIDGE_ROOT="$HOME/Library/Application Support/AdministrateMe Bridge"
-CODE_FILE="$(mktemp "${{TMPDIR:-/tmp}}/administrateme-bridge-code.XXXXXX")"
-PREVIEW_FILE="$(mktemp "${{TMPDIR:-/tmp}}/administrateme-bridge-preview.XXXXXX")"
-LOG_FILE="$(mktemp "${{TMPDIR:-/tmp}}/administrateme-bridge-helper.XXXXXX")"
-cleanup() {{ rm -f "$CODE_FILE" "$PREVIEW_FILE" "$LOG_FILE"; }}
-trap cleanup EXIT
-
-fail_closed() {{
-  /usr/bin/osascript "$RESOURCES/failed.applescript" >/dev/null 2>&1 || true
-  exit 1
-}}
-
-if [[ "$PACKAGE" == "--manage" ]]; then
-  action="$(/usr/bin/osascript "$RESOURCES/manage.applescript")" || exit 0
-  release_python="$BRIDGE_ROOT/app/releases/$EXPECTED_COMMIT/.venv/bin/python"
-  [[ -x "$release_python" ]] || fail_closed
-  if [[ "$action" == "Continue Enrollment" ]]; then
-    exec "$release_python" -m bootstrap.cli bridge-complete --bridge-root "$BRIDGE_ROOT"
-  fi
-  if [[ "$action" == "Uninstall Locally" ]]; then
-    exec "$release_python" -m bootstrap.cli bridge-uninstall --bridge-root "$BRIDGE_ROOT"
-  fi
-  exit 0
-fi
-
-[[ -n "$PACKAGE" && "$PACKAGE" == *.adminmebridge && -f "$PACKAGE" && ! -L "$PACKAGE" ]] || fail_closed
-TRANSFER_CODE="$(/usr/bin/osascript "$RESOURCES/secure-code.applescript")" || exit 0
-[[ -n "$TRANSFER_CODE" && "$TRANSFER_CODE" != *$'\\n'* && "$TRANSFER_CODE" != *$'\\r'* ]] || fail_closed
-/usr/bin/printf '%s' "$TRANSFER_CODE" >"$CODE_FILE"
-/bin/chmod 600 "$CODE_FILE"
-unset TRANSFER_CODE
-
-if ! "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --preview-only --transfer-code-file "$CODE_FILE" "$PACKAGE" >"$PREVIEW_FILE" 2>"$LOG_FILE"; then
-  fail_closed
-fi
-/usr/bin/osascript "$RESOURCES/review.applescript" "$PREVIEW_FILE" >/dev/null || exit 0
-if ! "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --complete-wizard --transfer-code-file "$CODE_FILE" "$PACKAGE" >"$LOG_FILE" 2>&1; then
-  fail_closed
-fi
-/usr/bin/osascript "$RESOURCES/complete.applescript" >/dev/null
-""".encode("utf-8")
+    launcher = _helper_launcher(commit, release_archive_sha256)
     executable = resources / "bridge-helper-launcher.sh"
     atomic_write(executable, launcher)
     os.chmod(executable, 0o700)
@@ -244,6 +374,13 @@ fi
         "remote_shell": False,
         "arbitrary_central_code": False,
         "tcc_dialog_automation": False,
+        "setup_diagnostics": {
+            "contract": "administrateme-bridge-setup-diagnostic-v1",
+            "private_terminal_receipts": True,
+            "dependency_log_limit_bytes": 262144,
+            "retains_enrollment_output": False,
+            "retains_transfer_code": False,
+        },
     }
     atomic_write(
         resources / "helper-manifest.json",

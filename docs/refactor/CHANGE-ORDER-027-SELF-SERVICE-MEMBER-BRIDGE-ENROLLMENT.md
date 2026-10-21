@@ -70,6 +70,15 @@ central code, install an updater or remote shell, or start a connector merely
 because transport paired. The legacy unsigned bootstrap package remains
 accepted only by the established legacy path.
 
+Installation failures must remain diagnosable after a native dialog exits.
+The helper records a private, content-free phase and terminal exit receipt;
+dependency preparation retains a bounded private log before transfer-package
+inspection. Dependency progress is separate from the safe enrollment preview.
+Transfer codes and later enrollment output remain temporary and are deleted
+on exit. A phase receipt is diagnostic evidence, never acceptance, permission,
+source attestation or proof that installation completed. This MODERNIZE preserves
+the existing enrollment and write-authorization gates.
+
 ## Independent lifecycle and capability gates
 
 The wizard uses the one exact lifecycle:
@@ -164,6 +173,16 @@ native per-capability workflow, protected secret transport, and absence of
 updater, remote-shell, arbitrary-code, TCC bypass, and write authority. Existing
 bootstrap, bridge-ingest, Calendar, Reminders, Settings, replay, browser,
 clean-macOS rehearsal, and aggregate release gates remain required.
+
+`tests/acceptance/test_member_bridge_installer_runtime.py` adds the actual
+packaged dependency-installation boundary in isolated hosted macOS: a Git-free
+archive, paths containing spaces, fresh tooling and dependency caches, a real
+main-only bridge environment, production preview, and recovery of an interrupted
+dependency installation. Only FileVault, Tailscale and Homebrew host boundaries
+are synthetic; no member device or Apple source is used as a test target. The
+explicit installer job rejects empty or skipped coverage. Its exact success is
+required by the existing protected macOS release gate, which runs and fails
+explicitly if the prerequisite fails, is cancelled or is missing.
 
 `tests/acceptance/test_cos_member_bridge_acquisition.py` covers the explicit
 read-only source exception through that same production composition with the

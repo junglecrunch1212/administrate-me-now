@@ -66,6 +66,7 @@ jobs:
           tests/unit/test_cos_member_bridge_acquisition_policy.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_member_bridge_helper_app.py
+          tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_authorization.py
           tests/unit/test_bridge_release_identity.py

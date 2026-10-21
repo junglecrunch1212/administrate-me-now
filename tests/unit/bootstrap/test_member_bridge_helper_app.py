@@ -93,6 +93,39 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
     assert manifest["remote_shell"] is False
     assert manifest["arbitrary_central_code"] is False
     assert manifest["tcc_dialog_automation"] is False
+    assert manifest["setup_diagnostics"] == {
+        "contract": "administrateme-bridge-setup-diagnostic-v1",
+        "private_terminal_receipts": True,
+        "dependency_log_limit_bytes": 262144,
+        "retains_enrollment_output": False,
+        "retains_transfer_code": False,
+    }
+    failure_dialog = (
+        destination / "Contents" / "Resources" / "failed.applescript"
+    ).read_text()
+    assert (
+        'phase is in {"tooling_setup", "environment_setup", "dependency_install"}'
+        in failure_dialog
+    )
+    assert "No provider write was authorized." in failure_dialog
+    # Compilation catches native dialog syntax without showing any dialog or
+    # exercising member permissions. The droplet compiler only checks handler
+    # source; bundled dialog scripts need their own hosted macOS syntax gate.
+    compiled_dialogs = tmp_path / "compiled-dialogs"
+    compiled_dialogs.mkdir()
+    for script in (destination / "Contents" / "Resources").glob("*.applescript"):
+        syntax = subprocess.run(
+            [
+                "/usr/bin/osacompile",
+                "-o",
+                str(compiled_dialogs / f"{script.stem}.scpt"),
+                str(script),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert syntax.returncode == 0, f"{script.name}: {syntax.stderr}"
 
     verification = subprocess.run(
         ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(destination)],
