@@ -64,6 +64,20 @@ def _retained_personal_setup(monkeypatch: pytest.MonkeyPatch) -> None:
             read_only=True,
             enable_writes=False,
         )
+        # Enrollment discovery requires the complete retained Google profile.
+        # These disabled rows keep the same account and read-only grant evidence;
+        # neither can be constructed or resolve a credential under CoS intake.
+        for suffix, kind, scope in (
+            ("calendar", "calendaring-google-calendar", "calendar.readonly"),
+            ("tasks", "tasks-google-tasks", "tasks.readonly"),
+        ):
+            retained = copy.deepcopy(personal)
+            retained["id"] = f"fixture-personal-{suffix}"
+            retained["kind"] = kind
+            retained["config"]["permission_scope"] = [
+                f"https://www.googleapis.com/auth/{scope}"
+            ]
+            config["adapters"].append(retained)
         config["adapters"].append(
             {
                 "id": "optional-unenrolled",
@@ -221,17 +235,25 @@ def test_retired_member_history_has_attribution_but_never_reactivates_acquisitio
         ]
     }
     personal = config["adapters"][0]
+    retired_group = [
+        row for row in config["adapters"] if row["config"].get("member_id") == MEMBER_A
+    ]
+    assert len(retired_group) == 3
+    assert all(row["enabled"] is False for row in retired_group)
     if defect == "malformed":
         personal["config"].pop("workspace")
     elif defect == "cross_owner":
-        personal["config"]["member_id"] = MEMBER_B
+        for row in retired_group:
+            row["config"]["member_id"] = MEMBER_B
     elif defect == "ambiguous":
-        conflict = copy.deepcopy(personal)
-        conflict["id"] = "retired-conflicting-owner"
-        conflict["config"]["member_id"] = MEMBER_B
-        config["adapters"].append(conflict)
+        for row in retired_group:
+            conflict = copy.deepcopy(row)
+            conflict["id"] = "retired-conflicting-" + row["id"]
+            conflict["config"]["member_id"] = MEMBER_B
+            config["adapters"].append(conflict)
     elif defect == "missing_optional":
-        personal["config"] = {}
+        for row in retired_group:
+            row["config"] = {}
     original_config = copy.deepcopy(config)
     binding_args = {
         "member_roles": {MEMBER_A: "principal", MEMBER_B: "principal"},
@@ -290,6 +312,12 @@ def test_retired_member_history_has_attribution_but_never_reactivates_acquisitio
 
     bindings = validate_historical_provider_bindings(config, **binding_args)
     assert "optional-unenrolled" not in {row.adapter_id for row in bindings}
+    if defect == "none":
+        assert {row.adapter_id for row in bindings if row.owner_kind == "member"} == {
+            "fixture-personal-gmail",
+            "fixture-personal-calendar",
+            "fixture-personal-tasks",
+        }
     assert all(
         not hasattr(row, "b03_dispatch_coordinate")
         and not hasattr(row, "permission_scope")
