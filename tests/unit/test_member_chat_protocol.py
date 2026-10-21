@@ -12,18 +12,32 @@ from adminme.member_chat import MemberChatError, OpenClawGatewayChatTransport
 
 
 class _PinnedGatewaySocket:
-    """Protocol-v4 fixture enforcing OpenClaw commit 944cf08's P0 rule."""
+    """Protocol-v4 fixture enforcing the pinned session subscription boundary."""
 
     def __init__(self, session_key: str) -> None:
         self.session_key = session_key
         self.sent: list[dict[str, Any]] = []
         self._responses = 0
+        self.subscribed = False
+        self.closed = False
 
     async def send(self, raw: str) -> None:
         self.sent.append(json.loads(raw))
 
     async def recv(self) -> str:
         request = self.sent[-1]
+        if request["method"] == "sessions.messages.subscribe":
+            assert request["params"] == {"key": self.session_key}
+            self.subscribed = True
+            return json.dumps(
+                {
+                    "type": "res",
+                    "id": request["id"],
+                    "ok": True,
+                    "payload": {"subscribed": True, "key": self.session_key},
+                }
+            )
+        assert self.subscribed, "Gateway withholds scoped chat without subscription"
         if self._responses == 0:
             self._responses += 1
             return json.dumps(
@@ -51,7 +65,7 @@ class _PinnedGatewaySocket:
         )
 
     async def close(self) -> None:
-        return None
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -86,7 +100,9 @@ async def test_chat_send_omits_every_admin_only_system_provenance_field(
     ]
 
     assert [chunk.kind for chunk in chunks] == ["status", "delta", "final"]
-    request = socket.sent[0]
+    assert socket.sent[0]["method"] == "sessions.messages.subscribe"
+    assert socket.closed
+    request = socket.sent[1]
     assert request["method"] == "chat.send"
     params = request["params"]
     assert params == {
@@ -134,7 +150,11 @@ async def test_native_approval_extends_only_its_member_stream_deadline(
                 return json.dumps(
                     {"type": "res", "id": request["id"], "ok": True, "payload": {}}
                 )
-            if self._responses and not self.timed_out:
+            if (
+                request["method"] == "chat.send"
+                and self._responses
+                and not self.timed_out
+            ):
                 self.timed_out = True
                 raise TimeoutError
             return await super().recv()
@@ -170,3 +190,43 @@ async def test_native_approval_extends_only_its_member_stream_deadline(
             await collect()
         assert socket.sent[-1]["method"] == "chat.abort"
     assert transport._approval_deadlines == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload", [{"subscribed": False}, {"subscribed": True, "key": "other"}]
+)
+async def test_unconfirmed_subscription_never_starts_or_aborts_a_member_run(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> None:
+    class Socket(_PinnedGatewaySocket):
+        async def recv(self) -> str:
+            return json.dumps(
+                {
+                    "type": "res",
+                    "id": self.sent[-1]["id"],
+                    "ok": True,
+                    "payload": payload,
+                }
+            )
+
+    socket = Socket("member-session")
+    transport = OpenClawGatewayChatTransport(
+        url="ws://127.0.0.1:18789", token="fixture-token"
+    )
+
+    async def connect() -> Socket:
+        return socket
+
+    monkeypatch.setattr(transport, "_connect", connect)
+    with pytest.raises(MemberChatError, match="subscription was not confirmed"):
+        _ = [
+            chunk
+            async for chunk in transport.stream(
+                session_key="member-session",
+                message="A normal message",
+                idempotency_key="subscription-refused",
+            )
+        ]
+    assert [row["method"] for row in socket.sent] == ["sessions.messages.subscribe"]
+    assert socket.closed

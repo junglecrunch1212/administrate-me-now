@@ -528,6 +528,14 @@ retried. The member device provides approval, while the enrolled CoS account
 on the central Mac remains the sender. This preserves the separate member,
 service, transport, domain approval, and native approval identities.
 
+Member chat subscribes to the authenticated member's exact signed session on
+the pinned Gateway before starting a turn. The scoped connection must confirm
+that subscription; a missing or mismatched confirmation starts no conversation.
+Terminal replies must reach the browser without a refresh, which can abort an
+outstanding native sending decision. This **MODERNIZE** repair preserves the
+OpenClaw conversation boundary and UX-29's honest live-state contract; it grants
+no broader event subscription, member identity, or sending authority.
+
 Member-bridge amendment (2026-09-02): CO-027 advances UX-38 into UX-61. Add
 Bridge now prepares the established encrypted package and carries the member
 through target verification, local consent, signed content-free progress, and

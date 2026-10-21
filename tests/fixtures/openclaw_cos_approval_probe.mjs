@@ -15,6 +15,15 @@ export default {
     };
     const relay = registerCosApprovalRelay(api, runtime);
     registerCosPermissionPreflight(api, runtime);
+    // Synthetic emitter only: delivery and session filtering use the actual
+    // pinned Gateway, without a model, provider, or household transcript.
+    api.registerGatewayMethod("administrateme.probe.chat.emit", ({ params, context, respond }) => {
+      context.broadcast("chat", {
+        sessionKey: params.key, runId: "synthetic-stream-run", state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "Synthetic completion." }] },
+      }, { sessionKeys: [params.key] });
+      respond(true, { emitted: true });
+    }, { scope: "operator.admin" });
     api.registerService({
       id: "administrateme-approval-probe-seeds",
       async start() {
