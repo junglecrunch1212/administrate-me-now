@@ -60,6 +60,8 @@ jobs:
           tests/acceptance/test_cos_channel_acquisition.py
           tests/acceptance/test_disposable_test_acquisition.py
           tests/unit/test_cos_member_bridge_acquisition_policy.py
+          tests/unit/test_pipeline_pack_loader.py
+          tests/unit/test_pack_loader.py
 
       - name: Validate enrollment browser behavior
         env:

@@ -388,6 +388,15 @@ services, remove only bounded stale AdministrateMe registrations, link and
 validate the reviewed candidate plugin, and restore the previous plugin path
 with the previous executable/pointer on rollback.
 
+MODERNIZE — pack release-root isolation (2026-10-21): AC-17 and AC-21 require
+pipeline and skill loader caches to include the resolved pack root alongside
+pack ID and version. Equal manifest versions in separate immutable releases
+must not reuse handlers, configuration, prompts or schemas from the other
+release, including after that other root is removed. Equivalent paths to one
+resolved root retain their cache hit. Loader regressions and the installed-
+release production-composition test prove this without cache-clearing hooks
+between the two runtime roots.
+
 OpenClaw startup-health amendment (2026-08-09): AC-12, AC-14, and AC-21
 require the native plugin's exact-pin health report to converge when the
 Gateway becomes healthy before the Python runtime is accepting requests. The

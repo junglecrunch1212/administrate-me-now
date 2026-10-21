@@ -12,7 +12,7 @@ Parses the canonical pack shape per [REFERENCE_EXAMPLES.md §3] and
       handler.py                   # optional; provides post_process(...)
 
 The loader returns a `LoadedPack` dataclass; the wrapper consumes it.
-Caches by `(pack_id, version)` so repeated calls inside one process don't
+Caches by `(resolved pack_root, pack_id, version)` so repeated calls inside one process don't
 re-read disk for every skill invocation. Tests can call
 `invalidate_cache()` between runs.
 """
@@ -50,7 +50,7 @@ class LoadedPack:
     pack_root: Path
 
 
-_cache: dict[tuple[str, str], LoadedPack] = {}
+_cache: dict[tuple[Path, str, str], LoadedPack] = {}
 
 
 def invalidate_cache() -> None:
@@ -133,8 +133,8 @@ def _load_handler(handler_path: Path, pack_id: str) -> Callable[..., Any]:
 
 def load_pack(pack_root: Path) -> LoadedPack:
     """Load a pack from disk, returning a cached `LoadedPack` if the
-    pack has been loaded before (keyed on pack_id + version)."""
-    pack_root = Path(pack_root)
+    same resolved root, pack ID and version have been loaded before."""
+    pack_root = Path(pack_root).resolve()
     pack_yaml = pack_root / "pack.yaml"
     skill_md = pack_root / "SKILL.md"
     input_schema_path = pack_root / "schemas" / "input.schema.json"
@@ -163,7 +163,7 @@ def load_pack(pack_root: Path) -> LoadedPack:
     if not isinstance(version, str) or not version:
         raise PackLoadError("pack.yaml: pack.version missing or not a string")
 
-    cache_key = (pack_id, version)
+    cache_key = (pack_root, pack_id, version)
     cached = _cache.get(cache_key)
     if cached is not None:
         return cached

@@ -66,6 +66,8 @@ jobs:
           tests/integration/test_bridge_ingest_roundtrip.py
           tests/integration/test_bridge_state_mirror_onramp.py
           tests/integration/test_runtime_application.py
+          tests/unit/test_pipeline_pack_loader.py
+          tests/unit/test_pack_loader.py
 
       - name: Validate bridge package
         run: |

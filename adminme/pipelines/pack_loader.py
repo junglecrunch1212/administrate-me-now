@@ -19,7 +19,7 @@ Pack shape (per [BUILD.md L4] lines 1259-1262 + [REFERENCE_EXAMPLES.md
 ``runtime.class`` (class name). Optional: ``triggers`` (events/schedule/
 proactive), ``depends_on``, ``events_emitted``.
 
-Caches by ``(pack_id, version)``; tests can call ``invalidate_cache()``
+Caches by ``(resolved pack_root, pack_id, version)``; tests can call ``invalidate_cache()``
 to drop the cache between runs.
 """
 
@@ -52,7 +52,7 @@ class LoadedPipelinePack:
     delivery_concurrency: int = 1
 
 
-_cache: dict[tuple[str, str], LoadedPipelinePack] = {}
+_cache: dict[tuple[Path, str, str], LoadedPipelinePack] = {}
 
 
 def invalidate_cache() -> None:
@@ -90,8 +90,8 @@ def _import_handler_module(handler_path: Path, pack_id: str) -> Any:
 
 def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
     """Load a pipeline pack from disk. Returns a cached ``LoadedPipelinePack``
-    if the pack has been loaded before (keyed on ``pack_id`` + ``version``)."""
-    pack_root = Path(pack_root)
+    if the same resolved root, pack ID and version have been loaded before."""
+    pack_root = Path(pack_root).resolve()
     pipeline_yaml = pack_root / "pipeline.yaml"
     if not pipeline_yaml.exists():
         raise PipelinePackLoadError(f"missing pipeline.yaml: {pipeline_yaml}")
@@ -115,7 +115,7 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
             f"pipeline.yaml: pack.kind must be 'pipeline', got {kind!r}"
         )
 
-    cache_key = (pack_id, version)
+    cache_key = (pack_root, pack_id, version)
     cached = _cache.get(cache_key)
     if cached is not None:
         return cached

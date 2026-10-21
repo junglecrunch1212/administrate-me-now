@@ -66,6 +66,39 @@ def test_load_returns_cached_instance_on_second_call() -> None:
     assert pack_a is pack_b
 
 
+def test_same_version_skill_never_reuses_another_release_root(tmp_path: Path) -> None:
+    roots = [tmp_path / "installed-release", tmp_path / "operational-release"]
+    for root, value in zip(roots, ("installed", "operational"), strict=True):
+        shutil.copytree(CLASSIFY_TEST_PACK, root)
+        (root / "source.txt").write_text(value, encoding="utf-8")
+        (root / "prompt.jinja2").write_text(value, encoding="utf-8")
+        (root / "schemas" / "input.schema.json").write_text(
+            json.dumps({"type": "object", "title": value}), encoding="utf-8"
+        )
+        (root / "handler.py").write_text(
+            "from pathlib import Path\n"
+            "_PACK_ROOT = Path(__file__).parent\n"
+            "def post_process(raw, inputs, ctx):\n"
+            "    return {'source': (_PACK_ROOT / 'source.txt').read_text()}\n",
+            encoding="utf-8",
+        )
+    first = load_pack(roots[0])
+    shutil.rmtree(roots[0])
+    second = load_pack(roots[1])
+    assert second is not first
+    assert second.pack_root == roots[1].resolve()
+    assert second.prompt_template == "operational"
+    assert second.input_schema["title"] == "operational"
+    assert second.handler_post_process is not None
+    assert second.handler_post_process is not first.handler_post_process
+    assert second.handler_post_process({}, {}, None) == {"source": "operational"}
+
+    alias = tmp_path / "current-release"
+    alias.symlink_to(roots[1], target_is_directory=True)
+    assert load_pack(alias) is second
+    assert load_pack(roots[1] / ".." / roots[1].name) is second
+
+
 def test_invalidate_cache_forces_reload() -> None:
     pack_a = load_pack(CLASSIFY_TEST_PACK)
     invalidate_cache()
