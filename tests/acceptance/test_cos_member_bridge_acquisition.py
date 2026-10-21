@@ -25,6 +25,7 @@ from adminme.bridge_enrollment import BridgeEnrollmentError, inspect_transfer_pa
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.historical_attribution import audit_historical_attribution
+from adminme.provider_bindings import validate_historical_provider_bindings
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme_bridge.config import load_config
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
@@ -64,6 +65,29 @@ async def _history(log: EventLog, watermark: str | None = None) -> dict[str, Any
     )
 
 
+async def _settled_source_assurance(
+    runtime: Any, source_event_id: str, *, timeout_s: float = 10.0
+) -> dict[str, Any]:
+    """Wait for the public asynchronous audit to cover the accepted source."""
+
+    deadline = time.monotonic() + timeout_s
+    assurance: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        diagnostics = await runtime.diagnostics()
+        assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+        freshness = assurance["freshness"]
+        assert freshness["state"] != "failed", assurance
+        if (
+            str(assurance.get("watermark_event_id") or "") >= source_event_id
+            and freshness["settled_revision"] is True
+        ):
+            return assurance
+        await asyncio.sleep(0.02)
+    raise AssertionError(
+        f"source assurance did not settle at the accepted source: {assurance}"
+    )
+
+
 def _assert_history(report: dict[str, Any], *, source_count: int = 3) -> None:
     assert report["state"] == "healthy", report
     assert report["source_event_count"] == source_count
@@ -84,10 +108,46 @@ def _configuration_settings(tmp_path: Path) -> RuntimeSettings:
     instance.mkdir()
     base = _settings(instance)
     config = _configuration(instance)
-    # Keep the complete, validated retained-policy + service overlay. The
-    # selected central service transport is inert, so this test cannot contact
-    # Gmail; a forbidden enabled personal pack must never even be loaded.
-    config["adapters"][1]["enabled"] = False
+    # The overlay-only fixture intentionally contains an unavailable enabled
+    # personal pack. This lifecycle fixture also invokes the historical audit,
+    # so retain a complete, disabled Google ownership profile like a deployed
+    # instance. No central provider or credential may be loaded here.
+    personal, service = config["adapters"]
+    personal.update(kind="messaging-gmail-api", enabled=False)
+    personal["config"].update(
+        user_email=config[TEST_KEY]["provider_account_id"],
+        workspace="personal",
+        permission_scope=["https://www.googleapis.com/auth/gmail.readonly"],
+        binding_provenance="oauth-subject",
+        ownership_attested=True,
+        oauth_credentials_ref="keychain://fixture-personal/never-resolved",
+        read_only=True,
+        enable_writes=False,
+    )
+    service["enabled"] = False
+    for suffix, kind, scope in (
+        ("calendar", "calendaring-google-calendar", "calendar.readonly"),
+        ("tasks", "tasks-google-tasks", "tasks.readonly"),
+    ):
+        retained = copy.deepcopy(personal)
+        retained["id"] = f"fixture-personal-{suffix}"
+        retained["kind"] = kind
+        retained["config"]["permission_scope"] = [
+            f"https://www.googleapis.com/auth/{scope}"
+        ]
+        config["adapters"].append(retained)
+    assert {
+        binding.adapter_id
+        for binding in validate_historical_provider_bindings(
+            config,
+            member_roles=base.member_roles,
+            household_mapping=base.household_mapping,
+        )
+    } == {
+        "fixture-personal-gmail",
+        "fixture-personal-calendar",
+        "fixture-personal-tasks",
+    }
     return replace(base, adapter_config=config)
 
 
@@ -636,8 +696,9 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
             _history, runtime.event_log, history_watermark
         )
         _assert_history(immutable_history)
-        diagnostics = client.portal.call(runtime.diagnostics)
-        assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+        assurance = client.portal.call(
+            _settled_source_assurance, runtime, event_ids["apple_notes"]
+        )
         assert assurance["state"] == "healthy", assurance
         assert assurance["counts"]["source_facts"] == 3
         assert all(

@@ -45,9 +45,10 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      # Collect all selected lifecycle failures within the existing job bound.
       - name: Validate native helper and enrollment composition
         run: >-
-          poetry run pytest -p no:cacheprovider --runxfail -q -ra --maxfail=5
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_bridge_enrollment.py

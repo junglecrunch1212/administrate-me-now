@@ -39,6 +39,7 @@ from tests.acceptance.test_cos_member_bridge_acquisition import (
     _manual_policies,
     _observation,
     _prepare_helper,
+    _settled_source_assurance,
 )
 
 
@@ -148,10 +149,9 @@ def bridge_history(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
                 "source-policy-v2:shadow",
                 source_ids["apple_notes"],
             )
-            diagnostics = client.portal.call(runtime.diagnostics)
-            assurance = diagnostics["capabilities"]["policy:source-assurance"][
-                "details"
-            ]
+            assurance = client.portal.call(
+                _settled_source_assurance, runtime, source_ids["apple_notes"]
+            )
             assert assurance["state"] == "healthy", assurance
             assert assurance["counts"]["source_facts"] == 3
             assert all(
