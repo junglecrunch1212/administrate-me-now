@@ -2,30 +2,89 @@ name: macOS bootstrap contract
 
 on:
   pull_request:
-    paths:
-      - "bootstrap/**"
-      - "adminme/**"
-      - "bridge/**"
-      - "packs/**"
-      - "openclaw/administrateme/**"
-      - "scripts/acceptance/**"
-      - "scripts/identity_scan.py"
-      - "scripts/verify_invariants.sh"
-      - "tests/**"
-      - "tools/console-reference-harness/**"
-      - "tools/gate7_visual_server.py"
-      - "pyproject.toml"
-      - "poetry.lock"
-      - "bridge/pyproject.toml"
-      - "bridge/poetry.lock"
-      - ".github/workflows/administrateme-consistency.yml"
-      - ".github/workflows/macos-bootstrap.yml"
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: macos-bootstrap-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
+  bridge-development:
+    name: Targeted bridge development (macOS)
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      ADMINME_TEST_MODE: "1"
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14.7"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.19.0"
+          cache: npm
+          cache-dependency-path: tools/console-reference-harness/package-lock.json
+
+      - name: Install locked development environment
+        run: |
+          python -m pip install "poetry==2.4.1"
+          poetry sync --with dev --no-interaction
+
+      - name: Validate native helper and enrollment composition
+        run: >-
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra --maxfail=5
+          --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
+          tests/unit/bootstrap/test_member_bridge_helper_app.py
+          tests/unit/bootstrap/test_bridge_enrollment.py
+          tests/unit/bootstrap/test_source_identity.py
+          tests/unit/test_bridge_release_identity.py
+          tests/unit/test_ci_release_gates.py
+          tests/acceptance/test_self_service_member_bridge_enrollment.py
+          tests/acceptance/test_member_bridge_knowledge_vertical_slice.py
+
+      - name: Validate enrollment browser behavior
+        env:
+          ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY: "1"
+          ADMINME_GATE7_EVIDENCE_DIR: ${{ runner.temp }}/adminme-bridge-development-browser
+        run: |
+          npm ci --prefix tools/console-reference-harness --ignore-scripts
+          ADMINME_GATE7_PYTHON="$(poetry env info --executable)" \
+          npm run test:gate7 --prefix tools/console-reference-harness
+
+      - name: Retain targeted browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: targeted-bridge-browser
+          path: ${{ runner.temp }}/adminme-bridge-development-browser
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Validate shell entrypoints and clean candidate
+        run: |
+          brew install shellcheck
+          shellcheck -x bootstrap/install-member-bridge.sh
+          bash -n bootstrap/install-member-bridge.sh
+          git diff --check "origin/${{ github.base_ref }}...HEAD"
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+  # Keep this full-release job name stable. Drafts fail rather than skip it.
   credential-free-rehearsal:
     runs-on: macos-15
     # The complete rehearsal exceeded 90 minutes after all Python tests passed.
@@ -35,6 +94,12 @@ jobs:
       ADMINME_TEST_MODE: "1"
       PYTHONPATH: bridge
     steps:
+      - name: Require complete release validation
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+        run: |
+          echo "::error::Development-only draft: targeted checks cannot approve a release. Mark this PR ready after relevant regressions pass to run complete Linux and macOS validation."
+          exit 1
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
@@ -118,7 +183,7 @@ jobs:
         run: bash scripts/acceptance/openclaw-source-install.sh
 
       - name: Preserve isolated Gateway approval probe diagnostics
-        if: always()
+        if: ${{ always() && !github.event.pull_request.draft }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cos-approval-gateway-probe
@@ -135,7 +200,7 @@ jobs:
           npm run test:gate7 --prefix tools/console-reference-harness
 
       - name: Retain credential-free browser evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !github.event.pull_request.draft }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: credential-free-member-browser

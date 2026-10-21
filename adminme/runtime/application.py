@@ -822,6 +822,7 @@ class AdministrateMeRuntime:
         self.settings_control = SettingsControlStore(
             settings.instance.config_dir / "settings-control.json"
         )
+        deployment_binding = settings.host_topology.get("deployment_binding")
         self.bridge_enrollment = BridgeEnrollmentCoordinator(
             instance_dir=settings.instance.instance_dir,
             encryption_key=settings.encryption_key,
@@ -830,6 +831,12 @@ class AdministrateMeRuntime:
             member_identities=settings.member_identities,
             member_roles=settings.member_roles,
             bridge_enrollments=settings.bridge_enrollments,
+            deployment_release_commit=(
+                deployment_binding.get("release_commit")
+                if isinstance(deployment_binding, dict)
+                else None
+            ),
+            require_deployment_release=settings.deployment_evidence_required,
         )
         self.source_policy_shadow: SourcePolicyShadowEvaluator | None = None
         self.reconciliation_admission: ReconciliationAdmissionEvaluator | None = None

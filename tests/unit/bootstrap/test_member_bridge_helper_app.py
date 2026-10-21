@@ -94,6 +94,28 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
     assert manifest["arbitrary_central_code"] is False
     assert manifest["tcc_dialog_automation"] is False
 
+    verification = subprocess.run(
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(destination)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert verification.returncode == 0, verification.stderr
+
+    # Confirm that both final document metadata and embedded installer content
+    # participate in the seal, rather than merely checking the droplet binary.
+    for sealed_path in (destination / "Contents" / "Info.plist", launcher_path):
+        original = sealed_path.read_bytes()
+        sealed_path.write_bytes(original + b"\n")
+        changed = subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(destination)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert changed.returncode != 0
+        sealed_path.write_bytes(original)
+
     with pytest.raises(RuntimeError, match="new, narrow"):
         build_member_bridge_helper_app(
             destination, root=REPO_ROOT, expected_commit=commit

@@ -839,6 +839,11 @@ class SettingsControlStore:
                         ),
                     }
                 )
+                # Lifecycle diagnostics belong to the request, separately from
+                # per-capability reasons. Clear them when that lifecycle moves
+                # on so a successful retry never keeps an obsolete failure.
+                if capability_id is None or previous_state != requested_state:
+                    current["reason"] = payload.get("reason")
                 for key in (
                     "enrollment_id",
                     "expires_at",

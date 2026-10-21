@@ -10,7 +10,6 @@ import importlib
 import json
 import os
 import plistlib
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -33,6 +32,7 @@ from adminme.bridge_enrollment import (
     WIZARD_CONTRACT,
     device_proof_key,
     inspect_transfer_package,
+    reviewed_release,
 )
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
@@ -92,21 +92,10 @@ def _parse_time(value: object) -> datetime:
 
 
 def _git_commit(root: Path) -> str:
-    reviewed = os.environ.get("ADMINME_REVIEWED_COMMIT", "")
-    if re.fullmatch(r"[0-9a-f]{40}", reviewed):
-        return reviewed
-    completed = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    value = completed.stdout.strip()
-    if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", value):
-        raise BridgeEnrollmentError(
-            "the bridge installer requires a reviewed Git commit"
-        )
-    return value
+    try:
+        return reviewed_release(root)
+    except WizardBridgeEnrollmentError as exc:
+        raise BridgeEnrollmentError(str(exc)) from exc
 
 
 def _validate_central_url(value: str) -> str:
