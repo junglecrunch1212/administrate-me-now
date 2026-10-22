@@ -1,13 +1,13 @@
 # AdministrateMe engineering instructions
 
-This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; executable behavior and tests decide whether a change works. The v2 reconciliation in `docs/refactor/` governs product architecture. Historical delivery procedures are not current authority.
+This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; executable behavior and tests decide whether a change works. The v2 reconciliation in `docs/refactor/` governs product architecture. The fast-delivery policy below, directed by the owner on 2026-10-22, supersedes conflicting release, testing, readiness and reporting requirements in older instructions, change orders and runbooks. Historical delivery procedures are not current authority.
 
 ## Working rules
 
 - Start each change from current protected `main`, use one `codex/` branch and one pull request, and preserve unrelated changes. Never rewrite published history, force-push, or push directly to `main`.
 - The implementation task may use bounded subagents for implementation, testing, research, or advisory review. A separate user-created review task, exact-head review artifact, staged label, or prescribed authorization phrase is not required.
-- GitHub is the delivery control plane: fix failures on the same branch, require the protected PR checks to pass, resolve actionable review comments, and merge through the pull request. Normal commits invalidate only the checks GitHub reruns; they do not start a new review ceremony.
-- A repository owner may authorize merge in ordinary language. A merge request does not authorize deployment or another operational change.
+- GitHub is the delivery control plane: fix blocking failures on the same branch, pass the applicable protected checks, and merge through the pull request. Resolve findings that affect the requested outcome or a protected invariant; unrelated improvements do not block delivery. Normal commits do not start a new review ceremony.
+- Accept owner authorization in ordinary language. One request may authorize both merge and deployment; do not ask again when it already does. A request only to merge does not authorize deployment.
 - Never place household names, emails, phone numbers, addresses, credentials, or tokens in platform code, bootstrap code, built-ins, or tests.
 - Keep the dependency direction: adapters -> encrypted append-only event log/durable bus -> deterministic projections -> pipelines -> family surfaces. Sources emit events; projections are never a source of truth.
 - OpenClaw owns channels, conversations, generic memory, sessions, model routing, cron/background execution, agent orchestration, generic tool approval, device nodes, and runtime administration. AdministrateMe owns typed household truth, domain authorization, scope/privacy, projections, workbooks, provenance, correction, observation, and outcome feedback.
@@ -16,12 +16,16 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 - External writes require the documented allowlist -> governance -> rate-limit ordering, independent OpenClaw and domain approval, a final content/privacy guard, and observation-mode handling. Audit every terminal result.
 - Preserve all six product functions, all thirteen projection capabilities, all five adapter categories, all six pack kinds, the five built-in profiles, and four built-in personas. A missing implementation must be reported, not silently omitted.
 - A central v2 deployment is one long-lived AdministrateMe Python runtime behind Tailscale Serve plus one exactly pinned OpenClaw Gateway. Member bridge daemons remain separate, per-member edge processes. Node may build browser assets but is not another central application runtime.
-- Phase A runs only in Codex/cloud or a disposable lab. Never experiment on the family Mac. Phase B begins only after merge and a clear, separate owner request to deploy.
+- Candidate tests run only in hosted CI or an authorized disposable lab. Deploy to the household only after protected merge and owner authorization. Observing a scoped release and rolling it back on regression is an intended delivery step; arbitrary candidate experiments and installed-release edits remain prohibited.
 - For member dashboard inspection and browser acceptance, follow `docs/refactor/MEMBER-DEVICE-TESTING.md`. The browser must run on the authorized member device; the central Host's identity and principal view-as are not substitutes. Test the control and result-return paths before claiming remote acceptance.
 
 ## Deployment safety
 
-A deployment operates on the immutable merge commit from protected `main`. A central runtime deployment uses the existing guarded updater, observation mode, verified encrypted backup, and automatic rollback on a new degradation or failed prerequisite. After central activation, require bounded settlement, full Doctor, privacy and tenant-isolation checks, authenticated read-only browser acceptance for changed behavior, backup/rollback evidence, and zero unintended provider effects. A supported compatible component release follows its bounded installation, health and rollback contract without manufacturing a central deployment or maintenance cycle.
+A deployment operates on an immutable merge commit from protected `main`, using the supported updater or component installer, a known-working predecessor, compatible retained state, and a concrete rollback command. Keep the existing observation and external-write controls. Reuse valid backup/recovery evidence under its existing freshness and compatibility rules; require new restore testing when the change affects persistence or recovery. Do not manufacture a central deployment for an independently installable component.
+
+After activation, check liveness/readiness and the changed user outcome within a bounded observation window. Check actual member rendering when UI behavior changed. Roll back promptly on a new runtime or workflow regression, verify predecessor health, then fix and retest the affected path in isolation. Rollback of that release is included in deployment authorization. Full Doctor, whole-household isolation sweeps and recovery rehearsals are not universal policy prerequisites for each narrow change; run them when the change or a concrete failure makes them relevant.
+
+Existing automated updater safeguards remain enforced until changed and tested through a protected PR. Prose does not implement a shorter updater path or authorize bypassing its checks. Identify any such coupling once as an implementation gap instead of inventing repeated manual validation around it.
 
 Runtime or dependency migration, provider enrollment, write enablement, Keychain or permission changes, and unrelated live repairs always require their own explicit owner request. Never edit an installed release, active virtual environment, LaunchAgent, encrypted state, or provider configuration to make activation pass. Hosted CI and subagents must not access the live family instance or credentials.
 
@@ -38,139 +42,74 @@ Runtime or dependency migration, provider enrollment, write enablement, Keychain
 - `bootstrap/`: baseline prose/config scaffolding. Its target is `docs/refactor/BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md`.
 - `tests/acceptance/`: golden process gates. Run with `--runxfail` for release gating.
 
-## Supported checks
+## Fast delivery and checks
 
-Use Python 3.14 and Node 24, matching the candidate manifests and ADR-0006. Existing Python 3.11/Node 22 deployments remain untouched until the separately approved runtime-migration gate. The bridge package must be importable when running the root suite.
+The owner accepts occasional reversible runtime and workflow failures in return
+for faster delivery. Default to build, check the changed behavior, ship when
+authorized, observe, roll back if needed, and fix. Exhaustive pre-release
+assurance is not the objective. Scope follows behavior and consequences, not
+line count or a filename.
 
-During development, select targeted behavioral checks by the changed behavior
-and its dependencies, with appropriate formatting, types, invariants, and
-privacy/security checks. Include a production-composition regression when a
-change crosses application boundaries. Run behavioral checks only in hosted CI
-or an authorized disposable lab; targeted testing does not authorize experiments
-on the family Mac, member acceptance devices, or the live instance.
+- **Prose only:** document/static checks. No application release or behavioral
+  suite just to change instructions.
+- **Ordinary reversible change:** a focused regression or existing relevant
+  check, affected syntax/type/build checks, and a small realistic smoke test.
+  Use production composition when the defect or interface needs it; do not
+  require a new process test for every local edit. Those passing checks can be
+  final release evidence without a second promotion run.
+- **Sensitive change:** test the affected permission, identity, privacy,
+  credential, external-write, persistence or recovery contract before release.
+  Unchanged contracts do not require blanket reruns. Preserve ownership,
+  encryption, append-only history, recipient restrictions, independent sending
+  approvals and audited effects: rollback cannot undo disclosure or sending.
+- **System-wide change:** use full-system validation only for concrete broad
+  effects or an irreversible risk that cannot be bounded by focused checks.
+  State the reason briefly. A shared file, bootstrap edit, missing path mapping,
+  or unrelated commit is not by itself that reason.
 
-Keep the pull request in draft while iterating. Select development checks by
-affected behavior and dependencies; a development pass is not automatically
-final release evidence. After a failure, reproduce and fix the concrete cause,
-batch related corrections, and pass relevant regressions before requesting
-another release run. Return an invalidated candidate to draft.
+For narrow work, one short PR paragraph naming the change, checks and
+rollback is sufficient. No mandatory impact map, subsystem-exclusion essay,
+lifecycle matrix, separate review chat, evidence-only PR, readiness approval
+or draft/ready cycle. Use draft status when it actually avoids waste under
+current CI. Fix a failure and run its regression plus affected dependencies;
+broaden only when the failure reveals a wider shared assumption. Do not rerun
+successful unrelated suites after each correction. Record nonblocking gaps
+briefly rather than turning them into new release prerequisites.
 
-When the candidate is settled, mark the same PR ready for its selected release
-scope. The stable protected jobs evaluate that scope and require its actual
-passing checks. Missing, failed, cancelled, skipped, stale or incomplete
-required evidence cannot approve release. No label, separate review artifact,
-prescribed phrase or additional owner approval is needed to select the
-authorized scope. Preserve useful running checks; do not restart them solely
-to adopt this policy. Retire an unnecessary broad run only after a legitimate
-scoped gate exists and its required evidence passes. Report development,
-scoped release and full-system results separately, with concrete failures and
-coverage gaps.
+Reuse passing results when the relevant artifact/source, toolchain, lockfile,
+dependencies and interfaces match. New behavior needs fresh relevant evidence;
+an unrelated prose change does not invalidate it. Parallelize independent
+checks. Preserve useful running work and avoid duplicate local/hosted runs.
+Select tests in the existing PR without asking for another owner approval.
 
-```bash
-poetry sync --with dev
-PYTHONPATH=bridge poetry run pytest -q
-PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q
-poetry run ruff check adminme bridge/adminme_bridge
-poetry run mypy adminme bridge/adminme_bridge
-bash scripts/verify_invariants.sh
-npm --prefix openclaw/administrateme ci
-npm --prefix openclaw/administrateme run check
-npm --prefix openclaw/administrateme test
-```
+Use Python 3.14 and Node 24 with the candidate manifests and ADR-0006. Existing
+deployments keep their runtime until an explicitly authorized migration. Full
+command inventory is in `docs/refactor/ACCEPTANCE-CONTRACT.md`; run only the
+selected scope in hosted CI or an authorized disposable lab.
 
-These commands are the full-system inventory, not a requirement to run every
-suite for every change. Full-system deployment validation also includes
-unscoped lint, all pack/package validators, identity and instance-path scans,
-replay/isolation/backup tests, and the clean macOS lab rehearsal in
-`docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and
-failures verbatim.
+## CI implementation boundary
 
-## Risk-based release scope
+The intended default is scoped validation for ordinary reversible changes.
+Current `scripts/release_scope.py` implements only `documentation`,
+`bridge-helper` and `system-wide`; most other code still falls back to the full
+workers. The protected `deterministic-consistency` and
+`credential-free-rehearsal` checks remain required until the implementation is
+updated. Do not report that this policy alone made those releases faster.
 
-Owner-directed policy (2026-10-21) supersedes the earlier blanket requirement
-for complete Linux and macOS suites on every release. Optimize delivery for
-this household with bounded validation and recoverable changes:
-
-- Documentation, copy and other non-executable changes require relevant
-  document/static checks, not an application release or behavioral suite.
-- An isolated reversible component may release after its final scoped checks
-  cover the changed behavior, affected dependencies/interfaces, privacy and
-  security boundaries, and realistic installation/use on the affected platform.
-  File size alone does not establish isolation.
-- Broaden coverage for shared runtime/composition, encrypted storage or event
-  schema/migrations, cross-member identity/authorization, external-write
-  governance, or widely shared dependencies. Require full-system validation
-  when effects are system-wide or cannot be credibly bounded, and explain the
-  concrete reason. A localized sensitive fix still needs its complete affected
-  security/data contract; a bootstrap path or new commit alone is not a reason
-  to run every subsystem.
-- A bridge-helper-only installer/SDK/diagnostics release normally qualifies as
-  a component: prove actual packaged installation on the affected toolchain,
-  helper integrity, interrupted recovery, diagnostic/secret cleanup and deployed
-  enrollment-interface compatibility. Reuse the unchanged central runtime
-  through the supported compatible component path. Identify actual coupling
-  rather than silently rebuilding or redeploying the central application.
-- Retain the known-working predecessor and supported rollback. Perform bounded
-  component health/use checks after authorized deployment and roll back on a
-  regression. Verify backup/restore compatibility before persistent-state
-  changes; reuse valid unchanged evidence where its bindings permit.
-- Preserve ownership/isolation, encryption, append-only history, recipient
-  restrictions, independent sending approvals, credential handling and audited
-  external effects. Rollback cannot undo a disclosure or send. No candidate
-  experiments on family/member systems, installed-release edits or invented
-  permissions are permitted.
-- Keep protected PR delivery. The gate must evaluate the selected scope and
-  actual passing evidence; never remove protection, forge a status or bypass
-  the current gate while adding a narrower path. Policy/CI changes need focused
-  selection and validation tests, not inherently unrelated application suites.
-- Bind evidence to the component/artifact, relevant toolchain, locks,
-  dependencies and interfaces. Reuse unchanged component evidence only when
-  those inputs demonstrably match. Changed behavior and new interactions need
-  fresh checks; unrelated prose alone does not invalidate all prior evidence.
-
-## Readiness before release validation
-
-Owner-directed policy (2026-10-21): before declaring a behavioral candidate
-ready, trace the affected user workflow through its real production boundaries.
-Keep a compact impact map in the existing PR/task: affected contract, concrete
-test or evidence, and unresolved gap. Consider identity and permission,
-acquisition policy, events and derived state, historical ownership, readiness,
-restart, revocation, and upgrade/restore/rollback where affected. Bound this
-review to the change and its dependencies; justify exclusions rather than
-retesting every subsystem.
-
-Use production composition and representative installed-release conditions in
-isolated CI: packaged code without Git metadata, existing configuration and
-retained events, disabled/revoked sources, and restart/recovery where relevant.
-Assert user-visible outcomes and preserved invariants. A successful setup call
-alone does not prove continued usability or maintainability.
-
-When a late defect exposes a missing assumption, review the finite equivalent
-paths before correcting just that example: other new intake routes for an
-ownership gap, related loaders and installed entrypoints for source identity or
-cache gaps. Extend shared regressions and batch related corrections without an
-unrelated broad refactor. Check discoverable deployment/device prerequisites
-with supported read-only diagnostics before promising readiness or entering
-maintenance; candidate behavior still runs only in isolated CI or an authorized
-disposable lab. Preserve consent, permission, evidence-expiry and operational
-guards.
-
-Complete this bounded review and the relevant lifecycle checks before marking
-a draft ready or requesting final validation for its selected scope. Resolve known blockers and
-actionable findings, pass focused checks, and settle the candidate first. A new
-invalidating defect returns the PR to draft and relevant focused validation;
-explain the concrete reason for restarting. Preserve useful unchanged evidence
-and every required final-candidate gate. Report development checks passed,
-scoped/full release checks passed, deployed, and verified usable separately. Remaining dependencies
-are distinct from CI duration; test estimates are not completion promises.
-Summarize late defects and added coverage in the existing PR without another
-tracking/review task or permission ceremony.
-
-Carry this policy into applicable focused checks through normal PR review.
-Instruction-only changes need document checks, not invented behavioral tests or
-a fresh release cycle merely to synchronize prose. Do not interrupt otherwise
-valid running release checks for an instruction-only update.
+Implement narrower gates through ordinary protected PRs with focused positive
+and negative selection tests. Each selected required check must actually pass;
+missing, failed, cancelled, stale or unexpectedly skipped evidence cannot
+become success. Keep branch protection and truthful results. A broad fallback
+caused solely by a missing scoped path is a CI limitation to fix, not a reason
+to demand extra manual suites. Policy-only edits need static checks.
 
 ## Definition of done
 
-A claim is complete only when a process-level test demonstrates it through the production composition root. Unit tests for isolated layers are necessary but insufficient. Update governing documentation when behavior or scope changes, but do not create evidence-only follow-up work. Classify semantic changes as PRESERVE, MODERNIZE, SUPERSEDE, or DEFER and cite the governing source. DEFER is never valid for a required product function, projection capability, privacy/governance invariant, workbook round trip, or bootstrap safety.
+Deliver the requested behavior with the selected checks and state remaining
+limitations honestly. Distinguish checked, merged, deployed and verified usable;
+claim only the stages actually completed. For a small change, a concise result,
+validation and any deployment blocker are enough. Update governing contracts
+when behavior changes. Classify material contract changes as PRESERVE,
+MODERNIZE, SUPERSEDE or DEFER once in the existing PR; no classification
+paperwork is needed for routine fixes. Required product functions and privacy,
+governance, history and bootstrap invariants cannot be silently dropped.

@@ -16,6 +16,18 @@ next_phase: continue_observation_until_separately_authorized_change
 ---
 # Release handoff
 
+## Current delivery policy — 2026-10-22
+
+The owner accepts reversible release failures in exchange for faster shipping.
+Follow [AGENTS.md](../../AGENTS.md), [ADR-0013](ADR-0013-SIMPLE-GITHUB-DELIVERY.md)
+and the current [acceptance scope](ACCEPTANCE-CONTRACT.md): focused checks,
+authorized deployment, bounded observation, prompt rollback and a targeted fix.
+Older entries' blanket full-suite, readiness and evidence requirements are
+historical. Unchanged permission/privacy/recovery contracts do not require
+fresh sweeps for every fix. Runtime protections remain enforced. This policy
+redraft does not implement additional CI scopes or shorten the current updater;
+those implementation gaps are recorded in the acceptance contract.
+
 ## 2026-09-03 G11 governed Apple Messages reply candidate
 
 G11 is a Phase A **MODERNIZE/HARDEN** candidate built from merged G10 protected
