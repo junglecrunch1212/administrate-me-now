@@ -348,7 +348,11 @@ async def central_rig(tmp_path: Path):
             client=http,
         )
         try:
-            yield {"log": log, "ingest": ingest}
+            yield {
+                "log": log,
+                "ingest": ingest,
+                "bridge_record": app.state.bridge_enrollments["m1@example.ts.net"],
+            }
         finally:
             await bus.stop()
             await log.close()
@@ -548,6 +552,23 @@ async def test_selected_reminders_acquire_and_reach_ingest_without_other_lists(
     )
     internal = wrapper._internal
     try:
+        # This standalone ingress fixture does not run the Settings capability
+        # projector. Prove it refuses reads before authorization, then model
+        # the enrolled read grant bound to the actual authentication event.
+        authenticated = [row async for row in central_rig["log"].read_since()]
+        assert len(authenticated) == 1
+        assert authenticated[0]["type"] == "adapter.authenticated"
+        with pytest.raises(RuntimeError, match="bridge_pack_contract_denied"):
+            await internal._inbound_poll_once(ctx=internal._ctx)
+        assert len([row async for row in central_rig["log"].read_since()]) == 1
+        central_rig["bridge_record"].update(
+            authorized_packs=[REMINDERS_PACK],
+            pack_capability_states={REMINDERS_PACK: "attested"},
+            provider_capability_state="attested",
+            capability_attestations={
+                REMINDERS_PACK: {"event_id": authenticated[0]["event_id"]}
+            },
+        )
         # The first selected list used to be emitted, then an unselected list's
         # central refusal aborted the cycle before any reminder could arrive.
         assert await internal._inbound_poll_once(ctx=internal._ctx) == 1
