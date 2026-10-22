@@ -7,6 +7,7 @@ import hashlib
 import os
 import stat
 import subprocess
+from dataclasses import dataclass
 import sys
 from pathlib import Path
 
@@ -73,6 +74,10 @@ preview=false
 for argument in "$@"; do
   [[ "$argument" != "--preview-only" ]] || preview=true
 done
+if [[ "${FIXTURE_OUTCOME:-}" == "native_setup_fail" ]]; then
+  printf 'release_preparation\\nnative_build_setup\\n' >&3
+  exit 78
+fi
 printf 'dependency_install\\n' >&3
 printf 'synthetic dependency installation detail\\n' >&4
 if [[ "${FIXTURE_OUTCOME:-}" == "dependency_fail" ]]; then
@@ -135,6 +140,7 @@ def _run(
     ("outcome", "phase", "exit_code", "status"),
     [
         ("dependency_fail", "dependency_install", 23, "failed"),
+        ("native_setup_fail", "native_build_setup", 78, "failed"),
         ("preview_fail", "package_preview", 31, "failed"),
         ("enrollment_fail", "permission_setup", 42, "failed"),
         ("review_cancel", "review", 0, "cancelled"),
@@ -161,7 +167,9 @@ def test_launcher_records_phase_without_retaining_enrollment_material(
     assert receipt["operation"] == "enroll"
     assert receipt["dependency_log_limit_bytes"] == 262144
     assert (attempt / "dependency-install.log").read_text() == (
-        "synthetic dependency installation detail\n"
+        ""
+        if outcome == "native_setup_fail"
+        else "synthetic dependency installation detail\n"
     )
     for file in attempt.iterdir():
         assert stat.S_IMODE(file.stat().st_mode) == 0o600
@@ -267,20 +275,61 @@ def test_unsafe_diagnostic_parent_cannot_redirect_writes(
     assert not (parent / "Setup").exists()
 
 
-def test_actual_installer_drains_large_dependency_failure_and_resumes_privately(
-    tmp_path: Path,
-) -> None:
+@dataclass
+class _InstallerFixture:
+    environment: dict[str, str]
+    command: list[str]
+    phases: Path
+    log: Path
+    receipt: Path
+    developer: Path
+    sdk: Path
+    newer_sdk: Path
+
+
+def _write_sdk(parent: Path, version: str, *, alias: bool) -> Path:
+    sdk = parent / f"MacOSX{version}.sdk"
+    sdk.mkdir(parents=True)
+    (sdk / "SDKSettings.json").write_text(
+        json.dumps({"Version": version, "CanonicalName": f"macosx{version}"})
+    )
+    if alias:
+        (parent / "MacOSX.sdk").symlink_to(sdk, target_is_directory=True)
+    return sdk
+
+
+def _installer_fixture(tmp_path: Path) -> _InstallerFixture:
     """Exercise actual shell/collector; only OS prerequisites and tooling are fake."""
     tools = tmp_path / "fixture-tools"
     tools.mkdir()
     prefix = tmp_path / "python-prefix"
     (prefix / "bin").mkdir(parents=True)
-    (prefix / "bin/python3.14").symlink_to(sys.executable)
+    # Model the base interpreter toolchain settings independently of the hosted
+    # runner; the real Homebrew/compiler integration has its own acceptance test.
+    _executable(
+        prefix / "bin/python3.14",
+        f"#!{sys.executable}\n"
+        + "import json, os, sys, sysconfig\n"
+        + f"real_python = {sys.executable!r}\n"
+        + "if len(sys.argv) > 2 and sys.argv[1] == '-c':\n"
+        + "    values = json.loads(os.environ.get('FIXTURE_SYSCONFIG', '{}'))\n"
+        + "    sysconfig.get_config_var = lambda key: values.get(key, '')\n"
+        + "    code = sys.argv[2]\n"
+        + "    sys.argv = ['-c', *sys.argv[3:]]\n"
+        + "    exec(compile(code, '<fixture-python>', 'exec'))\n"
+        + "else:\n"
+        + "    os.execv(real_python, [real_python, *sys.argv[1:]])\n",
+    )
+    developer = tmp_path / "selected developer"
+    sdk = _write_sdk(developer / "SDKs", "26.5", alias=True)
+    newer_sdk = _write_sdk(developer / "SDKs", "27.0", alias=False)
     for name, script in {
         "uname": 'if [[ "$1" == -s ]]; then echo Darwin; else echo arm64; fi',
         "id": "echo 501",
         "fdesetup": "echo 'FileVault is On.'",
         "tailscale": "exit 0",
+        "xcode-select": 'printf "%s\\n" "$FIXTURE_DEVELOPER_DIR"',
+        "xcrun": 'printf "unqualified lookup used\\n" >"$FIXTURE_XCRUN_MARKER"; exit 99',
         "brew": '[[ "$1" != --prefix ]] || printf "%s\\n" "$FIXTURE_PYTHON_PREFIX"',
         "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nfixture 99999999 1 99999998 1%% /\\n'",
     }.items():
@@ -296,9 +345,12 @@ def test_actual_installer_drains_large_dependency_failure_and_resumes_privately(
     (release / "bootstrap").mkdir()
     (release / "bootstrap/__init__.py").touch()
     (release / "bootstrap/cli.py").write_text(
-        """import os
+        """import json
+import os
+from pathlib import Path
 import sys
 
+Path(os.environ["FIXTURE_RUNTIME_ENV"]).write_text(json.dumps({key: os.environ.get(key) for key in ("SDKROOT", "DEVELOPER_DIR", "CC", "CFLAGS", "LDFLAGS")}))
 try:
     os.write(4, b"private-preview-output-must-not-be-persisted")
 except OSError:
@@ -314,8 +366,11 @@ print("Safe synthetic enrollment preview")
     _executable(
         poetry,
         f"#!{sys.executable}\n"
-        + """import os
+        + """import json
+import os
+from pathlib import Path
 
+Path(os.environ["FIXTURE_BUILD_ENV"]).write_text(json.dumps({key: os.environ.get(key) for key in ("SDKROOT", "DEVELOPER_DIR", "CC", "CFLAGS", "LDFLAGS")}))
 os.write(1, b"early-dependency-marker\\n" + b"a" * 300000)
 os.write(2, b"b" * 300000)
 os.write(1, b"\\nlast-dependency-marker\\n")
@@ -336,47 +391,93 @@ raise SystemExit(int(os.environ["FIXTURE_INSTALL_EXIT"]))
     environment = {
         key: value
         for key, value in os.environ.items()
-        if key not in {"BASH_ENV", "ENV", "PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"}
+        if key
+        not in {
+            "BASH_ENV",
+            "ENV",
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "VIRTUAL_ENV",
+            "SDKROOT",
+            "DEVELOPER_DIR",
+            "CC",
+            "CXX",
+            "CFLAGS",
+            "CPPFLAGS",
+            "LDFLAGS",
+            "LDSHARED",
+            "LDCXXSHARED",
+            "ARCHFLAGS",
+            "ADMINME_BRIDGE_DIAGNOSTICS_FD",
+        }
     }
     environment.update(
         {
             "PATH": f"{tools}:{os.defpath}",
             "FIXTURE_PYTHON_PREFIX": str(prefix),
             "PYTHONDONTWRITEBYTECODE": "1",
+            "FIXTURE_DEVELOPER_DIR": str(developer),
+            "FIXTURE_XCRUN_MARKER": str(tmp_path / "unqualified-sdk-lookup"),
+            "FIXTURE_RUNTIME_ENV": str(tmp_path / "runtime-environment.json"),
+            "FIXTURE_BUILD_ENV": str(tmp_path / "build-environment.json"),
         }
     )
     receipt = release / ".venv/.administrateme-bridge-installed-commit"
+    command = [
+        "/bin/bash",
+        str(REPO_ROOT / "bootstrap/install-member-bridge.sh"),
+        "--expected-commit",
+        COMMIT,
+        "--bridge-root",
+        str(root),
+        "--release-archive",
+        str(archive),
+        "--release-sha256",
+        hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "--preview-only",
+        "--transfer-code-file",
+        str(code),
+        str(package),
+    ]
+    return _InstallerFixture(
+        environment, command, phase_file, log_file, receipt, developer, sdk, newer_sdk
+    )
+
+
+def _run_installer(
+    fixture: _InstallerFixture,
+    *,
+    exit_code: int = 0,
+    diagnostics: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    command = fixture.command
+    if diagnostics:
+        command = [
+            "/bin/bash",
+            "-c",
+            'exec 3>"$1"; exec 4<>"$2"; shift 2; ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$@"',
+            "fixture-descriptors",
+            str(fixture.phases),
+            str(fixture.log),
+            *command,
+        ]
+    return subprocess.run(
+        command,
+        env={**fixture.environment, "FIXTURE_INSTALL_EXIT": str(exit_code)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_actual_installer_drains_large_dependency_failure_and_resumes_privately(
+    tmp_path: Path,
+) -> None:
+    fixture = _installer_fixture(tmp_path)
     for exit_code in (23, 0):
-        completed = subprocess.run(
-            [
-                "/bin/bash",
-                "-c",
-                'exec 3>"$1"; exec 4<>"$2"; shift 2; ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$@"',
-                "fixture-descriptors",
-                str(phase_file),
-                str(log_file),
-                "/bin/bash",
-                str(REPO_ROOT / "bootstrap/install-member-bridge.sh"),
-                "--expected-commit",
-                COMMIT,
-                "--bridge-root",
-                str(root),
-                "--release-archive",
-                str(archive),
-                "--release-sha256",
-                hashlib.sha256(archive.read_bytes()).hexdigest(),
-                "--preview-only",
-                "--transfer-code-file",
-                str(code),
-                str(package),
-            ],
-            env={**environment, "FIXTURE_INSTALL_EXIT": str(exit_code)},
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        completed = _run_installer(fixture, exit_code=exit_code)
         assert completed.returncode == exit_code, completed.stderr
-        dependency_log = log_file.read_bytes()
+        dependency_log = fixture.log.read_bytes()
         assert len(dependency_log) == 262144
         assert dependency_log.endswith(b"last-dependency-marker\n")
         assert b"early-dependency-marker" not in dependency_log
@@ -385,10 +486,140 @@ raise SystemExit(int(os.environ["FIXTURE_INSTALL_EXIT"]))
         assert b"private-preview-output-must-not-be-persisted" not in dependency_log
         if exit_code:
             assert completed.stdout == completed.stderr == ""
-            assert not receipt.exists()
-            assert phase_file.read_text().splitlines()[-1] == "dependency_install"
+            assert not fixture.receipt.exists()
+            assert fixture.phases.read_text().splitlines()[-1] == "dependency_install"
         else:
             assert completed.stdout == "Safe synthetic enrollment preview\n"
             assert completed.stderr == f"{POST_PREVIEW}\n"
-            assert receipt.read_text().strip() == COMMIT
-            assert phase_file.read_text().splitlines()[-1] == "package_preview"
+            assert fixture.receipt.read_text().strip() == COMMIT
+            assert fixture.phases.read_text().splitlines()[-1] == "package_preview"
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+@pytest.mark.parametrize(
+    "selection", ["clt", "xcode_directory", "xcode_app", "explicit_sdk"]
+)
+def test_native_sdk_selection_is_build_only_and_preserves_explicit_choices(
+    tmp_path: Path, diagnostics: bool, selection: str
+) -> None:
+    fixture = _installer_fixture(tmp_path)
+    expected_sdk = fixture.sdk
+    expected_developer = str(fixture.developer)
+    if selection in {"xcode_directory", "xcode_app"}:
+        app = tmp_path / "Selected Xcode.app"
+        developer = app / "Contents/Developer"
+        expected_sdk = _write_sdk(
+            developer / "Platforms/MacOSX.platform/Developer/SDKs", "26.5", alias=True
+        )
+        expected_developer = str(app if selection == "xcode_app" else developer)
+        fixture.environment["DEVELOPER_DIR"] = expected_developer
+    elif selection == "explicit_sdk":
+        expected_sdk = tmp_path / "explicit SDK alias"
+        expected_sdk.symlink_to(fixture.newer_sdk, target_is_directory=True)
+        fixture.environment["SDKROOT"] = str(expected_sdk)
+        # Compatible explicit compiler choices remain byte-for-byte intact.
+        fixture.environment["CC"] = f'custom-clang -isysroot "{fixture.newer_sdk}"'
+        fixture.environment["LDFLAGS"] = f'-Wl,-syslibroot,"{fixture.newer_sdk}"'
+    original = {
+        key: fixture.environment.get(key)
+        for key in ("SDKROOT", "DEVELOPER_DIR", "CC", "CFLAGS", "LDFLAGS")
+    }
+    completed = _run_installer(fixture, diagnostics=diagnostics)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "Safe synthetic enrollment preview\n"
+    build = json.loads(Path(fixture.environment["FIXTURE_BUILD_ENV"]).read_text())
+    runtime = json.loads(Path(fixture.environment["FIXTURE_RUNTIME_ENV"]).read_text())
+    assert build["SDKROOT"] == str(expected_sdk)
+    assert build["DEVELOPER_DIR"] == expected_developer
+    assert build["CC"] == original["CC"]
+    assert build["LDFLAGS"] == original["LDFLAGS"]
+    assert runtime == original
+    assert not Path(fixture.environment["FIXTURE_XCRUN_MARKER"]).exists()
+    assert fixture.receipt.read_text().strip() == COMMIT
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing_explicit_sdk",
+        "empty_explicit_sdk",
+        "missing_alias",
+        "external_alias",
+        "invalid_metadata",
+        "symlink_metadata",
+        "unsafe_sdk",
+        "compiler_sysroot",
+        "sysconfig_sysroot",
+        "linker_syslibroot",
+        "split_linker_syslibroot",
+        "xlinker_syslibroot",
+    ],
+)
+def test_native_sdk_setup_failure_cannot_complete_or_enter_enrollment(
+    tmp_path: Path, failure: str
+) -> None:
+    fixture = _installer_fixture(tmp_path)
+    metadata = fixture.sdk / "SDKSettings.json"
+    alias = fixture.developer / "SDKs/MacOSX.sdk"
+    if failure == "missing_explicit_sdk":
+        fixture.environment["SDKROOT"] = str(tmp_path / "missing")
+    elif failure == "empty_explicit_sdk":
+        fixture.environment["SDKROOT"] = ""
+    elif failure == "missing_alias":
+        alias.unlink()
+    elif failure == "external_alias":
+        alias.unlink()
+        alias.symlink_to(_write_sdk(tmp_path / "outside", "26.5", alias=False))
+    elif failure == "invalid_metadata":
+        metadata.write_text(
+            json.dumps({"Version": "26.5", "CanonicalName": "iphoneos26.5"})
+        )
+    elif failure == "symlink_metadata":
+        retained = fixture.sdk / "retained-metadata.json"
+        metadata.rename(retained)
+        metadata.symlink_to(retained)
+    elif failure == "unsafe_sdk":
+        fixture.sdk.chmod(0o777)
+    elif failure == "compiler_sysroot":
+        fixture.environment["CFLAGS"] = f'-isysroot "{fixture.newer_sdk}"'
+    elif failure == "sysconfig_sysroot":
+        fixture.environment["FIXTURE_SYSCONFIG"] = json.dumps(
+            {"CFLAGS": f'-isysroot "{fixture.newer_sdk}"'}
+        )
+    elif failure == "linker_syslibroot":
+        fixture.environment["LDFLAGS"] = f'-Wl,-syslibroot,"{fixture.newer_sdk}"'
+    elif failure == "split_linker_syslibroot":
+        fixture.environment["LDFLAGS"] = f'-Wl,-syslibroot -Wl,"{fixture.newer_sdk}"'
+    else:
+        fixture.environment["LDSHARED"] = (
+            f'clang -Xlinker -syslibroot -Xlinker "{fixture.newer_sdk}"'
+        )
+    completed = _run_installer(fixture)
+    assert completed.returncode == 78
+    assert completed.stdout == completed.stderr == ""
+    assert not fixture.receipt.exists()
+    assert not Path(fixture.environment["FIXTURE_BUILD_ENV"]).exists()
+    assert not Path(fixture.environment["FIXTURE_RUNTIME_ENV"]).exists()
+    assert fixture.phases.read_text().splitlines()[-1] == "native_build_setup"
+    diagnostic = fixture.log.read_text()
+    assert "native build SDK setup failed" in diagnostic
+    assert str(tmp_path) not in diagnostic
+    assert CODE not in diagnostic
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_completed_install_does_not_require_or_change_native_build_configuration(
+    tmp_path: Path, diagnostics: bool
+) -> None:
+    fixture = _installer_fixture(tmp_path)
+    fixture.receipt.write_text(COMMIT)
+    fixture.environment["SDKROOT"] = "unavailable-explicit-sdk"
+    fixture.environment["DEVELOPER_DIR"] = "unavailable-explicit-developer"
+    completed = _run_installer(fixture, diagnostics=diagnostics)
+    assert completed.returncode == 0, completed.stderr
+    assert not Path(fixture.environment["FIXTURE_BUILD_ENV"]).exists()
+    runtime = json.loads(Path(fixture.environment["FIXTURE_RUNTIME_ENV"]).read_text())
+    assert runtime["SDKROOT"] == "unavailable-explicit-sdk"
+    assert runtime["DEVELOPER_DIR"] == "unavailable-explicit-developer"
+    if diagnostics:
+        assert "native_build_setup" not in fixture.phases.read_text()

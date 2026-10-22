@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import plistlib
 import shlex
 import subprocess
 import sys
@@ -39,6 +40,7 @@ def _run(
     env: dict[str, str],
     log: Path,
     diagnostic: Path | None = None,
+    expected_failure: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
@@ -66,9 +68,15 @@ def _run(
         if result.returncode and diagnostic is not None and diagnostic.exists()
         else ""
     )
-    assert result.returncode == 0, (
-        f"{log.name}: exit {result.returncode}\n{output[-16000:]}\n{failure_detail}"
-    )
+    if expected_failure is None:
+        assert result.returncode == 0, (
+            f"{log.name}: exit {result.returncode}\n{output[-16000:]}\n{failure_detail}"
+        )
+    else:
+        assert result.returncode != 0 and expected_failure in output, (
+            f"{log.name}: expected {expected_failure!r}, got exit "
+            f"{result.returncode}\n{output[-16000:]}"
+        )
     return result
 
 
@@ -112,7 +120,59 @@ def _handoff(source: Path, directory: Path, commit: str) -> tuple[Path, Path]:
     return package, code_file
 
 
-@pytest.mark.parametrize("distribution", ["setup-python", "homebrew"])
+def _sdk_version(sdk: Path) -> str:
+    with (sdk / "SDKSettings.plist").open("rb") as stream:
+        return str(plistlib.load(stream)["Version"])
+
+
+def _toolchain_evidence(
+    workspace: Path, artifact_dir: Path, env: dict[str, str]
+) -> dict[str, str]:
+    def inspect(arguments: list[str], name: str) -> str:
+        result = _run(
+            arguments, cwd=workspace, env=env, log=artifact_dir / f"{name}.log"
+        )
+        return (result.stdout + result.stderr).strip()
+
+    developer = Path(
+        env.get("DEVELOPER_DIR")
+        or inspect(["/usr/bin/xcode-select", "-p"], "selected-developer")
+    ).resolve(strict=True)
+    default_sdk = Path(
+        inspect(["/usr/bin/xcrun", "--show-sdk-path"], "native-sdk")
+    ).resolve(strict=True)
+    canonical_candidates = [
+        path
+        for path in (
+            developer / "SDKs/MacOSX.sdk",
+            developer / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+        )
+        if path.is_dir()
+    ]
+    assert len(canonical_candidates) == 1
+    canonical_sdk = canonical_candidates[0].resolve(strict=True)
+    compiler = inspect(["/usr/bin/xcrun", "--find", "clang"], "compiler-path")
+    linker = inspect(["/usr/bin/xcrun", "--find", "ld"], "linker-path")
+    evidence = {
+        "developer_directory": str(developer),
+        "compiler_path": compiler,
+        "compiler_version": inspect([compiler, "--version"], "native-compiler"),
+        "linker_path": linker,
+        "linker_and_tapi_version": inspect([linker, "-v"], "native-linker"),
+        "default_sdk_resolved": str(default_sdk),
+        "default_sdk_version": _sdk_version(default_sdk),
+        "canonical_sdk_resolved": str(canonical_sdk),
+        "canonical_sdk_version": _sdk_version(canonical_sdk),
+    }
+    (artifact_dir / "native-toolchain.json").write_text(
+        json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
+    )
+    return evidence
+
+
+@pytest.mark.parametrize(
+    "distribution", ["setup-python", "homebrew", "homebrew-older-toolchain"]
+)
 def test_real_clean_and_interrupted_member_install_preview(
     tmp_path: Path, distribution: str
 ) -> None:
@@ -122,6 +182,7 @@ def test_real_clean_and_interrupted_member_install_preview(
     interpreter_variable = {
         "setup-python": "ADMINME_BRIDGE_INSTALLER_PYTHON",
         "homebrew": "ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON",
+        "homebrew-older-toolchain": "ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON",
     }[distribution]
     python = Path(os.environ[interpreter_variable]).resolve()
     assert python.is_file()
@@ -170,7 +231,7 @@ def test_real_clean_and_interrupted_member_install_preview(
         "HOME": str(home),
         "PATH": (
             f"{shims}:"
-            + ("/opt/homebrew/bin:" if distribution == "homebrew" else "")
+            + ("/opt/homebrew/bin:" if distribution != "setup-python" else "")
             + "/usr/bin:/bin:/usr/sbin:/sbin"
         ),
         "TMPDIR": str(temporary) + "/",
@@ -185,8 +246,10 @@ def test_real_clean_and_interrupted_member_install_preview(
         "HOMEBREW_NO_ANALYTICS": "1",
         "HOMEBREW_NO_INSTALL_CLEANUP": "1",
     }
+    if distribution == "homebrew-older-toolchain":
+        env["DEVELOPER_DIR"] = os.environ["ADMINME_BRIDGE_INSTALLER_OLDER_DEVELOPER"]
     formula_version = None
-    if distribution == "homebrew":
+    if distribution != "setup-python":
         # Exercise the real package-manager lookup used on a member Mac. The
         # explicit CI setup installs the formula; no substitute reports success.
         formula_version = _run(
@@ -203,18 +266,55 @@ def test_real_clean_and_interrupted_member_install_preview(
             log=artifact_dir / "homebrew-python-prefix.log",
         ).stdout.strip()
         assert (Path(formula_prefix) / "bin/python3.14").resolve() == python
-    _run(
-        ["/usr/bin/xcrun", "clang", "--version"],
-        cwd=workspace,
-        env=env,
-        log=artifact_dir / "native-compiler.log",
-    )
-    _run(
-        ["/usr/bin/xcrun", "--show-sdk-path"],
-        cwd=workspace,
-        env=env,
-        log=artifact_dir / "native-sdk.log",
-    )
+    toolchain = _toolchain_evidence(workspace, artifact_dir, env)
+    compatibility_probe = None
+    if distribution == "homebrew-older-toolchain":
+        # Real mixed-toolchain failure, separately from the installer's default
+        # selection: an explicit override must never be disguised as absent.
+        assert "clang-2100.1.1.101" in toolchain["compiler_version"]
+        newer_sdk = Path(os.environ["ADMINME_BRIDGE_INSTALLER_NEWER_SDK"]).resolve(
+            strict=True
+        )
+        assert _sdk_version(newer_sdk) == "27.0"
+        assert toolchain["canonical_sdk_version"] == "26.5"
+        probe_source = workspace / "native link probe.c"
+        probe_source.write_text("int adminme_native_probe(void) { return 0; }\n")
+        probe_command = [
+            toolchain["compiler_path"],
+            "-v",
+            "-bundle",
+            "-undefined",
+            "dynamic_lookup",
+            str(probe_source),
+            "-lm",
+            "-framework",
+            "CoreFoundation",
+            "-framework",
+            "CoreServices",
+            "-o",
+            str(workspace / "native link probe.so"),
+        ]
+        _run(
+            probe_command,
+            cwd=workspace,
+            env={**env, "SDKROOT": str(newer_sdk)},
+            log=artifact_dir / "older-compiler-newer-sdk-failure.log",
+            expected_failure="arm64e.x1",
+        )
+        _run(
+            probe_command,
+            cwd=workspace,
+            env={**env, "SDKROOT": toolchain["canonical_sdk_resolved"]},
+            log=artifact_dir / "older-compiler-canonical-sdk-success.log",
+        )
+        assert "SDKROOT" not in env
+        compatibility_probe = {
+            "incompatible_sdk": str(newer_sdk),
+            "incompatible_result": "arm64e.x1 link failure",
+            "canonical_sdk": toolchain["canonical_sdk_resolved"],
+            "canonical_result": "linked successfully; binary not executed",
+            "installer_sdkroot_override": False,
+        }
     commit = _run(
         ["/usr/bin/git", "--no-replace-objects", "-C", str(ROOT), "rev-parse", "HEAD"],
         cwd=workspace,
@@ -320,6 +420,7 @@ def test_real_clean_and_interrupted_member_install_preview(
             "preflight",
             "python_setup",
             "release_preparation",
+            "native_build_setup",
             "tooling_setup",
             "environment_setup",
             "dependency_install",
@@ -370,6 +471,8 @@ def test_real_clean_and_interrupted_member_install_preview(
                 "python_distribution": distribution,
                 "python_version": version,
                 "homebrew_formula_version": formula_version,
+                "native_toolchain": toolchain,
+                "compatibility_probe": compatibility_probe,
                 "architecture": os.uname().machine,
                 "host_boundaries_shimmed": ["FileVault", "Tailscale"]
                 + (["Homebrew"] if distribution == "setup-python" else []),

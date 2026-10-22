@@ -172,8 +172,14 @@ def test_packaged_installation_cannot_skip_or_reuse_harness_environment() -> Non
     assert install["env"]["ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON"] == (
         "${{ steps.homebrew-python.outputs.python-path }}"
     )
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_OLDER_DEVELOPER"] == (
+        "/Applications/Xcode_26.6.app/Contents/Developer"
+    )
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_NEWER_SDK"] == (
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk"
+    )
     assert "tests/acceptance/test_member_bridge_installer_runtime.py" in install["run"]
-    assert "suites) > 0" in install["run"]
+    assert "suites) == 3" in install["run"]
     assert '("skipped", "failures", "errors")' in install["run"]
 
 

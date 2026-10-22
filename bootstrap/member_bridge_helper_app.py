@@ -65,7 +65,7 @@ read_phase() {
   [[ -n "$ATTEMPT_DIR" ]] || return 0
   while IFS= read -r item; do
     case "$item" in
-      preflight|python_setup|release_preparation|tooling_setup|environment_setup|dependency_install|package_preview|local_acceptance|permission_setup) PHASE="$item" ;;
+      preflight|python_setup|release_preparation|native_build_setup|tooling_setup|environment_setup|dependency_install|package_preview|local_acceptance|permission_setup) PHASE="$item" ;;
     esac
   done <"$ATTEMPT_DIR/phases"
 }
@@ -327,6 +327,8 @@ end run
     set explanation to "The helper could not safely create its private diagnostic folder. Repair the local setup folder permissions before retrying."
   else if phase is in {"preflight", "python_setup", "release_preparation"} then
     set explanation to "Local installation prerequisites or reviewed release preparation stopped. A private setup diagnostic was saved. Repair the reported local setup problem before retrying this request in AdministrateMe Settings."
+  else if phase is "native_build_setup" then
+    set explanation to "The selected developer tools and SDK could not be prepared for installation. A private setup diagnostic was saved. Repair the reported developer-tool or explicit SDK setting before retrying."
   else if phase is in {"tooling_setup", "environment_setup", "dependency_install"} then
     set explanation to "Required software installation stopped before enrollment. A private installation log and setup diagnostic were saved. Repair the installation problem before retrying this request in AdministrateMe Settings."
   else if phase is in {"handoff_selection", "transfer_code", "package_preview"} then

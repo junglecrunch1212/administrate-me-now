@@ -79,6 +79,18 @@ on exit. A phase receipt is diagnostic evidence, never acceptance, permission,
 source attestation or proof that installation completed. This MODERNIZE preserves
 the existing enrollment and write-authorization gates.
 
+Native dependency preparation must use an SDK compatible with the selected
+Apple developer tools. An unqualified `xcrun` SDK lookup can select a newer SDK
+than those tools support. Without an explicit SDK override, the installer uses
+the selected developer directory's canonical `MacOSX.sdk` and validates it.
+The locked native dependency build verifies compilation and linking. Explicit
+SDK or compiler selections are retained or fail with an actionable diagnostic;
+they are never silently replaced. Build-specific environment settings stay
+inside dependency preparation and do not reach enrollment or the running bridge.
+No system developer selection, SDK installation or symlink is changed. A complete
+existing environment and local continue/uninstall do not acquire a new build
+prerequisite. This MODERNIZE preserves the pinned dependencies and runtime.
+
 ## Independent lifecycle and capability gates
 
 The wizard uses the one exact lifecycle:
@@ -178,8 +190,13 @@ clean-macOS rehearsal, and aggregate release gates remain required.
 packaged dependency-installation boundary in isolated hosted macOS: a Git-free
 archive, paths containing spaces, fresh tooling and dependency caches, a real
 main-only bridge environment, production preview, and recovery of an interrupted
-dependency installation. Only FileVault, Tailscale and Homebrew host boundaries
-are synthetic; no member device or Apple source is used as a test target. The
+dependency installation. Both setup-python and actual Homebrew interpreters are
+covered. An older Apple linker with a newer SDK must reproduce the specific
+architecture-parser failure; the matching SDK must then support the real
+packaged installation and recovery. Compiler, linker and resolved SDK evidence
+distinguish these cases. FileVault and Tailscale host boundaries are synthetic;
+the setup-python case also substitutes only the Homebrew interpreter lookup.
+No member device or Apple source is used as a test target. The
 explicit installer job rejects empty or skipped coverage. Its exact success is
 required by the existing protected macOS release gate, which runs and fails
 explicitly if the prerequisite fails, is cancelled or is missing.
