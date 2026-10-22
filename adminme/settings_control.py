@@ -27,6 +27,7 @@ from adminme.adapters.cos_channel_acquisition import (
     member_bridge_capability_ceiling,
     policy_from_config as cos_policy_from_config,
 )
+from adminme.adapters.member_google_connections import selected_source_entry
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     authorization_from_record,
@@ -253,8 +254,17 @@ class SettingsControlStore:
 
     SCHEMA_VERSION = 6
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *, adapter_config: dict[str, Any] | None = None
+    ) -> None:
+        from adminme.adapters.member_google_connections import (
+            manual_sources,
+            selected_entries,
+        )
+
         self.path = Path(path)
+        self._manual_google_sources = manual_sources(adapter_config or {})
+        self._google_observation_entries = selected_entries(adapter_config or {})
 
     async def cos_response_policy(
         self, event_log: Any, tenant_id: str
@@ -956,6 +966,10 @@ class SettingsControlStore:
     ) -> SettingsMutation:
         state = self.read()
         self._expect_revision(state, expected_revision)
+        if (member_id, source_id) in self._manual_google_sources and (
+            mode != "manual" or language_enabled
+        ):
+            raise ValueError("This Google connection permits manual intake only")
         normalized = validate_policy_override(
             source_id,
             mode=mode,
@@ -988,6 +1002,13 @@ class SettingsControlStore:
         *,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if (member_id, source_id) in self._manual_google_sources:
+            return {
+                **effective_policy(source_id),
+                "mode": "manual",
+                "language_enabled": False,
+                "locked": True,
+            }
         current = state or self.read()
         rows = current["candidate_policies"].get(member_id)
         override = rows.get(source_id) if isinstance(rows, dict) else None
@@ -1352,6 +1373,20 @@ class SettingsControlStore:
             migration_state = (
                 "migration_needed" if migration is not None else "not_required"
             )
+        selected = selected_source_entry(
+            self._google_observation_entries,
+            owner_id=owner_principal_id,
+            account_id=coordinate.provider_account_id,
+            adapter_id=coordinate.adapter_instance_id,
+            kind=coordinate.adapter_kind,
+        )
+        if selected is not None:
+            policy = policy.model_copy(
+                update={"attention_mode": "manual", "triage_mode": "manual_only"}
+            )
+            # This exact deployment-authorized override uses the existing audit
+            # contract; retained event schemas remain replay-compatible.
+            origin = "exact_override"
         return {
             "policy": policy.model_dump(mode="json"),
             "policy_key": coordinate.key,
@@ -1860,7 +1895,10 @@ def compose_source_policy_v2_sources(
 ) -> list[dict[str, Any]]:
     """Union configured, retained and catalog sources without inventing access."""
 
+    from adminme.adapters.member_google_connections import selected_entries
+
     connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
+    observed_google = selected_entries(runtime.settings.adapter_config)
     test_policy = policy_from_adapter_config(runtime.settings.adapter_config)
     sources: list[dict[str, Any]] = []
     admitted_bridge_keys: set[str] = set()
@@ -2227,10 +2265,44 @@ def compose_source_policy_v2_sources(
             # An older observation outside the current sealed container
             # selection remains history, never current acquisition evidence.
             source["connection_state"] = "disconnected"
+    observed_google_keys: set[str] = set()
+    for source in sources:
+        source_coordinate_data = source.get("coordinate") or {}
+        selected = selected_source_entry(
+            observed_google,
+            owner_id=str(source_coordinate_data.get("owner_principal_id") or ""),
+            account_id=str(source_coordinate_data.get("provider_account_id") or ""),
+            adapter_id=str(source_coordinate_data.get("adapter_instance_id") or ""),
+            kind=str(source_coordinate_data.get("adapter_kind") or ""),
+        )
+        if selected is None:
+            continue
+        observed_google_keys.add(source["policy_key"])
+        connection = connections.get(selected["id"], {})
+        setup = connection.get("setup")
+        source["connection_state"] = (
+            "connected"
+            if setup == "connected"
+            else "disconnected"
+            if setup in {"paused", "disabled"}
+            else "configured"
+        )
+        source["acquisition"] = {
+            "state": "paused" if setup in {"paused", "disabled"} else "active",
+            "coverage": "selected_google_sources",
+            "freshness": "current" if connection.get("last_sync_at") else "unknown",
+            "provider_capability": "available" if setup == "connected" else "unknown",
+            "mailbox_coverage_complete": False,
+            "automated_candidate_extraction": False,
+            "provider_writes": selected["config"]["read_only"] is False,
+            "writes_require_existing_governance": True,
+            "historical_expansion": False,
+        }
     if test_policy is not None:
         for source in sources:
             if (
-                source.get("direct_authenticated_intent")
+                source.get("policy_key") in observed_google_keys
+                or source.get("direct_authenticated_intent")
                 or source.get("policy_key") in admitted_bridge_keys
             ):
                 continue

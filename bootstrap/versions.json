@@ -41,7 +41,7 @@
     "runtime_port": 3330,
     "plugin_package_version": "2.0.0-gate8",
     "supported_communication_intake_policies": ["explicit-member-submission-v1"],
-    "supported_acquisition_contracts": ["disposable-test-acquisition-v1", "cos-forwarded-acquisition-v1"],
+    "supported_acquisition_contracts": ["disposable-test-acquisition-v1", "cos-forwarded-acquisition-v1", "member-google-connections-v1"],
     "communication_intake_release_role": "cutover",
     "default_communication_intake_policy": "explicit-member-submission-v1"
   },

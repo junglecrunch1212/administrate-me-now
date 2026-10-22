@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import shlex
 import subprocess
@@ -16,6 +17,9 @@ import yaml
 from scripts.release_scope import (
     CONTRACT,
     ENROLLMENT_INGEST_PATH,
+    GOOGLE_MODULE,
+    GOOGLE_SHARED_PATHS,
+    google_dependency_fingerprint,
     choose_scope,
     required_workers,
     select_scope,
@@ -88,7 +92,14 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    "scope", ["documentation", "bridge-helper", "bridge-enrollment", "system-wide"]
+    "scope",
+    [
+        "documentation",
+        "bridge-helper",
+        "bridge-enrollment",
+        "google-connections",
+        "system-wide",
+    ],
 )
 @pytest.mark.parametrize("platform", ["linux", "macos"])
 def test_scope_gate_requires_exact_corresponding_success(
@@ -572,6 +583,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "documentation-validation",
         "bridge-helper-validation",
         "bridge-development",
+        "google-connections-validation",
         system,
     }
     if platform == "macos":
@@ -714,7 +726,10 @@ def test_bridge_development_includes_strict_readiness_composition(
 
 def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
-    assert job["if"] == "${{ needs.release-scope.outputs.scope != 'documentation' }}"
+    assert (
+        job["if"]
+        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","system-wide"]\'), needs.release-scope.outputs.scope) }}'
+    )
     assert job["runs-on"] == "macos-26"
     install = next(
         step
@@ -951,4 +966,103 @@ def test_enrollment_component_requires_expected_regular_file_mode(
             path_modes={ENROLLMENT_INGEST_PATH: {"100644"}, path: {mode}},
         )
         == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("shared_path", sorted(GOOGLE_SHARED_PATHS))
+def test_google_scope_accepts_only_exact_wiring_and_unchanged_dependencies(
+    repository: tuple[Path, str], shared_path: str
+) -> None:
+    path, _initial = repository
+    contract = json.loads((ROOT / "scripts/google_connection_wiring.json").read_text())
+    pair = contract["paths"][shared_path][0]
+    baseline = pair["before"] + "\n# Unrelated retained behavior\n"
+    base = _commit(path, shared_path, baseline)
+    _commit(path, GOOGLE_MODULE, "# Google connection implementation\n")
+    head = _commit(path, shared_path, baseline.replace(pair["before"], pair["after"]))
+    assert google_dependency_fingerprint(path, base) == google_dependency_fingerprint(
+        path, head
+    )
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "google-connections"
+    )
+    # A shared filename is not a blanket exemption: even an adjacent edit fails closed.
+    changed = _commit(
+        path,
+        shared_path,
+        baseline.replace(pair["before"], pair["after"])
+        + "# Unreviewed runtime change\n",
+    )
+    assert (
+        select_scope(path, _event(base, changed), checkout_sha=changed)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "poetry.lock",
+        "bootstrap/upgrade.py",
+        "adminme/bridge_enrollment.py",
+        "bridge/adminme_bridge/daemon.py",
+    ],
+)
+def test_google_scope_never_exempts_dependency_or_bridge_changes(
+    repository: tuple[Path, str], changed: str
+) -> None:
+    path, base = repository
+    _commit(path, GOOGLE_MODULE, "# Google component\n")
+    head = _commit(path, changed, "# Changed dependency\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,modes", [("D", {"100644"}), ("T", {"100644", "120000"}), ("M", {"100755"})]
+)
+def test_google_scope_rejects_removed_or_executable_inputs(
+    status: str, modes: set[str]
+) -> None:
+    assert (
+        choose_scope(
+            [(status, GOOGLE_MODULE)],
+            interfaces_equal=False,
+            path_modes={GOOGLE_MODULE: modes},
+            google_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_google_release_requires_production_packaged_privacy_recovery_and_types(
+    filename: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["google-connections-validation"]
+    assert (
+        job["if"] == "${{ needs.release-scope.outputs.scope == 'google-connections' }}"
+    )
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    for required in (
+        "test_member_google_connections.py",
+        "test_cos_channel_activation.py",
+        "test_governance.py",
+        "test_b03_google_tasks_create_production.py",
+        "test_cos_self_replies.py",
+        "test_cos_response_execution.py",
+        "--runxfail",
+        "('skipped', 'failures', 'errors')",
+        "suites) > 0",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+    ):
+        assert required in commands
+    assert job["steps"][-1]["id"] == "validated"
+    assert "bridge-installed-runtime" not in required_workers(
+        "google-connections", "macos"
     )

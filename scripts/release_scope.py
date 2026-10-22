@@ -1,8 +1,7 @@
 """Deterministic component selection and exact-revision protected CI gates.
 
-Reviewed helper packaging and the bounded enrollment-ingest route have
-component contracts. Everything outside those contracts falls back to the
-unchanged system release validation. GitHub
+Reviewed components have explicit contracts. Everything outside those
+contracts falls back to unchanged system release validation. GitHub
 labels, supplied path lists and previous runs cannot authorize a smaller gate.
 """
 
@@ -48,8 +47,34 @@ HELPER_TEST_PATHS = frozenset(
     }
 )
 ENROLLMENT_INGEST_PATH = "adminme/products/bridge/routers/ingest.py"
+GOOGLE_MODULE = "adminme/adapters/member_google_connections.py"
+GOOGLE_WIRING = "scripts/google_connection_wiring.json"
+GOOGLE_SHARED_PATHS = frozenset(
+    {
+        "adminme/adapters/cos_channel_acquisition.py",
+        "adminme/adapters/disposable_test_acquisition.py",
+        "adminme/deployment_readiness.py",
+        "adminme/runtime/application.py",
+        "adminme/settings_control.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/versions.json",
+    }
+)
+GOOGLE_TEST_PATHS = frozenset(
+    {
+        "tests/acceptance/test_member_google_connections.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/test_cos_channel_operation.py",
+    }
+)
 SCOPES = frozenset(
-    {"documentation", "bridge-helper", "bridge-enrollment", "system-wide"}
+    {
+        "documentation",
+        "bridge-helper",
+        "bridge-enrollment",
+        "google-connections",
+        "system-wide",
+    }
 )
 CONTRACT = "administrateme-component-release-v1"
 
@@ -99,6 +124,7 @@ def choose_scope(
     interfaces_equal: bool,
     path_modes: dict[str, set[str]],
     enrollment_interfaces_equal: bool = False,
+    google_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -106,6 +132,25 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    google_allowed = (
+        GOOGLE_SHARED_PATHS
+        | GOOGLE_TEST_PATHS
+        | POLICY_PATHS
+        | {GOOGLE_MODULE, GOOGLE_WIRING}
+    )
+    if (
+        google_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in google_allowed or _prose(path))
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(
+            path == GOOGLE_MODULE or path in GOOGLE_SHARED_PATHS for _, path in changes
+        )
+    ):
+        return "google-connections"
     allowed = set(HELPER_COMPONENT_PATHS) | POLICY_PATHS | HELPER_TEST_PATHS
     if interfaces_equal and all(
         status in {"A", "M"} and (path in allowed or _prose(path))
@@ -150,6 +195,45 @@ def _enrollment_interface_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
     return hashlib.sha256(
         json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
     ).hexdigest()
+
+
+def google_dependency_fingerprint(repository: Path, revision: str) -> str:
+    """Exclude the Google module and only its exact tested integration edits.
+
+    This is a CI scope boundary, not a retained-helper compatibility assertion.
+    Every other runtime byte and mode, including all bridge code, stays bound.
+    The protected worker separately tests the complete immutable Google candidate.
+    """
+    contract = json.loads(
+        (Path(__file__).parent / "google_connection_wiring.json").read_text()
+    )
+    if (
+        contract.get("contract") != "google-connection-wiring-v1"
+        or set(contract["paths"]) != GOOGLE_SHARED_PATHS
+    ):
+        raise ValueError("invalid Google integration boundary")
+    entries, _ = load_git_tree(repository, revision)
+    inventory = {}
+    for entry in entries:
+        path = entry.path
+        if (
+            path in {GOOGLE_MODULE, GOOGLE_WIRING} | POLICY_PATHS
+            or _prose(path)
+            or path.startswith(("tests/", "bridge/tests/", ".github/"))
+        ):
+            continue
+        identity = entry.object_id
+        if path in GOOGLE_SHARED_PATHS:
+            source = _git(repository, "show", f"{revision}:{path}")
+            for pair in contract["paths"][path]:
+                before, after = pair["before"], pair["after"]
+                if not before or not after or before == after:
+                    raise ValueError("invalid Google integration edit")
+                if source.count(after) == 1:
+                    source = source.replace(after, before, 1)
+            identity = hashlib.sha256(source.encode()).hexdigest()
+        inventory[path] = {"mode": entry.mode, "identity": identity}
+    return hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
 
 
 def select_scope(
@@ -216,6 +300,13 @@ def select_scope(
             all(enrollment_route_present.values())
             and len(set(enrollment_fingerprints.values())) == 1
         ),
+        google_interfaces_equal=len(
+            {
+                google_dependency_fingerprint(repository, revision)
+                for revision in {base, head, checkout}
+            }
+        )
+        == 1,
     )
     return {
         "contract": CONTRACT,
@@ -237,12 +328,17 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "documentation": "documentation-validation",
         "bridge-helper": "bridge-helper-validation",
         "bridge-enrollment": "bridge-development",
+        "google-connections": "google-connections-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",
     }[scope]
     workers: tuple[str, ...] = ("release-scope", selected)
-    if platform == "macos" and scope != "documentation":
+    if platform == "macos" and scope in {
+        "bridge-helper",
+        "bridge-enrollment",
+        "system-wide",
+    }:
         workers += ("bridge-installed-runtime",)
     return workers
 

@@ -149,6 +149,89 @@ jobs:
           actual_sha="$(git rev-parse HEAD)"
           test "$actual_sha" = "$GITHUB_SHA"
           printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+  google-connections-validation:
+    name: Google connections release (linux)
+    needs: [release-scope]
+    if: ${{ needs.release-scope.outputs.scope == 'google-connections' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_ADDOPTS: '-o tmp_path_retention_policy=failed'
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - name: Install locked Google release environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+      - name: Validate private Google acquisition, capabilities and guarded recovery
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="$RUNNER_TEMP/google-connections-tests" \
+            --junitxml="$RUNNER_TEMP/google-connections.xml" \
+            tests/acceptance/test_member_google_connections.py \
+            tests/acceptance/test_cos_channel_acquisition.py \
+            tests/acceptance/test_forwarded_channel_intake.py \
+            tests/acceptance/test_cos_self_replies.py \
+            tests/acceptance/test_cos_response_execution.py \
+            tests/acceptance/test_b03_google_tasks_create_production.py \
+            tests/integration/test_service_owned_google_sources.py \
+            tests/integration/test_adapter_google_calendar_supervisor.py \
+            tests/integration/test_adapter_google_tasks_supervisor.py \
+            tests/integration/test_gmail_observation_receipts.py \
+            tests/unit/adapters/calendaring/test_google_calendar.py \
+            tests/unit/adapters/tasks/test_google_tasks.py \
+            tests/unit/test_governance.py \
+            tests/unit/test_google_tasks_execution.py \
+            tests/unit/test_cos_channel_operation.py \
+            tests/unit/bootstrap/test_cos_channel_activation.py \
+            tests/unit/test_ci_release_gates.py
+          python - "$RUNNER_TEMP/google-connections.xml" <<'CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          suites = list(ET.parse(sys.argv[1]).getroot().iter('testsuite'))
+          assert sum(int(s.get('tests', '0')) for s in suites) > 0
+          assert all(int(s.get(k, '0')) == 0 for s in suites for k in ('skipped', 'failures', 'errors'))
+          CHECK
+      - name: Validate affected types, privacy and plugin interfaces
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run mypy adminme bridge/adminme_bridge bootstrap scripts/release_scope.py
+          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
+          bash scripts/verify_invariants.sh
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+          poetry check --lock
+          git diff --check
+          test -z "$(git status --porcelain)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: google-connections-linux
+          path: ${{ runner.temp }}/google-connections.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
   bridge-development:
     needs: [release-scope]
     name: Bridge enrollment validation (Linux)
@@ -586,7 +669,7 @@ jobs:
 
   deterministic-consistency:
     name: deterministic-consistency
-    needs: [release-scope, documentation-validation, bridge-helper-validation, bridge-development, system-consistency]
+    needs: [release-scope, documentation-validation, bridge-helper-validation, bridge-development, google-connections-validation, system-consistency]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
