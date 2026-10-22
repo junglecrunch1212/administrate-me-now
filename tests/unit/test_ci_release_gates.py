@@ -16,6 +16,8 @@ import yaml
 
 from scripts.release_scope import (
     CONTRACT,
+    BRIDGE_RUNTIME_PATHS,
+    _bridge_runtime_dependency_fingerprint,
     COS_RECOVERY_COMPONENT_PATHS,
     COS_RECOVERY_CONTROLLER,
     COS_RECOVERY_HISTORY,
@@ -101,6 +103,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "documentation",
         "bridge-helper",
         "bridge-enrollment",
+        "bridge-runtime",
         "google-connections",
         "cos-recovery-history",
         "system-wide",
@@ -736,7 +739,7 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
     assert (
         job["if"]
-        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","system-wide"]\'), needs.release-scope.outputs.scope) }}'
+        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","bridge-runtime","system-wide"]\'), needs.release-scope.outputs.scope) }}'
     )
     assert job["runs-on"] == "macos-26"
     install = next(
@@ -786,7 +789,7 @@ def test_enrollment_worker_requires_complete_affected_contract_and_final_binding
     job = _workflow(filename)["jobs"]["bridge-development"]
     assert (
         job["if"]
-        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
+        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
     )
     assert job["outputs"] == {"validated_sha": "${{ steps.validated.outputs.sha }}"}
     assert job["steps"][-1]["id"] == "validated"
@@ -1276,3 +1279,69 @@ def test_actual_recovery_junit_gate_rejects_missing_or_partial_evidence(
         timeout=10,
     )
     assert (result.returncode == 0) is (defect == "none")
+
+
+def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies():
+    changes = [
+        ("A", "bootstrap/member_bridge_runtime_repair.py"),
+        ("M", "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py"),
+    ]
+    modes = {path: {"100644"} for _, path in changes}
+    assert (
+        choose_scope(
+            changes,
+            interfaces_equal=False,
+            path_modes=modes,
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "bridge-runtime"
+    )
+    assert (
+        choose_scope(changes, interfaces_equal=False, path_modes=modes) == "system-wide"
+    )
+    for extra in (
+        "adminme/events/log.py",
+        "bridge/poetry.lock",
+        "adminme/bridge_authorization.py",
+        "tests/unreviewed.py",
+        "bootstrap/arbitrary.py",
+    ):
+        assert (
+            choose_scope(
+                changes + [("M", extra)],
+                interfaces_equal=False,
+                path_modes={**modes, extra: {"100644"}},
+                bridge_runtime_interfaces_equal=True,
+            )
+            == "system-wide"
+        )
+    assert (
+        choose_scope(
+            changes,
+            interfaces_equal=False,
+            path_modes={**modes, changes[0][1]: {"120000"}},
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+
+
+def test_bridge_runtime_fingerprint_binds_every_unreviewed_byte_and_mode():
+    from bootstrap.source_identity import GitTreeEntry
+
+    def entry(path, blob="a" * 40, mode="100644"):
+        return GitTreeEntry(path=path, mode=mode, object_id=blob)
+
+    base = (entry("adminme/events/log.py"),)
+    changed = (entry("adminme/events/log.py", "b" * 40),)
+    assert _bridge_runtime_dependency_fingerprint(
+        base
+    ) != _bridge_runtime_dependency_fingerprint(changed)
+    for path in BRIDGE_RUNTIME_PATHS:
+        mode = "100755" if path.endswith(".sh") else "100644"
+        assert _bridge_runtime_dependency_fingerprint(
+            base
+        ) == _bridge_runtime_dependency_fingerprint((*base, entry(path, mode=mode)))
+        assert _bridge_runtime_dependency_fingerprint(
+            base
+        ) != _bridge_runtime_dependency_fingerprint((*base, entry(path, mode="120000")))

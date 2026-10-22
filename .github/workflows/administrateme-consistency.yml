@@ -319,7 +319,7 @@ jobs:
   bridge-development:
     needs: [release-scope]
     name: Bridge enrollment validation (Linux)
-    if: ${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}
+    if: ${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}
     outputs:
       validated_sha: ${{ steps.validated.outputs.sha }}
     runs-on: ubuntu-latest
@@ -358,6 +358,10 @@ jobs:
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
           --junitxml="${RUNNER_TEMP}/bridge-enrollment.xml"
           -k 'not test_builds_reviewed_document_helper_without_secret_or_remote_execution and not test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback and not test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation'
+          tests/unit/bootstrap/test_member_bridge_runtime_repair.py
+          tests/unit/adapters/reminders/test_eventkit_color_bounds.py
+          tests/unit/adapters/reminders
+          tests/integration/test_adapter_apple_eventkit_dual_deployment_integration.py
           tests/acceptance/test_self_service_member_bridge_enrollment.py
           tests/acceptance/test_member_bridge_permission_recovery.py
           tests/acceptance/test_apple_messages_bridge_ingestion.py

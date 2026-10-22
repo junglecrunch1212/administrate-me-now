@@ -84,11 +84,24 @@ COS_RECOVERY_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_member_bridge_component.py",
     }
 )
+BRIDGE_RUNTIME_PATHS = frozenset(
+    {
+        "bootstrap/member_bridge_runtime_repair.py",
+        "bootstrap/install-member-bridge.sh",
+        "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+        "tests/unit/bootstrap/test_member_bridge_runtime_repair.py",
+        "tests/unit/adapters/reminders/test_eventkit_color_bounds.py",
+        "tests/acceptance/test_eventkit_color_native.py",
+        "tests/acceptance/test_member_bridge_installer_runtime.py",
+        "tests/acceptance/test_member_bridge_launch_runtime.py",
+    }
+)
 SCOPES = frozenset(
     {
         "documentation",
         "bridge-helper",
         "bridge-enrollment",
+        "bridge-runtime",
         "google-connections",
         "cos-recovery-history",
         "system-wide",
@@ -144,6 +157,7 @@ def choose_scope(
     enrollment_interfaces_equal: bool = False,
     google_interfaces_equal: bool = False,
     cos_recovery_interfaces_equal: bool = False,
+    bridge_runtime_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -151,6 +165,20 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    if (
+        bridge_runtime_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in BRIDGE_RUNTIME_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path)
+            == {"100755" if path == "bootstrap/install-member-bridge.sh" else "100644"}
+            for status, path in changes
+        )
+        and any(
+            path == "bootstrap/member_bridge_runtime_repair.py" for _, path in changes
+        )
+    ):
+        return "bridge-runtime"
     recovery_allowed = (
         COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
     )
@@ -230,6 +258,26 @@ def _enrollment_interface_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
     )
     return hashlib.sha256(
         json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _bridge_runtime_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    allowed = BRIDGE_RUNTIME_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode
+            == (
+                "100755"
+                if entry.path == "bootstrap/install-member-bridge.sh"
+                else "100644"
+            )
+            and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":")).encode()
     ).hexdigest()
 
 
@@ -334,11 +382,15 @@ def select_scope(
     enrollment_fingerprints: dict[str, str] = {}
     enrollment_route_present: dict[str, bool] = {}
     recovery_fingerprints: dict[str, str] = {}
+    bridge_runtime_fingerprints: dict[str, str] = {}
     recovery_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
         enrollment_fingerprints[revision] = _enrollment_interface_fingerprint(entries)
         recovery_fingerprints[revision] = _cos_recovery_dependency_fingerprint(entries)
+        bridge_runtime_fingerprints[revision] = _bridge_runtime_dependency_fingerprint(
+            entries
+        )
         required_recovery_paths = COS_RECOVERY_COMPONENT_PATHS - (
             {COS_RECOVERY_HISTORY} if revision == base else set()
         )
@@ -369,6 +421,8 @@ def select_scope(
             }
         )
         == 1,
+        bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
+        == 1,
         cos_recovery_interfaces_equal=(
             all(recovery_sources_present.values())
             and len(set(recovery_fingerprints.values())) == 1
@@ -395,6 +449,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "documentation": "documentation-validation",
         "bridge-helper": "bridge-helper-validation",
         "bridge-enrollment": "bridge-development",
+        "bridge-runtime": "bridge-development",
         "google-connections": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
         "system-wide": "system-consistency"
@@ -405,6 +460,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
     if platform == "macos" and scope in {
         "bridge-helper",
         "bridge-enrollment",
+        "bridge-runtime",
         "system-wide",
     }:
         workers += ("bridge-installed-runtime",)

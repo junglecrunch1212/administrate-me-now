@@ -24,10 +24,6 @@ import pytest
 import yaml
 
 from bootstrap.bridge_enrollment import MemberBridgeInstaller, MemberBridgePaths
-from bootstrap.member_bridge_component import (
-    PERMISSION_RECOVERY_COMPATIBILITY,
-    PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
-)
 from bootstrap.member_bridge_helper_app import build_member_bridge_helper_app
 
 
@@ -60,9 +56,6 @@ def sealed_component(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, st
         app,
         root=ROOT,
         expected_commit=commit,
-        runtime_commit=PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
-        expected_runtime_archive_sha256="12eaab9cd6325200b0fa795236fd5da917f221282a582cc8a8767e94e6847df3",
-        runtime_compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
     )
     _run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
     manifest = json.loads(
