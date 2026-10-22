@@ -43,10 +43,14 @@ jobs:
           tests/unit/test_apple_service_permission_contract.py
           tests/unit/test_apple_native_permission_boundary.py
           tests/unit/test_apple_notes_commands.py
-          bridge/tests/unit/test_apple_notes_governed_writes.py
-          bridge/tests/unit/test_apple_revoked_attempt.py
           tests/unit/bootstrap/test_member_bridge_runtime_repair.py
           tests/unit/test_capability_catalog.py
+      - name: Check isolated bridge write boundary
+        if: '!cancelled()'
+        run: >-
+          poetry run pytest -p no:cacheprovider --import-mode=importlib -q -ra
+          bridge/tests/unit/test_apple_notes_governed_writes.py
+          bridge/tests/unit/test_apple_revoked_attempt.py
       - name: Check focused member browser behavior
         if: '!cancelled()'
         run: |
