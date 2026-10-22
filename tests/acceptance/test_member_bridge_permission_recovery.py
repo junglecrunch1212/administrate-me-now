@@ -6,9 +6,13 @@ member acceptance device. Existing CoS fixture provider credentials are inert.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import copy
 import hashlib
 import json
+import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +20,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 import pytest
 
+from adminme.adapters.cos_channel_acquisition import policy_from_config as cos_policy
+from adminme.adapters.loader import load_builtin_adapters
 from adminme.bridge_enrollment import CAPABILITIES as DESCRIPTORS
 from adminme.bridge_enrollment import (
     PROGRESS_CONTRACT,
@@ -51,7 +57,14 @@ from tests.acceptance.test_cos_member_bridge_acquisition import (
     _prepare_helper,
     _settled_source_assurance,
 )
-from tests.acceptance.test_forwarded_channel_intake import _events
+from tests.acceptance.test_forwarded_channel_intake import TEXT, _events
+from tests.acceptance.test_member_google_connections import (
+    PERSONAL_ACCOUNT,
+    SCOPES,
+    WRITE_SCOPES,
+    ReadOnlyGoogle,
+    google_configuration,
+)
 
 
 class NativeFixture:
@@ -283,17 +296,247 @@ def _initial_start_post(
     )
 
 
+def _selected_google_boundary(
+    config: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[str, list[str]]]:
+    """Keep production adapters; replace only credential/provider I/O in CI."""
+    calls: list[tuple[str, list[str]]] = []
+    for adapter in load_builtin_adapters(config, repository_root=ROOT):
+        module = sys.modules[type(adapter).__module__]
+        monkeypatch.setattr(module, "_default_credentials_resolver", lambda _ref: {})
+
+        def service(
+            _credentials: Any, scopes: list[str], subject: str
+        ) -> ReadOnlyGoogle:
+            assert len(scopes) == 1 and scopes[0] in {
+                *SCOPES.values(),
+                *WRITE_SCOPES.values(),
+            }
+            calls.append((subject, scopes))
+            # No provider mutation methods exist on this fixture boundary.
+            return ReadOnlyGoogle(subject)
+
+        monkeypatch.setattr(module, "_default_service_factory", service)
+        monkeypatch.setattr(type(adapter), "POLL_INTERVAL_S", 3600)
+    return calls
+
+
+async def _wait_selected_google(runtime: Any) -> None:
+    assert set(runtime.adapters.inventory()) == {
+        "fixture-personal-gmail",
+        "fixture-personal-calendar",
+        "fixture-personal-tasks",
+        "fixture-cos-gmail",
+    }
+    for _attempt in range(1000):
+        if all(
+            row.adapter._ctx is not None for row in runtime.adapters._managed.values()
+        ):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("combined Google and CoS adapters did not start")
+
+
+async def _emit_selected_google(runtime: Any) -> None:
+    """Representative provider reads travel through the actual loaded adapters."""
+    managed = runtime.adapters._managed
+    gmail = managed["fixture-personal-gmail"].adapter
+    await gmail._emit_messaging_received(
+        ctx=gmail._ctx,
+        message={
+            "id": "initial-start-personal-mail",
+            "threadId": "initial-start-personal-thread",
+            "internalDate": "1925035200000",
+            "labelIds": ["INBOX"],
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": "sender@example.invalid"},
+                    {"name": "To", "value": PERSONAL_ACCOUNT},
+                    {"name": "Subject", "value": "Please submit the form"},
+                ],
+                "body": {"data": base64.urlsafe_b64encode(TEXT.encode()).decode()},
+            },
+        },
+    )
+    calendar = managed["fixture-personal-calendar"].adapter
+    await calendar._emit_calendar_snapshot(
+        ctx=calendar._ctx,
+        event_type="calendar.event_added",
+        calendar_id="primary",
+        calendar_name="Fixture Google calendar",
+        event={
+            "id": "initial-start-personal-calendar",
+            "summary": TEXT,
+            "status": "confirmed",
+            "start": {"dateTime": "2031-01-02T12:00:00Z"},
+            "end": {"dateTime": "2031-01-02T13:00:00Z"},
+            "updated": "2030-12-01T12:00:00Z",
+            "etag": "fixture-1",
+        },
+    )
+    tasks = managed["fixture-personal-tasks"].adapter
+    await tasks._emit_item(
+        ctx=tasks._ctx,
+        event_type="list_item.added",
+        tasklist={"id": "@default", "title": "Fixture Google list"},
+        task={
+            "id": "initial-start-personal-task",
+            "title": TEXT,
+            "status": "needsAction",
+            "updated": "2030-12-01T12:00:00Z",
+            "etag": "fixture-1",
+        },
+    )
+
+
+def _assert_selected_google(client: TestClient, runtime: Any, access: str) -> None:
+    for event_type, adapter in (
+        ("messaging.received", "messaging-gmail-api"),
+        ("calendar.event_added", "calendaring-google-calendar"),
+        ("list_item.added", "tasks-google-tasks"),
+    ):
+        observed = [
+            event
+            for event in client.portal.call(_events, runtime, event_type)
+            if event["source_adapter"] == adapter
+            and event["source_account_id"] == PERSONAL_ACCOUNT
+        ]
+        assert len(observed) == 1
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "source-policy-v2:shadow",
+            observed[0]["event_id"],
+        )
+        if event_type == "messaging.received":
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "pipeline:pipeline:noise_filtering",
+                observed[0]["event_id"],
+            )
+        audits = client.portal.call(
+            _events, runtime, "source.policy_v2.shadow_evaluated"
+        )
+        matching = [
+            event
+            for event in audits
+            if event["payload"]["source_event_id"] == observed[0]["event_id"]
+        ]
+        assert matching and all(
+            event["payload"]["policy"]["triage_mode"] == "manual_only"
+            for event in matching
+        )
+    control = _control(client)
+    selected = [
+        row
+        for row in control["connections"]
+        if row["id"].startswith("fixture-personal-")
+    ]
+    assert len(selected) == 3
+    for row in selected:
+        writable = access == "read_write" and row["id"] in {
+            "fixture-personal-calendar",
+            "fixture-personal-tasks",
+        }
+        assert bool(row["permissions"]["write"]) is writable
+    sources = [
+        row
+        for row in control["source_policy_v2"]["sources"]
+        if str(row.get("adapter_instance_id") or "").startswith("fixture-personal-")
+    ]
+    assert len(sources) >= 3
+    assert all(
+        row["acquisition"]["coverage"] == "selected_google_sources" for row in sources
+    )
+    assert all(row["policy"]["triage_mode"] == "manual_only" for row in sources)
+    for row in sources:
+        writable = access == "read_write" and row["adapter_instance_id"] in {
+            "fixture-personal-calendar",
+            "fixture-personal-tasks",
+        }
+        assert row["acquisition"]["provider_writes"] is writable
+        assert row["acquisition"]["writes_require_existing_governance"]
+    for endpoint, identifier in (
+        (
+            "/api/member/v1/surfaces/calendar?date=2031-01-02",
+            "initial-start-personal-calendar",
+        ),
+        ("/api/member/v1/surfaces/reminders", "initial-start-personal-task"),
+    ):
+        mine = client.get(endpoint, headers=MEMBER_HEADERS)
+        other = client.get(endpoint, headers=OTHER_HEADERS)
+        assert mine.status_code == other.status_code == 200
+        assert identifier in mine.text and identifier not in other.text
+    for kind in (
+        "triage.item.proposed",
+        "triage.intent.submitted",
+        "external_sync.write_requested",
+        "external.sent",
+    ):
+        assert client.portal.call(_events, runtime, kind) == []
+
+
+def _assert_initial_start_history(
+    client: TestClient, runtime: Any, google_access: str | None
+) -> None:
+    if google_access is None:
+        _assert_history(client.portal.call(_history, runtime.event_log))
+        return
+    # The original bridge-only helper intentionally omits central bindings.
+    # Use production's current, historical-capable binding validation for the
+    # combined source set, preserving exact immutable bridge attribution too.
+    response = client.get("/api/system/historical-attribution", headers=MEMBER_HEADERS)
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["state"] == "healthy", report
+    assert report["source_event_count"] == report["attributed_event_count"] >= 6
+    assert report["unattributed_event_count"] == 0
+    assert (
+        report["content_exposed"] is False
+        and report["raw_identifiers_exposed"] is False
+    )
+    assert (
+        sum(
+            row["event_count"]
+            for row in report["groups"]
+            if row["binding_state"] == "member_bridge_source_reconciled"
+        )
+        == 3
+    )
+    assert all(
+        row["binding_state"] in {"member_bridge_source_reconciled", "matched"}
+        for row in report["groups"]
+    )
+
+
+@pytest.mark.parametrize(
+    "google_access",
+    [None, "read_only", "read_write"],
+    ids=["cos_only", "cos_google_reads", "cos_google_read_write"],
+)
 def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_consent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    google_access: str | None,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     settings = _configuration_settings(tmp_path)
+    google_calls: list[tuple[str, list[str]]] = []
+    if google_access is not None:
+        config = google_configuration(
+            tmp_path / "instance", read_write=google_access == "read_write"
+        )
+        google_calls = _selected_google_boundary(config, monkeypatch)
+        settings = replace(settings, adapter_config=config)
+    retained_cos_policy = cos_policy(settings.adapter_config).digest()
     with TestClient(
         create_application(settings),
         base_url="https://central-fixture.ts.net",
     ) as client:
         runtime = client.app.state.runtime
+        if google_access is not None:
+            client.portal.call(_wait_selected_google, runtime)
+            client.portal.call(_emit_selected_google, runtime)
         _manual_policies(client)
         original, transfer = _prepare_helper(client, tmp_path, CAPABILITIES)
         _block_at_initial_start(original, monkeypatch)
@@ -388,7 +631,7 @@ def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_con
             _settled_source_assurance, runtime, source_ids["apple_notes"]
         )
         assert assurance["state"] == "healthy", assurance
-        _assert_history(client.portal.call(_history, runtime.event_log))
+        _assert_initial_start_history(client, runtime, google_access)
         assert (
             len(
                 client.get("/api/capture/v1/knowledge", headers=MEMBER_HEADERS).json()[
@@ -413,6 +656,17 @@ def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_con
             item["setup"] == "connected" and not item["safety"]["writes_execute"]
             for item in connections
         )
+        apple_sources = [
+            row
+            for row in _control(client)["candidate_identification"]["sources"]
+            if row["id"] in {f"adapter:{capability}" for capability in CAPABILITIES}
+        ]
+        assert len(apple_sources) == 3
+        assert all(
+            row["policy"]["mode"] == "manual"
+            and row["policy"]["language_enabled"] is False
+            for row in apple_sources
+        )
         for kind in (
             "external.sent",
             "external_sync.write_requested",
@@ -420,6 +674,11 @@ def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_con
             "triage.item.proposed",
         ):
             assert client.portal.call(_events, runtime, kind) == []
+        assert (
+            cos_policy(runtime.settings.adapter_config).digest() == retained_cos_policy
+        )
+        if google_access is not None:
+            _assert_selected_google(client, runtime, google_access)
         retained_progress = client.portal.call(
             _events, runtime, "bridge.enrollment_progressed"
         )
@@ -427,6 +686,12 @@ def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_con
         create_application(settings), base_url="https://central-fixture.ts.net"
     ) as restarted:
         runtime = restarted.app.state.runtime
+        if google_access is not None:
+            restarted.portal.call(_wait_selected_google, runtime)
+            _assert_selected_google(restarted, runtime, google_access)
+        assert (
+            cos_policy(runtime.settings.adapter_config).digest() == retained_cos_policy
+        )
         assert (
             _control(restarted)["bridge_wizard"]["current"]["state"]
             == "active_observation"
@@ -435,9 +700,26 @@ def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_con
             _events, runtime, "bridge.enrollment_progressed"
         )
         assert restarted_progress == retained_progress
-        _assert_history(restarted.portal.call(_history, runtime.event_log))
+        _assert_initial_start_history(restarted, runtime, google_access)
         assert _initial_start_status(restarted, helper)["initial_start_recovery"] == {}
         assert restarted.portal.call(_events, runtime, "external.sent") == []
+
+    if google_access is not None:
+        assert len(google_calls) == 8
+        assert {
+            scope
+            for account, scopes in google_calls
+            if account == PERSONAL_ACCOUNT
+            for scope in scopes
+        } == {
+            SCOPES["messaging-gmail-api"],
+            (WRITE_SCOPES if google_access == "read_write" else SCOPES)[
+                "calendaring-google-calendar"
+            ],
+            (WRITE_SCOPES if google_access == "read_write" else SCOPES)[
+                "tasks-google-tasks"
+            ],
+        }
 
 
 @pytest.mark.parametrize("capability", CAPABILITIES)
