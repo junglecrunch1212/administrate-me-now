@@ -58,6 +58,7 @@ from tests.acceptance.test_cos_member_bridge_acquisition import (
     _settled_source_assurance,
 )
 from tests.acceptance.test_forwarded_channel_intake import TEXT, _events
+from bootstrap.cos_channel_activation import prepare_configuration
 from tests.acceptance.test_member_google_connections import (
     PERSONAL_ACCOUNT,
     SCOPES,
@@ -526,6 +527,15 @@ def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_con
         config = google_configuration(
             tmp_path / "instance", read_write=google_access == "read_write"
         )
+        # Materialize the same inventory that guarded activation publishes.
+        # The loader-only fixture's unbound sentinel must remain unenrolled;
+        # historical audits still validate every actual Google/CoS binding.
+        config = prepare_configuration(config, config, enable_live=False)
+        unselected = next(
+            row for row in config["adapters"] if row["id"] == "other-member-unselected"
+        )
+        assert unselected["config"].get("ownership_attested") is not True
+        assert unselected["enabled"] is False
         google_calls = _selected_google_boundary(config, monkeypatch)
         settings = replace(settings, adapter_config=config)
     retained_cos_policy = cos_policy(settings.adapter_config).digest()
