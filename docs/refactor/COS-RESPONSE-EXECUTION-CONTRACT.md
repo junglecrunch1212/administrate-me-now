@@ -182,7 +182,10 @@ alone does not create this grant. The guarded channel activation request's
 `allow_owner_self_replies: true` records exact owner/agent/account/recipient
 binding hashes in `cos.channels.activated` schema 2 and independently in the
 OpenClaw plugin configuration. Omission retains only existing matching grants
-in both places; `false` removes them. Routine reactivation therefore preserves
+in both places; `false` removes the authorizing owner's bindings. Existing
+grants for other members are retained only while their exact routes and
+recipient policy still match. An observation pause retains permission while
+suppressing sending. Routine reactivation therefore preserves
 standing permission while revoked or changed destinations cannot inherit it.
 Existing schema 1 activations and exact manual approvals retain their behavior.
 

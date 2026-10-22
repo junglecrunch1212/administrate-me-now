@@ -99,7 +99,7 @@ try {
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
     "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
-    Array.from({length: 95}, (_, i) => String.fromCharCode(i + 32)).join(""),
+    Array.from({length: 94}, (_, i) => String.fromCharCode(i + 33)).join(""),
     ...replyParts([{role: "user", content: "Question"}, {role: "assistant", content: "😀 a_b **x** ".repeat(1000)}]),
   ];
   for (const text of literalCases) {

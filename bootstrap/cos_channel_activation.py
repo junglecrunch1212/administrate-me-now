@@ -111,20 +111,13 @@ def owner_self_reply_bindings(
     """
     from adminme.cos_self_replies import self_reply_binding
 
-    if request.allow_owner_self_replies is False:
-        return []
-    if not enable_live:
-        if request.allow_owner_self_replies:
-            raise CoSActivationError("standing replies require live guarded iMessage")
-        return []
+    if not enable_live and request.allow_owner_self_replies:
+        raise CoSActivationError("standing replies require live guarded iMessage")
     bindings = set()
+    owner_bindings = set()
     for actor, member in prepared.get("openclaw_actor_identities", {}).items():
         parts = actor.split("|")
-        if (
-            member != request.owner_member_id
-            or len(parts) != 3
-            or parts[0] != "imessage"
-        ):
+        if len(parts) != 3 or parts[0] != "imessage":
             continue
         if not any(
             row == {"member_id": member, "channel": "imessage", "address": parts[2]}
@@ -132,9 +125,15 @@ def owner_self_reply_bindings(
         ):
             continue
         binding = self_reply_binding(member, parts[1], parts[2])
-        if request.allow_owner_self_replies is True or binding in previous_bindings:
+        if member == request.owner_member_id:
+            owner_bindings.add(binding)
+            if request.allow_owner_self_replies is False:
+                continue
+            if request.allow_owner_self_replies is True:
+                bindings.add(binding)
+        if binding in previous_bindings:
             bindings.add(binding)
-    if request.allow_owner_self_replies and not bindings:
+    if request.allow_owner_self_replies and not bindings.intersection(owner_bindings):
         raise CoSActivationError("owner has no exact allowlisted private reply binding")
     return sorted(bindings)
 
@@ -1166,21 +1165,18 @@ class CoSChannelActivator:
                     "administrateme"
                 ].setdefault("config", {})
                 previous_bindings: list[str] = []
-                if request.allow_owner_self_replies is None:
-                    try:
-                        prior = parse_activation(
-                            _json(self.config_dir / RECEIPT_FILENAME)["activation"]
-                        )
-                        host_bindings = plugin_config.get(
-                            "standingSelfReplyBindings", []
-                        )
-                        previous_bindings = [
-                            value
-                            for value in getattr(prior, "self_reply_bindings", [])
-                            if value in host_bindings
-                        ]
-                    except (OSError, KeyError, TypeError, ValueError):
-                        pass
+                try:
+                    prior = parse_activation(
+                        _json(self.config_dir / RECEIPT_FILENAME)["activation"]
+                    )
+                    host_bindings = plugin_config.get("standingSelfReplyBindings", [])
+                    previous_bindings = [
+                        value
+                        for value in getattr(prior, "self_reply_bindings", [])
+                        if value in host_bindings
+                    ]
+                except (OSError, KeyError, TypeError, ValueError):
+                    pass
                 reply_bindings = owner_self_reply_bindings(
                     request,
                     prepared,

@@ -45,6 +45,7 @@ jobs:
           tests/acceptance/test_forwarded_channel_intake.py
           tests/unit/test_cos_channel_operation.py
           tests/unit/test_cos_response_assurance.py
+          tests/unit/test_historical_attribution.py
           tests/unit/bootstrap/test_cos_channel_activation.py
           tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
       - name: Validate native hook, guard and configuration contracts

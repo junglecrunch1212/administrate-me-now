@@ -778,6 +778,18 @@ def test_standing_owner_reply_activation_is_explicit_retained_and_revocable(
         request, prepared, recipients, prior_bindings, enable_live=True
     )
     assert result == ([digest] if choice is True or (choice is None and prior) else [])
+    other_digest = self_reply_binding("member-other", "fixture-account", other)
+    with_other = owner_self_reply_bindings(
+        request, prepared, recipients, [*prior_bindings, other_digest], enable_live=True
+    )
+    assert set(with_other) == set(result) | {other_digest}
+    if choice is None:
+        assert (
+            owner_self_reply_bindings(
+                request, prepared, recipients, prior_bindings, enable_live=False
+            )
+            == prior_bindings
+        )
     if choice:
         with pytest.raises(CoSActivationError, match="live guarded"):
             owner_self_reply_bindings(

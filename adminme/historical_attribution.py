@@ -68,9 +68,10 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         ):
             return False
     return bool(
-        all(
-            row.get("schema_version") == (2 if row is approved and standing else 1)
-            and row.get("source_adapter") == "openclaw-plugin"
+        attempt.get("schema_version") == 1
+        and approved.get("schema_version") in ({2} if standing else {1, 2})
+        and all(
+            row.get("source_adapter") == "openclaw-plugin"
             and row.get("source_account_id") == "cos-response"
             and row.get("owner_scope") == scope
             and row.get("visibility_scope") == scope
