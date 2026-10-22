@@ -22,6 +22,10 @@ CONTEXT_TYPES = {
     RESULT,
     POLICY_EVENT_TYPE,
     "openclaw.approval.received",
+    "cos.reply.openclaw_authorized",
+    "cos.channels.activated",
+    "cos.channels.deactivated",
+    "triage.intent.submitted",
 }
 AUDIT_TYPES = CONTEXT_TYPES | OUTBOUND_TYPES
 
@@ -47,6 +51,68 @@ def _private(event: dict[str, Any], approved: dict[str, Any]) -> bool:
     )
 
 
+def _standing_valid(
+    approved: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+    *,
+    before: str | None = None,
+) -> bool:
+    from adminme.cos_channel_operation import CosChannelActivationV2
+    from adminme.cos_self_replies import self_reply_binding
+
+    payload = approved.get("payload") or {}
+    activation = by_id.get(str(payload.get("standing_authorization_event_id")), {})
+    source = by_id.get(str(payload.get("source_message_event_id")), {})
+    try:
+        grant = CosChannelActivationV2.model_validate(activation["payload"])
+        cutoff = before or str(approved["event_id"])
+        changes = [
+            event
+            for event in by_id.values()
+            if event.get("tenant_id") == approved.get("tenant_id")
+            and event.get("type")
+            in {"cos.channels.activated", "cos.channels.deactivated"}
+            and str(event["event_id"]) < cutoff
+        ]
+        latest = max(changes, key=lambda event: str(event["event_id"]), default={})
+        submitted = _time(source["payload"]["submitted_at"])
+        approved_at = _time(payload["approved_at"])
+        enabled = _time(grant.enabled_at)
+        return bool(
+            payload.get("authorization_method") == "standing_self_reply"
+            and payload.get("channel") == "imessage"
+            and payload.get("subject") == ""
+            and approved.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
+            and approved.get("causation_id") == activation.get("event_id")
+            and activation.get("type") == "cos.channels.activated"
+            and activation.get("actor_identity") == grant.operator_principal_id
+            and activation.get("tenant_id") == approved.get("tenant_id")
+            and latest.get("event_id") == activation.get("event_id")
+            and payload.get("self_reply_binding")
+            == self_reply_binding(
+                payload["member_id"],
+                payload["provider_account_id"],
+                payload["recipient"],
+            )
+            and payload["self_reply_binding"] in grant.self_reply_bindings
+            and source.get("type") == "triage.intent.submitted"
+            and _private(source, approved)
+            and source.get("actor_identity") == payload.get("member_id")
+            and source["payload"].get("member_id") == payload.get("member_id")
+            and source["payload"].get("submission_kind") == "member_forwarded"
+            and submitted is not None
+            and approved_at is not None
+            and enabled is not None
+            and enabled <= submitted <= approved_at
+            and (approved_at - submitted).total_seconds() <= 3600
+            and str(activation["event_id"])
+            < str(source["event_id"])
+            < str(approved["event_id"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> bool:
     payload = approved.get("payload") or {}
     policy = by_id.get(str(payload.get("policy_event_id")), {})
@@ -57,7 +123,11 @@ def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) 
         return bool(
             approved.get("type") == APPROVED
             and payload.get("contract") == RESPONSE_CONTRACT
-            and approved.get("actor_identity") == payload.get("member_id")
+            and (
+                _standing_valid(approved, by_id)
+                if payload.get("authorization_method") == "standing_self_reply"
+                else approved.get("actor_identity") == payload.get("member_id")
+            )
             and _private(approved, approved)
             and policy.get("type") == POLICY_EVENT_TYPE
             and policy.get("tenant_id") == approved.get("tenant_id")
@@ -109,6 +179,44 @@ def _attempt_valid(
         and str(event["event_id"]) < str(attempt["event_id"])
     ]
     latest = max(preceding, key=lambda event: str(event["event_id"]), default={})
+    if approval.get("authorization_method") == "standing_self_reply":
+        return bool(
+            _standing_valid(approved, by_id, before=str(attempt["event_id"]))
+            and _private(attempt, approved)
+            and _private(openclaw, approved)
+            and payload.get("contract") == RESPONSE_CONTRACT
+            and payload.get("member_id") == approval.get("member_id")
+            and payload.get("content_fingerprint")
+            == approval.get("content_fingerprint")
+            and payload.get("policy_event_id")
+            == approval.get("policy_event_id")
+            == latest.get("event_id")
+            and payload.get("automatic_retry_allowed") is False
+            and attempt.get("causation_id") == openclaw_id
+            and openclaw.get("type") == "cos.reply.openclaw_authorized"
+            and openclaw.get("causation_id") == approved.get("event_id")
+            and receipt.get("approval_event_id") == approved.get("event_id")
+            and all(
+                receipt.get(key) == approval.get(key)
+                for key in (
+                    "member_id",
+                    "content_fingerprint",
+                    "standing_authorization_event_id",
+                    "source_message_event_id",
+                    "self_reply_binding",
+                    "authorization_method",
+                )
+            )
+            and receipt.get("automatic_retry_allowed") is False
+            and _time(receipt.get("authorized_at")) == start
+            and attempted is not None
+            and start is not None
+            and end is not None
+            and start <= attempted < end
+            and str(approved["event_id"])
+            < str(openclaw["event_id"])
+            < str(attempt["event_id"])
+        )
     fingerprint = receipt.get("request_fingerprint")
     return bool(
         _private(attempt, approved)

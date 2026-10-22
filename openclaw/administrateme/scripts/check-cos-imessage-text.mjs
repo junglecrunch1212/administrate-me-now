@@ -56,7 +56,61 @@ try {
         "Expected pinned transformation is missing from regression corpus");
     }
   }
-  console.log(`Verified ${cases.length} CoS text cases against pinned OpenClaw formatter.`);
+  // Exercise the production standing-reply escape function against the actual
+  // pinned sender pipeline, including punctuation that exact manual replies reject.
+  const selfReplySource = await readFile(path.join(repository, "openclaw/administrateme/src/self-replies.ts"), "utf8");
+  const selfReplyModule = path.join(directory, "self-replies.mjs");
+  await writeFile(selfReplyModule, ts.transpileModule(selfReplySource, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
+  }).outputText);
+  const { escapeReplyText, replyParts, rememberSelfReply, registerSelfReplies } = await import(pathToFileURL(selfReplyModule).href);
+  // Exercise the actual pinned inbound mapper, whose optional runId is absent.
+  const hookSdk = await import(pathToFileURL(requirePinned.resolve("openclaw/plugin-sdk/hook-runtime")).href);
+  const canonical = hookSdk.deriveInboundMessageHookContext({
+    From: "+12025550101", SenderId: "+12025550101", Body: "Question", // fixture:tenant_data:ok
+    Provider: "imessage", AccountId: "fixture", MessageSid: "native-fixture",
+    SessionKey: "agent:adminme-0123456789abcdef:imessage:fixture:direct:+12025550101", // fixture:tenant_data:ok
+  });
+  const incoming = hookSdk.toPluginMessageReceivedEvent(canonical);
+  assert.equal(incoming.runId, undefined);
+  assert.equal(incoming.messageId, "native-fixture");
+  const crypto = await import("node:crypto");
+  const agent = "adminme-0123456789abcdef";
+  const binding = crypto.createHash("sha256").update(JSON.stringify(["cos-self-reply-v1", agent, "imessage", "fixture", incoming.senderId])).digest("hex");
+  let handler;
+  let sent = 0;
+  const runtime = { transport: { config: {memberAgentIds: [agent], standingSelfReplyBindings: [binding]},
+    request: async (endpoint, value) => endpoint.endsWith("/self-reply") ? {transport_dispatch: {
+      channel: "imessage", account_id: "fixture", recipient: incoming.senderId, body: value.body, approval_event_id: "approval-fixture",
+    }} : {status: "sent"} } };
+  const api = { config: {}, on: (_name, fn) => {handler = fn;}, logger: {warn() {}, info() {}, error() {}},
+    runtime: {channel: {outbound: {loadAdapter: async () => ({sendText: async () => {sent++;}})}}} };
+  registerSelfReplies(api, runtime);
+  rememberSelfReply(runtime, {actor_id: incoming.senderId, account_id: "fixture", channel_id: "imessage",
+    message_id: incoming.messageId, session_key: incoming.sessionKey}, incoming.runId, Promise.resolve("receipt-fixture"), incoming.content);
+  // This protected transport metadata is preserved by the pinned Codex user
+  // snapshot. Its reasoning mirrors are assistant rows without a phase tag.
+  await handler({success: true, runId: "agent-generated", messages: [
+    {role: "user", content: incoming.content, __openclaw: {transport: {channel: "imessage", messageId: incoming.messageId}}},
+    {role: "assistant", stopReason: "stop", content: "private reasoning", __openclaw: {mirrorIdentity: "turn:reasoning"}},
+    {role: "assistant", stopReason: "stop", content: "Hello", __openclaw: {mirrorIdentity: "turn:assistant"}},
+  ]}, {agentId: agent, sessionKey: incoming.sessionKey});
+  assert.equal(sent, 1, "Pinned inbound without a run ID did not produce its governed self reply");
+  const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
+    "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
+    "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
+    Array.from({length: 94}, (_, i) => String.fromCharCode(i + 33)).join(""),
+    ...replyParts([{role: "user", content: "Question"}, {role: "assistant", content: "😀 a_b **x** ".repeat(1000)}]),
+  ];
+  for (const text of literalCases) {
+    const escaped = escapeReplyText(text);
+    const tables = sdk.convertMarkdownTables(escaped, "bullets");
+    const directives = sdk.stripInlineDirectiveTagsForDelivery(tables).text;
+    const actual = extractMarkdownFormatRuns(directives);
+    assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
+    assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
+  }
+  console.log(`Verified ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw formatter.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

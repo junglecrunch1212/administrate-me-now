@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from adminme.cos_channel_operation import CosChannelActivation
+from adminme.cos_channel_operation import CosChannelActivation, CosChannelActivationV2
 from adminme.events.registry import registry
 
 
@@ -32,6 +32,10 @@ def upcast_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 registry.register("cos.channels.activated", 1, CosChannelActivation)
+registry.register("cos.channels.activated", 2, CosChannelActivationV2)
+registry.register_upcaster(
+    "cos.channels.activated", 1, lambda payload: {**payload, "self_reply_bindings": []}
+)
 registry.register("cos.channels.deactivated", 1, CosChannelDeactivatedV1)
 registry.register("cos.channels.deactivated", 2, CosChannelDeactivatedV2)
 registry.register_upcaster("cos.channels.deactivated", 1, upcast_v1_to_v2)

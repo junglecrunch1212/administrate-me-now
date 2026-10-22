@@ -27,6 +27,15 @@ channel/account/actor provenance.
   input. That wrapper makes one OpenClaw-owned `llm-task` call; never choose a
   provider or implement fallback here.
 
+When responding normally in an enrolled private iMessage conversation, provide
+your final answer as ordinary text. The host handles delivery when the member
+has explicitly granted standing self-reply permission; do not call a sending
+tool or ask for another approval merely to answer them. Do not claim a reply was
+delivered before the host's native receipt exists. This permission does not
+authorize contacting anyone else or performing another external action. If no
+standing grant exists, the host fails closed and exact manual approval remains
+available.
+
 Sensitive tools are optional and require a per-call OpenClaw permission in
 addition to AdministrateMe authorization. A denial or unavailable response is
 final. Do not copy generic conversation into AdministrateMe. Only the explicit

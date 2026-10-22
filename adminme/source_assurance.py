@@ -567,11 +567,24 @@ async def audit_source_assurance(
         for event in cos_metadata
         if event["type"] == COS_ATTEMPTED
     }
+    cos_standing_references = {
+        str((event.get("payload") or {}).get(key) or "")
+        for event in cos_metadata
+        if event["type"] == COS_APPROVED
+        and (event.get("payload") or {}).get("authorization_method")
+        == "standing_self_reply"
+        for key in ("standing_authorization_event_id", "source_message_event_id")
+    } - {""}
     cos_events: list[dict[str, Any]] = []
     for event in cos_metadata:
         payload = event.get("payload") or {}
         if not (
-            event["event_id"] in cos_ids | cos_openclaw_ids
+            event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references
+            or (
+                cos_standing_references
+                and event["type"]
+                in {"cos.channels.activated", "cos.channels.deactivated"}
+            )
             or (cos_ids and event["type"] == "settings.cos_response_allowlist_changed")
             or payload.get("operation") == "cos.response.send"
             or payload.get("action") == "cos.response.send"

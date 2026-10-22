@@ -123,6 +123,7 @@ export type PluginHookMessageSendingResult = {
 };
 
 export type PluginHookAgentContext = {
+  runId?: string;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -207,6 +208,10 @@ export type OpenClawPluginApi = {
   ) => void;
   registerService: (service: OpenClawPluginService) => void;
   on: {
+    (
+      hook: "agent_end",
+      handler: (event: { runId?: string; messages: unknown[]; success: boolean; error?: string; durationMs?: number }, context: PluginHookAgentContext) => void | Promise<void>,
+    ): void;
     (
       hook: "message_sending",
       handler: (

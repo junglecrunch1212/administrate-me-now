@@ -294,6 +294,7 @@ jobs:
             --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest" \
             tests/acceptance/test_cos_response_allowlist_settings.py \
             tests/acceptance/test_cos_response_execution.py \
+            tests/acceptance/test_cos_self_replies.py \
             tests/acceptance/test_cos_identity_delegation_kernel.py \
             tests/acceptance/test_member_cos_approval.py \
             tests/unit/test_member_chat_protocol.py \
