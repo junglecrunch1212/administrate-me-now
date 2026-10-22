@@ -356,8 +356,8 @@ def test_complete_reviewed_cos_overlay_preserves_exact_retained_archive(
     tmp_path: Path,
 ) -> None:
     repository, retained, candidate = _cos_overlay_repository(tmp_path)
-    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 31
-    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 7
+    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 32
+    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 8
     assert all(is_runtime_input(path) for path in PERMISSION_RECOVERY_COS_OVERLAY)
     assert runtime_interface_fingerprint(
         repository, candidate

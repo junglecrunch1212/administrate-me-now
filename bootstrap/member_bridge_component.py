@@ -53,10 +53,10 @@ PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256 = (
 # Closed reviewed central overlay. The retained edge never receives these bytes.
 # Every path/presence/mode/hash must match as one coherent group before reuse.
 PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = (
-    "cos-standing-replies-457-hooks-458-google-455-v1"
+    "cos-standing-replies-google-recovery-history-v1"
 )
 PERMISSION_RECOVERY_COS_RETAINED_COMMIT = "043ac68915b185be4ada771f6893a4d69c3f994b"
-PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "1d0f9ba325c98975789128d72d6cf2d0807d09d3"
+PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "2cfa4eeae95d99a29701d6781a8901a4980120ea"
 PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     "adminme/adapters/cos_channel_acquisition.py": (
         "1ea0988b4cb4fb3c3f99cd1642a749b692b90dca864bfb15f6e64f42c344108d",
@@ -124,7 +124,11 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
     "bootstrap/cos_channel_activation.py": (
         "e686393e3baf0b444ed74cf1fbd0eee72c1e906e32d00a997031b5e19557d796",
-        "a920fc0c333b4d44ea39b221d04d8ccf49d6187be9ec33a5bd3ea457654d209f",
+        "3275fba3fd835cd66606e25b3d2f7719234428af086c115e91e2cf5e9cef7499",
+    ),
+    "bootstrap/cos_recovery_history.py": (
+        None,
+        "2296c0fe6f08885a5d0d4ce42d14cfd5f93db3e822d98bbebebc0acee92abed9",
     ),
     "bootstrap/cos_reply_hooks.py": (
         None,
