@@ -588,3 +588,11 @@ and an interrupted action remains locked until its immutable receipt is read.
 Settings saves use revision checks and exact request reconciliation. No service
 permission authorizes personal-channel obligation mining or another adult's
 private data.
+
+Apple permission and write history is retained across revocation. Before the
+first permission, the supported updater may return to the read-only predecessor.
+After a permission or governed write is recorded, recovery requires a release
+that advertises `administrateme-apple-service-permission-v1`; an older runtime
+cannot safely interpret an unfinished Apple action. Recovery revokes the affected
+service write permission and reconciles retained results on a supporting release,
+without restoring a pre-permission history or retrying an unknown provider effect.
