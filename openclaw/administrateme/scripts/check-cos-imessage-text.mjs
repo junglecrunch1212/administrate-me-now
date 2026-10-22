@@ -56,7 +56,29 @@ try {
         "Expected pinned transformation is missing from regression corpus");
     }
   }
-  console.log(`Verified ${cases.length} CoS text cases against pinned OpenClaw formatter.`);
+  // Exercise the production standing-reply escape function against the actual
+  // pinned sender pipeline, including punctuation that exact manual replies reject.
+  const selfReplySource = await readFile(path.join(repository, "openclaw/administrateme/src/self-replies.ts"), "utf8");
+  const selfReplyModule = path.join(directory, "self-replies.mjs");
+  await writeFile(selfReplyModule, ts.transpileModule(selfReplySource, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
+  }).outputText);
+  const { escapeReplyText, replyParts } = await import(pathToFileURL(selfReplyModule).href);
+  const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
+    "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
+    "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
+    Array.from({length: 95}, (_, i) => String.fromCharCode(i + 32)).join(""),
+    ...replyParts([{role: "user", content: "Question"}, {role: "assistant", content: "😀 a_b **x** ".repeat(1000)}]),
+  ];
+  for (const text of literalCases) {
+    const escaped = escapeReplyText(text);
+    const tables = sdk.convertMarkdownTables(escaped, "bullets");
+    const directives = sdk.stripInlineDirectiveTagsForDelivery(tables).text;
+    const actual = extractMarkdownFormatRuns(directives);
+    assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
+    assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
+  }
+  console.log(`Verified ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw formatter.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

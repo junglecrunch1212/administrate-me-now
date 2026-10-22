@@ -101,10 +101,14 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any], _Log]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("standing", [False, True])
 async def test_exact_live_authorization_rejects_backlog_wrong_sender_and_deactivation(
     tmp_path: Path,
+    standing: bool,
 ) -> None:
     config, receipt, log = _fixture(tmp_path)
+    if standing:
+        receipt["activation"]["self_reply_bindings"] = ["f" * 64]
     arguments = {
         "channel": "email",
         "provider_account_id": EMAIL_ACCOUNT,
@@ -114,6 +118,7 @@ async def test_exact_live_authorization_rejects_backlog_wrong_sender_and_deactiv
         log, "tenant-fixture", config, receipt, **arguments
     )
     assert result["authorized"] is True
+    assert result["self_reply_bindings"] == (["f" * 64] if standing else [])
     result = await live_authorization(
         log,
         "tenant-fixture",

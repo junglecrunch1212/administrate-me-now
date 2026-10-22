@@ -55,9 +55,21 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         return False
     approval = approved.get("payload") or {}
     scope = f"private:{member}"
+    standing = approval.get("authorization_method") == "standing_self_reply"
+    if standing:
+        from adminme.cos_response_assurance import _standing_valid
+
+        references = [
+            await event_log.get(approval.get(key, ""))
+            for key in ("standing_authorization_event_id", "source_message_event_id")
+        ]
+        if not _standing_valid(
+            approved, {row["event_id"]: row for row in references if row is not None}
+        ):
+            return False
     return bool(
         all(
-            row.get("schema_version") == 1
+            row.get("schema_version") == (2 if row is approved and standing else 1)
             and row.get("source_adapter") == "openclaw-plugin"
             and row.get("source_account_id") == "cos-response"
             and row.get("owner_scope") == scope
@@ -67,7 +79,8 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         )
         and attempt.get("tenant_id")
         and attempt.get("tenant_id") == approved.get("tenant_id")
-        and approved.get("actor_identity") == member
+        and approved.get("actor_identity")
+        == (COS_SERVICE_PRINCIPAL_ID if standing else member)
         and attempt.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}
         and approval.get("member_id") == member
         and payload.get("automatic_retry_allowed") is False

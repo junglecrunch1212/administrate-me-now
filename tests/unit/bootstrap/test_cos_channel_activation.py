@@ -748,3 +748,49 @@ def test_legacy_observation_compatibility_never_widens_other_inputs(
         path.chmod(0o644)
     with pytest.raises((CoSActivationError, OSError)):
         _observation_control_bytes(controller.config_dir, path.name)
+
+
+@pytest.mark.parametrize("choice", [None, False, True])
+@pytest.mark.parametrize("prior", [False, True])
+def test_standing_owner_reply_activation_is_explicit_retained_and_revocable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, choice: bool | None, prior: bool
+) -> None:
+    from adminme.cos_self_replies import self_reply_binding
+    from bootstrap.cos_channel_activation import owner_self_reply_bindings
+
+    _controller_value, request, _original = _controller(tmp_path, monkeypatch)
+    actor = "+12025550101"  # fixture:tenant_data:ok
+    other = "+12025550102"  # fixture:tenant_data:ok
+    digest = self_reply_binding(MEMBER_A, "fixture-account", actor)
+    request = request.model_copy(update={"allow_owner_self_replies": choice})
+    prepared = {
+        "openclaw_actor_identities": {
+            f"imessage|fixture-account|{actor}": MEMBER_A,
+            f"imessage|fixture-account|{other}": "member-other",
+        }
+    }
+    recipients = [
+        {"member_id": MEMBER_A, "channel": "imessage", "address": actor},
+        {"member_id": "member-other", "channel": "imessage", "address": other},
+    ]
+    prior_bindings = [digest] if prior else []
+    result = owner_self_reply_bindings(
+        request, prepared, recipients, prior_bindings, enable_live=True
+    )
+    assert result == ([digest] if choice is True or (choice is None and prior) else [])
+    if choice:
+        with pytest.raises(CoSActivationError, match="live guarded"):
+            owner_self_reply_bindings(
+                request, prepared, recipients, prior_bindings, enable_live=False
+            )
+        with pytest.raises(CoSActivationError, match="no exact"):
+            owner_self_reply_bindings(
+                request, prepared, [], prior_bindings, enable_live=True
+            )
+    else:
+        assert (
+            owner_self_reply_bindings(
+                request, prepared, [], prior_bindings, enable_live=True
+            )
+            == []
+        )

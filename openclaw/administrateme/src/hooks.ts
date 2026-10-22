@@ -10,6 +10,7 @@ import { PLUGIN_ID, SIDE_EFFECT_TOOL_NAMES, type BridgeEventKind } from "./contr
 import { provenanceFromMessage } from "./provenance.js";
 import { prepareApproval } from "./approval.js";
 import type { PluginRuntime } from "./runtime.js";
+import { rememberSelfReply, registerSelfReplies } from "./self-replies.js";
 import { TransportError } from "./transport.js";
 
 type BridgeMarker = {
@@ -19,6 +20,7 @@ type BridgeMarker = {
 };
 
 export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): void {
+  registerSelfReplies(api, runtime);
   api.on(
     "before_tool_call",
     async (event, context) => {
@@ -114,15 +116,21 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
             unsupported_attachment_count: attachmentCount,
             sensitivity: sensitivityDeclarations.includes("sensitive") ? "sensitive" : "normal",
           };
-          for (let attempt = 0; ; attempt += 1) {
-            try {
-              await runtime.transport.request("/api/openclaw/v1/submissions/forward", request);
-              break;
-            } catch (error) {
-              if (attempt >= 2 || !(error instanceof TransportError) ||
-                  (error.status !== undefined && error.status < 500)) throw error;
+          const submitted = (async () => {
+            for (let attempt = 0; ; attempt += 1) {
+              try {
+                const receipt = await runtime.transport.request<{ intent_event_id?: string }>("/api/openclaw/v1/submissions/forward", request);
+                return receipt.intent_event_id;
+              } catch (error) {
+                if (attempt >= 2 || !(error instanceof TransportError) ||
+                    (error.status !== undefined && error.status < 500)) throw error;
+              }
             }
-          }
+          })();
+          // Capture the trusted run before awaiting intake: message_received is
+          // fire-and-forget in the pinned host, and another turn can be queued.
+          rememberSelfReply(runtime, provenance, event.runId ?? context.runId, submitted);
+          await submitted;
           return;
         }
         await runtime.transport.request("/api/openclaw/v1/bridge/events", {

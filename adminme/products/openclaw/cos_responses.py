@@ -13,6 +13,7 @@ import hashlib
 import secrets
 import time
 from typing import Annotated, Any, Literal
+from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
@@ -146,6 +147,7 @@ async def _receipt(
     payload: dict[str, Any],
     request_id: str,
     causation_id: str | None = None,
+    schema_version: int = 1,
 ) -> str:
     event_id, _ = await seam._append(
         runtime,
@@ -158,6 +160,7 @@ async def _receipt(
         sensitivity="sensitive",
         request_id=request_id,
         causation_id=causation_id,
+        schema_version=schema_version,
     )
     return event_id
 
@@ -443,6 +446,9 @@ async def _execute_locked(
     body: ResponseExecutionRequest,
     request: Request,
     payload: dict[str, Any],
+    *,
+    standing_check: Callable[[], Awaitable[None]] | None = None,
+    standing_host_event_id: str | None = None,
 ) -> dict[str, Any]:
     approval_id = approved["event_id"]
     terminal_key = (
@@ -471,7 +477,9 @@ async def _execute_locked(
         )
 
     async def final_check(provider_effect: bool = False) -> None:
-        if payload["channel"] == "imessage":
+        if standing_check is not None:
+            await standing_check()
+        if payload["channel"] == "imessage" and standing_check is None:
             try:
                 validate_imessage_response_text(payload["body"])
             except ValueError as exc:
@@ -523,7 +531,7 @@ async def _execute_locked(
                 "member_id": session.auth_member_id,
             },
         )
-        openclaw_id = await seam._consume_openclaw_approval(
+        openclaw_id = standing_host_event_id or await seam._consume_openclaw_approval(
             request,
             session,
             body.provenance,

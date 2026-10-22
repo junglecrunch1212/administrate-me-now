@@ -1,0 +1,82 @@
+name: CoS reply development
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'adminme/**'
+      - 'bootstrap/**'
+      - 'openclaw/administrateme/**'
+      - 'tests/**'
+      - '.github/workflows/cos-reply-development.yml'
+permissions:
+  contents: read
+jobs:
+  focused:
+    if: github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_ADDOPTS: '-o tmp_path_retention_policy=failed'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - name: Install locked development environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+      - name: Validate private standing reply composition and lifecycle
+        run: >-
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra
+          --basetemp="$RUNNER_TEMP/cos-reply-tests"
+          tests/acceptance/test_cos_self_replies.py
+          tests/acceptance/test_cos_response_execution.py
+          tests/acceptance/test_forwarded_channel_intake.py
+          tests/unit/test_cos_channel_operation.py
+          tests/unit/test_cos_response_assurance.py
+          tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
+      - name: Validate native hook, guard and configuration contracts
+        if: '!cancelled()'
+        run: |
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+      - name: Validate style, types and privacy
+        if: '!cancelled()'
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run mypy adminme bridge/adminme_bridge bootstrap
+          bash scripts/verify_invariants.sh
+          git diff --check
+  pinned-renderer:
+    if: github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - name: Exercise the authenticated pinned sender with synthetic text
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          bash bootstrap/install-openclaw-source.sh --instance-root "$RUNNER_TEMP/cos-source" --python "$(command -v python)"
+          commit=$(python -c 'import json; print(json.load(open("bootstrap/versions.json"))["openclaw"]["commit"])')
+          node openclaw/administrateme/scripts/check-cos-imessage-text.mjs "$RUNNER_TEMP/cos-source/app/openclaw/$commit"
