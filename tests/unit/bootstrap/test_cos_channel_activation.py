@@ -748,3 +748,56 @@ def test_legacy_observation_compatibility_never_widens_other_inputs(
         path.chmod(0o644)
     with pytest.raises((CoSActivationError, OSError)):
         _observation_control_bytes(controller.config_dir, path.name)
+
+
+@pytest.mark.parametrize("wrong_owner", [False, True])
+def test_google_observation_activation_checks_owner_before_live_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_owner: bool
+) -> None:
+    from adminme.adapters.member_google_observation import CONFIG_KEY, binding_digest
+    from tests.acceptance.test_member_google_observation import google_configuration
+
+    controller, request, original = _controller(tmp_path, monkeypatch)
+    google = google_configuration(tmp_path / "google-source")
+    # Reuse the operation's enrolled service entry; add only existing member
+    # records to both predecessor and request, as a real retained deployment has.
+    original["adapters"] = [
+        google["adapters"][0],
+        original["adapters"][1],
+        *google["adapters"][2:],
+    ]
+    for entry in original["adapters"]:
+        entry["enabled"] = False
+    _write(controller.config_dir / "adapters.json", original)
+    requested = copy.deepcopy(request.adapter_config)
+    requested["adapters"] = [
+        google["adapters"][0],
+        requested["adapters"][1],
+        *google["adapters"][2:],
+    ]
+    for entry in requested["adapters"]:
+        if entry["config"].get("member_id") == MEMBER_A:
+            entry["enabled"] = True
+    requested[CONFIG_KEY] = google[CONFIG_KEY]
+    for selection in requested[CONFIG_KEY]["selections"]:
+        selection["binding_sha256"] = binding_digest(
+            next(e for e in requested["adapters"] if e["id"] == selection["adapter_id"])
+        )
+        if wrong_owner:
+            selection["owner_authorization_sha256"] = "f" * 64
+    changed = request.model_copy(update={"adapter_config": requested})
+    before = (controller.config_dir / "adapters.json").read_bytes()
+    if wrong_owner:
+        with pytest.raises(CoSActivationError, match="exact authorization"):
+            controller.activate(changed, enable_live=False)
+        assert (controller.config_dir / "adapters.json").read_bytes() == before
+        assert not controller.journal_path.exists()
+    else:
+        controller.activate(changed, enable_live=False)
+        installed = json.loads((controller.config_dir / "adapters.json").read_text())
+        selected = [
+            e for e in installed["adapters"] if e["config"].get("member_id") == MEMBER_A
+        ]
+        assert len(selected) == 3 and all(e["enabled"] for e in selected)
+        assert all(e["config"]["enable_writes"] is False for e in selected)
+        assert installed["adapters"][-1]["enabled"] is False

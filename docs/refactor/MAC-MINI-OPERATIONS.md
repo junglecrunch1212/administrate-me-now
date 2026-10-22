@@ -730,3 +730,59 @@ Official platform references reviewed for this matrix: Apple’s macOS 26 Mac
 compatibility list, Apple’s Apple-silicon identification guide, Homebrew’s
 installation requirements, and the Node.js release schedule. Exact URLs are
 recorded in the Gate 5 evidence.
+
+### Separately selected personal Google observation
+
+`member-google-readonly-observation-v1` MODERNIZES the CoS-only acquisition
+ceiling without restoring blanket personal polling. It PRESERVES the original
+bounded sample, exact member/account ownership, append-only observations,
+manual communication submission, and the external-write boundaries in
+`UX-BEHAVIOR-CONTRACT.md` and ADR-0005. An existing personal Google connection
+may be selected independently of the CoS mailbox. The operator must have that
+member's explicit authorization; another adult's consent is not a substitute.
+
+The private `member_google_observation` policy contains exact existing adapter
+IDs, member/account coordinates, `binding_digest(entry)` values and hashes of
+the owner's authorization. It accepts only enrolled member-owned Google Gmail,
+Calendar and Tasks OAuth adapters. Account credentials, calendar/list selection,
+and all other binding fields must match the predecessor. No account is created
+or reattributed. The retained test sample is unchanged and remains historical
+evidence rather than the active acquisition ceiling for these selected reads.
+
+Prepare this policy in the private `ActivationRequest.adapter_config` for the
+existing guarded `bootstrap.cos_channel_activation` operation. Set only the
+selected existing entries enabled. The request's authorizing member and receipt
+hash must match every added/changed selection; an operator cannot remove another
+member's selection. Keep existing CoS enrollment, sender/transport proofs and
+recipient restrictions. The operation requires the matching merged release,
+observation containment, an encrypted backup and restore proof, and settled
+Doctor evidence; its journal binds the complete prepared configuration. Do not
+edit active configuration by hand. A request to change Google connections does
+not authorize changing the CoS sender, recipients, or provider write authority.
+
+The effective configuration forces the three Google adapters to their read-only
+scopes, disables writes, and disables Gmail initial backfill, named historical
+queries and related-participant expansion. It also forces manual candidate
+handling and disables language extraction before adapters start, including after
+restart with older retained preferences. A source-attention preference cannot
+relax this ceiling. Forwarding an item explicitly to the CoS remains a separate
+member action. Settings show current selected read acquisition separately from
+the retained sample, and do not claim a full mailbox history or healthy sync
+without runtime/cursor evidence.
+
+Reusing a credential reference is not proof that Google will accept it. Verify
+its exact owner/account and effective scope through the supported provider
+handshake; renewal may require the member's Google consent. On an activation
+failure the existing operation restores predecessor configuration, contains
+sending and pauses acquisition. A connection pause remains effective after
+restart. Removing a member's exact selections through the same authorized
+operation disables those reads without deleting retained facts or candidates.
+Restoring an older release without this contract keeps personal adapters off.
+
+Validate the change in isolated CI with
+`tests/acceptance/test_member_google_observation.py`, the existing CoS acquisition
+and forwarded-intake scenarios, and the guarded activation/recovery tests. The
+change affects central acquisition, settings, and pipeline composition, so its
+final release uses the protected central runtime checks. Member-device browser
+verification is read-only acceptance after authorized activation, not a place
+to test candidate code.

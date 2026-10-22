@@ -825,7 +825,8 @@ class AdministrateMeRuntime:
             settings.repository_root, settings.instance.instance_dir
         )
         self.settings_control = SettingsControlStore(
-            settings.instance.config_dir / "settings-control.json"
+            settings.instance.config_dir / "settings-control.json",
+            adapter_config=settings.adapter_config,
         )
         deployment_binding = settings.host_topology.get("deployment_binding")
         self.bridge_enrollment = BridgeEnrollmentCoordinator(

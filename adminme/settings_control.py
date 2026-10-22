@@ -253,8 +253,17 @@ class SettingsControlStore:
 
     SCHEMA_VERSION = 6
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *, adapter_config: dict[str, Any] | None = None
+    ) -> None:
+        from adminme.adapters.member_google_observation import (
+            manual_sources,
+            selected_entries,
+        )
+
         self.path = Path(path)
+        self._manual_google_sources = manual_sources(adapter_config or {})
+        self._google_observation_entries = selected_entries(adapter_config or {})
 
     async def cos_response_policy(
         self, event_log: Any, tenant_id: str
@@ -956,6 +965,10 @@ class SettingsControlStore:
     ) -> SettingsMutation:
         state = self.read()
         self._expect_revision(state, expected_revision)
+        if (member_id, source_id) in self._manual_google_sources and (
+            mode != "manual" or language_enabled or candidate_kinds
+        ):
+            raise ValueError("This Google connection permits manual intake only")
         normalized = validate_policy_override(
             source_id,
             mode=mode,
@@ -988,6 +1001,14 @@ class SettingsControlStore:
         *,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if (member_id, source_id) in self._manual_google_sources:
+            return {
+                **effective_policy(source_id),
+                "mode": "manual",
+                "language_enabled": False,
+                "candidate_kinds": [],
+                "locked": True,
+            }
         current = state or self.read()
         rows = current["candidate_policies"].get(member_id)
         override = rows.get(source_id) if isinstance(rows, dict) else None
@@ -1352,6 +1373,16 @@ class SettingsControlStore:
             migration_state = (
                 "migration_needed" if migration is not None else "not_required"
             )
+        selected = self._google_observation_entries.get(coordinate.adapter_instance_id)
+        if selected is not None and (
+            selected["config"]["member_id"] == owner_principal_id
+            and selected["config"]["provider_account_id"]
+            == coordinate.provider_account_id
+        ):
+            policy = policy.model_copy(
+                update={"attention_mode": "manual", "triage_mode": "manual_only"}
+            )
+            origin = "member_google_readonly_observation"
         return {
             "policy": policy.model_dump(mode="json"),
             "policy_key": coordinate.key,
@@ -1860,7 +1891,10 @@ def compose_source_policy_v2_sources(
 ) -> list[dict[str, Any]]:
     """Union configured, retained and catalog sources without inventing access."""
 
+    from adminme.adapters.member_google_observation import selected_entries
+
     connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
+    observed_google = selected_entries(runtime.settings.adapter_config)
     test_policy = policy_from_adapter_config(runtime.settings.adapter_config)
     sources: list[dict[str, Any]] = []
     admitted_bridge_keys: set[str] = set()
@@ -2227,10 +2261,34 @@ def compose_source_policy_v2_sources(
             # An older observation outside the current sealed container
             # selection remains history, never current acquisition evidence.
             source["connection_state"] = "disconnected"
+    for source in sources:
+        adapter_id = source.get("adapter_instance_id")
+        if adapter_id not in observed_google:
+            continue
+        connection = connections.get(adapter_id, {})
+        setup = connection.get("setup")
+        source["connection_state"] = (
+            "connected"
+            if setup == "connected"
+            else "disconnected"
+            if setup in {"paused", "disabled"}
+            else "configured"
+        )
+        source["acquisition"] = {
+            "state": "paused" if setup in {"paused", "disabled"} else "active",
+            "coverage": "selected_read_only_sources",
+            "freshness": "current" if connection.get("last_sync_at") else "unknown",
+            "provider_capability": "available" if setup == "connected" else "unknown",
+            "mailbox_coverage_complete": False,
+            "automated_candidate_extraction": False,
+            "provider_writes": False,
+            "historical_expansion": False,
+        }
     if test_policy is not None:
         for source in sources:
             if (
-                source.get("direct_authenticated_intent")
+                source.get("adapter_instance_id") in observed_google
+                or source.get("direct_authenticated_intent")
                 or source.get("policy_key") in admitted_bridge_keys
             ):
                 continue

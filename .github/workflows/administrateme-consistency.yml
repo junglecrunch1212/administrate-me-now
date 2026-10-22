@@ -186,6 +186,9 @@ jobs:
           tests/acceptance/test_member_bridge_historical_attribution.py
           tests/acceptance/test_bridge_readiness_transition.py
           tests/acceptance/test_cos_channel_acquisition.py
+          tests/acceptance/test_member_google_observation.py
+          tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/integration/test_service_owned_google_sources.py
           tests/acceptance/test_disposable_test_acquisition.py
           tests/acceptance/test_forwarded_channel_intake.py
           tests/acceptance/test_retired_provider_history.py

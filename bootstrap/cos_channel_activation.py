@@ -29,6 +29,11 @@ from adminme.adapters.cos_channel_acquisition import (
     policy_from_config,
     restrict_cos_adapter_config,
 )
+from adminme.adapters.member_google_observation import (
+    readonly_config,
+    selected_entries,
+    validate_authorized_change,
+)
 from adminme.adapters.disposable_test_acquisition import (
     CONFIG_KEY as TEST_POLICY_KEY,
     DisposableTestAcquisition,
@@ -192,7 +197,7 @@ def _sha(payload: bytes) -> str:
 def prepare_configuration(
     previous: dict[str, Any], requested: dict[str, Any], *, enable_live: bool
 ) -> dict[str, Any]:
-    """Preserve the old selection and force every non-CoS adapter off."""
+    """Preserve history and admit only the CoS and exact Google read selections."""
 
     retained = DisposableTestAcquisition.parse(previous.get(TEST_POLICY_KEY))
     if requested.get(TEST_POLICY_KEY) != previous.get(TEST_POLICY_KEY):
@@ -230,6 +235,7 @@ def prepare_configuration(
             "channel activation cannot add or remove adapter records"
         )
     result = restrict_cos_adapter_config(requested)
+    selected_google = selected_entries(result)
     for entry in result["adapters"]:
         config = entry.get("config") or {}
         if entry.get("id") == policy.gmail_adapter_id:
@@ -241,14 +247,21 @@ def prepare_configuration(
             ):
                 raise CoSActivationError("live Gmail requires an enrolled send grant")
         else:
-            entry["enabled"] = False
-            # Account enrollment and cursors belonging to members are immutable.
             before = next(
                 item
                 for item in previous["adapters"]
                 if item.get("id") == entry.get("id")
             )
-            if entry.get("config") != before.get("config"):
+            # New read authority is separately checked against this operation's
+            # exact authorizing member. Narrow capabilities without replacing
+            # enrolled account credentials, source selections or cursor IDs.
+            selected = entry.get("id") in selected_google
+            expected_config = (
+                readonly_config(before) if selected else before.get("config")
+            )
+            if not selected:
+                entry["enabled"] = False
+            if entry.get("config") != expected_config:
                 raise CoSActivationError(
                     "channel activation cannot alter member adapters"
                 )
@@ -1023,6 +1036,15 @@ class CoSChannelActivator:
                 )
             prior_provider_calls = self._provider_calls(before)
             original = _json(self.config_dir / "adapters.json")
+            try:
+                validate_authorized_change(
+                    original,
+                    request.adapter_config,
+                    owner_member_id=request.owner_member_id,
+                    owner_authorization_sha256=request.owner_authorization_sha256,
+                )
+            except ValueError as exc:
+                raise CoSActivationError(str(exc)) from exc
             prepared = prepare_configuration(
                 original, request.adapter_config, enable_live=enable_live
             )
@@ -1174,6 +1196,7 @@ class CoSChannelActivator:
                 "owner_member_id": request.owner_member_id,
                 "initial_files": initial_files,
                 "initial_external_files": {},
+                "prepared_adapter_configuration_sha256": _sha(_payload(prepared)),
                 # Contacts remain only in the encrypted event log. Recovery
                 # resolves this immutable reference instead of caching them.
                 "initial_policy": {
