@@ -267,7 +267,9 @@ def test_exact_hosted_gateway_probe_pair_is_independent_and_retains_old_archive(
         }
     ]
     assert ("reviewed_central_overlay" in inspected.compatibility) is with_cos
-    assert len(differences) == (32 if with_cos else 1)
+    assert len(differences) == (
+        len(PERMISSION_RECOVERY_COS_OVERLAY) + 1 if with_cos else 1
+    )
     assert inspected.compatibility["required_central_release_commit"] == candidate
     assert (
         inspected.compatibility["required_central_protocol"]
@@ -356,8 +358,8 @@ def test_complete_reviewed_cos_overlay_preserves_exact_retained_archive(
     tmp_path: Path,
 ) -> None:
     repository, retained, candidate = _cos_overlay_repository(tmp_path)
-    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 31
-    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 7
+    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 32
+    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 8
     assert all(is_runtime_input(path) for path in PERMISSION_RECOVERY_COS_OVERLAY)
     assert runtime_interface_fingerprint(
         repository, candidate

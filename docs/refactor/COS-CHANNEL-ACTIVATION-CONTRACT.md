@@ -197,6 +197,24 @@ before archiving the journal. A subsequent human policy edit is never overwritte
 Source facts acquired during the attempted operation remain in the append-only
 history. An interrupted journal continues to deny sends until recovery or commit.
 
+Recovery-window repair is **MODERNIZE** under this history-preservation rule.
+Recovery persists one interval plan before restoring control files, and retries
+reuse that plan and its audit identity. An open interval receives the recorded
+recovery boundary once; retries cannot discard earlier intervals or append an
+unclosed duplicate. HTR-10's strict ordered, closed-history checks are unchanged.
+
+For the known historical two-recovery defect, the separate
+`--repair-recovery-history --request PRIVATE_REPAIR_REQUEST` operation runs from
+a clean protected-main successor with the selected predecessor's Python while
+observation is active. It binds the current snapshot and readiness digest plus
+the exact archived operations and encrypted audit events. It derives the missing
+boundaries only from those preserved records, not caller-supplied timestamps.
+A fresh journal, encrypted backup and restore proof precede the narrow readiness
+metadata correction. Original journals, events, account configuration, enrollment
+and recipient policy remain unchanged. Interrupted repair resumes the same plan;
+changed evidence, unknown effects or incomplete provenance stop the operation.
+Healthy settlement and unchanged provider-effect counts precede completion.
+
 Live mode requires a nonempty current recipient policy and its durable
 activation. Every new reply still needs its independent domain and OpenClaw
 approvals, recipient/privacy checks, and rate limits. Old suppressed commands
