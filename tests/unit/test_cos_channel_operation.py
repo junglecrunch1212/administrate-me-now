@@ -223,6 +223,29 @@ def test_pending_operation_holds_replies_until_commit(
     assert read_receipt(config_dir) == receipt
 
 
+@pytest.mark.parametrize("selected_count", [0, 3])
+def test_readonly_google_diagnostics_preserve_independent_cos_authority(
+    selected_count: int,
+) -> None:
+    inputs = _inputs()
+    inputs.update(
+        cos_acquisition_configured=True,
+        member_google_source_count=selected_count,
+    )
+    result = evaluate_deployment_readiness(**inputs)
+    evidence = result["dimensions"]["cos_channel_operation"]["evidence"]
+    assert evidence["personal_channel_polling"] is (selected_count > 0)
+    assert evidence["member_google_source_count"] == selected_count
+    assert evidence["live_authorized"] is False
+    inputs["observation_active"] = False
+    assert (
+        evaluate_deployment_readiness(**inputs)["dimensions"]["cos_channel_operation"][
+            "state"
+        ]
+        == "blocked"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("access", [None, False, True])
 async def test_runtime_rejects_a_standing_grant_with_blocked_native_hook(
@@ -268,26 +291,3 @@ async def test_runtime_rejects_a_standing_grant_with_blocked_native_hook(
         ),
     )
     assert (await runtime_live_authorization(runtime))["authorized"] is (access is True)
-
-
-@pytest.mark.parametrize("selected_count", [0, 3])
-def test_readonly_google_diagnostics_preserve_independent_cos_authority(
-    selected_count: int,
-) -> None:
-    inputs = _inputs()
-    inputs.update(
-        cos_acquisition_configured=True,
-        member_google_source_count=selected_count,
-    )
-    result = evaluate_deployment_readiness(**inputs)
-    evidence = result["dimensions"]["cos_channel_operation"]["evidence"]
-    assert evidence["personal_channel_polling"] is (selected_count > 0)
-    assert evidence["member_google_source_count"] == selected_count
-    assert evidence["live_authorized"] is False
-    inputs["observation_active"] = False
-    assert (
-        evaluate_deployment_readiness(**inputs)["dimensions"]["cos_channel_operation"][
-            "state"
-        ]
-        == "blocked"
-    )
