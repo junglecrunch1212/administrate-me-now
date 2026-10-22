@@ -19,6 +19,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -1029,7 +1030,7 @@ def native_interaction(base: Any, choice_class: Any) -> Any:
 
         def _eventkit_rows(self, capability: str) -> list[dict[str, str]]:
             try:
-                import EventKit  # type: ignore[import-untyped]
+                EventKit = importlib.import_module("EventKit")
             except ImportError as exc:
                 raise PermissionFailure("eventkit_unavailable") from exc
             entity = (

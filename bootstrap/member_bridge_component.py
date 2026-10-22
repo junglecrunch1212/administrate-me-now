@@ -354,7 +354,7 @@ def verify_runtime_archive(
                 raise RuntimeError("runtime archive member is unavailable")
             digest = hashlib.sha256()
             with source:
-                for block in iter(lambda: source.read(1024 * 1024), b""):
+                while block := source.read(1024 * 1024):
                     digest.update(block)
             if digest.hexdigest() != expected["sha256"]:
                 raise RuntimeError(
