@@ -339,7 +339,9 @@ jobs:
     runs-on: macos-15
     # The complete rehearsal exceeded 90 minutes after all Python tests passed.
     # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
-    timeout-minutes: 120
+    # Full Python and acceptance passed before the former two-hour deadline
+    # interrupted the final browser pass. Preserve all stages and a finite bound.
+    timeout-minutes: 180
     env:
       ADMINME_TEST_MODE: "1"
       PYTHONPATH: bridge
