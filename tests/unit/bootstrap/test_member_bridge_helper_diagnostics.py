@@ -313,7 +313,7 @@ def _installer_fixture(tmp_path: Path) -> _InstallerFixture:
         + f"real_python = {sys.executable!r}\n"
         + "if len(sys.argv) > 2 and sys.argv[1] == '-c':\n"
         + "    values = json.loads(os.environ.get('FIXTURE_SYSCONFIG', '{}'))\n"
-        + "    sysconfig.get_config_var = lambda key: values.get(key, '')\n"
+        + "    sysconfig.get_config_var = lambda key, fixture_values=values: fixture_values.get(key, '')\n"
         + "    code = sys.argv[2]\n"
         + "    sys.argv = ['-c', *sys.argv[3:]]\n"
         + "    exec(compile(code, '<fixture-python>', 'exec'))\n"
