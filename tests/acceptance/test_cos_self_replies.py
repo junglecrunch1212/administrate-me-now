@@ -242,7 +242,7 @@ def test_standing_reply_is_delivered_once_without_per_message_prompt_and_survive
             _send(client, fresh)
 
 
-@pytest.mark.parametrize("revoke", ["host", "domain", "recipient"])
+@pytest.mark.parametrize("revoke", ["host", "domain", "recipient", "delegation"])
 def test_standing_reply_rechecks_revocation_at_native_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, revoke: str
 ) -> None:
@@ -258,6 +258,17 @@ def test_standing_reply_rechecks_revocation_at_native_boundary(
             _host(client.app.state.runtime, False)
         elif revoke == "domain":
             authority["authorized"] = False
+        elif revoke == "delegation":
+            grants = client.get(
+                "/api/member/v1/cos/delegations", headers=HEADERS
+            ).json()
+            revoked = client.request(
+                "DELETE",
+                f"/api/member/v1/cos/delegations/{grants['items'][0]['grant_id']}",
+                headers=HEADERS,
+                json={"request_id": "revoke-standing-context"},
+            )
+            assert revoked.status_code == 200, revoked.text
         else:
             changed = client.put(
                 POLICY,

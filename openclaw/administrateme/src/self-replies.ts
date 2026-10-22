@@ -3,11 +3,11 @@ import type { OpenClawPluginApi, PluginHookAgentContext } from "openclaw/plugin-
 import type { Provenance } from "./contract.js";
 import type { PluginRuntime } from "./runtime.js";
 
-type Inbound = { provenance: Provenance; sourceId: Promise<string | undefined>; binding: string; capturedAt: number };
+type Inbound = { provenance: Provenance; sourceId: Promise<string | undefined>; binding: string; capturedAt: number; runId: string | undefined; text: string };
 const pending = new WeakMap<PluginRuntime, Map<string, Inbound>>();
 
-export function rememberSelfReply(runtime: PluginRuntime, provenance: Provenance, runId: string | undefined, receipt: Promise<unknown>): void {
-  if (!runId || provenance.channel_id !== "imessage" ||
+export function rememberSelfReply(runtime: PluginRuntime, provenance: Provenance, runId: string | undefined, receipt: Promise<unknown>, text: string): void {
+  if (provenance.channel_id !== "imessage" ||
       !provenance.account_id || !provenance.message_id || provenance.thread_id ||
       !/^\+[1-9][0-9]{7,14}$/.test(provenance.actor_id)) return;
   const session = provenance.session_key;
@@ -24,10 +24,40 @@ export function rememberSelfReply(runtime: PluginRuntime, provenance: Provenance
   for (const [key, entry] of inbox) {
     if (Date.now() - entry.capturedAt > 3_600_000) inbox.delete(key);
   }
-  if (inbox.size >= 100 && !inbox.has(runId)) return;
-  inbox.set(runId, { provenance: { ...provenance, agent_id: agent },
+  const key = JSON.stringify([session, provenance.message_id]);
+  if (inbox.size >= 100 && !inbox.has(key)) return;
+  inbox.set(key, { provenance: { ...provenance, agent_id: agent },
     sourceId: receipt.then((value) => typeof value === "string" ? value : undefined, () => undefined),
-    binding, capturedAt: Date.now() });
+    binding, capturedAt: Date.now(), runId, text });
+}
+
+function record(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function currentInput(messages: unknown[]): Record<string, any> {
+  return record([...messages].reverse().find((value) => record(value).role === "user"));
+}
+
+function matchInputs(inbox: Map<string, Inbound>, messages: unknown[], session: string, runId: string | undefined): Array<[string, Inbound]> {
+  const user = currentInput(messages);
+  if (!user.role || user.display === false || (user.provenance?.kind && user.provenance.kind !== "external_user")) return [];
+  const metadata = record(user.__openclaw);
+  const transport = record(metadata.transport);
+  const candidates = [...inbox].filter(([, value]) => value.provenance.session_key === session &&
+    (!value.runId || value.runId === runId) && Date.now() - value.capturedAt <= 3_600_000);
+  if (transport.channel === "imessage" && typeof transport.messageId === "string" && !transport.threadId) {
+    return candidates.filter(([, value]) => value.provenance.message_id === transport.messageId);
+  }
+  // The pinned host's collected followup deliberately drops individual transport
+  // metadata. Its host-created transcript marker and exact source text identify
+  // the pending inputs in this same private conversation. No model output or
+  // prompt-embedded message ID is used as source authority.
+  if (typeof user.idempotencyKey === "string" && user.idempotencyKey.startsWith("followup-collect:") &&
+      typeof user.content === "string") {
+    return candidates.filter(([, value]) => value.text.trim() && user.content.includes(value.text.trim()));
+  }
+  return [];
 }
 
 export function replyParts(messages: unknown[]): string[] {
@@ -39,9 +69,11 @@ export function replyParts(messages: unknown[]): string[] {
     if (!value || typeof value !== "object") continue;
     const m = value as Record<string, unknown>;
     if (m.role === "user") { final = ""; sawUser = true; }
-    if (!sawUser || m.role !== "assistant" || m.openclawStreamFallback ||
+    if (!sawUser || m.role !== "assistant" || m.display === false || m.openclawStreamFallback ||
         (m.stopReason !== undefined && m.stopReason !== "stop") ||
         (m.phase !== undefined && m.phase !== "final")) continue;
+    const mirror = record(m.__openclaw).mirrorIdentity;
+    if (typeof mirror === "string" && !mirror.endsWith(":assistant")) continue;
     const content = m.content;
     if (typeof content === "string") final = content;
     else if (Array.isArray(content)) {
@@ -79,13 +111,17 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
     const inbox = pending.get(runtime);
     const session = context.sessionKey;
     const runId = event.runId ?? context.runId;
-    const input = runId ? inbox?.get(runId) : undefined;
-    if (!session || !runId || !input || session !== input.provenance.session_key || !event.success || context.agentId !== input.provenance.agent_id ||
-        Date.now() - input.capturedAt > 3_600_000) return;
+    if (!session || !inbox || !event.success) return;
+    const matches = matchInputs(inbox, event.messages, session, runId);
+    const input = matches.at(-1)?.[1];
+    if (!input || context.agentId !== input.provenance.agent_id) return;
+    const accountId = input.provenance.account_id;
+    if (!accountId) return;
     const parts = replyParts(event.messages);
     if (!parts.length) return;
-    // Consume before I/O: a failed/ambiguous native attempt is never retried.
-    inbox!.delete(runId);
+    // Consume all collected inputs before I/O. The newest acknowledged input
+    // is the durable authority for this one combined answer; no automatic retry.
+    for (const [key] of matches) inbox.delete(key);
     const sourceId = await input.sourceId;
     if (!sourceId) {
       api.logger.error("CoS self reply refused: its inbound receipt was not acknowledged.");
@@ -110,7 +146,7 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
         if (!adapter?.sendText) throw new Error("self reply transport unavailable");
         try {
           await adapter.sendText({ cfg: api.config, to: input.provenance.actor_id,
-            text: escapeReplyText(parts[index]!), accountId: input.provenance.account_id });
+            text: escapeReplyText(parts[index]!), accountId });
         } catch { /* The guarded native terminal distinguishes non-contact from unknown. */ }
         const terminal = await runtime.transport.request<Record<string, unknown>>(
           "/api/openclaw/v1/cos-responses/result", {

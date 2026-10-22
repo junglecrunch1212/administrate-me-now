@@ -794,3 +794,101 @@ def test_standing_owner_reply_activation_is_explicit_retained_and_revocable(
             )
             == []
         )
+
+
+@pytest.mark.parametrize("settlement_fails", [False, True])
+def test_standing_reply_operation_publishes_both_grants_or_restores_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settlement_fails: bool
+) -> None:
+    from adminme.cos_self_replies import self_reply_binding
+    from adminme.openclaw_topology import member_agent_id
+    from bootstrap.cos_imessage import prepare_channel
+    from tests.unit.bootstrap.test_cos_imessage import _guard
+
+    controller, request, _original = _controller(tmp_path, monkeypatch)
+    guard = _guard(tmp_path)
+    guard["account_id"] = "cos-messages-fixture"
+    phone = "+12025550101"  # fixture:tenant_data:ok
+    adapters = copy.deepcopy(request.adapter_config)
+    adapters["cos_channel_acquisition"]["imessage_channel_id"] = (
+        "channel:chief-of-staff:apple-imessage"
+    )
+    adapters["service_identities"]["channels"][0]["response_transport_contract"] = (
+        "cos-imessage-guard-v1"
+    )
+    adapters["openclaw_actor_identities"] = {
+        f"imessage|{guard['account_id']}|{phone}": MEMBER_A
+    }
+    previous = {
+        "agents": {"list": [{"id": member_agent_id(MEMBER_A)}]},
+        "models": {"retained": "fixture"},
+    }
+    gateway_path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+    _write(gateway_path, previous)
+    prepared = prepare_channel(previous, guard, allowed_senders=[phone])
+    monkeypatch.setattr(
+        "bootstrap.openclaw_activation.prepare_existing_member_topology",
+        lambda config, **_kwargs: copy.deepcopy(config),
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_imessage.verify_guard_files", lambda *_args, **_kwargs: None
+    )
+    proof = request.sender_proofs[0].model_copy(
+        update={
+            "channel": "imessage",
+            "provider_account_sha256": hashlib.sha256(
+                guard["account_id"].encode()
+            ).hexdigest(),
+        }
+    )
+    request = request.model_copy(
+        update={
+            "adapter_config": adapters,
+            "prepared_openclaw_config": prepared,
+            "cos_imsg_guard_config": guard,
+            "allow_owner_self_replies": True,
+            "sender_proofs": [*request.sender_proofs, proof],
+            "recipient_entries": [
+                *(request.recipient_entries or []),
+                {"member_id": MEMBER_A, "channel": "imessage", "address": phone},
+            ],
+        }
+    )
+    if settlement_fails:
+        calls = 0
+
+        def settle(_release: Path) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise CoSActivationError("synthetic standing settlement refusal")
+            return {"status": "healthy"}
+
+        monkeypatch.setattr(controller, "_settle", settle)
+        with pytest.raises(CoSActivationError, match="standing settlement"):
+            controller.activate(request, enable_live=True)
+        assert json.loads(gateway_path.read_text()) == previous
+        assert not (controller.config_dir / "cos-channel-operation.json").exists()
+        _policy_value, events = asyncio.run(_audit(controller))
+        assert events[-1]["type"] != "cos.channels.activated"
+    else:
+        controller.activate(request, enable_live=True)
+        expected = [self_reply_binding(MEMBER_A, guard["account_id"], phone)]
+        host = json.loads(gateway_path.read_text())
+        assert (
+            host["plugins"]["entries"]["administrateme"]["config"][
+                "standingSelfReplyBindings"
+            ]
+            == expected
+        )
+        assert host["models"] == previous["models"]
+        receipt = json.loads(
+            (controller.config_dir / "cos-channel-operation.json").read_text()
+        )
+        assert receipt["activation"]["self_reply_bindings"] == expected
+        _policy_value, events = asyncio.run(_audit(controller))
+        activation = next(
+            event for event in events if event["event_id"] == receipt["event_id"]
+        )
+        assert activation["schema_version"] == 2
+        assert activation["payload"] == receipt["activation"]

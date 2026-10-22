@@ -13,7 +13,7 @@ const actor = "+12025550101"; // fixture:tenant_data:ok
 const session = `agent:${agent}:imessage:${account}:direct:${actor}`;
 const binding = createHash("sha256").update(JSON.stringify(["cos-self-reply-v1", agent, "imessage", account, actor])).digest("hex");
 const context = { agentId: agent, sessionKey: session, channelId: "imessage", accountId: account, senderId: actor };
-const answer = (text: string) => [{ role: "user", content: "Question" }, { role: "assistant", stopReason: "stop", phase: "final", content: [{ type: "text", text }] }];
+const answer = (text: string, messageId = "run-a") => [{ role: "user", content: "Question", __openclaw: { transport: { channel: "imessage", messageId } } }, { role: "assistant", stopReason: "stop", phase: "final", content: [{ type: "text", text }] }];
 
 function fixture(bindings = [binding]) {
   const hooks = new Map<string, (event: any, context: any) => any>();
@@ -32,7 +32,7 @@ function fixture(bindings = [binding]) {
     forwardIntakeAccounts: [{ channelId: "imessage", accountId: account }] }), request }, trackedSessions: new Map() } as unknown as PluginRuntime;
   registerHooks(api, runtime);
   const inbound = (runId: string) => hooks.get("message_received")!({ from: actor, senderId: actor, content: "Question", messageId: runId, runId }, { ...context, runId });
-  const end = (runId: string, text = "Hello.", extra = {}) => hooks.get("agent_end")!({ runId, success: true, messages: answer(text), ...extra }, { ...context, runId });
+  const end = (runId: string, text = "Hello.", extra = {}) => hooks.get("agent_end")!({ runId, success: true, messages: answer(text, runId), ...extra }, { ...context, runId });
   return { hooks, request, send, inbound, end, logger };
 }
 
@@ -64,6 +64,27 @@ describe("standing private self replies through production hooks", () => {
     await Promise.all([incoming, slowEnd]);
     const replies = f.request.mock.calls.filter(([path]) => path.endsWith("/self-reply")).map(([, body]) => [body.body, body.source_message_event_id]);
     expect(replies).toEqual([["Second answer", "receipt-fast"], ["First answer", "receipt-slow"]]);
+  });
+
+  it("uses the pinned host native transcript identity when inbound has no run ID", async () => {
+    const f = fixture();
+    await f.hooks.get("message_received")!({ from: actor, senderId: actor, content: "Question", messageId: "native-only" }, context);
+    await f.end("generated-agent-run", "Answer", { messages: answer("Answer", "native-only") });
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.request.mock.calls.find(([path]) => path.endsWith("/self-reply"))![1].source_message_event_id).toBe("receipt-native-only");
+  });
+
+  it("answers a host-collected followup once and consumes its matching inputs", async () => {
+    const f = fixture();
+    for (const id of ["first", "second"]) {
+      await f.hooks.get("message_received")!({ from: actor, senderId: actor, content: `Question ${id}`, messageId: id }, context);
+    }
+    const messages = [{ role: "user", idempotencyKey: "followup-collect:fixture:digest", content: "Question first\nQuestion second" },
+      { role: "assistant", content: "Combined answer", __openclaw: { mirrorIdentity: "turn:assistant" } }];
+    await f.end("collected", "", { messages });
+    await f.end("collected", "", { messages });
+    expect(f.send).toHaveBeenCalledOnce();
+    expect(f.request.mock.calls.find(([path]) => path.endsWith("/self-reply"))![1].source_message_event_id).toBe("receipt-second");
   });
 
   it.each(["no-grant", "wrong-run", "wrong-session", "wrong-agent", "failure", "no-final"])("does not send for %s", async (mode) => {
@@ -100,6 +121,8 @@ describe("standing private self replies through production hooks", () => {
   it("excludes historical, tool, reasoning and unfinished output", () => {
     const messages = [...answer("old answer"), { role: "user", content: "New question" },
       { role: "assistant", phase: "analysis", content: "private reasoning" },
+      { role: "assistant", stopReason: "stop", content: "Codex reasoning: private", __openclaw: { mirrorIdentity: "turn:reasoning" } },
+      { role: "assistant", stopReason: "stop", content: "Codex plan: private", __openclaw: { mirrorIdentity: "turn:plan" } },
       { role: "toolResult", content: "untrusted" },
       { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "progress" }] }];
     expect(replyParts(messages)).toEqual([]);

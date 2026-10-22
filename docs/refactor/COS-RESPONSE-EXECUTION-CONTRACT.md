@@ -186,9 +186,12 @@ in both places; `false` removes them. Routine reactivation therefore preserves
 standing permission while revoked or changed destinations cannot inherit it.
 Existing schema 1 activations and exact manual approvals retain their behavior.
 
-The plugin binds the trusted `message_received` run ID to its durable private
-forwarded-intake receipt and handles the matching successful `agent_end` final
-answer. It awaits intake even when that hook is still completing, isolates queued
+The plugin binds the trusted `message_received` native message ID to its durable
+private intake receipt and the matching `agent_end` user transcript transport
+metadata. The pinned dispatcher does not populate the inbound run ID despite
+its optional SDK declaration. A host-collected followup uses its protected
+collection marker and exact pending source text in the same private session.
+When an inbound run ID is present it must also match. It awaits intake even when that hook is still completing, isolates queued
 runs in the same conversation, excludes analysis/tool/progress/silence output,
 and consumes the run before attempting delivery. No model tool can grant the
 permission. The internal self-reply route verifies the exact principal, current
@@ -223,3 +226,11 @@ and unrelated acquisition behavior are unchanged. This touches shared external
 write governance and event schemas, so the existing protected system release
 gates remain required after focused development checks. No test authorizes
 provider contact or substitutes for observed live delivery.
+
+Integration findings: the pinned inbound dispatcher omits its optional run ID,
+and Codex reasoning mirrors lack a phase tag. Regression cases use the actual
+pinned inbound mapper, retained native transport metadata, collected followups,
+and mirror identity to avoid silent correlation failure or disclosure of
+reasoning. Source assurance loads the exact standing grant and input references
+plus activation changes; metadata-only collection otherwise loses the authority
+chain even after a valid native send.

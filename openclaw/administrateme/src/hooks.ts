@@ -25,13 +25,13 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
     "before_tool_call",
     async (event, context) => {
       // Generic delivery tools cannot borrow CoS account authority. The
-      // governed response tool is the only supported send path; the transport
-      // wrapper remains the authoritative last boundary for channel autosends.
+      // final-answer hook handles explicitly authorized self replies. Other
+      // sends use the exact approval tool; the native wrapper guards both.
       if (runtime.transport.config.forwardIntakeAccounts.length > 0 &&
           (event.toolName === "message" || event.toolName === "sessions_send") &&
           (event.params.channel === undefined ||
            event.params.channel === "imessage" || event.params.channel === "bluebubbles")) {
-        return { block: true, blockReason: "Use an exact member-approved AdministrateMe CoS response." };
+        return { block: true, blockReason: "Reply normally for an authorized private self reply; other sends require exact AdministrateMe approval." };
       }
       if (!SIDE_EFFECT_TOOL_NAMES.has(event.toolName)) return;
       if (event.toolName === "administrateme_review" && event.params.action === "inspect") return;
@@ -127,9 +127,9 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
               }
             }
           })();
-          // Capture the trusted run before awaiting intake: message_received is
-          // fire-and-forget in the pinned host, and another turn can be queued.
-          rememberSelfReply(runtime, provenance, event.runId ?? context.runId, submitted);
+          // Capture the trusted native message before awaiting intake: this hook
+          // is fire-and-forget in the pinned host, and another turn can be queued.
+          rememberSelfReply(runtime, provenance, event.runId ?? context.runId, submitted, event.content);
           await submitted;
           return;
         }
