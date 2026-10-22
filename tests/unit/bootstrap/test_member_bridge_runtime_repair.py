@@ -21,6 +21,7 @@ OLD, NEW = "a" * 40, "b" * 40
 
 @pytest.fixture
 def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, Any]:
+    monkeypatch.setattr(repair, "APPLE_SERVICE_WRITE_OVERLAY", {})
     paths = MemberBridgePaths.from_root(tmp_path / "bridge")
     paths.create()
     for commit in (OLD, NEW):
@@ -230,3 +231,52 @@ def test_acquisition_repair_does_not_allow_other_pack_changes(rig):
     with pytest.raises(ValueError, match="unsupported runtime interfaces"):
         repair.repair(paths, predecessor=OLD, candidate=NEW)
     assert not fake.actions("bootstrap")
+
+
+def test_reviewed_write_overlay_requires_exact_bytes_without_changing_read_state(
+    rig, monkeypatch
+):
+    import hashlib
+
+    paths, fake, _ = rig
+    relative = "adminme/apple_service_permissions.py"
+    new_bytes = b"reviewed additive permission implementation\n"
+    monkeypatch.setattr(
+        repair,
+        "APPLE_SERVICE_WRITE_OVERLAY",
+        {relative: (None, hashlib.sha256(new_bytes).hexdigest())},
+    )
+    candidate_file = paths.root / "app/releases" / NEW / relative
+    candidate_file.parent.mkdir(parents=True, exist_ok=True)
+    candidate_file.write_bytes(new_bytes)
+    before = paths.config_path.read_bytes()
+    result = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    assert result["status"] == "activated"
+    assert paths.config_path.read_bytes() == before
+    assert len(fake.actions("bootstrap")) == 1
+
+
+def test_unreviewed_write_overlay_refuses_before_switch(rig, monkeypatch):
+    paths, fake, _ = rig
+    relative = "adminme/apple_service_permissions.py"
+    monkeypatch.setattr(
+        repair, "APPLE_SERVICE_WRITE_OVERLAY", {relative: (None, "a" * 64)}
+    )
+    candidate_file = paths.root / "app/releases" / NEW / relative
+    candidate_file.parent.mkdir(parents=True, exist_ok=True)
+    candidate_file.write_bytes(b"unreviewed\n")
+    before = (paths.root / "app/current-release.json").read_bytes()
+    with pytest.raises(ValueError, match="unreviewed Apple write overlay"):
+        repair.repair(paths, predecessor=OLD, candidate=NEW)
+    assert (paths.root / "app/current-release.json").read_bytes() == before
+    assert not fake.actions("bootstrap")
+
+
+def test_candidate_write_overlay_pins_match_committed_files():
+    import hashlib
+
+    root = Path(__file__).resolve().parents[3]
+    for relative, (_old, expected) in repair.APPLE_SERVICE_WRITE_OVERLAY.items():
+        assert hashlib.sha256((root / relative).read_bytes()).hexdigest() == expected, (
+            relative
+        )

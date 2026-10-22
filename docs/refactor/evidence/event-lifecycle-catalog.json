@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 360,
-    "technical_event_types": 287,
+    "technical_event_schemas": 361,
+    "technical_event_types": 288,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -14565,6 +14565,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -14686,6 +14687,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -14802,6 +14804,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -14914,6 +14917,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -15146,6 +15150,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -15271,6 +15276,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -21039,6 +21045,7 @@
             "apple_calendar",
             "apple_contacts",
             "apple_reminders",
+            "apple_notes",
             "gmail",
             "microsoft_graph",
             "bluebubbles",
@@ -32387,6 +32394,98 @@
         "member_id",
         "action",
         "state",
+        "revision",
+        "coordinates",
+        "coordinates_sha256",
+        "changed_by_member_id",
+        "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.apple_service_permission_controlled",
+      "family": "settings",
+      "properties": {
+        "action": {
+          "enum": [
+            "enable",
+            "revoke"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "changed_at": {
+          "minLength": 1,
+          "title": "Changed At",
+          "type": "string"
+        },
+        "changed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "coordinates": {
+          "additionalProperties": true,
+          "title": "Coordinates",
+          "type": "object"
+        },
+        "coordinates_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Coordinates Sha256",
+          "type": "string"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "apple_calendar",
+            "apple_reminders",
+            "apple_notes"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "request_id": {
+          "maxLength": 160,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "scope_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scope Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "member_id",
+        "provider",
+        "request_id",
+        "action",
+        "enabled",
         "revision",
         "coordinates",
         "coordinates_sha256",

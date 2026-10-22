@@ -833,12 +833,76 @@ def _effective_trust(
     return agreements, stages
 
 
+def _apple_service_bridge_state(
+    runtime: Any, member_id: str, definition: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Use the self-service source's own evidence, independent of write grants."""
+    provider = str(definition.get("request_key") or "")
+    if provider not in {"apple_calendar", "apple_reminders", "apple_notes"}:
+        return None
+    from adminme.apple_service_permissions import permission_options, service_permission
+
+    try:
+        options = permission_options(runtime, member_id, provider)
+    except ValueError:
+        return None
+    request = runtime.settings_control.bridge_request_for(member_id) or {}
+    capability = (request.get("capability_states") or {}).get(provider) or {}
+    state = str(capability.get("state") or "unknown")
+    observed_at = capability.get("last_successful_observation")
+    observed = False
+    if isinstance(observed_at, str) and observed_at:
+        try:
+            observed = (
+                datetime.fromisoformat(observed_at.replace("Z", "+00:00")).tzinfo
+                is not None
+            )
+        except ValueError:
+            pass
+    grant = service_permission(runtime, member_id, provider)
+    return {
+        "bridge_software_available": bool(definition.get("implementation_present")),
+        "compatible_package_available": bool(definition.get("implementation_present")),
+        "enrollment": str(request.get("state") or "unknown"),
+        "package": "ready",
+        "device_pairing": "paired",
+        "tailscale_identity": "verified",
+        "capability_request": "requested",
+        "local_permission": "verified",
+        "adapter_authentication": "authenticated",
+        # Source acquisition continues when global observation mode is off.
+        "observation": "active",
+        "source_settlement": "settled"
+        if state == "settled" and observed
+        else "unsettled",
+        "degraded": False,
+        "paused": False,
+        "revoked": False,
+        "unsupported": not definition.get("implementation_present"),
+        "effective_readiness": "healthy"
+        if definition.get("implementation_present")
+        else "unsupported",
+        "write_permission": "enabled" if grant else "disabled",
+        "write_execution": "observation_only"
+        if grant and runtime._observation_active
+        else "ask_every_time"
+        if grant
+        else "disabled",
+        "write_permission_event_id": grant["event_id"] if grant else None,
+        "write_operations": list(grant["operations"]) if grant else [],
+        "enrollment_id": options["enrollment"]["enrollment_id"],
+    }
+
+
 def _bridge_state(
     runtime: Any,
     member_id: str,
     definition: dict[str, Any],
     settings_state: dict[str, Any],
 ) -> dict[str, Any]:
+    apple_state = _apple_service_bridge_state(runtime, member_id, definition)
+    if apple_state is not None:
+        return apple_state
     identity, record = _bridge_record(runtime, member_id)
     artifact_id = str(definition["artifact_id"])
     request_key = str(definition["request_key"])
@@ -1024,11 +1088,24 @@ def compose_member_catalog(
             freshness = "unknown"
 
         read_supported = row["verbs"]["read"] in {"supported", "fixture_only"}
+        apple_write_grant = bool(
+            bridge_state is not None
+            and bridge_state.get("write_permission") == "enabled"
+        )
+        if apple_write_grant:
+            row["verbs"]["execute"] = "ask_every_time"
+            row["terminal_result_support"] = True
         execute_supported = row["verbs"]["execute"] == "fixture_only"
         read_available = bool(
             implementation_present
             and not paused
             and not planned
+            and not (
+                viewing_as
+                and row["source_kind"] == "bridge_manifest"
+                and row.get("request_key")
+                in {"apple_calendar", "apple_reminders", "apple_notes"}
+            )
             and (
                 bridge_state is None or bridge_state["effective_readiness"] == "healthy"
             )
@@ -1089,6 +1166,15 @@ def compose_member_catalog(
             and openclaw_state == "healthy"
             and not paused
         )
+        if apple_write_grant:
+            authority_state = "owner_write_grant_approval_required"
+            execute_authorized = bool(
+                read_available
+                and not viewing_as
+                and not runtime._observation_active
+                and openclaw_state == "healthy"
+                and not paused
+            )
         effective_tools = [
             tool
             for tool in declared_tools
@@ -1110,6 +1196,9 @@ def compose_member_catalog(
                     "state": authority_state,
                     "required_permissions": sorted(required_permissions),
                     "granted_permissions": sorted(granted_permissions),
+                    "provider_permission_event_id": (bridge_state or {}).get(
+                        "write_permission_event_id"
+                    ),
                     "grant_ids": [
                         grant["grant_id"]
                         for grant in grants
@@ -1122,7 +1211,8 @@ def compose_member_catalog(
                     "runtime_state": openclaw_state,
                     "declared_tools": declared_tools,
                     "effective_tools": effective_tools,
-                    "approval_required_for_side_effects": any(
+                    "approval_required_for_side_effects": apple_write_grant
+                    or any(
                         tool
                         not in {
                             "administrateme_state",
@@ -1199,6 +1289,8 @@ def compose_member_catalog(
                     if bridge_state is not None and not read_available
                     else "A reviewed provider adapter is present but this member has not completed setup."
                     if row["source_kind"] == "adapter_manifest" and configured is None
+                    else "Observation mode or independent execution approval prevents provider changes."
+                    if apple_write_grant and not execute_authorized
                     else "Observation mode or exact authority prevents execution."
                     if execute_supported and not execute_authorized
                     else None

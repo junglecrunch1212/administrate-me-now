@@ -47,6 +47,50 @@ UNCHANGED_TREES = (
 )
 
 
+# Reviewed additive write overlay. Both sides retain the identical read-only
+# enrollment/launch/configuration contract; authority is a separate audited grant.
+# Exact old/new bytes prevent this component repair from becoming a generic
+# runtime-interface bypass. Refresh a pair only with its affected checks.
+APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
+    "adminme/apple_service_permissions.py": (
+        None,
+        "26a6413a1eb41f51a4276007d1a7f25ec2751fac6d4b76d79f22484f46acfee1",
+    ),
+    "adminme/apple_notes_writes.py": (
+        None,
+        "11a4e2fd3e3b2373fda37986d6ebf228726f0dffa020e900ee6aa9a31d164af5",
+    ),
+    "adminme/events/schemas/apple_service_permissions.py": (
+        None,
+        "dd8e7aa2544f4e5bde272cdf3ccc2c52c2236d3352d068d0f994d830a5cfb1c9",
+    ),
+    "adminme/events/schemas/external_sync.py": (
+        "b844efd28abe9e9de15af7ff62bc4d67b31906f76638a50e608ddc94d2c3b659",
+        "c9987b6b6dc753ff9990dd9ad37f22a6b9029920524617f3e14e1334ba273d07",
+    ),
+    "bridge/adminme_bridge/main.py": (
+        "07836c5334b87b53a5fec80aed9f325c591bd37995a38b71330dcac7ec707159",
+        "55bdf2c6c41e02c4db88bb2f014e7d4d3ba27c31d76c14f8ea5a19ed5dbc1746",
+    ),
+    "bridge/adminme_bridge/ingest_client.py": (
+        "1ca09adde4a2c23633bef66ef7f641c6e75b4194ba2e0489bd8bbe704a2f09c0",
+        "77e9d70d8bcf4822dc90d3dee0918650220ec958b579c8334b14b296c7ef5baf",
+    ),
+    "bridge/adminme_bridge/connector_packs/apple_notes/provider.py": (
+        "627ad16ce4e8559b2d0ff705c4b493cc71901eb71365cd760256ea9c82024de0",
+        "66d9d895be554dba3820cca81c8136678424bfd30bbf86384bdd2370ee738a20",
+    ),
+    "packs/adapters/calendaring/apple-calendar/adapter.py": (
+        "d508be2822271f8710fbb0843c799662fd49d3f7bfbecc53dab7713b33457e7c",
+        "830e04296d6f6a341c08ed324351c6a4cada39bf5e84c6bf5c67e1f3717bea5b",
+    ),
+    "packs/adapters/reminders/apple-eventkit/adapter.py": (
+        "c25e284adeaa872292ead2228d0e9b6d2024b837e3adeb09e28779f6bdddaa97",
+        "11a7113382f15cfbb45863a4ac54fae1b8d21f6b412fb6280377662a5cecda63",
+    ),
+}
+
+
 def _read(path: Path) -> bytes:
     if not launch._owned(path, private=True):
         raise ValueError("runtime repair requires owned private state")
@@ -65,7 +109,7 @@ def _write(path: Path, value: dict[str, Any]) -> None:
 
 
 def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
-    paths = {root / name for name in UNCHANGED_FILES}
+    paths = {root / name for name in (*UNCHANGED_FILES, *APPLE_SERVICE_WRITE_OVERLAY)}
     for name in UNCHANGED_TREES:
         paths.update(
             path
@@ -78,6 +122,19 @@ def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
     result = {}
     for path in paths:
         relative = path.relative_to(root).as_posix()
+        if relative in APPLE_SERVICE_WRITE_OVERLAY:
+            old_digest, new_digest = APPLE_SERVICE_WRITE_OVERLAY[relative]
+            if not path.exists() and retained and old_digest is None:
+                result[relative] = "absent-before-apple-write-overlay"
+                continue
+            if not launch._owned(path):
+                raise ValueError("Apple write overlay file missing or unsafe")
+            current_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            accepted = {old_digest, new_digest} if retained else {new_digest}
+            if current_digest not in accepted:
+                raise ValueError("unreviewed Apple write overlay difference")
+            result[relative] = old_digest or "absent-before-apple-write-overlay"
+            continue
         if relative in ACQUISITION_PATHS:
             continue
         if not launch._owned(path):

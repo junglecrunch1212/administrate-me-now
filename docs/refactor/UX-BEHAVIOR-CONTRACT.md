@@ -565,3 +565,26 @@ its last good checkpoint and remediation rather than rendering celebratory
 zero-state copy. NLP-derived candidates display verbatim source evidence and
 remain ordinary human-gated proposals; model confidence never hides a
 candidate that passed the fixed exact-quote/type/privacy rules.
+
+
+### Explicit Apple service write permissions (2026-10-22)
+
+MODERNIZE the existing member bridge write controls: Settings → Apple service
+permissions shows read access separately from revocable write permission for
+Calendar, Reminders, and Notes. An adult can grant only their own attested
+bridge and explicitly selected destinations. Reading enrollment remains
+immutable and does not grant writing. Each external action still requires its
+exact member confirmation, independent OpenClaw approval, current service
+grant, final provider scope/revision checks, and terminal audit. Observation
+mode continues to suppress effects. Revocation remains available when a
+previously enabled source becomes unavailable.
+
+Calendar permissions can select an attested empty calendar without fabricating
+an observed calendar event. Notes permissions bind one observed native account
+and selected folders; governed note creation, text updates/appends, and deletion
+refuse locked, shared, attached, or unsupported rich documents when safe
+preservation cannot be established. Notes exposes exact-text creation review
+and an interrupted action remains locked until its immutable receipt is read.
+Settings saves use revision checks and exact request reconciliation. No service
+permission authorizes personal-channel obligation mining or another adult's
+private data.

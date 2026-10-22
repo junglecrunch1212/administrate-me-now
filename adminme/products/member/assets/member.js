@@ -3663,6 +3663,85 @@ function noteDetail(note, data) {
   return section;
 }
 
+function newAppleNoteCard() {
+  const card = document.createElement("section"); card.className = "card new-apple-note";
+  card.append(text("h2", "New Apple note"));
+  const identity = state.bootstrap?.member; const trust = state.bootstrap?.trust;
+  if (!identity || identity.authenticated_role !== "principal" || identity.viewing_as || !identity.authenticated_id || identity.authenticated_id !== identity.id || trust?.actions_as !== trust?.reads_as) {
+    card.append(text("p", "Return to your own private view to prepare an Apple note.", "state-note")); return card;
+  }
+  const pendingKey = `administrateme:apple-note-pending:${identity.authenticated_id}`;
+  let pending = null; let busy = false; let loaded = false; let canCreate = false; let targets = []; let retryAllowed = false; let receipt = null;
+  try { pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null"); } catch { pending = { unknown: true }; }
+  const status = text("p", "Checking your Apple Notes writing permission…", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  const settings = text("a", "Review Apple Notes permissions", "button button-quiet"); settings.href = "/member/settings?section=apple-services";
+  const form = document.createElement("form"); form.className = "new-apple-note-form";
+  const folder = document.createElement("select"); folder.required = true;
+  const title = document.createElement("input"); title.type = "text"; title.maxLength = 1000;
+  const body = document.createElement("textarea"); body.rows = 5; body.required = true; body.maxLength = 100000;
+  const review = text("button", "Review new note", "button button-primary"); review.type = "submit";
+  form.append(field("Apple Notes folder", folder), field("Note title (optional)", title), field("Note text", body), text("p", "Plain text only. Review the exact note and destination before approval. Apple will change only after a separate execution approval.", "state-note"), review);
+  const check = text("button", "Check note status", "button button-secondary"); check.type = "button";
+  const retry = text("button", "Retry saved note approval", "button button-secondary"); retry.type = "button"; retry.hidden = true;
+  const another = text("button", "Prepare another note", "button button-quiet"); another.type = "button"; another.hidden = true;
+  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(check, retry, another, settings); card.append(form, status, actions);
+  function lock() {
+    for (const control of form.querySelectorAll("input,select,textarea,button")) control.disabled = busy || !loaded || !canCreate || Boolean(pending);
+    check.disabled = busy; check.hidden = !pending;
+    retry.hidden = !retryAllowed; retry.disabled = busy || !canCreate || !retryAllowed;
+    another.hidden = !receipt; another.disabled = busy;
+  }
+  function savePending(value) { if (value) sessionStorage.setItem(pendingKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingKey); pending = value; }
+  function matchesRequest(result) {
+    return Boolean(pending?.body && result.request_id === pending.body.request_id && result.command_id === pending.body.request_id && result.request && Object.keys(pending.body).every((key) => result.request[key] === pending.body[key]) && Object.keys(result.request).length === Object.keys(pending.body).length);
+  }
+  async function reconcile() {
+    busy = true; retryAllowed = false; receipt = null; lock();
+    try {
+      const permissions = await api("/api/member/v1/settings/apple-services");
+      const service = (permissions.items || []).find((item) => item.provider === "apple_notes");
+      targets = service?.write_access ? (service.scopes || []).filter((scope) => (service.selected_scope_ids || []).includes(scope.id) && scope.provider_account_id && scope.account_id && scope.container_id) : [];
+      canCreate = permissions.can_mutate === true && Boolean(service?.write_access) && (service?.operations || []).includes("create_note") && targets.length > 0; loaded = true;
+      const previous = folder.value; folder.replaceChildren(); for (const target of targets) { const option = text("option", target.label); option.value = target.id; folder.append(option); } if (targets.some((target) => target.id === previous)) folder.value = previous;
+      if (pending?.body) {
+        title.value = pending.body.title || ""; body.value = pending.body.body || "";
+        const selected = targets.find((target) => target.provider_account_id === pending.body.provider_account_id && target.account_id === pending.body.account_external_id && target.container_id === pending.body.folder_external_id); if (selected) folder.value = selected.id;
+        const result = await api(`/api/member/v1/notes/commands/status?request_id=${encodeURIComponent(pending.body.request_id)}`);
+        if (matchesRequest(result) && result.domain_approval_event_id && result.state !== "not_recorded") {
+          receipt = result;
+          const messages = { awaiting_openclaw_approval: "Your exact note is approved. A separate execution approval is still required before Apple can change.", pending: "Your approved note is pending. It has not been confirmed in Apple.", completed: "The bridge reported this note change complete. Check the synced Notes list for the latest observed copy.", failed: "This note change failed. Review the result before preparing another action.", unknown: "The provider result is unknown. Do not repeat this note change; check its status again." };
+          status.textContent = messages[result.state] || `Note approval recorded. Current state: ${titleCase(result.state)}.`;
+          if (result.state === "unknown") receipt = null;
+        } else if (result.request_id === pending.body.request_id && result.state === "not_recorded") { retryAllowed = true; status.textContent = "This exact note approval was not recorded. You may retry the saved approval; no new text will be submitted."; }
+        else status.textContent = "Your note approval is not confirmed. Check its status before preparing another note.";
+      } else if (pending) status.textContent = "A previous note request cannot be reconciled here. Have its exact request reviewed before preparing another note.";
+      else status.textContent = canCreate ? "Choose an allowed folder and write the note you want CoS to create." : "Apple Notes writing is off or no allowed folder is ready. Review Apple Notes permissions in Settings.";
+    } catch (error) { loaded = false; status.textContent = `${error.message} Note status is unconfirmed. No new approval is allowed until it can be checked.`; }
+    finally { busy = false; lock(); }
+  }
+  async function submit(change, isRetry = false) {
+    if (busy || !loaded || !canCreate || (pending && !isRetry) || (isRetry && (!retryAllowed || pending !== change))) return;
+    try { savePending(change); } catch { status.textContent = "This browser cannot retain the request reference. No note approval was requested."; return; }
+    busy = true; lock(); closeActionDialog(); status.textContent = "Recording your exact note approval…";
+    try { await api("/api/member/v1/notes/commands", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(change.body) }); }
+    catch { /* Reconcile every response by its original request, never auto-retry. */ }
+    finally { busy = false; await reconcile(); }
+  }
+  form.addEventListener("submit", (event) => {
+    event.preventDefault(); if (busy || pending || !loaded || !canCreate) return;
+    const target = targets.find((value) => value.id === folder.value); if (!target || !body.value.trim()) return;
+    const request = { request_id: crypto.randomUUID(), operation: "create_note", provider_account_id: target.provider_account_id, account_external_id: target.account_id, folder_external_id: target.container_id, knowledge_id: null, expected_last_event_id: null, expected_provider_revision: null, body: body.value, title: title.value || null };
+    const confirmation = document.createElement("form"); confirmation.className = "dialog-form apple-note-confirmation";
+    confirmation.append(text("p", `${identity.authenticated_display_name} · ${target.label}`), text("h3", request.title || "Untitled note"), text("pre", request.body, "notes-body"), text("p", "Approve this exact text and folder. A separate execution approval is required before the note can be created in Apple.", "state-note"));
+    const back = text("button", "Go back", "button button-quiet"); back.type = "button"; back.addEventListener("click", closeActionDialog);
+    const approve = text("button", "Approve this note", "button button-primary"); approve.type = "submit"; confirmation.append(back, approve);
+    confirmation.addEventListener("submit", (submitEvent) => { submitEvent.preventDefault(); approve.disabled = true; void submit({ body: request }); }); openActionDialog("Create this Apple note?", confirmation);
+  });
+  check.addEventListener("click", () => { void reconcile(); }); retry.addEventListener("click", () => { if (pending) void submit(pending, true); });
+  another.addEventListener("click", () => { if (!busy && receipt) { savePending(null); receipt = null; title.value = ""; body.value = ""; void reconcile(); } });
+  void reconcile(); return card;
+}
+
 function renderNotes(data) {
   const root = $("#surface"); root.replaceChildren();
   $("#mode-label").textContent = "Private · authorized recall · deterministic Triage";
@@ -3671,7 +3750,7 @@ function renderNotes(data) {
   const selected = notes.find((note) => note.knowledge_id === state.notesSelected) || null;
   const workspace = document.createElement("div"); workspace.className = "notes-workspace";
   workspace.append(notesSources(data), noteMasterList(notes, data), noteDetail(selected, data));
-  root.append(freshnessStrip(data), notesHero(data), notesControls(data), workspace);
+  root.append(freshnessStrip(data), notesHero(data), notesControls(data), newAppleNoteCard(), workspace);
 }
 
 const FINANCE_VIEWS = [
@@ -3861,6 +3940,7 @@ const SETTINGS_SECTIONS = [
   ["cos-replies", "CoS replies"],
   ["capabilities", "Capabilities"],
   ["connections", "Connections"],
+  ["apple-services", "Apple permissions"],
   ["bridges", "Devices & bridges"],
   ["learning-trust", "Learning & trust"],
   ["privacy", "Household & privacy"],
@@ -3957,10 +4037,118 @@ function serviceChannelsCard(data) {
 }
 
 function renderConnections(data) {
-  const fragment = document.createDocumentFragment(); fragment.append(serviceChannelsCard(data)); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("h2", "Your personal connections"), text("strong", "Connection truth has four separate axes."), text("p", "These counts and controls cover only your accounts. Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.")); fragment.append(intro);
+  const fragment = document.createDocumentFragment(); fragment.append(serviceChannelsCard(data), appleServicePermissionLink()); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("h2", "Your personal connections"), text("strong", "Connection truth has four separate axes."), text("p", "These counts and controls cover only your accounts. Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.")); fragment.append(intro);
   if (!data.control.connections.length) fragment.append(text("p", "No reviewed provider connection is configured for this member.", "empty card"));
   else { const grid = document.createElement("div"); grid.className = "settings-card-grid"; for (const connection of data.control.connections) grid.append(connectionCard(connection, data)); fragment.append(grid); }
   const add = document.createElement("section"); add.className = "card settings-add-provider"; add.append(text("h2", "Reviewed provider paths"), text("p", "Only adapters proven by the checked-in capability catalog appear here. Secure account enrollment and member consent stay separate from software availability.")); const list = document.createElement("div"); list.className = "provider-roadmap"; const reviewed = (data.control.capabilities?.items || []).filter((item) => item.source_kind === "adapter_manifest"); for (const item of reviewed) list.append(text("span", `${item.label} · ${titleCase(item.installation)}`, "pill pill-lavender")); if (!reviewed.length) list.append(text("span", "No reviewed central provider path", "pill pill-lavender")); add.append(list); fragment.append(add); return fragment;
+}
+
+function appleServicePermissionLink() {
+  const card = document.createElement("section"); card.className = "card apple-permissions-link";
+  const link = text("a", "Review Apple service permissions", "button button-secondary"); link.href = "/member/settings?section=apple-services";
+  card.append(text("h2", "Apple service permissions"), text("p", "See what CoS can read and change in your Calendar, Reminders, and Notes."), link); return card;
+}
+
+function appleServicePermissions(data) {
+  const section = document.createElement("section"); section.className = "apple-service-permissions";
+  const intro = document.createElement("div"); intro.className = "card";
+  intro.append(text("h2", "Apple service permissions"), text("p", "Choose where CoS may make changes. Each action still needs your approval and a separate execution approval. Enabling a service does not change anything in Apple."), text("p", "Reading, permission to write, and macOS permissions are separate. These controls do not grant macOS access or enable personal inbox monitoring.", "state-note")); section.append(intro);
+  const identity = data.control.identity;
+  const own = identity.can_mutate && identity.authenticated_role === "principal" && Boolean(identity.authenticated_member_id) && !identity.viewing_as && identity.authenticated_member_id === identity.view_member_id && identity.actions_as === identity.reads_as;
+  if (!own) { intro.append(text("p", "Return to your own private view to see or change your Apple service permissions.", "review-state")); return section; }
+  const endpoint = "/api/member/v1/settings/apple-services";
+  const pendingKey = `administrateme:apple-permission-pending:${identity.authenticated_member_id}`;
+  let pending = null; let busy = false; let loaded = false; let canMutate = false; let retryAllowed = false; let items = [];
+  try { pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null"); } catch { pending = { unknown: true }; }
+  const list = document.createElement("div"); list.className = "settings-card-grid apple-service-permission-list";
+  const status = text("p", "Checking your Apple service permissions…", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  const refresh = text("button", "Check Apple permission status", "button button-secondary"); refresh.type = "button";
+  const retry = text("button", "Retry saved permission change", "button button-secondary"); retry.type = "button"; retry.hidden = true;
+  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(refresh, retry); section.append(list, status, actions);
+  const sorted = (values) => [...(values || [])].sort();
+  function savePending(value) { if (value) sessionStorage.setItem(pendingKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingKey); pending = value; }
+  function immutableMatch(confirmation) {
+    const body = pending?.body;
+    return Boolean(body && confirmation && confirmation.request_id === body.request_id && confirmation.provider === pending.provider && confirmation.expected_revision === body.expected_revision && confirmation.enabled === body.enabled && JSON.stringify(sorted(confirmation.scope_ids)) === JSON.stringify(sorted(body.scope_ids)));
+  }
+  function renderItems() {
+    list.replaceChildren();
+    const locked = busy || !loaded || !canMutate || Boolean(pending);
+    for (const item of items) {
+      const card = document.createElement("article"); card.className = "card apple-service-permission"; card.dataset.provider = item.provider;
+      const heading = document.createElement("div"); heading.className = "connection-heading";
+      heading.append(text("h3", item.label), text("span", titleCase(item.state), `pill state-label state-${item.state === "enabled" ? "healthy" : item.state === "unavailable" ? "unknown" : "paused"}`)); card.append(heading);
+      const facts = document.createElement("dl"); facts.className = "settings-facts";
+      facts.append(text("dt", "Reading"), text("dd", item.read_access ? "Connected" : "Not available"), text("dt", "Writing"), text("dd", item.write_access ? "Allowed in selected locations · approval required" : "Off"), text("dt", "macOS permissions"), text("dd", "Managed on your bridge Mac")); card.append(facts);
+      if (item.reason) card.append(text("p", item.reason, "state-note"));
+      if (item.observation_mode) card.append(text("p", "Provider changes are paused while observation mode is on.", "review-state"));
+      if ((item.operations || []).length) card.append(text("p", `Available changes: ${item.operations.map(titleCase).join(", ")}.`, "state-note"));
+      const form = document.createElement("form"); form.className = "apple-service-permission-form";
+      const scopes = document.createElement("fieldset"); scopes.className = "apple-service-scopes"; scopes.append(text("legend", "Where CoS may write"));
+      const selected = new Set(item.selected_scope_ids || []);
+      for (const scope of item.scopes || []) {
+        const label = document.createElement("label"); label.className = "bridge-capability-choice";
+        const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.name = "scope"; checkbox.value = scope.id; checkbox.checked = selected.has(scope.id); checkbox.dataset.accountId = scope.account_id;
+        const copy = document.createElement("span"); copy.append(text("strong", scope.label)); if (scope.account_label) copy.append(text("small", scope.account_label)); label.append(checkbox, copy); scopes.append(label);
+      }
+      if (!(item.scopes || []).length) scopes.append(text("p", "No writable location is available. Check this service on your bridge Mac.", "empty compact-empty"));
+      const enable = text("button", item.write_access ? "Review selected locations" : "Review enabling writes", "button button-primary"); enable.type = "submit";
+      const revoke = text("button", "Turn off writes", "button button-quiet"); revoke.type = "button"; revoke.hidden = item.can_revoke !== true && !item.write_access;
+      const note = text("p", "Select only the calendars, lists, or folders you want CoS to change.", "state-note");
+      function lockForm() {
+        const unavailable = item.state === "unavailable";
+        for (const input of form.querySelectorAll("input")) input.disabled = locked || unavailable;
+        const chosen = [...form.querySelectorAll('input[name="scope"]:checked')];
+        const accounts = new Set(chosen.map((input) => input.dataset.accountId));
+        enable.disabled = locked || unavailable || !chosen.length || accounts.size > 1;
+        revoke.disabled = locked;
+        note.textContent = accounts.size > 1 ? "Choose locations from one Apple account at a time." : "Select only the calendars, lists, or folders you want CoS to change.";
+      }
+      const buttons = document.createElement("div"); buttons.className = "button-row"; buttons.append(enable, revoke); form.append(scopes, note, buttons);
+      form.addEventListener("change", lockForm);
+      form.addEventListener("submit", (event) => { event.preventDefault(); if (!enable.disabled) reviewChange(item, true, [...form.querySelectorAll('input[name="scope"]:checked')].map((input) => input.value)); });
+      revoke.addEventListener("click", () => { if (!revoke.disabled) reviewChange(item, false, []); });
+      lockForm(); card.append(form); list.append(card);
+    }
+    refresh.disabled = busy; retry.hidden = !pending || !retryAllowed; retry.disabled = busy || !loaded || !canMutate || !retryAllowed;
+  }
+  async function reconcile() {
+    busy = true; retryAllowed = false; renderItems();
+    try {
+      const query = pending?.body?.request_id && pending.provider ? `?request_id=${encodeURIComponent(pending.body.request_id)}&provider=${encodeURIComponent(pending.provider)}` : "";
+      const result = await api(`${endpoint}${query}`);
+      items = result.items || []; canMutate = result.can_mutate === true; loaded = true;
+      const confirmation = result.request_confirmation;
+      if (pending && immutableMatch(confirmation) && confirmation.state === "recorded") savePending(null);
+      else if (pending?.body && confirmation?.request_id === pending.body.request_id && confirmation.provider === pending.provider && confirmation.state === "not_recorded") retryAllowed = true;
+      status.textContent = pending ? retryAllowed ? "This saved request was not recorded. You may retry the same permission change; its selections cannot be changed while it is pending." : "Your last permission change is not confirmed. Check its status before making another change." : "Your current Apple permissions are shown above. Turning writing off preserves your history and existing Apple items.";
+    } catch (error) { loaded = false; status.textContent = `${error.message} Current Apple permissions could not be checked. Changes remain locked.`; }
+    finally { busy = false; renderItems(); }
+  }
+  async function submitChange(change, isRetry = false) {
+    if (busy || !loaded || !canMutate || (pending && !isRetry) || (isRetry && (!retryAllowed || change !== pending))) return;
+    try { savePending(change); } catch { status.textContent = "This browser cannot retain the request reference. No permission change was requested."; return; }
+    busy = true; retryAllowed = false; renderItems(); closeActionDialog(); status.textContent = "Saving your Apple permission decision…";
+    try { await api(`${endpoint}/${encodeURIComponent(change.provider)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(change.body) }); }
+    catch (error) {
+      if (error.status === 409 && error.body?.detail?.code === "stale_revision") { savePending(null); setBanner("These permissions changed in another window. Review the refreshed settings before saving again."); }
+      // Every other uncertain result is reconciled by its exact request ID;
+      // a failed transport never causes an automatic second POST.
+    } finally { busy = false; await reconcile(); }
+  }
+  function reviewChange(item, enabled, scopeIds) {
+    if (busy || pending || !loaded || !canMutate) return;
+    const content = document.createElement("form"); content.className = "dialog-form apple-permission-confirmation";
+    content.append(text("p", `${identity.authenticated_display_name} · ${item.label}`), text("p", enabled ? "Allow CoS to write in these selected locations:" : "Turn off CoS writing for this service?"));
+    if (enabled) { const locations = document.createElement("ul"); for (const scope of item.scopes || []) if (scopeIds.includes(scope.id)) locations.append(text("li", scope.label)); content.append(locations, text("p", "Each action still needs your approval and a separate execution approval. No Apple item is changed by saving this setting.", "state-note")); }
+    else content.append(text("p", "Existing Apple items and read access are unchanged. New writes will be blocked.", "state-note"));
+    const cancel = text("button", "Go back", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+    const confirm = text("button", enabled ? "Allow selected writes" : "Turn off writes", "button button-primary"); confirm.type = "submit"; content.append(cancel, confirm);
+    content.addEventListener("submit", (event) => { event.preventDefault(); confirm.disabled = true; void submitChange({ provider: item.provider, body: { request_id: crypto.randomUUID(), expected_revision: item.revision, enabled, scope_ids: sorted(scopeIds) } }); });
+    openActionDialog(enabled ? `Allow ${item.label} changes?` : `Turn off ${item.label} changes?`, content);
+  }
+  refresh.addEventListener("click", () => { void reconcile(); }); retry.addEventListener("click", () => { if (pending) void submitChange(pending, true); });
+  void reconcile(); return section;
 }
 
 const CANDIDATE_MODE_COPY = {
@@ -4492,7 +4680,7 @@ function bridgeEnrollmentReason(reason) {
 }
 
 function bridgeSettings(data) {
-  const fragment = document.createDocumentFragment(); const wizard = data.control.bridge_wizard || {}; const current = wizard.current;
+  const fragment = document.createDocumentFragment(); fragment.append(appleServicePermissionLink()); const wizard = data.control.bridge_wizard || {}; const current = wizard.current;
   const memberId = data.control.identity.authenticated_member_id;
   const own = data.control.identity.can_mutate && !data.control.identity.viewing_as;
   const pendingKey = `administrateme:bridge-enrollment-pending:${memberId}`;
@@ -5010,6 +5198,7 @@ function renderSettings(data) {
   else if (state.settingsSection === "capabilities") content.append(capabilitySettings(data));
   else if (state.settingsSection === "connections") content.append(renderConnections(data));
   else if (state.settingsSection === "bridges") content.append(bridgeSettings(data));
+  else if (state.settingsSection === "apple-services") content.append(appleServicePermissions(data));
   else if (state.settingsSection === "learning-trust") content.append(learningTrustSettings(data));
   else if (state.settingsSection === "privacy") content.append(privacySettings(data));
   else if (state.settingsSection === "admin-requests") content.append(adminRequestsSettings(data));

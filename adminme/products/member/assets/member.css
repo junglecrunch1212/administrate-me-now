@@ -844,3 +844,14 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .button:hover { transform: none; }
 }
+
+.apple-service-permissions, .apple-service-permission-form { display: grid; gap: .8rem; }
+.apple-service-permission { min-width: 0; }
+.apple-service-scopes { display: grid; gap: .45rem; min-width: 0; margin: 0; padding: .65rem; border: 1px solid var(--line); border-radius: var(--radius); }
+.apple-service-scopes legend { padding: 0 .3rem; font-weight: 800; }
+.apple-service-scopes .bridge-capability-choice { overflow-wrap: anywhere; }
+
+.new-apple-note, .new-apple-note-form { display: grid; gap: .65rem; }
+.new-apple-note-form textarea, .new-apple-note-form select, .new-apple-note-form input { width: 100%; min-width: 0; }
+
+.apple-service-permissions [hidden], .new-apple-note [hidden] { display: none !important; }

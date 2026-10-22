@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from adminme.bridge_history import BridgeHistory, SOURCE_ADAPTERS
+from adminme.apple_service_history import apple_command_owner_matches
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
@@ -378,6 +379,11 @@ async def audit_historical_attribution(
             if event_type == "triage.intent.submitted"
             else None
         )
+        apple_command = (
+            await event_log.get(str(event["event_id"]))
+            if event_type == "external_sync.write_requested"
+            else None
+        )
         bindings = bindings_by_account.get(account.casefold(), [])
         matching_bindings = [
             binding for binding in bindings if owner_scope == binding.owner_scope
@@ -394,6 +400,18 @@ async def audit_historical_attribution(
             # matching when its member/private correlation is malformed.
             if await _cos_response_owner_matches(event_log, str(event["event_id"])):
                 binding_state = "internal_cos_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif apple_command is not None and (
+            apple_command.get("payload", {}).get("provider") == "apple_notes"
+            or (apple_command.get("payload", {}).get("payload") or {}).get(
+                "apple_service_permission"
+            )
+        ):
+            if await apple_command_owner_matches(
+                event_log, apple_command, through=watermark or ""
+            ):
+                binding_state = "internal_apple_service_member_source_reconciled"
                 workspace = "personal"
                 attributed += 1
         elif submission is not None and (

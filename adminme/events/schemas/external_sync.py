@@ -22,6 +22,7 @@ ExternalProvider = Literal[
     "apple_calendar",
     "apple_contacts",
     "apple_reminders",
+    "apple_notes",
     "gmail",
     "microsoft_graph",
     "bluebubbles",

@@ -13,6 +13,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from adminme.apple_notes_writes import NOTE_OPERATIONS, assert_plain_note_html
 from adminme_bridge.knowledge_sources import KnowledgeDocument, KnowledgeFolder
 
 
@@ -53,10 +54,29 @@ function findNote(app, id) {
   for (const row of allFolders(app)) for (const note of notesOf(row.folder)) if (idOf(note) === id) return {note: note, folder: row.folder, account: row.account, path: row.path};
   throw new Error("Note not found");
 }
-function assertRevision(note, expected) {
-  if (!expected) return;
+function assertRevision(note, expected, required) {
+  if (!expected) { if (required) throw new Error("provider revision is required"); return; }
   const actual = iso(safe(() => note.modificationDate(), null));
-  if (actual && actual !== expected) throw new Error("provider revision conflict: expected " + expected + ", actual " + actual);
+  if ((required && !actual) || (actual && actual !== expected)) throw new Error("provider revision conflict");
+}
+function assertWriteFolder(row, payload) {
+  if (idOf(row.account) !== payload.account_external_id || idOf(row.folder) !== payload.folder_external_id || !payload.allowed_container_ids.includes(idOf(row.folder))) throw new Error("Notes source account or folder changed");
+  if (safe(() => row.folder.shared(), true) !== false) throw new Error("Shared or unknown-sharing Notes folders cannot be changed");
+}
+function assertWriteTime(payload) {
+  const expires = Date.parse(payload.apple_service_authorization_expires_at);
+  if (!Number.isFinite(expires) || Date.now() >= expires) throw new Error("Apple service authorization expired before the Notes effect");
+}
+function assertEditable(row, payload) {
+  assertWriteFolder(row, payload); assertRevision(row.note, payload.expected_provider_revision, true);
+  if (safe(() => row.note.passwordProtected(), true) !== false || safe(() => row.note.shared(), true) !== false) throw new Error("Locked, shared or unknown-sharing notes cannot be changed");
+  const attachments = safe(() => row.note.attachments(), null);
+  if (attachments === null || attachments.length) throw new Error("Note attachment state is unavailable or unsupported");
+  const body = String(row.note.body());
+  if (/<!--|<!|<\?/.test(body)) throw new Error("Rich Notes content cannot be safely replaced");
+  for (const match of body.matchAll(/<([^>]+)>/g)) {
+    if (!/^\/?(?:div|p|br|b|strong|h1|h2|h3)\s*\/?$/i.test(match[1])) throw new Error("Rich Notes content cannot be safely replaced");
+  }
 }
 function scan(app) {
   const result = []; const folderRows = allFolders(app);
@@ -86,16 +106,19 @@ function scan(app) {
 function run(argv) {
   const req = JSON.parse(argv[0]); const app = Application("Notes"); app.includeStandardAdditions = true;
   if (req.operation === "scan") return JSON.stringify({ok: true, result: scan(app)});
+  const governed = Boolean(req.payload.apple_service_permission);
   let result = null;
   if (req.operation === "create_note") {
     const account = findAccount(app, req.payload.account_external_id, req.payload.account_name);
     const folder = findFolder(app, req.payload.folder_external_id, req.payload.folder_path, account);
+    if (governed) { assertWriteFolder({account: account, folder: folder}, req.payload); assertWriteTime(req.payload); }
     const note = app.make({new: "note", at: folder, withProperties: {body: req.payload.body}});
     result = {external_id: idOf(note)};
   } else if (req.operation === "update_note" || req.operation === "append_note") {
     const row = findNote(app, req.target_external_id);
-    assertRevision(row.note, req.payload.expected_provider_revision);
+    if (governed) assertEditable(row, req.payload); else assertRevision(row.note, req.payload.expected_provider_revision);
     const current = String(safe(() => row.note.body(), ""));
+    if (governed) assertWriteTime(req.payload);
     row.note.body = req.operation === "append_note" ? current + req.payload.body : req.payload.body;
     result = {external_id: idOf(row.note)};
   } else if (req.operation === "move_note") {
@@ -104,7 +127,7 @@ function run(argv) {
     const folder = findFolder(app, req.payload.folder_external_id, req.payload.folder_path, row.account);
     app.move(row.note, {to: folder}); result = {external_id: idOf(row.note)};
   } else if (req.operation === "delete_note") {
-    const row = findNote(app, req.target_external_id); assertRevision(row.note, req.payload.expected_provider_revision); app.delete(row.note); result = {external_id: req.target_external_id};
+    const row = findNote(app, req.target_external_id); if (governed) { assertEditable(row, req.payload); assertWriteTime(req.payload); } else assertRevision(row.note, req.payload.expected_provider_revision); app.delete(row.note); result = {external_id: req.target_external_id};
   } else if (req.operation === "create_folder") {
     const account = findAccount(app, req.payload.account_external_id, req.payload.account_name);
     const folder = app.make({new: "folder", at: account, withProperties: {name: req.payload.folder_name}});
@@ -231,10 +254,54 @@ class AppleNotesScriptingProvider:
     async def apply_write(
         self, operation: str, payload: dict[str, Any], target_external_id: str | None
     ) -> dict[str, Any]:
+        # Preserve the pre-existing provider library contract. The member bridge
+        # only admits Notes commands carrying independently checked service proof.
+        if not payload.get("apple_service_permission"):
+            result = await asyncio.to_thread(
+                self._invoke, operation, payload, target_external_id
+            )
+            return dict(result or {})
+        if operation not in NOTE_OPERATIONS:
+            raise ValueError(
+                "This Notes operation is not available through the governed bridge."
+            )
+        account = payload.get("account_external_id")
+        folder = payload.get("folder_external_id")
+        allowed = payload.get("allowed_container_ids")
+        if payload.get("apple_service_permission") and allowed != payload.get(
+            "apple_service_allowed_container_ids"
+        ):
+            raise ValueError(
+                "Notes write source does not match the current bridge permission."
+            )
+        if (
+            not isinstance(account, str)
+            or not account
+            or not isinstance(folder, str)
+            or not folder
+            or not isinstance(allowed, list)
+            or any(not isinstance(value, str) or not value for value in allowed)
+            or folder not in allowed
+        ):
+            raise ValueError(
+                "Notes writes require the exact authorized account and folder."
+            )
+        if operation == "create_note":
+            if target_external_id:
+                raise ValueError("Creating a note cannot target an existing note.")
+        elif not target_external_id or not payload.get("expected_provider_revision"):
+            raise ValueError(
+                "Changing a note requires its native identity and revision."
+            )
+        if operation != "delete_note":
+            body = payload.get("body")
+            if not isinstance(body, str) or not body or len(body) > 1_000_000:
+                raise ValueError("Notes writes require bounded text content.")
+            assert_plain_note_html(body)
         result = await asyncio.to_thread(
             self._invoke, operation, payload, target_external_id
         )
-        return dict(result or {})
+        return {"applied": True, "suppressed": False, **dict(result or {})}
 
 
 __all__ = ["AppleNotesScriptingProvider", "CommandRunner"]

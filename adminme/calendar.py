@@ -249,7 +249,9 @@ def compose_calendar_cockpit(
     sources: list[dict[str, Any]],
     rules: list[dict[str, Any]],
     schedule_policy: dict[str, Any] | None,
+    write_permissions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    permission_routes = {_route(row) for row in write_permissions or []}
     zone = ZoneInfo(timezone_name)
     as_of = as_of.astimezone(zone)
     range_start = range_start.astimezone(zone)
@@ -304,8 +306,10 @@ def compose_calendar_cockpit(
                 "buffer_before_minutes": before,
                 "buffer_after_minutes": after,
                 "why": reasons,
-                "can_write": bool(source.get("write_events"))
-                and bool(rule.get("write_target")),
+                "can_write": route in permission_routes
+                or (
+                    bool(source.get("write_events")) and bool(rule.get("write_target"))
+                ),
                 "last_event_id": row.get("last_event_id"),
                 "recorded_outcome": row.get("recorded_outcome"),
                 "outcome_event_id": row.get("outcome_event_id"),
@@ -480,7 +484,9 @@ def compose_calendar_cockpit(
             if row.get("enabled")
             and row.get("write_target")
             and row.get("write_events")
-        ],
+            and _route(row) not in permission_routes
+        ]
+        + [dict(row) for row in write_permissions or []],
         "provider_truth": {
             "duplicates_are_grouped_not_deleted": True,
             "transparent_events_do_not_block": True,
@@ -501,6 +507,7 @@ def preview_calendar_candidate(
     rules: list[dict[str, Any]],
     schedule_policy: dict[str, Any] | None,
     observation_active: bool,
+    write_permissions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Preview a proposed calendar write without creating a provider fact."""
 
@@ -554,6 +561,7 @@ def preview_calendar_candidate(
         sources=sources,
         rules=rules,
         schedule_policy=schedule_policy,
+        write_permissions=write_permissions,
     )
     preview = next(
         (event for event in cockpit["events"] if event["id"] == proposal_event_id),
