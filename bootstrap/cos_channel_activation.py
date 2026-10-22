@@ -62,8 +62,22 @@ from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
-from bootstrap.backup_restore import BackupManager
-from bootstrap.candidate_readiness import capture_deployment_snapshot
+from bootstrap.backup_restore import (
+    BackupManager,
+    _MAX_BACKUP_BYTES,
+    _sha256_private_regular_file,
+)
+from bootstrap.candidate_readiness import (
+    CandidateReadinessError,
+    capture_deployment_snapshot,
+    provider_effect_window_evidence,
+)
+from bootstrap.cos_recovery_history import (
+    RecoveryHistoryRepairRequest,
+    derive_recovery_history,
+    initial_readiness,
+    window_vector,
+)
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
@@ -480,6 +494,331 @@ class CoSChannelActivator:
         if effects.get("state") != "healthy" or type(count) is not int or count < 0:
             raise CoSActivationError("provider-effect integrity is incomplete")
         return count
+
+    async def _recovery_history_events(self) -> list[dict[str, Any]]:
+        log = self._event_log(read_only=True)
+        try:
+            return [
+                event
+                async for event in log.read_since(
+                    None,
+                    types=[
+                        ACTIVATED_EVENT,
+                        DEACTIVATED_EVENT,
+                        "observation.enabled",
+                        "observation.disabled",
+                    ],
+                )
+            ]
+        finally:
+            await log.close()
+
+    def _derive_history_repair(
+        self, request: RecoveryHistoryRepairRequest, original: bytes
+    ) -> dict[str, Any]:
+        if _sha(original) != request.readiness_sha256:
+            raise CoSActivationError("history repair initial readiness digest differs")
+        journals = []
+        for reference in (
+            request.failed_operation,
+            request.activation_operation,
+            request.maintenance_operation,
+        ):
+            payload = _private_bytes(
+                self.directory / "history" / f"{reference.operation_id}.json"
+            )
+            if _sha(payload) != reference.sha256:
+                raise CoSActivationError(
+                    "history repair archived journal digest differs"
+                )
+            journals.append(json.loads(payload))
+        try:
+            return derive_recovery_history(
+                request,
+                json.loads(original),
+                journals[0],
+                journals[1],
+                journals[2],
+                asyncio.run(self._recovery_history_events()),
+                tenant_id=load_instance_config(self.paths.instance_dir).tenant_id,
+            )
+        except (ValueError, CandidateReadinessError) as exc:
+            raise CoSActivationError(
+                "history repair retained proof is invalid"
+            ) from exc
+
+    async def _repair_interval_effects(self, repaired: dict[str, Any]) -> None:
+        from adminme.source_assurance import audit_source_assurance
+
+        prior = repaired["prior_provider_effect_windows"]
+        log = self._event_log(read_only=True)
+        try:
+            report = await audit_source_assurance(
+                log,
+                repository_root=self.repository,
+                capabilities={},
+                provider_effect_window_started_at=prior[-3]["started_at"],
+                provider_effect_window_ended_at=prior[-1]["ended_at"],
+            )
+        finally:
+            await log.close()
+        effects = report["provider_effects"]
+        window = effects["observation_window"]
+        if (
+            effects.get("state") != "healthy"
+            or window.get("state") != "healthy"
+            or window["counts"].get("provider_called_true") != 0
+        ):
+            raise CoSActivationError(
+                "history repair interval has incomplete or nonzero effects"
+            )
+
+    def _require_repair_observation(self) -> None:
+        state = yaml.safe_load(_private_bytes(self.config_dir / "runtime.yaml"))
+        if (
+            not isinstance(state, dict)
+            or (state.get("observation_mode_override") or {}).get("active") is not True
+            or _json(self.config_dir / "observation.json").get("active") is not True
+        ):
+            raise CoSActivationError(
+                "history repair requires explicit observation mode"
+            )
+
+    def repair_recovery_history(
+        self, request: RecoveryHistoryRepairRequest
+    ) -> dict[str, Any]:
+        """Repair only the proved legacy overwrite, without editing its facts."""
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if (
+                self.journal_path.exists()
+                or (self.paths.app_dir / "activation/active.json").exists()
+            ):
+                raise CoSActivationError("recover the interrupted operation first")
+            commit, release, controller_commit = self._observation_selection()
+            if (commit, controller_commit) != (
+                request.expected_release_commit,
+                request.expected_controller_commit,
+            ) or self._bound_snapshot(commit) != request.initial_snapshot:
+                raise CoSActivationError("history repair source or snapshot differs")
+            members = {
+                row["member_id"]: row["role"]
+                for row in _json(self.config_dir / "member-mapping.json")["members"]
+            }
+            if members.get(request.owner_member_id) != "principal":
+                raise CoSActivationError(
+                    "history repair requires its exact authorizing principal"
+                )
+            self._require_repair_observation()
+            before = self.services.runtime_diagnostics() or {}
+            if (
+                before.get("ready") is not True
+                or before.get("observation_active") is not True
+            ):
+                raise CoSActivationError(
+                    "history repair requires healthy observation containment"
+                )
+            original = _private_bytes(self.config_dir / "deployment-readiness.json")
+            repaired = self._derive_history_repair(request, original)
+            asyncio.run(self._repair_interval_effects(repaired))
+            policy = asyncio.run(self._policy())
+            journal = {
+                "contract": "cos-channel-operation-journal-v1",
+                "operation": "repair_recovery_history",
+                "activation_id": uuid.uuid4().hex,
+                "release_commit": commit,
+                "controller_commit": controller_commit,
+                "operator_principal_id": request.operator_principal_id,
+                "owner_member_id": request.owner_member_id,
+                "owner_authorization_sha256": request.owner_authorization_sha256,
+                "request": request.model_dump(mode="json"),
+                "initial_snapshot": request.initial_snapshot,
+                "initial_policy": {
+                    "event_id": policy["event_id"],
+                    "revision": policy["revision"],
+                },
+                "initial_readiness": base64.b64encode(original).decode(),
+                "repaired_readiness": base64.b64encode(_payload(repaired)).decode(),
+                "repaired_readiness_sha256": _sha(_payload(repaired)),
+                "diagnostic_provider_calls_before": self._provider_calls(before),
+            }
+            self._write_journal(journal, "prepared")
+            return self._complete_recovery_history_repair(journal, release=release)
+
+    def _verify_history_backup(self, journal: dict[str, Any]) -> None:
+        backup, rehearsal = journal["backup"], journal["rehearsal"]
+        path = Path(backup["path"])
+        if (
+            path.parent != self.paths.backup_dir
+            or not path.name.startswith(
+                f"cos-history-repair-{journal['activation_id']}-"
+            )
+            or path.suffix != ".ambackup"
+            or backup.get("encrypted") is not True
+            or rehearsal.get("status") != "healthy"
+            or (rehearsal.get("artifact") or {}).get("authenticated") is not True
+            or (rehearsal.get("candidate") or {}).get("commit")
+            != journal["controller_commit"]
+            or rehearsal.get("deployment_binding") != journal["initial_snapshot"]
+            or _sha256_private_regular_file(path, maximum_size=_MAX_BACKUP_BYTES)
+            != rehearsal["artifact"].get("sha256")
+        ):
+            raise CoSActivationError("history repair backup or restore binding differs")
+
+    def _complete_recovery_history_repair(
+        self, journal: dict[str, Any], *, release: Path
+    ) -> dict[str, Any]:
+        """Resume the same exact repair; a failure retains observation and its hold."""
+        try:
+            self.services.stop()
+            request = RecoveryHistoryRepairRequest.model_validate(journal["request"])
+            selected = self._observation_selection()
+            if selected != (
+                request.expected_release_commit,
+                release,
+                request.expected_controller_commit,
+            ):
+                raise CoSActivationError("history repair source or selection changed")
+            if any(
+                journal.get(key) != expected
+                for key, expected in {
+                    "operation": "repair_recovery_history",
+                    "release_commit": request.expected_release_commit,
+                    "controller_commit": request.expected_controller_commit,
+                    "owner_member_id": request.owner_member_id,
+                    "operator_principal_id": request.operator_principal_id,
+                    "owner_authorization_sha256": request.owner_authorization_sha256,
+                    "initial_snapshot": request.initial_snapshot,
+                }.items()
+            ):
+                raise CoSActivationError("history repair journal binding differs")
+            self._require_repair_observation()
+            if (
+                self._bound_snapshot(request.expected_release_commit)
+                != request.initial_snapshot
+            ):
+                raise CoSActivationError("history repair configuration changed")
+            policy = asyncio.run(self._policy())
+            if {
+                "event_id": policy["event_id"],
+                "revision": policy["revision"],
+            } != journal["initial_policy"]:
+                raise CoSActivationError("history repair recipient policy changed")
+            original = base64.b64decode(journal["initial_readiness"], validate=True)
+            repaired = self._derive_history_repair(request, original)
+            proposed = _payload(repaired)
+            if (
+                proposed
+                != base64.b64decode(journal["repaired_readiness"], validate=True)
+                or _sha(proposed) != journal["repaired_readiness_sha256"]
+            ):
+                raise CoSActivationError("history repair immutable plan differs")
+            path = self.config_dir / "deployment-readiness.json"
+            if _private_bytes(path) not in (original, proposed):
+                raise CoSActivationError("history repair readiness changed")
+            asyncio.run(self._repair_interval_effects(repaired))
+            effects = asyncio.run(self._effect_count())
+            if "prior_provider_calls" not in journal:
+                if effects != journal["diagnostic_provider_calls_before"]:
+                    raise CoSActivationError(
+                        "history repair found an unsettled provider effect"
+                    )
+                journal["prior_provider_calls"] = effects
+                self._write_journal(journal, "quiesced")
+            if effects != journal["prior_provider_calls"]:
+                raise CoSActivationError("history repair provider-effect count changed")
+            if "backup" not in journal:
+                backup = self.backups.create(
+                    self.paths.backup_dir
+                    / f"cos-history-repair-{journal['activation_id']}-{uuid.uuid4().hex}.ambackup"
+                )
+                rehearsal = self.backups.rehearse(
+                    Path(backup["path"]), candidate=self.repository
+                )
+                if (
+                    backup.get("encrypted") is not True
+                    or rehearsal.get("status") != "healthy"
+                    or (rehearsal.get("artifact") or {}).get("authenticated")
+                    is not True
+                ):
+                    raise CoSActivationError(
+                        "history repair encrypted backup restore proof failed"
+                    )
+                journal.update(backup=backup, rehearsal=rehearsal)
+                self._verify_history_backup(journal)
+                self._write_journal(journal, "backup_verified")
+            self._verify_history_backup(journal)
+            # Revalidate after the lengthy backup/rehearsal. All earlier files,
+            # facts and provider configuration remain untouched by this repair.
+            if (
+                self._observation_selection() != selected
+                or self._bound_snapshot(request.expected_release_commit)
+                != request.initial_snapshot
+                or _private_bytes(path) not in (original, proposed)
+                or _payload(self._derive_history_repair(request, original)) != proposed
+                or asyncio.run(self._effect_count()) != effects
+                or asyncio.run(self._policy()).get("event_id") != policy["event_id"]
+            ):
+                raise CoSActivationError(
+                    "history repair evidence changed during backup verification"
+                )
+            self._require_repair_observation()
+            self._write_journal(journal, "repairing_history")
+            if _private_bytes(path) != proposed:
+                self._refresh_binding(repaired, request.expected_release_commit)
+            if _private_bytes(path) != proposed:
+                raise CoSActivationError(
+                    "history repair changed more than its exact window plan"
+                )
+            self._write_journal(journal, "verifying")
+            self.services.start()
+            journal["doctor"] = self._settle(release)
+            after = self.services.runtime_diagnostics() or {}
+            if (
+                after.get("ready") is not True
+                or after.get("observation_active") is not True
+                or self._provider_calls(after) != effects
+                or asyncio.run(self._effect_count()) != effects
+                or self._bound_snapshot(request.expected_release_commit)
+                != request.initial_snapshot
+                or asyncio.run(self._policy()).get("event_id") != policy["event_id"]
+                or self._observation_selection() != selected
+                or _private_bytes(path) != proposed
+                or _payload(self._derive_history_repair(request, original)) != proposed
+            ):
+                raise CoSActivationError(
+                    "history repair did not settle without drift or effects"
+                )
+            asyncio.run(self._repair_interval_effects(repaired))
+            self._require_repair_observation()
+            history = self.directory / "history" / f"{journal['activation_id']}.json"
+            if history.exists():
+                prior = _json(history)
+                if prior.get("phase") != "committed" or any(
+                    prior.get(key) != value
+                    for key, value in journal.items()
+                    if key not in {"phase", "doctor"}
+                ):
+                    raise CoSActivationError("history repair archive differs")
+                self._finish(prior, "committed")
+            else:
+                self._finish(journal, "committed")
+            return {
+                "status": "recovery_history_repaired",
+                "operation_id": journal["activation_id"],
+                "release_commit": request.expected_release_commit,
+                "observation_active": True,
+                "provider_effects": 0,
+                "retained_events_and_journals_unchanged": True,
+            }
+        except BaseException:
+            self.services.stop()
+            # The fresh journal continues to hold channel authority. Recovery
+            # rechecks the same exact input/output instead of guessing or editing
+            # the malformed historical evidence a second time.
+            raise
 
     def enter_observation(
         self,
@@ -985,6 +1324,7 @@ class CoSChannelActivator:
         manager = ObservationManager(writer, self.config_dir / "runtime.yaml")
         now = (
             journal.get("observation_started_at")
+            or journal.get("recovery_window_plan", {}).get("started_at")
             or datetime.now(timezone.utc).isoformat()
         )
         try:
@@ -996,7 +1336,9 @@ class CoSChannelActivator:
                         "prior_activation_id", journal["activation_id"]
                     ),
                     "operator_principal_id": journal["operator_principal_id"],
-                    "reason": deactivate_reason,
+                    "reason": journal.get("recovery_window_plan", {}).get(
+                        "reason", deactivate_reason
+                    ),
                     "observation_active": True,
                 }
             )
@@ -1023,7 +1365,11 @@ class CoSChannelActivator:
                 idempotency_key=(
                     f"cos-operation:{journal['activation_id']}:observation"
                     if journal.get("operation") == "enter_observation"
-                    else None
+                    else (
+                        f"cos-operation:{journal['activation_id']}:recovery"
+                        if activation is None and "recovery_window_plan" in journal
+                        else None
+                    )
                 ),
                 payload=payload,
             )
@@ -1037,10 +1383,17 @@ class CoSChannelActivator:
                 reason = (
                     f"CoS deployment observation:{journal['activation_id']}"
                     if journal.get("operation") == "enter_observation"
-                    else "CoS operation recovery"
+                    else (
+                        f"CoS operation recovery:{journal['activation_id']}"
+                        if "recovery_window_plan" in journal
+                        else "CoS operation recovery"
+                    )
                 )
                 already_enabled = False
-                if journal.get("operation") == "enter_observation":
+                if (
+                    journal.get("operation") == "enter_observation"
+                    or "recovery_window_plan" in journal
+                ):
                     async for previous in log.read_since(
                         None, types=["observation.enabled"]
                     ):
@@ -1433,12 +1786,56 @@ class CoSChannelActivator:
         self, journal: dict[str, Any], *, release: Path, reason: str
     ) -> dict[str, Any]:
         self.services.stop()
-        prior_window = (
-            _json(self.config_dir / "deployment-readiness.json").get(
-                "provider_effect_window"
+        current_readiness = _json(self.config_dir / "deployment-readiness.json")
+        if "recovery_window_plan" not in journal:
+            # Record the complete observed history BEFORE restoring controls.
+            # Retry must reuse this boundary, including after failed settlement.
+            before = provider_effect_window_evidence(
+                current_readiness, now=datetime.now(timezone.utc)
             )
-            or {}
+            after = copy.deepcopy(before)
+            started_at = datetime.now(timezone.utc).isoformat()
+            if journal.get("enabled_live"):
+                prior = copy.deepcopy(before["provider_effect_window"])
+                prior.setdefault("ended_at", started_at)
+                after["prior_provider_effect_windows"].append(prior)
+                after["provider_effect_window"] = {
+                    "started_at": started_at,
+                    "reason": "cos_operation_recovery",
+                }
+                provider_effect_window_evidence(after, now=datetime.now(timezone.utc))
+            journal["recovery_window_plan"] = {
+                "contract": "cos-recovery-window-plan-v1",
+                "started_at": started_at,
+                "reason": reason,
+                "before": before,
+                "after": after,
+            }
+        plan = journal["recovery_window_plan"]
+        if (
+            plan.get("contract") != "cos-recovery-window-plan-v1"
+            or plan.get("reason") not in {"operation_failed", "interrupted_operation"}
+            or aware_time(plan.get("started_at")) is None
+            or window_vector(current_readiness)
+            not in (plan.get("before"), plan.get("after"))
+        ):
+            raise CoSActivationError("recovery window plan or retained history changed")
+        expected = provider_effect_window_evidence(
+            plan["before"], now=datetime.now(timezone.utc)
         )
+        if journal.get("enabled_live"):
+            previous = copy.deepcopy(expected["provider_effect_window"])
+            previous.setdefault("ended_at", plan["started_at"])
+            expected["prior_provider_effect_windows"].append(previous)
+            expected["provider_effect_window"] = {
+                "started_at": plan["started_at"],
+                "reason": "cos_operation_recovery",
+            }
+        if expected != plan["after"]:
+            raise CoSActivationError(
+                "recovery window plan is not the exact retained continuation"
+            )
+        provider_effect_window_evidence(plan["after"], now=datetime.now(timezone.utc))
         self._write_journal(journal, "recovering")
         for name, encoded in journal["initial_files"].items():
             if name not in {
@@ -1451,6 +1848,10 @@ class CoSChannelActivator:
                 raise CoSActivationError(
                     "journal contains an unexpected control coordinate"
                 )
+            # Never transiently replace the complete retained window vector
+            # with the initial snapshot: a crash there would lose its proof.
+            if name == "deployment-readiness.json":
+                continue
             path = self.config_dir / name
             if encoded is None:
                 path.unlink(missing_ok=True)
@@ -1484,18 +1885,23 @@ class CoSChannelActivator:
         observation.update(active=True, trusted=False)
         observation.pop("cos_activation_id", None)
         atomic_write(self.config_dir / "observation.json", _payload(observation))
-        readiness = _json(self.config_dir / "deployment-readiness.json")
-        if journal.get("enabled_live"):
-            prior = copy.deepcopy(prior_window)
-            readiness.setdefault("prior_provider_effect_windows", []).append(prior)
-            readiness["provider_effect_window"] = {
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "reason": "cos_operation_recovery",
-            }
+        readiness = initial_readiness(journal)
+        readiness.update(copy.deepcopy(plan["after"]))
         self._refresh_binding(readiness, journal["release_commit"])
         self.services.start()
         journal["recovery_doctor"] = self._settle(release)
-        self._finish(journal, "recovered")
+        history = self.directory / "history" / f"{journal['activation_id']}.json"
+        if history.exists():
+            completed = _json(history)
+            if completed.get("phase") != "recovered" or any(
+                completed.get(key) != value
+                for key, value in journal.items()
+                if key not in {"phase", "recovery_doctor"}
+            ):
+                raise CoSActivationError("recovery operation history does not match")
+            self._finish(completed, "recovered")
+        else:
+            self._finish(journal, "recovered")
         return {
             "status": "recovered",
             "observation_active": True,
@@ -1508,6 +1914,9 @@ class CoSChannelActivator:
         )
         with updater._operation_lock():
             journal = _json(self.journal_path)
+            if journal.get("operation") == "repair_recovery_history":
+                _commit, release, _controller_commit = self._observation_selection()
+                return self._complete_recovery_history_repair(journal, release=release)
             if journal.get("operation") == "enter_observation":
                 commit, release, controller_commit = self._observation_selection()
                 if (
@@ -1534,11 +1943,19 @@ def main() -> None:
     parser.add_argument("--request", type=Path)
     parser.add_argument("--enable-live", action="store_true")
     parser.add_argument("--enter-observation", action="store_true")
+    parser.add_argument("--repair-recovery-history", action="store_true")
     parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument("--recover", action="store_true")
     arguments = parser.parse_args()
     if arguments.recover == bool(arguments.request):
         parser.error("choose one private request or interrupted-operation recovery")
+    if arguments.repair_recovery_history and (
+        arguments.enable_live
+        or arguments.recover
+        or arguments.enter_observation
+        or arguments.submission_repair_manifest is not None
+    ):
+        parser.error("history repair is a separate private-request operation")
     if arguments.enter_observation and (arguments.enable_live or arguments.recover):
         parser.error("enter-observation is a separate private-request operation")
     if (
@@ -1554,6 +1971,10 @@ def main() -> None:
     )
     if arguments.recover:
         result = controller.recover()
+    elif arguments.repair_recovery_history:
+        result = controller.repair_recovery_history(
+            RecoveryHistoryRepairRequest.model_validate(_json(arguments.request))
+        )
     elif arguments.enter_observation:
         request = EnterObservationRequest.model_validate(_json(arguments.request))
         result = controller.enter_observation(

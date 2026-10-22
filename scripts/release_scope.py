@@ -67,12 +67,30 @@ GOOGLE_TEST_PATHS = frozenset(
         "tests/unit/test_cos_channel_operation.py",
     }
 )
+COS_RECOVERY_CONTROLLER = "bootstrap/cos_channel_activation.py"
+COS_RECOVERY_HISTORY = "bootstrap/cos_recovery_history.py"
+COS_RECOVERY_COMPONENT_PATHS = frozenset(
+    {
+        COS_RECOVERY_CONTROLLER,
+        COS_RECOVERY_HISTORY,
+        "bootstrap/member_bridge_component.py",
+    }
+)
+COS_RECOVERY_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/bootstrap/test_cos_recovery_history.py",
+        "tests/unit/bootstrap/test_cos_recovery_history_operation.py",
+        "tests/unit/bootstrap/test_member_bridge_component.py",
+    }
+)
 SCOPES = frozenset(
     {
         "documentation",
         "bridge-helper",
         "bridge-enrollment",
         "google-connections",
+        "cos-recovery-history",
         "system-wide",
     }
 )
@@ -125,6 +143,7 @@ def choose_scope(
     path_modes: dict[str, set[str]],
     enrollment_interfaces_equal: bool = False,
     google_interfaces_equal: bool = False,
+    cos_recovery_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -132,6 +151,23 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    recovery_allowed = (
+        COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    )
+    if (
+        cos_recovery_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in recovery_allowed or _prose(path))
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(
+            path in {COS_RECOVERY_CONTROLLER, COS_RECOVERY_HISTORY}
+            for _, path in changes
+        )
+    ):
+        return "cos-recovery-history"
     google_allowed = (
         GOOGLE_SHARED_PATHS
         | GOOGLE_TEST_PATHS
@@ -190,6 +226,23 @@ def _enrollment_interface_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
         and (
             is_runtime_input(entry.path, mode=entry.mode)
             or (entry.path not in allowed and not _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # Only this closed controller/history/compatibility edit set may differ.
+    # Every other tracked byte and mode, including tests and unknown inputs,
+    # stays frozen across the protected base, head, and exact-parent test merge.
+    allowed = COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
         )
     )
     return hashlib.sha256(
@@ -280,9 +333,18 @@ def select_scope(
     path_modes: dict[str, set[str]] = {}
     enrollment_fingerprints: dict[str, str] = {}
     enrollment_route_present: dict[str, bool] = {}
+    recovery_fingerprints: dict[str, str] = {}
+    recovery_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
         enrollment_fingerprints[revision] = _enrollment_interface_fingerprint(entries)
+        recovery_fingerprints[revision] = _cos_recovery_dependency_fingerprint(entries)
+        required_recovery_paths = COS_RECOVERY_COMPONENT_PATHS - (
+            {COS_RECOVERY_HISTORY} if revision == base else set()
+        )
+        recovery_sources_present[revision] = required_recovery_paths <= {
+            entry.path for entry in entries if entry.mode == "100644"
+        }
         enrollment_route_present[revision] = any(
             entry.path == ENROLLMENT_INGEST_PATH and entry.mode == "100644"
             for entry in entries
@@ -307,6 +369,10 @@ def select_scope(
             }
         )
         == 1,
+        cos_recovery_interfaces_equal=(
+            all(recovery_sources_present.values())
+            and len(set(recovery_fingerprints.values())) == 1
+        ),
     )
     return {
         "contract": CONTRACT,
@@ -317,6 +383,7 @@ def select_scope(
         "checkout_sha": checkout,
         "interface_sha256": checkout_fingerprint,
         "enrollment_interface_sha256": enrollment_fingerprints[checkout],
+        "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -329,6 +396,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-helper": "bridge-helper-validation",
         "bridge-enrollment": "bridge-development",
         "google-connections": "google-connections-validation",
+        "cos-recovery-history": "cos-recovery-history-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",

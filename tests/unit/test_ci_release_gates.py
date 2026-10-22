@@ -16,6 +16,10 @@ import yaml
 
 from scripts.release_scope import (
     CONTRACT,
+    COS_RECOVERY_COMPONENT_PATHS,
+    COS_RECOVERY_CONTROLLER,
+    COS_RECOVERY_HISTORY,
+    COS_RECOVERY_TEST_PATHS,
     ENROLLMENT_INGEST_PATH,
     GOOGLE_MODULE,
     GOOGLE_SHARED_PATHS,
@@ -98,6 +102,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "bridge-helper",
         "bridge-enrollment",
         "google-connections",
+        "cos-recovery-history",
         "system-wide",
     ],
 )
@@ -128,7 +133,9 @@ def test_scope_gate_requires_exact_corresponding_success(
 
 
 @pytest.mark.parametrize("defect", ["draft", "scope", "interface", "contract"])
-@pytest.mark.parametrize("scope", ["bridge-helper", "bridge-enrollment"])
+@pytest.mark.parametrize(
+    "scope", ["bridge-helper", "bridge-enrollment", "cos-recovery-history"]
+)
 def test_gate_refuses_development_or_reinterpreted_evidence(
     defect: str, scope: str
 ) -> None:
@@ -584,6 +591,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "bridge-helper-validation",
         "bridge-development",
         "google-connections-validation",
+        "cos-recovery-history-validation",
         system,
     }
     if platform == "macos":
@@ -1066,3 +1074,205 @@ def test_google_release_requires_production_packaged_privacy_recovery_and_types(
     assert "bridge-installed-runtime" not in required_workers(
         "google-connections", "macos"
     )
+
+
+def _recovery_candidate(repository: Path) -> tuple[str, str]:
+    _commit(repository, COS_RECOVERY_CONTROLLER, "RETAINED_CONTROLLER = True\n")
+    base = _commit(
+        repository, "bootstrap/member_bridge_component.py", "RETAINED_CONTRACT = True\n"
+    )
+    _commit(repository, COS_RECOVERY_CONTROLLER, "RECOVERY_CONTROLLER = True\n")
+    return base, _commit(repository, COS_RECOVERY_HISTORY, "PRESERVE_HISTORY = True\n")
+
+
+def test_recovery_scope_binds_new_module_and_closed_edit_set_to_immutable_sources(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, _ = _recovery_candidate(path)
+    for allowed in (
+        "bootstrap/member_bridge_component.py",
+        *sorted(COS_RECOVERY_TEST_PATHS),
+        "scripts/release_scope.py",
+        PROSE,
+    ):
+        head = _commit(path, allowed, "# Reviewed recovery contract\n")
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-recovery-history"
+    assert len(proof["cos_recovery_dependency_sha256"]) == 64
+    assert {item["path"] for item in proof["changes"]} >= COS_RECOVERY_COMPONENT_PATHS
+    for platform in ("linux", "macos"):
+        assert required_workers(proof["scope"], platform) == (
+            "release-scope",
+            "cos-recovery-history-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "adminme/runtime/application.py",
+        "adminme/events/log.py",
+        "adminme/events/schemas/cos_channels.py",
+        "bootstrap/candidate_readiness.py",
+        "bootstrap/backup_restore.py",
+        "bootstrap/upgrade.py",
+        "bootstrap/source_identity.py",
+        "adminme/locks.py",
+        "poetry.lock",
+        "new-runtime.py",
+        "tests/unreviewed.py",
+    ],
+)
+def test_recovery_scope_never_exempts_shared_or_unknown_dependencies(
+    repository: tuple[Path, str], other: str
+) -> None:
+    path, _ = repository
+    _commit(path, other, "RETAINED = True\n")
+    base, _ = _recovery_candidate(path)
+    head = _commit(path, other, "CHANGED = True\n")
+    event = _event(base, head)
+    event.update(
+        cos_recovery_interfaces_equal=True, changed_paths=[COS_RECOVERY_HISTORY]
+    )
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("path", sorted(COS_RECOVERY_COMPONENT_PATHS))
+@pytest.mark.parametrize("defect", ["removed", "executable"])
+def test_recovery_component_requires_all_regular_sources(
+    repository: tuple[Path, str], path: str, defect: str
+) -> None:
+    repository_path, _ = repository
+    base, _ = _recovery_candidate(repository_path)
+    if defect == "removed":
+        _git(repository_path, "rm", "--", path)
+    else:
+        (repository_path / path).chmod(0o755)
+        _git(repository_path, "add", "--", path)
+    _git(repository_path, "commit", "-m", "Unsafe recovery fixture")
+    head = _git(repository_path, "rev-parse", "HEAD")
+    assert (
+        select_scope(repository_path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "drift", ["none", "runtime", "mode", "unknown-test", "missing-history"]
+)
+def test_recovery_scope_checks_exact_test_merge_tree(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    base, head = _recovery_candidate(path)
+    if drift == "runtime":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY_CHANGE = True\n")
+    elif drift == "mode":
+        (path / "adminme/runtime.py").chmod(0o755)
+    elif drift == "unknown-test":
+        target = path / "tests/merge_only.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("UNREVIEWED = True\n")
+    elif drift == "missing-history":
+        (path / COS_RECOVERY_HISTORY).unlink()
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent recovery merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == (
+        "cos-recovery-history" if drift == "none" else "system-wide"
+    )
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_recovery_worker_requires_affected_persistence_and_compatibility_contracts(
+    filename: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["cos-recovery-history-validation"]
+    assert job["if"] == (
+        "${{ needs.release-scope.outputs.scope == 'cos-recovery-history' }}"
+    )
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    for required in (
+        "test_cos_recovery_history.py",
+        "test_cos_recovery_history_operation.py",
+        "test_cos_channel_activation.py",
+        "test_cos_live_maintenance.py",
+        "test_candidate_readiness.py",
+        "test_htr10_export.py",
+        "test_member_bridge_component.py",
+        "test_streaming_backup_round_trip_and_wrong_key_cleanup",
+        "test_interrupted_activation_restores_exact_predecessor_bytes",
+        "test_transactional_activation_orders_fresh_rehearsal_before_selectors",
+        "test_production_upgrade_controller_must_be_the_reviewed_candidate",
+        "test_ci_release_gates.py",
+        "--runxfail",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+    ):
+        assert required in commands
+    assert '--junitxml="$RUNNER_TEMP/cos-recovery-history.xml"' in commands
+    assert "test_member_google_connections.py" not in commands
+    assert "test:gate7" not in commands
+    assert "scripts/acceptance/release-candidate.sh" not in commands
+    assert "ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME" not in commands
+    assert commands.count("-k ") == 1
+    assert "not test_sealed_component_reuses_exact_old_runtime" in commands
+    assert "and not test_sealed_mixed_release_keeps_exact_paired_archive" in commands
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+@pytest.mark.parametrize(
+    "defect",
+    ["none", "missing", "empty", "missing-count", "skipped", "failure", "wrong-count"],
+)
+def test_actual_recovery_junit_gate_rejects_missing_or_partial_evidence(
+    filename: str, defect: str, tmp_path: Path
+) -> None:
+    steps = _workflow(filename)["jobs"]["cos-recovery-history-validation"]["steps"]
+    checker = next(
+        step
+        for step in steps
+        if step.get("name") == "Require complete recovery history evidence"
+    )
+    assert "if" not in checker
+    script = checker["run"].split("<<'PY_CHECK'\n", 1)[1].rsplit("\nPY_CHECK", 1)[0]
+    report = tmp_path / "recovery.xml"
+    payload = '<testsuites><testsuite tests="1" skipped="0" failures="0" errors="0"><testcase name="fixture"/></testsuite></testsuites>'
+    if defect == "empty":
+        payload = "<testsuites/>"
+    elif defect == "missing-count":
+        payload = payload.replace(' errors="0"', "")
+    elif defect in {"skipped", "failure"}:
+        payload = payload.replace(
+            '<testcase name="fixture"/>',
+            f'<testcase name="fixture"><{defect}/></testcase>',
+        )
+    elif defect == "wrong-count":
+        payload = payload.replace('tests="1"', 'tests="2"')
+    if defect != "missing":
+        report.write_text(payload)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(report)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) is (defect == "none")
