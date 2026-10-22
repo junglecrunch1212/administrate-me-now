@@ -6,7 +6,8 @@ export async function auditAppleActionHandoffs({ page, baseUrl, record }) {
   const native = async (route) => { await route.fulfill({ status: 200, contentType: "application/json", body: '{"items":[]}' }); };
   const reminders = async (route) => {
     const body = route.request().postDataJSON(); reminderRequests.push(body);
-    await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ accepted: true, state: "awaiting_openclaw_approval", domain_approval_event_id: `synthetic-domain-${body.provider}` }) });
+    const approvalId = body.item_external_id === "synthetic-today-reminder" ? "synthetic-domain-today-apple-reminder" : `synthetic-domain-${body.provider}`;
+    await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ accepted: true, state: "awaiting_openclaw_approval", domain_approval_event_id: approvalId }) });
   };
   const triage = async (route) => {
     triageRequests.push(route.request().postDataJSON());
@@ -33,6 +34,12 @@ export async function auditAppleActionHandoffs({ page, baseUrl, record }) {
   await continueOnce("apple_reminders", "synthetic-domain-apple_reminders");
   await page.evaluate(() => runReminderCommand({ provider: "google_tasks", provider_account_id: "synthetic-google-account", list_external_id: "synthetic-list", item_external_id: "synthetic-task", last_event_id: "synthetic-task-revision", provider_revision: "synthetic-native-revision" }, "complete_task"));
   record("Google task approval flow gains no Apple execution control", reminderRequests.length === 2 && await button.count() === 0 && chats.length === 1);
+  await page.goto(`${baseUrl}/member/today`, { waitUntil: "networkidle" });
+  await page.evaluate(() => executeTodayAction({ kind: "list_item", id: "synthetic-today-item", provider: "apple_reminders", provider_account_id: "synthetic-reminder-account", list_external_id: "synthetic-list", item_external_id: "synthetic-today-reminder", last_event_id: "synthetic-today-revision", provider_revision: "synthetic-native-revision" }, "complete_external", document.querySelector("#surface")));
+  record("Today Apple Done retains its exact reminder command and waits for execution handoff after reload", reminderRequests.length === 3 && reminderRequests.at(-1).operation === "complete_reminder" && reminderRequests.at(-1).item_external_id === "synthetic-today-reminder" && reminderRequests.at(-1).expected_last_event_id === "synthetic-today-revision" && await button.count() === 1 && chats.length === 1);
+  await continueOnce("apple_reminders", "synthetic-domain-today-apple-reminder");
+  await page.evaluate(() => executeTodayAction({ kind: "list_item", id: "synthetic-today-task", provider: "google_tasks", provider_account_id: "synthetic-google-account", list_external_id: "synthetic-list", item_external_id: "synthetic-today-task", last_event_id: "synthetic-task-revision", provider_revision: "synthetic-native-revision" }, "complete_external", document.querySelector("#surface")));
+  record("Today Google Done preserves its task command without an Apple execution handoff", reminderRequests.length === 4 && reminderRequests.at(-1).provider === "google_tasks" && reminderRequests.at(-1).operation === "complete_task" && await button.count() === 0 && chats.length === 2);
   for (const provider of ["apple_calendar", "apple_reminders"]) {
     await page.goto(`${baseUrl}/member/triage`, { waitUntil: "networkidle" });
     const proposalId = `apple-handoff-${provider}`;
@@ -41,7 +48,7 @@ export async function auditAppleActionHandoffs({ page, baseUrl, record }) {
     await continueOnce(provider, `synthetic-domain-${proposalId}`);
   }
   await page.evaluate(() => { const banner = document.querySelector("#state-banner"); banner.replaceChildren(); appendAppleExecutionHandoff(banner, "google_calendar", "synthetic-google-approval"); });
-  record("Calendar execution helper refuses non-Apple provider receipts", await button.count() === 0 && chats.length === 3);
+  record("Calendar execution helper refuses non-Apple provider receipts", await button.count() === 0 && chats.length === 4);
   await page.unroute("**/api/member/v1/chat/stream", chat); await page.unroute("**/api/member/v1/chat/reply-approvals", native);
   await page.unroute("**/api/member/v1/reminders/commands", reminders); await page.unroute("**/api/member/v1/triage/apple-handoff-*/approve", triage);
 }

@@ -43,6 +43,34 @@ def prepare_apple_sources(
     # pre-existing calendar event, is the prerequisite for its first write.
     for capability in ("apple_reminders", "apple_notes"):
         envelope = _observation(runtime, capability, f"write-fixture-{capability}")
+        if capability == "apple_reminders":
+            # EventKit emits the selected list as well as its items. Creating a
+            # reminder requires this retained, member-owned destination record.
+            item = envelope["payload"]
+            observed_list = {
+                **envelope,
+                "type": "list.created",
+                "schema_version": 1,
+                "idempotency_key": "write-fixture-reminder-list",
+                "payload": {
+                    key: item[key]
+                    for key in (
+                        "member_id",
+                        "provider",
+                        "provider_account_id",
+                        "list_external_id",
+                        "list_name",
+                    )
+                },
+            }
+            observed_list["payload"]["changed_at"] = item["last_modified_at"]
+            retained = client.post(
+                "/api/bridge/ingest", headers=headers, json=observed_list
+            )
+            assert retained.status_code == 202, retained.text
+            client.portal.call(
+                runtime.wait_for_projection, "lists", retained.json()["event_id"]
+            )
         if capability == "apple_notes":
             envelope["payload"].update(
                 account_external_id="fixture-notes-account",

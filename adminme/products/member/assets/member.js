@@ -1685,6 +1685,7 @@ async function executeTodayAction(item, action, container) {
   }
   const buttons = container.querySelectorAll("button");
   buttons.forEach((button) => { button.disabled = true; });
+  let appleApprovalEventId = null;
   try {
     if (["task", "commitment", "recurrence"].includes(item.kind) && action === "complete") {
       setBanner("Recording that finish and rebuilding the rest of today…");
@@ -1731,7 +1732,7 @@ async function executeTodayAction(item, action, container) {
       return;
     } else if (item.kind === "list_item" && action === "complete_external") {
       setBanner("Requesting completion through the reminder provider…");
-      await api("/api/member/v1/reminders/commands", {
+      const result = await api("/api/member/v1/reminders/commands", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
         body: JSON.stringify({
@@ -1746,9 +1747,11 @@ async function executeTodayAction(item, action, container) {
           request_id: crypto.randomUUID(),
         }),
       });
+      if (item.provider === "apple_reminders" && result.state === "awaiting_openclaw_approval") appleApprovalEventId = result.domain_approval_event_id;
       setBanner("Completion saved for approval. The provider is unchanged until OpenClaw confirms this exact action.");
     }
     await reloadActiveSurface();
+    if (appleApprovalEventId) appendAppleExecutionHandoff($("#state-banner"), item.provider, appleApprovalEventId);
   } catch (error) {
     setBanner(`${error.message} Nothing was implied as complete.`);
     buttons.forEach((button) => { button.disabled = false; });
