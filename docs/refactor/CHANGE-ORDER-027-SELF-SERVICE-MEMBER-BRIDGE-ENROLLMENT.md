@@ -210,6 +210,11 @@ sources at `d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21`. Its four added central
 files must be absent from the retained archive. Partial mixtures, unknown bytes,
 mode drift and any other dependency or edge-contract change fail closed. This
 does not establish a generic central-code exclusion or change release scope.
+A separate `hosted-gateway-startup-probe-456-v1` exact regular-file hash pair
+covers the hosted approval probe's pinned disabled-heartbeat startup check.
+It is recorded independently of the unchanged PR457 group, remains a runtime
+input for default compatibility and CI, and is never copied over the retained
+archive. Its corrected bytes execute only in the isolated hosted probe.
 The exact coordinator
 pair changes only the body of `BridgeEnrollmentCoordinator.configure_capability`;
 the edge-used definitions remain unchanged. Unknown shared-module bytes fail

@@ -39,6 +39,17 @@ PERMISSION_RECOVERY_RETAINED_MODULE_SHA256 = (
 PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256 = (
     "a6aa140fea3b3bdf63437eb818f1f9974b9cdd5f23fc09cb3352ee6b467a21e9"
 )
+# Independent hosted-probe correction; this is not part of the PR457 overlay.
+PERMISSION_RECOVERY_GATEWAY_PROBE_PATH = (
+    "openclaw/administrateme/scripts/check-cos-approval-gateway.mjs"
+)
+PERMISSION_RECOVERY_GATEWAY_PROBE_RULE = "hosted-gateway-startup-probe-456-v1"
+PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256 = (
+    "d17351be538d5c8dd44b5fdbdf9b54f505da70018d56257daf60e633b832b901"
+)
+PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256 = (
+    "76ff3412dcf925d662377c5850f89f367f32392e355780f87f40c4f517766107"
+)
 # Closed reviewed central overlay. The retained edge never receives these bytes.
 # Every path/presence/mode/hash must match as one coherent group before reuse.
 PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = "cos-standing-replies-457-v1"
@@ -201,7 +212,7 @@ def _fingerprint(inventory: dict[str, dict[str, str]]) -> str:
 def _retained_edge_inventory(
     inventory: dict[str, dict[str, str]],
     *,
-    reviewed_overlay: dict[str, dict[str, str] | None],
+    reviewed_differences: dict[str, dict[str, str] | None],
 ) -> dict[str, dict[str, str]]:
     selected = {
         path: dict(coordinate)
@@ -222,7 +233,7 @@ def _retained_edge_inventory(
         coordinate["sha256"] = PERMISSION_RECOVERY_RETAINED_MODULE_SHA256
     # This normalization is supplied only after every reviewed pair is checked.
     # Newly central-only files are absent from the exact retained archive.
-    for path, retained in reviewed_overlay.items():
+    for path, retained in reviewed_differences.items():
         if retained is None:
             selected.pop(path, None)
         else:
@@ -252,6 +263,31 @@ def _reviewed_cos_overlay(
             )
         normalization[path] = previous
     return normalization
+
+
+def _reviewed_gateway_probe(
+    candidate: dict[str, dict[str, str]],
+    retained: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str] | None]:
+    """Permit one exact hosted-only probe correction, independently of PR457."""
+
+    path = PERMISSION_RECOVERY_GATEWAY_PROBE_PATH
+    if candidate.get(path) == retained.get(path):
+        return {}
+    previous = {
+        "mode": "100644",
+        "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+    }
+    current = {
+        "mode": "100644",
+        "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+    }
+    if retained.get(path) != previous or candidate.get(path) != current:
+        raise RuntimeError(
+            "retained edge compatibility changes unsupported runtime inputs: "
+            "reviewed hosted Gateway probe changed"
+        )
+    return {path: previous}
 
 
 def runtime_interface_fingerprint(repository: Path, revision: str) -> str:
@@ -307,6 +343,7 @@ def inspect_helper_component(
         central_differences: list[dict[str, object]] = []
         retained_edge_fingerprint: str | None = None
         reviewed_overlay: dict[str, dict[str, str] | None] = {}
+        reviewed_probe: dict[str, dict[str, str] | None] = {}
         if compatibility_contract == PERMISSION_RECOVERY_COMPATIBILITY:
             # This is a mixed central/helper release, never a smaller CI scope.
             # The public runtime fingerprint remains conservative. Only these
@@ -315,6 +352,10 @@ def inspect_helper_component(
             reviewed_overlay = _reviewed_cos_overlay(
                 component_inventory, runtime_inventory
             )
+            reviewed_probe = _reviewed_gateway_probe(
+                component_inventory, runtime_inventory
+            )
+            reviewed_differences = reviewed_overlay | reviewed_probe
             for path in sorted(component_inventory.keys() | runtime_inventory.keys()):
                 candidate = component_inventory.get(path)
                 retained = runtime_inventory.get(path)
@@ -324,13 +365,17 @@ def inspect_helper_component(
                     if entry is not None
                 ):
                     continue
-                if path in reviewed_overlay:
+                if path in reviewed_differences:
                     central_differences.append(
                         {
                             "path": path,
                             "retained": retained,
                             "central_candidate": candidate,
-                            "compatibility_rule": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+                            "compatibility_rule": (
+                                PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT
+                                if path in reviewed_overlay
+                                else PERMISSION_RECOVERY_GATEWAY_PROBE_RULE
+                            ),
                         }
                     )
                     continue
@@ -369,12 +414,12 @@ def inspect_helper_component(
                 central_differences.append(difference)
             retained_edge_fingerprint = _fingerprint(
                 _retained_edge_inventory(
-                    runtime_inventory, reviewed_overlay=reviewed_overlay
+                    runtime_inventory, reviewed_differences=reviewed_differences
                 )
             )
             if retained_edge_fingerprint != _fingerprint(
                 _retained_edge_inventory(
-                    component_inventory, reviewed_overlay=reviewed_overlay
+                    component_inventory, reviewed_differences=reviewed_differences
                 )
             ):
                 raise RuntimeError("retained edge inputs differ")
@@ -461,6 +506,13 @@ def inspect_helper_component(
                     "central_reference_commit": PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
                     "paths": sorted(reviewed_overlay),
                     "complete_group_verified": True,
+                }
+            if reviewed_probe:
+                compatibility["reviewed_hosted_gateway_probe"] = {
+                    "contract": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+                    "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+                    "retained_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+                    "central_candidate_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
                 }
     if reviewed_candidate_commit(repository) != component_commit:
         raise RuntimeError("helper component source changed during inspection")

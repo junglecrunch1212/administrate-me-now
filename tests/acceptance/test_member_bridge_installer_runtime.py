@@ -31,6 +31,10 @@ from bootstrap.member_bridge_component import (
     PERMISSION_RECOVERY_COS_OVERLAY,
     PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
     PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
     PERMISSION_RECOVERY_METHOD_RULE,
     PERMISSION_RECOVERY_PROTOCOL,
     PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
@@ -468,6 +472,32 @@ def test_real_clean_and_interrupted_member_install_preview(
                 "compatibility_rule": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
             }
         )
+    assert (
+        hashlib.sha256(
+            (source / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).read_bytes()
+        ).hexdigest()
+        == PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256
+    )
+    assert (
+        hashlib.sha256(
+            (ROOT / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).read_bytes()
+        ).hexdigest()
+        == PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256
+    )
+    expected_differences.append(
+        {
+            "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+            "retained": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+            },
+            "compatibility_rule": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+        }
+    )
     assert manifest["runtime_compatibility"]["central_differences"] == sorted(
         expected_differences, key=lambda row: str(row["path"])
     )
@@ -477,6 +507,12 @@ def test_real_clean_and_interrupted_member_install_preview(
         "central_reference_commit": PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
         "paths": sorted(PERMISSION_RECOVERY_COS_OVERLAY),
         "complete_group_verified": True,
+    }
+    assert manifest["runtime_compatibility"]["reviewed_hosted_gateway_probe"] == {
+        "contract": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+        "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+        "retained_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+        "central_candidate_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
     }
     assert (
         built.release_archive_sha256

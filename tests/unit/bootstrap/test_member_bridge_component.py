@@ -25,6 +25,10 @@ from bootstrap.member_bridge_component import (
     PERMISSION_RECOVERY_COS_OVERLAY,
     PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
     PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
     PERMISSION_RECOVERY_METHOD_RULE,
     PERMISSION_RECOVERY_PROTOCOL,
     PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
@@ -161,6 +165,184 @@ def _cos_overlay_repository(directory: Path) -> tuple[Path, str, str]:
     retained = _commit(repository)
     _write_cos_overlay(repository, candidate=True)
     return repository, retained, _commit(repository)
+
+
+def _gateway_probe_revisions() -> tuple[bytes, bytes]:
+    retained = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(ROOT),
+            "show",
+            f"{PERMISSION_RECOVERY_COS_RETAINED_COMMIT}:{PERMISSION_RECOVERY_GATEWAY_PROBE_PATH}",
+        ],
+        env=sanitized_git_environment(),
+        capture_output=True,
+        check=True,
+        timeout=30,
+    ).stdout
+    candidate = (ROOT / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).read_bytes()
+    assert (
+        hashlib.sha256(retained).hexdigest()
+        == PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256
+    )
+    assert (
+        hashlib.sha256(candidate).hexdigest()
+        == PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256
+    )
+    return retained, candidate
+
+
+def _gateway_probe_repository(
+    directory: Path, *, with_cos: bool = False
+) -> tuple[Path, str, str]:
+    if with_cos:
+        repository, retained, _ = _cos_overlay_repository(directory)
+        _git(repository, "checkout", "--detach", retained)
+    else:
+        repository, _ = _repository(directory)
+    old, new = _gateway_probe_revisions()
+    target = repository / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(old)
+    retained = _commit(repository)
+    if with_cos:
+        _write_cos_overlay(repository, candidate=True)
+    target.write_bytes(new)
+    return repository, retained, _commit(repository)
+
+
+@pytest.mark.parametrize("with_cos", [False, True])
+def test_exact_hosted_gateway_probe_pair_is_independent_and_retains_old_archive(
+    tmp_path: Path,
+    with_cos: bool,
+) -> None:
+    repository, retained, candidate = _gateway_probe_repository(
+        tmp_path, with_cos=with_cos
+    )
+    assert is_runtime_input(PERMISSION_RECOVERY_GATEWAY_PROBE_PATH)
+    assert PERMISSION_RECOVERY_GATEWAY_PROBE_PATH not in PERMISSION_RECOVERY_COS_OVERLAY
+    assert runtime_interface_fingerprint(
+        repository, retained
+    ) != runtime_interface_fingerprint(repository, candidate)
+    with pytest.raises(RuntimeError, match="changes retained runtime inputs"):
+        inspect_helper_component(repository, candidate, retained)
+    inspected = inspect_helper_component(
+        repository,
+        candidate,
+        retained,
+        compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+    )
+    assert inspected.compatibility["reviewed_hosted_gateway_probe"] == {
+        "contract": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+        "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+        "retained_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+        "central_candidate_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+    }
+    differences = inspected.compatibility["central_differences"]
+    assert isinstance(differences, list)
+    assert [
+        row
+        for row in differences
+        if row["path"] == PERMISSION_RECOVERY_GATEWAY_PROBE_PATH
+    ] == [
+        {
+            "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+            "retained": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+            },
+            "compatibility_rule": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+        }
+    ]
+    assert ("reviewed_central_overlay" in inspected.compatibility) is with_cos
+    assert len(differences) == (24 if with_cos else 1)
+    assert inspected.compatibility["required_central_release_commit"] == candidate
+    assert (
+        inspected.compatibility["required_central_protocol"]
+        == PERMISSION_RECOVERY_PROTOCOL
+    )
+    archive = tmp_path / "exact-retained-probe.tar"
+    _archive(repository, retained, archive)
+    verify_runtime_archive(archive, inspected.runtime_inventory)
+    with tarfile.open(archive) as package:
+        stream = package.extractfile(PERMISSION_RECOVERY_GATEWAY_PROBE_PATH)
+        assert stream is not None
+        assert (
+            hashlib.sha256(stream.read()).hexdigest()
+            == PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256
+        )
+
+
+@pytest.mark.parametrize("side", ["candidate", "retained"])
+@pytest.mark.parametrize("defect", ["bytes", "mode", "missing"])
+def test_hosted_gateway_probe_requires_both_exact_regular_file_coordinates(
+    tmp_path: Path,
+    side: str,
+    defect: str,
+) -> None:
+    repository, retained, _ = _gateway_probe_repository(tmp_path)
+    if side == "retained":
+        _git(repository, "checkout", "--detach", retained)
+    target = repository / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH
+    if defect == "bytes":
+        target.write_bytes(target.read_bytes() + b"\n// unknown\n")
+    elif defect == "mode":
+        target.chmod(0o755)
+    else:
+        target.unlink()
+    candidate = _commit(repository)
+    if side == "retained":
+        retained = candidate
+        target.write_bytes(_gateway_probe_revisions()[1])
+        target.chmod(0o644)
+        candidate = _commit(repository)
+    with pytest.raises(RuntimeError, match="reviewed hosted Gateway probe changed"):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+def test_hosted_gateway_probe_pair_cannot_be_reversed(tmp_path: Path) -> None:
+    repository, _, retained = _gateway_probe_repository(tmp_path)
+    (repository / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).write_bytes(
+        _gateway_probe_revisions()[0]
+    )
+    candidate = _commit(repository)
+    with pytest.raises(RuntimeError, match="reviewed hosted Gateway probe changed"):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+@pytest.mark.parametrize(
+    "path", ["openclaw/administrateme/scripts/unknown-probe.mjs", "bridge/poetry.lock"]
+)
+def test_reviewed_probe_does_not_exempt_nearby_files_or_dependencies(
+    tmp_path: Path, path: str
+) -> None:
+    repository, retained, _ = _gateway_probe_repository(tmp_path)
+    target = repository / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"unreviewed\n")
+    candidate = _commit(repository)
+    with pytest.raises(RuntimeError, match="unsupported runtime inputs"):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
 
 
 def test_complete_reviewed_cos_overlay_preserves_exact_retained_archive(
