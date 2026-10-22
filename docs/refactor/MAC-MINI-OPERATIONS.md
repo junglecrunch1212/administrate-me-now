@@ -788,7 +788,11 @@ Restoring an older release without this contract keeps personal adapters off.
 Validate the change in isolated CI with
 `tests/acceptance/test_member_google_connections.py`, the existing CoS acquisition
 and forwarded-intake scenarios, and the guarded activation/recovery tests. The
-change affects central acquisition, settings, and pipeline composition, so its
-final release uses the protected central runtime checks. Member-device browser
+Google release scope requires the complete focused production, packaged-restart,
+permission/privacy, guarded-recovery and type checks. Its Git-bound selector
+allows only the exact Google integration edits; every other runtime byte and
+mode, including bridge code and dependencies, must remain unchanged. This CI
+scope does not assert compatibility for a retained helper or waive an actual
+deployment prerequisite. Member-device browser
 verification is read-only acceptance after authorized activation, not a place
 to test candidate code.
