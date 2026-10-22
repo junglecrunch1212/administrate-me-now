@@ -739,7 +739,7 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
     assert (
         job["if"]
-        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","system-wide"]\'), needs.release-scope.outputs.scope) }}'
+        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","bridge-runtime","system-wide"]\'), needs.release-scope.outputs.scope) }}'
     )
     assert job["runs-on"] == "macos-26"
     install = next(
@@ -789,7 +789,7 @@ def test_enrollment_worker_requires_complete_affected_contract_and_final_binding
     job = _workflow(filename)["jobs"]["bridge-development"]
     assert (
         job["if"]
-        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
+        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
     )
     assert job["outputs"] == {"validated_sha": "${{ steps.validated.outputs.sha }}"}
     assert job["steps"][-1]["id"] == "validated"
