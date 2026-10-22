@@ -217,9 +217,18 @@ def _cgcolor_hex(value: Any) -> str | None:
     if value is None:
         return None
     try:
-        from Quartz import CGColorGetComponents
+        from Quartz import CGColorGetComponents, CGColorGetNumberOfComponents
 
-        components = list(CGColorGetComponents(value) or [])
+        # PyObjC returns an objc.varlist over a C array, not a sized Python
+        # sequence. Iterating it can read past the allocation and crash the
+        # entire bridge. Keep the color alive and read only its declared size.
+        count = CGColorGetNumberOfComponents(value)
+        if count not in (2, 4):
+            return None
+        native_components = CGColorGetComponents(value)
+        if native_components is None:
+            return None
+        components = [native_components[index] for index in range(count)]
     except Exception:  # pragma: no cover - Quartz/PyObjC only
         return None
     if len(components) == 2:

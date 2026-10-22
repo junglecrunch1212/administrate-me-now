@@ -502,6 +502,12 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      - name: Validate bounded native Reminder colors
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            tests/unit/adapters/reminders/test_eventkit_color_bounds.py \
+            tests/acceptance/test_eventkit_color_native.py
+
       - name: Record isolated member installation platform
         run: |
           sudo xcode-select --switch /Library/Developer/CommandLineTools
