@@ -84,7 +84,8 @@ compatibility does not reduce that central release to a helper-only scope. Keep
 the protected system validation and guarded central deployment for these shared
 boundaries. Focused development must first prove observation during startup and
 remaining native prompts, stale refusal before any nonce/index/event effect,
-single and batch ingest serialized with revocation, and unknown-result refusal.
+single and batch ingest serialized with revocation, unchanged admission for an
+already attested source while another is configured, and unknown-result refusal.
 The actual paired edge archive and its permissions remain unchanged; the new
 controller must negotiate the authenticated central protocol before any action.
 

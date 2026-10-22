@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
@@ -18,8 +19,12 @@ from bootstrap.member_bridge_component import (
     HELPER_COMPONENT_PATHS,
     HELPER_RUNTIME_COMPATIBILITY_CONTRACT,
     PERMISSION_RECOVERY_CENTRAL_PATHS,
+    PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
     PERMISSION_RECOVERY_COMPATIBILITY,
+    PERMISSION_RECOVERY_METHOD_RULE,
     PERMISSION_RECOVERY_PROTOCOL,
+    PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+    PERMISSION_RECOVERY_SHARED_MODULE,
     inspect_helper_component,
     is_runtime_input,
     runtime_interface_fingerprint,
@@ -30,6 +35,26 @@ from bootstrap.source_identity import sanitized_git_environment
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _enrollment_revisions() -> tuple[bytes, bytes]:
+    candidate = (ROOT / PERMISSION_RECOVERY_SHARED_MODULE).read_bytes()
+    start = candidate.index(b"        # Configuring one source must not revoke")
+    end = candidate.index(b"        record.update(\n", start)
+    retained = (candidate[:start] + candidate[end:]).replace(
+        b'"provider_capability_state": global_state,',
+        b'"provider_capability_state": "not_attested",',
+        1,
+    )
+    assert (
+        hashlib.sha256(candidate).hexdigest()
+        == PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256
+    )
+    assert (
+        hashlib.sha256(retained).hexdigest()
+        == PERMISSION_RECOVERY_RETAINED_MODULE_SHA256
+    )
+    return retained, candidate
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -78,6 +103,9 @@ def _repository(directory: Path) -> tuple[Path, str]:
         destination = repository / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content)
+    (repository / PERMISSION_RECOVERY_SHARED_MODULE).write_bytes(
+        _enrollment_revisions()[0]
+    )
     return repository, _commit(repository)
 
 
@@ -538,13 +566,188 @@ def test_retained_edge_opt_in_does_not_exempt_other_central_edge_identity_or_dep
         )
 
 
+def test_exact_central_coordinator_fix_preserves_all_other_shared_module_ast(
+    tmp_path: Path,
+) -> None:
+    repository, retained = _repository(tmp_path)
+    old, new = _enrollment_revisions()
+    shared = repository / PERMISSION_RECOVERY_SHARED_MODULE
+
+    def protected_ast(payload: bytes) -> str:
+        module = ast.parse(payload)
+        coordinator = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "BridgeEnrollmentCoordinator"
+        )
+        method = next(
+            node
+            for node in coordinator.body
+            if isinstance(node, ast.FunctionDef) and node.name == "configure_capability"
+        )
+        method.body = [ast.Pass()]
+        return ast.dump(module, include_attributes=False)
+
+    assert protected_ast(old) == protected_ast(new)
+    shared.write_bytes(new)
+    component = _commit(repository)
+    assert is_runtime_input(PERMISSION_RECOVERY_SHARED_MODULE)
+    assert runtime_interface_fingerprint(
+        repository, retained
+    ) != runtime_interface_fingerprint(repository, component)
+    with pytest.raises(RuntimeError, match="changes retained runtime inputs"):
+        inspect_helper_component(repository, component, retained)
+    inspected = inspect_helper_component(
+        repository,
+        component,
+        retained,
+        compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+    )
+    assert inspected.compatibility["central_differences"] == [
+        {
+            "path": PERMISSION_RECOVERY_SHARED_MODULE,
+            "retained": {"mode": "100644", "sha256": hashlib.sha256(old).hexdigest()},
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": hashlib.sha256(new).hexdigest(),
+            },
+            "compatibility_rule": PERMISSION_RECOVERY_METHOD_RULE,
+            "reviewed_central_method_body": "BridgeEnrollmentCoordinator.configure_capability",
+        }
+    ]
+    assert inspected.compatibility["allowed_shared_module_hash_pair"] == {
+        "path": PERMISSION_RECOVERY_SHARED_MODULE,
+        "retained_sha256": PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+        "central_candidate_sha256": PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
+    }
+    archive = tmp_path / "exact-retained-coordinator.tar"
+    _archive(repository, retained, archive)
+    verify_runtime_archive(archive, inspected.runtime_inventory)
+    with tarfile.open(archive) as stream:
+        archived = stream.extractfile(PERMISSION_RECOVERY_SHARED_MODULE)
+        assert archived is not None and archived.read() == old
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "import",
+        "constant",
+        "function",
+        "other_class",
+        "class_base",
+        "class_decorator",
+        "class_statement",
+        "other_method",
+        "method_decorator",
+        "method_default",
+        "method_annotation",
+        "method_async",
+        "duplicate_class",
+        "duplicate_method",
+        "unknown_body",
+        "comment_only",
+        "syntax_error",
+    ],
+)
+def test_shared_module_compatibility_rejects_every_unreviewed_byte_change(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    repository, retained = _repository(tmp_path)
+    shared = repository / PERMISSION_RECOVERY_SHARED_MODULE
+    _, candidate = _enrollment_revisions()
+    tree = ast.parse(candidate)
+    coordinator = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "BridgeEnrollmentCoordinator"
+    )
+    method = next(
+        node
+        for node in coordinator.body
+        if isinstance(node, ast.FunctionDef) and node.name == "configure_capability"
+    )
+    if mutation == "import":
+        tree.body.append(ast.Import(names=[ast.alias(name="fixture_unknown")]))
+    elif mutation == "constant":
+        tree.body.append(
+            ast.Assign(
+                targets=[ast.Name(id="UNKNOWN", ctx=ast.Store())],
+                value=ast.Constant(value=True),
+            )
+        )
+    elif mutation == "function":
+        tree.body.extend(ast.parse("def unknown():\n    return True\n").body)
+    elif mutation == "other_class":
+        tree.body.extend(ast.parse("class Unknown:\n    pass\n").body)
+    elif mutation == "class_base":
+        coordinator.bases.append(ast.Name(id="Unknown", ctx=ast.Load()))
+    elif mutation == "class_decorator":
+        coordinator.decorator_list.append(ast.Name(id="unknown", ctx=ast.Load()))
+    elif mutation == "class_statement":
+        coordinator.body.append(
+            ast.Expr(
+                value=ast.Call(
+                    func=ast.Name(id="unknown", ctx=ast.Load()), args=[], keywords=[]
+                )
+            )
+        )
+    elif mutation == "other_method":
+        coordinator.body.extend(ast.parse("def unknown(self):\n    return True\n").body)
+    elif mutation == "method_decorator":
+        method.decorator_list.append(ast.Name(id="unknown", ctx=ast.Load()))
+    elif mutation == "method_default":
+        method.args.defaults.append(
+            ast.Call(func=ast.Name(id="unknown", ctx=ast.Load()), args=[], keywords=[])
+        )
+    elif mutation == "method_annotation":
+        method.returns = ast.Name(id="Unknown", ctx=ast.Load())
+    elif mutation == "method_async":
+        coordinator.body[coordinator.body.index(method)] = ast.AsyncFunctionDef(
+            **{field: getattr(method, field) for field in method._fields}
+        )
+    elif mutation == "duplicate_class":
+        tree.body.append(coordinator)
+    elif mutation == "duplicate_method":
+        coordinator.body.append(method)
+    elif mutation == "unknown_body":
+        method.body.append(
+            ast.Expr(
+                value=ast.Call(
+                    func=ast.Name(id="unknown", ctx=ast.Load()), args=[], keywords=[]
+                )
+            )
+        )
+    changed = ast.unparse(ast.fix_missing_locations(tree)).encode()
+    if mutation == "comment_only":
+        changed = candidate + b"\n# Unknown revision is not an approved hash.\n"
+    elif mutation == "syntax_error":
+        changed = b"invalid source (\n"
+    shared.write_bytes(changed)
+    component = _commit(repository)
+    with pytest.raises(RuntimeError, match="unsupported runtime inputs"):
+        inspect_helper_component(
+            repository,
+            component,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
 @pytest.mark.parametrize("defect", ["delete", "executable", "add"])
+@pytest.mark.parametrize(
+    "central_path",
+    ["adminme/products/bridge/routers/ingest.py", PERMISSION_RECOVERY_SHARED_MODULE],
+)
 def test_retained_edge_contract_rejects_central_path_presence_or_mode_change(
     tmp_path: Path,
     defect: str,
+    central_path: str,
 ) -> None:
     repository, retained = _repository(tmp_path)
-    route = repository / "adminme/products/bridge/routers/ingest.py"
+    route = repository / central_path
     if defect == "delete":
         route.unlink()
     elif defect == "executable":
@@ -584,6 +787,9 @@ def test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_ne
     archive_sha = _archive(repository, retained, archive)
     route = repository / "adminme/products/bridge/routers/ingest.py"
     route.write_bytes(route.read_bytes() + b"# Supported new central protocol.\n")
+    (repository / PERMISSION_RECOVERY_SHARED_MODULE).write_bytes(
+        _enrollment_revisions()[1]
+    )
     component = _commit(repository)
     with pytest.raises(RuntimeError, match="changes retained runtime inputs"):
         build_member_bridge_helper_app(

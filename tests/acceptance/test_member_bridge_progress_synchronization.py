@@ -342,8 +342,21 @@ def test_admission_and_revoke_are_serialized_for_single_and_batch(
         assert _control(client)["bridge_wizard"]["current"]["state"] == "revoked"
 
 
+@pytest.mark.parametrize(
+    ("running", "configuring", "expected_aggregate"),
+    [
+        ("apple_calendar", "apple_reminders", "partial"),
+        ("apple_reminders", "apple_calendar", "partial"),
+        ("apple_calendar", "apple_notes", "attested"),
+        ("apple_notes", "apple_calendar", "not_attested"),
+    ],
+)
 def test_progress_lock_spans_index_mutation_append_and_apply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    running: str,
+    configuring: str,
+    expected_aggregate: str,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     with TestClient(
@@ -353,24 +366,24 @@ def test_progress_lock_spans_index_mutation_append_and_apply(
         runtime = client.app.state.runtime
         _manual_policies(client)
         helper, transfer = _prepare_helper(client, tmp_path, CAPABILITIES)
-        _enable(helper, "apple_calendar")
+        _enable(helper, running)
         helper._report(
             helper.state,
-            capability_id="apple_reminders",
+            capability_id=configuring,
             capability_state="implementation_available",
         )
         helper._report(
             helper.state,
-            capability_id="apple_reminders",
+            capability_id=configuring,
             capability_state="permission_required",
         )
         config = helper.pack_config_for(
-            "apple_reminders",
-            source_coordinate="fixture-apple_reminders-container",
-            account_coordinate="fixture-apple_reminders-account",
+            configuring,
+            source_coordinate=f"fixture-{configuring}-container",
+            account_coordinate=f"fixture-{configuring}-account",
         )
         progress = _signed(
-            helper, "apple_reminders", "permission_verified", pack_config=config
+            helper, configuring, "permission_verified", pack_config=config
         )
         original_write = runtime.events.write_batch
 
@@ -385,11 +398,17 @@ def test_progress_lock_spans_index_mutation_append_and_apply(
                 ):
                     assert runtime.settings_command_locks["settings-control"].locked()
                     assert (
-                        PACKS["apple_reminders"]
+                        PACKS[configuring]
                         in runtime.settings.bridge_enrollments[
                             MEMBER_HEADERS["Tailscale-User-Login"]
                         ]["configured_packs"]
                     )
+                    record = runtime.settings.bridge_enrollments[
+                        MEMBER_HEADERS["Tailscale-User-Login"]
+                    ]
+                    assert record["provider_capability_state"] == expected_aggregate
+                    assert PACKS[running] in record["authorized_packs"]
+                    assert PACKS[configuring] not in record["authorized_packs"]
                     entered.set()
                     await release.wait()
                 return await original_write(envelopes, **kwargs)
@@ -411,26 +430,32 @@ def test_progress_lock_spans_index_mutation_append_and_apply(
                     remote.post(
                         "/api/bridge/ingest",
                         headers=_bridge_headers(transfer),
-                        json=_observation(
-                            runtime, "apple_calendar", "concurrent-source"
-                        ),
+                        json=_observation(runtime, running, "concurrent-source"),
                     )
                 )
                 await asyncio.sleep(0)
                 assert not observation.done()
                 release.set()
                 changed, observed = await asyncio.gather(changing, observation)
+                assert changed.status_code == 202, changed.text
+                assert observed.status_code == 202, observed.text
                 assert changed.json()["state"] == helper.state
                 return changed.status_code, observed.status_code
 
         assert client.portal.call(race) == (202, 202)
         current = _status(client, transfer)["current"]
         assert (
-            current["capability_states"]["apple_reminders"]["state"]
-            == "permission_verified"
+            current["capability_states"][configuring]["state"] == "permission_verified"
         )
-        assert current["capability_states"]["apple_calendar"]["state"] == "settled"
+        assert current["capability_states"][running]["state"] == "settled"
         _assert_history(client.portal.call(_history, runtime.event_log), source_count=1)
+
+        blocked = client.post(
+            "/api/bridge/ingest",
+            headers=_bridge_headers(transfer),
+            json=_observation(runtime, configuring, "still-unattested-source"),
+        )
+        assert blocked.status_code == 403, blocked.text
 
 
 @pytest.mark.parametrize(

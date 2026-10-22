@@ -191,6 +191,7 @@ jobs:
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_release_identity.py
+          tests/unit/test_bridge_authorization.py
           tests/unit/test_ci_release_gates.py
           tests/acceptance/test_self_service_member_bridge_enrollment.py
           tests/acceptance/test_member_bridge_permission_recovery.py

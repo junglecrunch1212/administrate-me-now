@@ -425,10 +425,14 @@ def test_real_observation_interleavings_do_not_replay_native_setup_or_lose_settl
         observed: set[str] = set()
         conflicts: list[dict[str, Any]] = []
         starts: list[str] = []
+        admitted: list[tuple[str, str, int]] = []
+        unchanged_boundary: list[tuple[str, str, str, str]] = []
 
         def observe(capability: str) -> None:
             if capability in observed:
                 return
+            before = _control(client)["bridge_wizard"]["current"]
+            before_source = before["capability_states"][capability]["state"]
             response = client.post(
                 "/api/bridge/ingest",
                 headers=_bridge_headers(transfer),
@@ -436,35 +440,58 @@ def test_real_observation_interleavings_do_not_replay_native_setup_or_lose_settl
                     runtime, capability, f"permission-race-{timing}-{capability}"
                 ),
             )
+            admitted.append((capability, before_source, response.status_code))
+            assert before_source in {"observation_starting", "observing"}, before
             assert response.status_code == 202, response.text
             observed.add(capability)
+            if timing == "unchanged_aggregate" and capability == second:
+                after = _control(client)["bridge_wizard"]["current"]
+                unchanged_boundary.append(
+                    (
+                        before["state"],
+                        after["state"],
+                        before_source,
+                        after["capability_states"][capability]["state"],
+                    )
+                )
+                assert (
+                    before["capability_states"][last]["state"] == "permission_required"
+                )
+                assert (
+                    after["capability_states"][last]["state"] == "permission_required"
+                )
 
         def reporter(
             bound: Any, payload: Any, signature: str, *, state_sha256: str
         ) -> dict[str, Any]:
             if (
                 timing == "before_next_progress"
-                and payload.get("capability_id") == "apple_reminders"
+                and payload.get("capability_id") == second
                 and payload.get("capability_state") == "permission_verified"
             ):
-                observe("apple_calendar")
+                observe(first)
             if (
                 timing == "late_observing_progress"
-                and payload.get("capability_id") == "apple_reminders"
+                and payload.get("capability_id") == second
                 and payload.get("capability_state") == "observing"
             ):
-                observe("apple_reminders")
+                observe(second)
             if (
                 timing == "unchanged_aggregate"
-                and payload.get("capability_id") == "apple_notes"
+                and payload.get("capability_id") == last
                 and payload.get("capability_state") == "permission_verified"
             ):
-                observe("apple_reminders")
+                observe(second)
             return _composed_reporter(client, conflicts)(
                 bound, payload, signature, state_sha256=state_sha256
             )
 
         helper = _resume(client, original, reporter=reporter)
+        # Installed receipts use canonical JSON key order. Exercise that real
+        # resume order rather than assuming the selection-list order survives.
+        setup_order = tuple(helper.capability_states)
+        assert set(setup_order) == set(CAPABILITIES) and len(setup_order) == 3
+        first, second, last = setup_order
         original_enable = helper.installer.enable_pack
 
         def enable(pack: str) -> dict[str, Any]:
@@ -486,21 +513,24 @@ def test_real_observation_interleavings_do_not_replay_native_setup_or_lose_settl
             def confirm_permission(
                 self, capability: str, label: str, requirement: str
             ) -> bool:
-                if capability == "apple_reminders" and timing in {
+                if capability == second and timing in {
                     "during_next_permission",
                     "late_observing_progress",
                     "unchanged_aggregate",
                 }:
-                    observe("apple_calendar")
+                    observe(first)
                 return super().confirm_permission(capability, label, requirement)
 
         native = InterleavedNative()
         result = _run(client, helper, native)
-        assert result["outcome"] == "ready", result
-        assert starts == [PACKS[capability] for capability in CAPABILITIES]
-        assert [
-            cap for action, cap in native.calls if action == "probe"
-        ] == CAPABILITIES
+        assert admitted and all(
+            status == 202 for _capability, _prior, status in admitted
+        ), admitted
+        assert result["outcome"] == "ready", json.dumps(result, sort_keys=True)
+        assert starts == [PACKS[capability] for capability in setup_order]
+        assert [cap for action, cap in native.calls if action == "probe"] == list(
+            setup_order
+        )
         assert not (helper.paths.root / "permission-controller-pending.json").exists()
         for capability in CAPABILITIES:
             observe(capability)
@@ -518,12 +548,36 @@ def test_real_observation_interleavings_do_not_replay_native_setup_or_lose_settl
         )
         if timing in {
             "before_next_progress",
-            "late_observing_progress",
             "unchanged_aggregate",
         }:
             assert conflicts
             assert all(row["detail"]["effects"] == "none" for row in conflicts)
+        if timing == "unchanged_aggregate":
+            assert unchanged_boundary == [
+                ("settling", "settling", "observing", "settled")
+            ]
+            assert len(conflicts) == 1
+            assert conflicts[0]["detail"]["reason"] == "state_snapshot_mismatch"
         progress = client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+        if timing == "late_observing_progress":
+            # The source arrived before its genuine helper observing fact.
+            # Catch-up follows that fact; it is not a stale POST or a fake start.
+            assert (second, "observation_starting", 202) in admitted
+            second_progress = [
+                row for row in progress if row["payload"].get("capability_id") == second
+            ]
+            tail = second_progress[-3:]
+            assert [row["payload"]["capability_state"] for row in tail] == [
+                "observing",
+                "settling",
+                "settled",
+            ]
+            assert [row["payload"]["reported_by"] for row in tail] == [
+                "target_helper",
+                "central_runtime",
+                "central_runtime",
+            ]
+            assert conflicts == []
         for capability in CAPABILITIES:
             settled = [
                 row

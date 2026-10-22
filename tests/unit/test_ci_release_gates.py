@@ -152,6 +152,7 @@ def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None
         ([("M", "adminme/bridge_enrollment.py")], True, "system-wide"),
         ([("M", "adminme/products/bridge/routers/ingest.py")], True, "system-wide"),
         ([("M", "adminme/bridge_history.py")], True, "system-wide"),
+        ([("M", "adminme/bridge_enrollment.py")], True, "system-wide"),
         ([("M", "bridge/adminme_bridge/enrollment_helper.py")], True, "system-wide"),
         ([("M", "bootstrap/bridge_enrollment.py")], True, "system-wide"),
         ([("M", "bootstrap/upgrade.py")], True, "system-wide"),

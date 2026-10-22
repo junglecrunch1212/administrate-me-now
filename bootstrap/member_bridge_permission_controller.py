@@ -32,11 +32,24 @@ from urllib.parse import urlsplit
 
 CONTRACT = "administrateme-bridge-permission-result-v1"
 RECOVERY_CONTRACT = "administrateme-bridge-permission-recovery-v1"
-RUNTIME_INTERFACE_HASHES = {
-    "bridge/adminme_bridge/enrollment_helper.py": "8b37b4f9be805c58f1bf4923ca523cc09d4f69cd575f725471fc709124cca6a0",
-    "bridge/adminme_bridge/enrollment_ui.py": "01b7a3a719f023362933e54d1816b0dae9ef770a11ce6aff1ef222f34b5afcd6",
-    "bootstrap/bridge_enrollment.py": "9cdc2da8e27fb1905d3ca6b42536c7a65edb220e9ac2fd9264017ab86af656ce",
-    "adminme/bridge_enrollment.py": "96caaabe2320f19a2201d94dd53bf93b06f2d12957d634519637cb1cbd6f220a",
+RUNTIME_INTERFACE_HASHES: dict[str, frozenset[str]] = {
+    "bridge/adminme_bridge/enrollment_helper.py": frozenset(
+        {"8b37b4f9be805c58f1bf4923ca523cc09d4f69cd575f725471fc709124cca6a0"}
+    ),
+    "bridge/adminme_bridge/enrollment_ui.py": frozenset(
+        {"01b7a3a719f023362933e54d1816b0dae9ef770a11ce6aff1ef222f34b5afcd6"}
+    ),
+    "bootstrap/bridge_enrollment.py": frozenset(
+        {"9cdc2da8e27fb1905d3ca6b42536c7a65edb220e9ac2fd9264017ab86af656ce"}
+    ),
+    # Retained paired runtime and reviewed coordinator-only central successor.
+    # Packaging separately proves their edge-used code is unchanged.
+    "adminme/bridge_enrollment.py": frozenset(
+        {
+            "96caaabe2320f19a2201d94dd53bf93b06f2d12957d634519637cb1cbd6f220a",
+            "a6aa140fea3b3bdf63437eb818f1f9974b9cdd5f23fc09cb3352ee6b467a21e9",
+        }
+    ),
 }
 SELECTED = frozenset({"apple_calendar", "apple_reminders", "apple_notes"})
 CAPABILITY_IDS = SELECTED | {
@@ -1357,6 +1370,18 @@ def run_controller(
         )
 
 
+def validate_runtime_interfaces(root: Path) -> None:
+    """Accept only the reviewed exact local modules; never substitute imports."""
+    for relative, approved in RUNTIME_INTERFACE_HASHES.items():
+        source = root / relative
+        if (
+            source.is_symlink()
+            or not source.is_file()
+            or hashlib.sha256(source.read_bytes()).hexdigest() not in approved
+        ):
+            raise PermissionFailure("runtime_mismatch")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-root", required=True, type=Path)
@@ -1375,14 +1400,7 @@ def main(argv: list[str] | None = None) -> int:
             or not root.is_dir()
         ):
             raise PermissionFailure("runtime_mismatch")
-        for relative, expected_sha in RUNTIME_INTERFACE_HASHES.items():
-            source = root / relative
-            if (
-                source.is_symlink()
-                or not source.is_file()
-                or hashlib.sha256(source.read_bytes()).hexdigest() != expected_sha
-            ):
-                raise PermissionFailure("runtime_mismatch")
+        validate_runtime_interfaces(root)
         # The launcher verifies the sealed component hash and retained archive.
         # Add only that exact retained runtime, never ambient cwd/PYTHONPATH.
         sys.path[:0] = [str(root), str(root / "bridge")]

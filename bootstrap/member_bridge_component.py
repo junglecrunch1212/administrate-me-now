@@ -31,6 +31,14 @@ PERMISSION_RECOVERY_PROTOCOL = "administrateme-bridge-permission-recovery-v1"
 PERMISSION_RECOVERY_CENTRAL_PATHS = frozenset(
     {"adminme/products/bridge/routers/ingest.py"}
 )
+PERMISSION_RECOVERY_SHARED_MODULE = "adminme/bridge_enrollment.py"
+PERMISSION_RECOVERY_METHOD_RULE = "exact-reviewed-enrollment-coordinator-pair-v1"
+PERMISSION_RECOVERY_RETAINED_MODULE_SHA256 = (
+    "96caaabe2320f19a2201d94dd53bf93b06f2d12957d634519637cb1cbd6f220a"
+)
+PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256 = (
+    "a6aa140fea3b3bdf63437eb818f1f9974b9cdd5f23fc09cb3352ee6b467a21e9"
+)
 HELPER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/install-member-bridge.sh",
@@ -88,6 +96,29 @@ def _fingerprint(inventory: dict[str, dict[str, str]]) -> str:
     return hashlib.sha256(
         json.dumps(selected, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _retained_edge_inventory(
+    inventory: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    selected = {
+        path: dict(coordinate)
+        for path, coordinate in inventory.items()
+        if path not in PERMISSION_RECOVERY_CENTRAL_PATHS
+    }
+    if PERMISSION_RECOVERY_SHARED_MODULE in selected:
+        coordinate = selected[PERMISSION_RECOVERY_SHARED_MODULE]
+        if coordinate["mode"] != "100644" or coordinate["sha256"] not in {
+            PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+            PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
+        }:
+            raise RuntimeError(
+                "retained edge compatibility changes unsupported runtime inputs"
+            )
+        # Only this reviewed pair differs solely inside the central coordinator's
+        # configure_capability body. No generic class or source exemption exists.
+        coordinate["sha256"] = PERMISSION_RECOVERY_RETAINED_MODULE_SHA256
+    return selected
 
 
 def runtime_interface_fingerprint(repository: Path, revision: str) -> str:
@@ -158,7 +189,9 @@ def inspect_helper_component(
                     continue
                 if (
                     path not in PERMISSION_RECOVERY_CENTRAL_PATHS
-                    or candidate is None
+                    and path != PERMISSION_RECOVERY_SHARED_MODULE
+                ) or (
+                    candidate is None
                     or retained is None
                     or candidate["mode"] != "100644"
                     or retained["mode"] != "100644"
@@ -166,26 +199,32 @@ def inspect_helper_component(
                     raise RuntimeError(
                         "retained edge compatibility changes unsupported runtime inputs"
                     )
-                central_differences.append(
-                    {
-                        "path": path,
-                        "retained": retained,
-                        "central_candidate": candidate,
-                    }
-                )
-            retained_edge_fingerprint = _fingerprint(
-                {
-                    path: entry
-                    for path, entry in runtime_inventory.items()
-                    if path not in PERMISSION_RECOVERY_CENTRAL_PATHS
+                difference: dict[str, object] = {
+                    "path": path,
+                    "retained": retained,
+                    "central_candidate": candidate,
                 }
+                if path == PERMISSION_RECOVERY_SHARED_MODULE:
+                    if (
+                        retained["sha256"] != PERMISSION_RECOVERY_RETAINED_MODULE_SHA256
+                        or candidate["sha256"]
+                        != PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256
+                    ):
+                        raise RuntimeError(
+                            "retained edge compatibility changes unsupported runtime inputs"
+                        )
+                    difference.update(
+                        {
+                            "compatibility_rule": PERMISSION_RECOVERY_METHOD_RULE,
+                            "reviewed_central_method_body": "BridgeEnrollmentCoordinator.configure_capability",
+                        }
+                    )
+                central_differences.append(difference)
+            retained_edge_fingerprint = _fingerprint(
+                _retained_edge_inventory(runtime_inventory)
             )
             if retained_edge_fingerprint != _fingerprint(
-                {
-                    path: entry
-                    for path, entry in component_inventory.items()
-                    if path not in PERMISSION_RECOVERY_CENTRAL_PATHS
-                }
+                _retained_edge_inventory(component_inventory)
             ):
                 raise RuntimeError("retained edge inputs differ")
         elif component_fingerprint != runtime_fingerprint:
@@ -256,6 +295,11 @@ def inspect_helper_component(
                     "allowed_central_difference_paths": sorted(
                         PERMISSION_RECOVERY_CENTRAL_PATHS
                     ),
+                    "allowed_shared_module_hash_pair": {
+                        "path": PERMISSION_RECOVERY_SHARED_MODULE,
+                        "retained_sha256": PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+                        "central_candidate_sha256": PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
+                    },
                     "central_differences": central_differences,
                 }
             )

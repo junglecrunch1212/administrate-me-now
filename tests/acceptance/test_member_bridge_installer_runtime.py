@@ -25,8 +25,12 @@ import pytest
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from bootstrap.source_identity import write_source_marker
 from bootstrap.member_bridge_component import (
+    PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
     PERMISSION_RECOVERY_COMPATIBILITY,
+    PERMISSION_RECOVERY_METHOD_RULE,
     PERMISSION_RECOVERY_PROTOCOL,
+    PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+    PERMISSION_RECOVERY_SHARED_MODULE,
     runtime_interface_fingerprint,
 )
 from bootstrap.member_bridge_helper_app import build_member_bridge_helper_app
@@ -344,9 +348,9 @@ def test_real_clean_and_interrupted_member_install_preview(
         env=env,
         log=artifact_dir / "candidate-archive.log",
     )
-    # Isolated mixed-release fixture: A has the exact candidate edge code, an
-    # older central protocol constant and no controller. B restores the current
-    # central route plus controller/installer. Real install/preview must keep A
+    # Isolated mixed-release fixture: A retains the exact reviewed shared module,
+    # unchanged edge code, older central protocol and no controller. B restores
+    # the current coordinator/route plus controller/installer. Install must keep A
     # while executing sealed component B; no archive overlay is permitted.
     # Production central+retained-edge handshake is covered by its composition
     # gate; this process proves actual packaging/installation/import boundaries.
@@ -368,6 +372,28 @@ def test_real_clean_and_interrupted_member_install_preview(
     )
     assert legacy_route != candidate_route
     fixture_route.write_bytes(legacy_route)
+    fixture_enrollment = fixture_repository / PERMISSION_RECOVERY_SHARED_MODULE
+    candidate_enrollment = fixture_enrollment.read_bytes()
+    fix_start = candidate_enrollment.index(
+        b"        # Configuring one source must not revoke"
+    )
+    fix_end = candidate_enrollment.index(b"        record.update(\n", fix_start)
+    retained_enrollment = (
+        candidate_enrollment[:fix_start] + candidate_enrollment[fix_end:]
+    ).replace(
+        b'"provider_capability_state": global_state,',
+        b'"provider_capability_state": "not_attested",',
+        1,
+    )
+    assert (
+        hashlib.sha256(candidate_enrollment).hexdigest()
+        == PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256
+    )
+    assert (
+        hashlib.sha256(retained_enrollment).hexdigest()
+        == PERMISSION_RECOVERY_RETAINED_MODULE_SHA256
+    )
+    fixture_enrollment.write_bytes(retained_enrollment)
     installer.write_bytes(
         candidate_installer + b"\n# Synthetic retained helper revision.\n"
     )
@@ -394,6 +420,7 @@ def test_real_clean_and_interrupted_member_install_preview(
     installer.write_bytes(candidate_installer)
     fixture_controller.write_bytes(controller_payload)
     fixture_route.write_bytes(candidate_route)
+    fixture_enrollment.write_bytes(candidate_enrollment)
     for index, arguments in enumerate(
         [
             [
@@ -402,6 +429,7 @@ def test_real_clean_and_interrupted_member_install_preview(
                 "bootstrap/install-member-bridge.sh",
                 "bootstrap/member_bridge_permission_controller.py",
                 "adminme/products/bridge/routers/ingest.py",
+                PERMISSION_RECOVERY_SHARED_MODULE,
             ],
             ["commit", "-m", "Exact candidate helper with retained runtime"],
         ]
@@ -505,6 +533,19 @@ def test_real_clean_and_interrupted_member_install_preview(
     assert manifest["required_central_release_commit"] == component_commit
     assert manifest["runtime_compatibility"]["central_differences"] == [
         {
+            "path": PERMISSION_RECOVERY_SHARED_MODULE,
+            "retained": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
+            },
+            "compatibility_rule": PERMISSION_RECOVERY_METHOD_RULE,
+            "reviewed_central_method_body": "BridgeEnrollmentCoordinator.configure_capability",
+        },
+        {
             "path": "adminme/products/bridge/routers/ingest.py",
             "retained": {
                 "mode": "100644",
@@ -514,7 +555,7 @@ def test_real_clean_and_interrupted_member_install_preview(
                 "mode": "100644",
                 "sha256": hashlib.sha256(candidate_route).hexdigest(),
             },
-        }
+        },
     ]
     assert (
         built.release_archive_sha256
@@ -672,7 +713,8 @@ def test_real_clean_and_interrupted_member_install_preview(
             "assert hashlib.sha256(controller.read_bytes()).hexdigest()==sys.argv[2]; "
             "namespace=runpy.run_path(str(controller)); assert callable(namespace['validate_result']); "
             "runtime_root=Path(sys.prefix).parent; "
-            "assert all(hashlib.sha256((runtime_root/path).read_bytes()).hexdigest()==expected for path,expected in namespace['RUNTIME_INTERFACE_HASHES'].items()); "
+            "namespace['validate_runtime_interfaces'](runtime_root); "
+            "assert hashlib.sha256((runtime_root/'adminme/bridge_enrollment.py').read_bytes()).hexdigest()==sys.argv[3]; "
             "from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper; "
             "from adminme_bridge.enrollment_ui import MacOSEnrollmentInteraction; "
             "from bootstrap.bridge_enrollment import MemberBridgePaths; "
@@ -698,6 +740,7 @@ def test_real_clean_and_interrupted_member_install_preview(
             "print(json.dumps({'sealed_controller_import':True,'eventkit_abi':True,'authorization_states':statuses,'unsaved_metadata':True,'permission_requested':False,'provider_records_read':False,'provider_writes':False,'osascript_native_error_classification':'native_permission_denied'}))",
             str(bundled_controller),
             manifest["permission_controller_sha256"],
+            PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
         ],
         cwd=workspace,
         env=env,

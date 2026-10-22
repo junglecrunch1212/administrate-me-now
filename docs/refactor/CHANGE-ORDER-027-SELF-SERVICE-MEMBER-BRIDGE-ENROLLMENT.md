@@ -188,6 +188,10 @@ after that source's exact authorization boundary and appends the existing
 `settling`/`settled` progress. It preserves the helper command's acknowledgement.
 No new centrally reported `observing` fact is introduced: the predecessor's
 historical auditor and existing transition semantics remain compatible.
+Configuring another source preserves the aggregate attestation derived from all
+configured sources; an already attested source must remain admitted while the
+new source awaits its own proof. This uses the existing index commit procedure
+and never gives the new source authority before attestation.
 
 The controller's restrictive state-vector hash precondition covers every selected
 capability as well as the aggregate state. A source can settle while the aggregate
@@ -197,9 +201,14 @@ does not replace the retained signed body or any identity check.
 
 The explicit builder option `--runtime-compatibility-contract
 bridge-permission-recovery-v1` supports this mixed central/helper repair. It permits
-only regular-file modifications of the fixed central enrollment router,
-records its old/new hashes, and verifies every retained edge input and archive
-byte. Default compatibility and the CI runtime fingerprint remain strict. The
+only regular-file modifications of the fixed central enrollment router and
+the exact reviewed old/new source pair for the central coordinator fix. That
+pair changes only the body of `BridgeEnrollmentCoordinator.configure_capability`;
+the edge-used definitions remain unchanged. Unknown shared-module bytes fail
+closed. The manifest records both hashes and retains every byte of the paired
+archive. The controller accepts only the exact
+reviewed retained/current interface hashes. Default compatibility and the CI
+runtime fingerprint remain strict. The
 launcher binds the expected central release independently of the paired edge
 release; the authenticated protocol must match before any permission action.
 

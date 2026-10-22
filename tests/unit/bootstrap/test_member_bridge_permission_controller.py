@@ -25,6 +25,7 @@ from bootstrap.member_bridge_permission_controller import (
     native_interaction,
     run_controller,
     validate_origin,
+    validate_runtime_interfaces,
     validate_progress_ack,
     validate_result,
 )
@@ -35,7 +36,27 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_retained_interface_bytes_match_the_explicit_component_contract() -> None:
     for relative, expected in RUNTIME_INTERFACE_HASHES.items():
-        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == expected
+        assert len(expected) == (2 if relative == "adminme/bridge_enrollment.py" else 1)
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() in expected
+    assert (
+        "96caaabe2320f19a2201d94dd53bf93b06f2d12957d634519637cb1cbd6f220a"
+        in RUNTIME_INTERFACE_HASHES["adminme/bridge_enrollment.py"]
+    )
+
+
+@pytest.mark.parametrize("changed", tuple(RUNTIME_INTERFACE_HASHES))
+def test_unknown_interface_bytes_are_refused_even_with_same_runtime_commit(
+    tmp_path: Path, changed: str
+) -> None:
+    for relative in RUNTIME_INTERFACE_HASHES:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((ROOT / relative).read_bytes())
+    validate_runtime_interfaces(tmp_path)
+    selected = tmp_path / changed
+    selected.write_bytes(selected.read_bytes() + b"\n# unreviewed fixture mutation\n")
+    with pytest.raises(PermissionFailure, match="runtime_mismatch"):
+        validate_runtime_interfaces(tmp_path)
 
 
 @pytest.mark.parametrize(
