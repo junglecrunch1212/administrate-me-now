@@ -55,6 +55,8 @@ jobs:
           tests/unit/bootstrap/test_apple_service_write_upgrade_safety.py
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/test_capability_catalog.py
+          tests/unit/test_primary_surface_v2.py
+          tests/unit/bootstrap/test_source_identity.py::test_materializer_timeout_reaps_child_and_publisher_removes_stage
       - name: Check isolated bridge write boundary
         if: '!cancelled()'
         run: >-

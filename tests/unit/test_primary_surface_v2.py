@@ -10,7 +10,10 @@ import pytest
 from pydantic import ValidationError
 from pathlib import Path
 
-from adminme.events.schemas.external_sync import ExternalWriteRequestedV1
+from adminme.events.schemas.external_sync import (
+    ExternalWriteRequestedV1,
+    ExternalWriteRequestedV2,
+)
 from adminme.events.schemas.ingest import CalendarEventV2
 from adminme.events.schemas.knowledge import MemberKnowledgeNoteV2
 from adminme.events.schemas.lists import ListItemV2
@@ -233,20 +236,38 @@ def test_external_write_command_keeps_optimistic_revision() -> None:
     assert command.expected_provider_revision == '"etag-1"'
 
 
-def test_notes_are_ingest_only_and_cannot_enter_external_write_spine() -> None:
+def test_notes_write_command_requires_both_approval_receipts() -> None:
+    # Notes now shares the governed v2 write spine. A typed v1 intent is not
+    # executable approval; both independent receipts remain mandatory in v2.
+    intent = {
+        "command_id": "request-notes-1",
+        "member_id": "member-a",
+        "provider": "apple_notes",
+        "provider_account_id": "local-notes",
+        "operation": "update_note",
+        "target_external_id": "note-1",
+        "expected_provider_revision": "revision-1",
+        "payload": {"title": "Approved source change"},
+        "requested_at": datetime.now(timezone.utc),
+    }
+    assert ExternalWriteRequestedV1.model_validate(intent).provider == "apple_notes"
     with pytest.raises(ValidationError):
-        ExternalWriteRequestedV1.model_validate(
-            {
-                "command_id": "request-notes-1",
-                "member_id": "member-a",
-                "provider": "apple_notes",
-                "provider_account_id": "local-notes",
-                "operation": "update_note",
-                "target_external_id": "note-1",
-                "payload": {"title": "Mutate source"},
-                "requested_at": datetime.now(timezone.utc),
-            }
-        )
+        ExternalWriteRequestedV2.model_validate(intent)
+
+    approved = {
+        **intent,
+        "domain_approval_event_id": "domain-approval-1",
+        "openclaw_approval_event_id": "native-approval-1",
+        "request_fingerprint": "a" * 64,
+        "privacy_guard_version": "privacy-v1",
+    }
+    command = ExternalWriteRequestedV2.model_validate(approved)
+    assert command.expected_provider_revision == "revision-1"
+    for missing in ("domain_approval_event_id", "openclaw_approval_event_id"):
+        with pytest.raises(ValidationError):
+            ExternalWriteRequestedV2.model_validate(
+                {key: value for key, value in approved.items() if key != missing}
+            )
 
 
 def test_rrule_parser_and_serializer_preserve_advanced_selectors() -> None:
