@@ -394,6 +394,15 @@ def test_real_clean_and_interrupted_member_install_preview(
     bundled_installer = helper_app / manifest["installer_path"]
     bundled_archive = helper_app / manifest["release_archive_path"]
     bundled_controller = helper_app / manifest["permission_controller_path"]
+    bundled_launch = helper_app / manifest["launch_controller_path"]
+    assert (
+        bundled_launch.read_bytes()
+        == (ROOT / "bootstrap/member_bridge_launch.py").read_bytes()
+    )
+    assert (
+        hashlib.sha256(bundled_launch.read_bytes()).hexdigest()
+        == manifest["launch_controller_sha256"]
+    )
     candidate_controller = (
         ROOT / "bootstrap/member_bridge_permission_controller.py"
     ).read_bytes()
@@ -674,7 +683,9 @@ def test_real_clean_and_interrupted_member_install_preview(
             "assert hashlib.sha256((runtime_root/'adminme/bridge_enrollment.py').read_bytes()).hexdigest()==sys.argv[3]; "
             "from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper; "
             "from adminme_bridge.enrollment_ui import MacOSEnrollmentInteraction; "
-            "from bootstrap.bridge_enrollment import MemberBridgePaths; "
+            "from bootstrap.bridge_enrollment import MemberBridgeInstaller, MemberBridgePaths; "
+            "launch=namespace['load_launch_controller'](Path(sys.argv[4]),sys.argv[5]); "
+            "assert issubclass(launch['compatible_installer_class'](MemberBridgeInstaller),MemberBridgeInstaller); "
             "assert callable(MemberBridgeEnrollmentHelper.resume) and callable(MacOSEnrollmentInteraction) and callable(MemberBridgePaths.from_root); "
             "store=EventKit.EKEventStore.alloc().init(); "
             "assert callable(store.requestFullAccessToEventsWithCompletion_); "
@@ -698,6 +709,8 @@ def test_real_clean_and_interrupted_member_install_preview(
             str(bundled_controller),
             manifest["permission_controller_sha256"],
             PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+            str(bundled_launch),
+            manifest["launch_controller_sha256"],
         ],
         cwd=workspace,
         env=env,
@@ -723,6 +736,8 @@ def test_real_clean_and_interrupted_member_install_preview(
                     "permission_controller_sha256"
                 ],
                 "native_permission_smoke": native_permission_proof,
+                "launch_controller_sha256": manifest["launch_controller_sha256"],
+                "sealed_launch_loaded_against_retained_runtime": True,
                 "mixed_component_and_retained_runtime": True,
                 "sealed_combined_package": True,
                 "runtime_archive_sha256": archive_sha256,

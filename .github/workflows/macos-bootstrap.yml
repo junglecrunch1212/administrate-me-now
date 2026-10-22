@@ -106,6 +106,7 @@ jobs:
             tests/unit/bootstrap/test_member_bridge_helper_app.py \
             tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
             tests/unit/bootstrap/test_member_bridge_permission_controller.py \
+            tests/unit/bootstrap/test_member_bridge_launch.py \
             tests/unit/bootstrap/test_member_bridge_component.py \
             tests/unit/bootstrap/test_bridge_enrollment.py \
             tests/unit/test_bridge_release_identity.py \
@@ -190,6 +191,7 @@ jobs:
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_member_bridge_permission_controller.py
+          tests/unit/bootstrap/test_member_bridge_launch.py
           tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_source_identity.py
@@ -313,6 +315,23 @@ jobs:
           assert all(int(s.get(k, "0")) == 0 for s in suites for k in ("skipped", "failures", "errors"))
           PY
 
+      - name: Validate sealed launch lifecycle against real macOS launchd
+        env:
+          ADMINME_RUN_BRIDGE_LAUNCH_RUNTIME: "1"
+          ADMINME_BRIDGE_LAUNCH_ARTIFACT_DIR: ${{ runner.temp }}/adminme-packaged-bridge-evidence/launchd
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="${RUNNER_TEMP}/adminme-bridge-launch" \
+            --junitxml="${RUNNER_TEMP}/adminme-bridge-launch.xml" \
+            tests/acceptance/test_member_bridge_launch_runtime.py
+          python - "${RUNNER_TEMP}/adminme-bridge-launch.xml" <<'PY_CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          suites = list(ET.parse(sys.argv[1]).getroot().iter("testsuite"))
+          assert sum(int(s.get("tests", "0")) for s in suites) == 2
+          assert all(int(s.get(k, "0")) == 0 for s in suites for k in ("skipped", "failures", "errors"))
+          PY_CHECK
+
       - name: Retain isolated installation result
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -320,6 +339,7 @@ jobs:
           name: packaged-member-bridge-installation
           path: |
             ${{ runner.temp }}/adminme-packaged-bridge.xml
+            ${{ runner.temp }}/adminme-bridge-launch.xml
             ${{ runner.temp }}/adminme-packaged-bridge-evidence
           if-no-files-found: error
           retention-days: 7

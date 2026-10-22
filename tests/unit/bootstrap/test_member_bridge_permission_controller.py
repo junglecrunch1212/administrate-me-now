@@ -621,3 +621,87 @@ def test_only_exact_typed_no_effect_rejection_can_be_retried() -> None:
         with pytest.raises(PermissionFailure) as raised:
             progress_response(httpx.Response(409, json={"detail": altered}), payload)
         assert raised.value.unknown
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "unknown_source",
+        "configuration",
+        "proof",
+        "prior_observation",
+        "permission_overlap",
+        "extra_field",
+    ],
+)
+def test_initial_start_proof_is_separate_and_bound_to_exact_unobserved_source(
+    tmp_path: Path, defect: str | None
+) -> None:
+    from bootstrap.member_bridge_permission_controller import (
+        validate_observation_snapshot,
+    )
+
+    helper, status = _observation_status(tmp_path)
+    helper.state = "degraded"
+    helper.capability_states = {"apple_notes": "degraded"}
+    status["current"].update(
+        state="degraded",
+        capability_states={
+            "apple_notes": {"state": "degraded", "last_successful_observation": None}
+        },
+    )
+    proof = {
+        "proof_sha256": "e" * 64,
+        "configured_source_sha256": status["configured_source_sha256"]["apple_notes"],
+    }
+    status["initial_start_recovery"] = {"apple_notes": proof}
+    if defect == "unknown_source":
+        status["initial_start_recovery"] = {"apple_calendar": proof}
+    elif defect == "configuration":
+        proof["configured_source_sha256"] = "f" * 64
+    elif defect == "proof":
+        proof["proof_sha256"] = "unbounded source data"
+    elif defect == "prior_observation":
+        status["current"]["capability_states"]["apple_notes"][
+            "last_successful_observation"
+        ] = "2031-01-01T12:00:00Z"
+    elif defect == "permission_overlap":
+        status["permission_retry_capabilities"] = ["apple_notes"]
+    elif defect == "extra_field":
+        proof["reset_permission"] = True
+    if defect is None:
+        assert validate_observation_snapshot(helper, status, "d" * 40) == (
+            "degraded",
+            {"apple_notes": "degraded"},
+        )
+    else:
+        with pytest.raises(PermissionFailure, match="central_protocol_unavailable"):
+            validate_observation_snapshot(helper, status, "d" * 40)
+
+
+@pytest.mark.parametrize("defect", ["bytes", "symlink", "public"])
+def test_launch_resource_must_match_sealed_hash_and_private_owner(
+    tmp_path: Path, defect: str
+) -> None:
+    from bootstrap.member_bridge_permission_controller import load_launch_controller
+
+    source = tmp_path / "member_bridge_launch.py"
+    source.write_text("def compatible_installer_class(base): return base\n")
+    source.chmod(0o600)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert callable(
+        load_launch_controller(source, digest)["compatible_installer_class"]
+    )
+    if defect == "bytes":
+        source.write_text("raise RuntimeError('unreviewed launch module executed')\n")
+    elif defect == "symlink":
+        outside = source.with_name("outside.py")
+        source.rename(outside)
+        source.symlink_to(outside)
+    else:
+        source.chmod(0o644)
+    with pytest.raises(
+        PermissionFailure, match="runtime_mismatch|configuration_mismatch"
+    ):
+        load_launch_controller(source, digest)

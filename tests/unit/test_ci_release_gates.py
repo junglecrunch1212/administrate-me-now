@@ -143,6 +143,8 @@ def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None
             False,
             "system-wide",
         ),
+        ([("A", "bootstrap/member_bridge_launch.py")], True, "bridge-helper"),
+        ([("M", "bootstrap/member_bridge_launch.py")], False, "system-wide"),
         ([("M", "scripts/release_scope.py")], True, "bridge-helper"),
         ([("M", HELPER), ("M", PROSE)], True, "bridge-helper"),
         ([("M", HELPER)], False, "system-wide"),
@@ -401,6 +403,7 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
         "test_member_bridge_helper_app.py",
         "test_member_bridge_helper_diagnostics.py",
         "test_member_bridge_permission_controller.py",
+        "test_member_bridge_launch.py",
         "test_member_bridge_permission_recovery.py",
         "test_member_bridge_progress_synchronization.py",
         "test_cos_member_bridge_acquisition.py",
@@ -493,4 +496,21 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
         assert key in install["env"]
     assert "suites) == 3" in install["run"]
     assert '("skipped", "failures", "errors")' in install["run"]
+    assert job["steps"][-1]["id"] == "validated"
+
+
+def test_packaged_gate_requires_real_sealed_launchd_and_rejects_skips() -> None:
+    job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
+    step = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Validate sealed launch lifecycle against real macOS launchd"
+    )
+    assert "if" not in step
+    assert step["env"]["ADMINME_RUN_BRIDGE_LAUNCH_RUNTIME"] == "1"
+    commands = step["run"]
+    assert "test_member_bridge_launch_runtime.py" in commands
+    assert "== 2" in commands
+    assert '("skipped", "failures", "errors")' in commands
     assert job["steps"][-1]["id"] == "validated"

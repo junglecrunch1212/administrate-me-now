@@ -76,6 +76,7 @@ router = APIRouter(prefix="/api/bridge", tags=["bridge"])
 ENROLLMENT_HEADER = "X-AdministrateMe-Bridge-Enrollment"
 PERMISSION_RECOVERY_CONTRACT = "administrateme-bridge-permission-recovery-v1"
 PERMISSION_STATE_HEADER = "X-AdministrateMe-Bridge-State-SHA256"
+INITIAL_START_RECOVERY_HEADER = "X-AdministrateMe-Bridge-Initial-Start-Recovery"
 
 
 class BatchIngestRequest(BaseModel):
@@ -1332,6 +1333,193 @@ async def _initial_permission_retry_capabilities(
     )
 
 
+async def _initial_start_recovery(
+    runtime: Any, current: dict[str, Any], record: dict[str, Any], through: str
+) -> dict[str, dict[str, str]]:
+    """Prove a never-observed initial start, without resetting its permission.
+
+    This is only central evidence. The sealed helper must independently prove
+    the failed local start rolled back and no daemon or unknown operation is
+    outstanding. Previously observing sources never acquire this continuation.
+    """
+
+    member = str(current["member_id"])
+    tenant = runtime.settings.instance.tenant_id
+    request_id = current["request_id"]
+    if (
+        record.get("status") != "active"
+        or record.get("acquisition_policy") != MEMBER_BRIDGE_ACQUISITION_CONTRACT
+        or current.get("state")
+        not in {"degraded", "capabilities_testing", "partially_active", "settling"}
+        or current.get("observation_only") is not True
+        or current.get("writes_authorized") is not False
+    ):
+        return {}
+    rows: list[dict[str, Any]] = []
+    async for event in runtime.event_log.read_since(
+        through=through,
+        owner_scope=f"private:{member}",
+        types=[*LIFECYCLE_TYPES, SOURCE_AUTHORIZED],
+    ):
+        rows.append(event)
+        if len(rows) > 4096:
+            return {}
+    history = BridgeHistory(runtime.event_log, rows)
+    try:
+        # Use the established immutable lifecycle/source validator. No synthetic
+        # source event is needed to advance its audit cursor to this snapshot.
+        for event in rows:
+            if event["type"] == SOURCE_AUTHORIZED:
+                await history._authorize(event)
+            else:
+                history._lifecycle(event)
+        replay = history.states.get(tenant, {}).get("bridge_requests", {}).get(member)
+        if (tenant, member) in history.invalid or replay != current:
+            return {}
+        relevant = [
+            event
+            for event in rows
+            if event.get("payload", {}).get("request_id") == request_id
+        ]
+        if any(
+            event["type"] == "settings.bridge_enrollment_controlled"
+            for event in relevant
+        ):
+            return {}
+        result: dict[str, dict[str, str]] = {}
+        for capability in ("apple_calendar", "apple_reminders", "apple_notes"):
+            capability_row = current["capability_states"].get(capability) or {}
+            if capability_row.get("state") != "degraded":
+                continue
+            pack = str(CAPABILITIES[capability]["pack"])
+            policy = BRIDGE_PACK_POLICIES[pack]
+            config = record.get("pack_config", {}).get(pack)
+            if (
+                not isinstance(config, dict)
+                or pack not in record.get("configured_packs", [])
+                or pack not in record.get("authorized_packs", [])
+                or pack not in record.get("enabled_packs", [])
+                or record.get("pack_capability_states", {}).get(pack)
+                != (
+                    "attested"
+                    if policy.requires_capability_attestation
+                    else "not_required"
+                )
+            ):
+                continue
+            progress = [
+                event
+                for event in relevant
+                if event["type"] == "bridge.enrollment_progressed"
+                and event["payload"].get("capability_id") == capability
+            ]
+            states = [event["payload"].get("capability_state") for event in progress]
+            if "permission_verified" not in states:
+                continue
+            start = states.index("permission_verified")
+            chain = progress[start:]
+            if (
+                states[start:]
+                != [
+                    "permission_verified",
+                    "adapter_authenticated",
+                    "observation_starting",
+                    "degraded",
+                ]
+                or any(
+                    state
+                    not in {
+                        "requested",
+                        "implementation_available",
+                        "permission_required",
+                        "permission_denied",
+                        "prerequisite_missing",
+                    }
+                    for state in states[:start]
+                )
+                or chain[-1]["payload"].get("reason") != "local_capability_test_failed"
+                or any(
+                    event.get("source_adapter") != "member-bridge-enrollment-helper"
+                    or event["payload"].get("reported_by") != "target_helper"
+                    or event["payload"].get("signature_verified") is not True
+                    or event["payload"].get("device_identity_sha256")
+                    != record.get("device_identity_sha256")
+                    for event in chain
+                )
+            ):
+                continue
+            authorities = [
+                event
+                for event in relevant
+                if event["type"] == SOURCE_AUTHORIZED
+                and event["payload"].get("capability_id") == capability
+            ]
+            if len(authorities) != 1:
+                continue
+            authority = authorities[0]
+            receipt = authority["payload"]
+            if (
+                history.grants.get((tenant, member, pack)) != authority
+                or not chain[2]["event_id"]
+                < authority["event_id"]
+                < chain[3]["event_id"]
+                or receipt["pack_config"] != config
+                or any(
+                    receipt[key] != record.get(key)
+                    for key in (
+                        "request_id",
+                        "enrollment_id",
+                        "member_id",
+                        "instance_id",
+                        "release_commit",
+                        "capability_set_sha256",
+                        "device_identity_sha256",
+                    )
+                )
+                or receipt["enrollment_event_id"] != record.get("event_id")
+                or receipt["authentication_event_id"]
+                != (record.get("capability_attestations", {}).get(pack) or {}).get(
+                    "event_id"
+                )
+            ):
+                continue
+            observed = False
+            count = 0
+            async for event in runtime.event_log.read_attribution_metadata_since(
+                cursor=receipt["enrollment_event_id"],
+                through=through,
+                types=sorted(
+                    policy.event_types - {"adapter.authenticated", "adapter.error"}
+                ),
+            ):
+                count += 1
+                if count > 4096 or (
+                    event.get("owner_scope") == f"private:{member}"
+                    and event.get("source_adapter") == policy.source_adapter
+                ):
+                    observed = True
+                    break
+            if observed:
+                continue
+            configuration_sha = hashlib.sha256(canonical_bytes(config)).hexdigest()
+            result[capability] = {
+                "configured_source_sha256": configuration_sha,
+                "proof_sha256": hashlib.sha256(
+                    canonical_bytes(
+                        {
+                            "contract": "administrateme-bridge-initial-start-recovery-v1",
+                            "source_authority": authority,
+                            "initial_start_history": chain,
+                            "current_state": _permission_state(current),
+                        }
+                    )
+                ).hexdigest(),
+            }
+        return result
+    except (KeyError, TypeError, ValueError):
+        return {}
+
+
 @router.get("/enrollment/status")
 async def enrollment_status(
     request: Request, request_id: str = Query(min_length=8, max_length=120)
@@ -1405,6 +1593,9 @@ async def enrollment_status(
                 runtime, current, record, through
             ),
             "permission_retry_capabilities": await _initial_permission_retry_capabilities(
+                runtime, current, record, through
+            ),
+            "initial_start_recovery": await _initial_start_recovery(
                 runtime, current, record, through
             ),
             "content_exposed": False,
@@ -1484,6 +1675,35 @@ async def _enrollment_progress_locked(
             ) from exc
     if wizard.get("state") != body.previous_state:
         raise _progress_stale_before_mutation(body, reason="previous_state_mismatch")
+    recovery_proof = request.headers.get(INITIAL_START_RECOVERY_HEADER)
+    initial_start = (
+        transport_record.get("acquisition_policy") == MEMBER_BRIDGE_ACQUISITION_CONTRACT
+        and body.capability_id in {"apple_calendar", "apple_reminders", "apple_notes"}
+        and body.capability_state == "observation_starting"
+        and ((wizard.get("capability_states") or {}).get(body.capability_id) or {}).get(
+            "state"
+        )
+        == "degraded"
+    )
+    if initial_start or recovery_proof is not None:
+        through = await runtime.event_log.latest_event_id()
+        eligible = (
+            await _initial_start_recovery(runtime, wizard, transport_record, through)
+            if through is not None and initial_start
+            else {}
+        )
+        if (
+            recovery_proof is None
+            or not re.fullmatch(r"[0-9a-f]{64}", recovery_proof)
+            or body.state != body.previous_state
+            or body.pack_config is not None
+            or body.capability_event_id is not None
+            or recovery_proof
+            != eligible.get(str(body.capability_id), {}).get("proof_sha256")
+        ):
+            raise _progress_stale_before_mutation(
+                body, reason="initial_start_recovery_unavailable"
+            )
     try:
         if body.state != body.previous_state or body.capability_id is None:
             validate_enrollment_transition(body.previous_state, body.state)

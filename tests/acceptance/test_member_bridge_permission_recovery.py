@@ -6,7 +6,10 @@ member acceptance device. Existing CoS fixture provider credentials are inert.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +17,13 @@ from fastapi.testclient import TestClient
 import pytest
 
 from adminme.bridge_enrollment import CAPABILITIES as DESCRIPTORS
+from adminme.bridge_enrollment import (
+    PROGRESS_CONTRACT,
+    canonical_bytes,
+    progress_signature,
+)
 from adminme.runtime.application import create_application
+from adminme_bridge.config import load_config
 from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper
 from adminme_bridge.enrollment_ui import LocalSourceChoice
 from bootstrap.member_bridge_permission_controller import (
@@ -22,6 +31,8 @@ from bootstrap.member_bridge_permission_controller import (
     http_progress_report,
     run_controller,
 )
+from bootstrap.bridge_enrollment import BridgeEnrollmentError, MemberBridgeInstaller
+from bootstrap.member_bridge_launch import compatible_installer_class
 from tests.acceptance.test_cos_member_bridge_acquisition import (
     CAPABILITIES,
     MEMBER_HEADERS,
@@ -96,23 +107,48 @@ def _composed_reporter(client: TestClient, responses: list[Any] | None = None) -
         return response
 
     def reporter(
-        bound: Any, payload: Any, signature: str, *, state_sha256: str
+        bound: Any,
+        payload: Any,
+        signature: str,
+        *,
+        state_sha256: str,
+        initial_start_recovery_sha256: str | None = None,
     ) -> dict[str, Any]:
         return http_progress_report(
-            bound, payload, signature, state_sha256=state_sha256, post=post
+            bound,
+            payload,
+            signature,
+            state_sha256=state_sha256,
+            initial_start_recovery_sha256=initial_start_recovery_sha256,
+            post=post,
         )
 
     return reporter
 
 
-def _resume(client: TestClient, helper: Any, *, reporter: Any = None) -> Any:
+def _resume(
+    client: TestClient,
+    helper: Any,
+    *,
+    reporter: Any = None,
+    compatible_launch: bool = False,
+) -> Any:
+    installer = helper.installer
+    if compatible_launch:
+        installer = compatible_installer_class(MemberBridgeInstaller)(
+            helper.paths,
+            root=ROOT,
+            test_mode=True,
+            submitter=helper.installer.submitter,
+        )
+        installer._tailscale_identity = helper.installer._tailscale_identity
     return compatible_helper_class(MemberBridgeEnrollmentHelper).resume(
         helper.paths,
         repository_root=ROOT,
         test_mode=True,
         reporter=reporter or _composed_reporter(client),
         evidence_submitter=helper._evidence_submitter,
-        installer=helper.installer,
+        installer=installer,
     )
 
 
@@ -148,6 +184,387 @@ def _run(
         descriptors=DESCRIPTORS,
         snapshot=lambda _helper: {"control": _control(client, headers)},
     )
+
+
+def _block_at_initial_start(
+    helper: Any, monkeypatch: pytest.MonkeyPatch, capability: str = "apple_notes"
+) -> None:
+    """Exercise retained enable_pack's actual rollback after central start ACK."""
+    for selected in helper.capability_states:
+        if selected != capability:
+            helper.record_prerequisite_missing(
+                selected, reason="local_prerequisite_unavailable"
+            )
+    helper.record_permission(
+        capability,
+        granted=True,
+        pack_config=helper.pack_config_for(
+            capability,
+            source_coordinate=f"fixture-{capability}-container",
+            account_coordinate=f"fixture-{capability}-account",
+        ),
+    )
+    before_config = helper.paths.config_path.read_bytes()
+
+    def failed_start() -> None:
+        raise BridgeEnrollmentError("fixture launchd bootstrap failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(helper.installer, "_start", failed_start)
+        with pytest.raises(BridgeEnrollmentError, match="fixture launchd"):
+            helper.prove_and_start(capability)
+    assert helper.capability_states[capability] == "observation_starting"
+    assert helper.paths.config_path.read_bytes() == before_config
+    assert load_config(helper.paths.config_path).enabled_packs == []
+    assert helper.installer.status()["service"] == "stopped"
+    helper.record_capability_degraded(capability, reason="local_capability_test_failed")
+
+
+def _initial_start_status(client: TestClient, helper: Any) -> dict[str, Any]:
+    response = client.get(
+        "/api/bridge/enrollment/status",
+        headers=_bridge_headers(helper.transfer),
+        params={"request_id": helper.transfer["request_id"]},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _initial_start_post(
+    client: TestClient,
+    helper: Any,
+    capability: str,
+    proof: str | None,
+) -> Any:
+    transfer = helper.transfer
+    payload = {
+        "contract": PROGRESS_CONTRACT,
+        **{
+            key: transfer[key]
+            for key in (
+                "request_id",
+                "enrollment_id",
+                "member_id",
+                "instance_id",
+                "release_commit",
+                "capability_set_sha256",
+            )
+        },
+        "previous_state": helper.state,
+        "state": helper.state,
+        "nonce": "fixture-initial-start-recovery-nonce",
+        "reported_at": datetime.now(timezone.utc).isoformat(),
+        "device_node_id": helper.device_node_id,
+        "enrollment_event_id": None,
+        "capability_id": capability,
+        "capability_state": "observation_starting",
+        "reason": None,
+        "last_successful_observation": None,
+        "pack_config": None,
+        "capability_event_id": None,
+    }
+    headers = {
+        **_bridge_headers(transfer),
+        "X-AdministrateMe-Bridge-State-SHA256": hashlib.sha256(
+            canonical_bytes(
+                {
+                    "state": helper.state,
+                    "capability_states": helper.capability_states,
+                }
+            )
+        ).hexdigest(),
+    }
+    if proof is not None:
+        headers["X-AdministrateMe-Bridge-Initial-Start-Recovery"] = proof
+    return client.post(
+        "/api/bridge/enrollment/progress",
+        headers=headers,
+        json={**payload, "signature": progress_signature(helper._proof_key(), payload)},
+    )
+
+
+def test_initial_start_rollback_recovers_all_sources_without_repeating_notes_consent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    settings = _configuration_settings(tmp_path)
+    with TestClient(
+        create_application(settings),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        _manual_policies(client)
+        original, transfer = _prepare_helper(client, tmp_path, CAPABILITIES)
+        _block_at_initial_start(original, monkeypatch)
+        snapshot = _initial_start_status(client, original)
+        assert snapshot["permission_retry_capabilities"] == [
+            "apple_calendar",
+            "apple_reminders",
+        ]
+        assert set(snapshot["initial_start_recovery"]) == {"apple_notes"}
+        proof = snapshot["initial_start_recovery"]["apple_notes"]
+        assert set(proof) == {"proof_sha256", "configured_source_sha256"}
+        assert all(len(value) == 64 for value in proof.values())
+        before = client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+        record = runtime.settings.bridge_enrollments[
+            MEMBER_HEADERS["Tailscale-User-Login"]
+        ]
+        original_notes = copy.deepcopy(record["pack_config"][PACKS["apple_notes"]])
+        helper = _resume(client, original, compatible_launch=True)
+        interaction = NativeFixture()
+        result = _run(client, helper, interaction)
+        assert result["outcome"] == "ready", result
+        assert result["provider_effects"] is False
+        assert not any(
+            capability == "apple_notes" for _action, capability in interaction.calls
+        )
+        assert record["pack_config"][PACKS["apple_notes"]] == original_notes
+        progress = client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+        assert progress[: len(before)] == before
+        notes_tail = [
+            event["payload"]["capability_state"]
+            for event in progress[len(before) :]
+            if event["payload"].get("capability_id") == "apple_notes"
+        ]
+        assert notes_tail == ["observation_starting", "observing"]
+        assert not (helper.paths.root / "permission-controller-pending.json").exists()
+        source_ids = {}
+        for capability in CAPABILITIES:
+            accepted = client.post(
+                "/api/bridge/ingest",
+                headers=_bridge_headers(transfer),
+                json=_observation(
+                    runtime, capability, f"initial-start-recovered-{capability}"
+                ),
+            )
+            assert accepted.status_code == 202, accepted.text
+            source_ids[capability] = accepted.json()["event_id"]
+        assert (
+            _control(client)["bridge_wizard"]["current"]["state"]
+            == "active_observation"
+        )
+        for capability, projection in (
+            ("apple_calendar", "calendars"),
+            ("apple_reminders", "lists"),
+            ("apple_notes", "member_knowledge"),
+        ):
+            client.portal.call(
+                runtime.wait_for_projection, projection, source_ids[capability]
+            )
+        calendar = client.get(
+            "/api/member/v1/surfaces/calendar?date=2031-01-02&view=day",
+            headers=MEMBER_HEADERS,
+        )
+        assert calendar.status_code == 200, calendar.text
+        assert any(
+            row["external_uid"] == "initial-start-recovered-apple_calendar"
+            for row in calendar.json()["events"]
+        )
+        reminders = client.get(
+            "/api/member/v1/surfaces/reminders", headers=MEMBER_HEADERS
+        )
+        assert reminders.status_code == 200, reminders.text
+        assert "initial-start-recovered-apple_reminders" in json.dumps(
+            reminders.json()["cockpit"]["items"]
+        )
+        notes = client.get("/api/member/v1/surfaces/notes", headers=MEMBER_HEADERS)
+        assert notes.status_code == 200, notes.text
+        assert any(
+            row["knowledge_id"] == "initial-start-recovered-apple_notes"
+            for row in notes.json()["notes"]
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:member_knowledge_indexing",
+            source_ids["apple_notes"],
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "source-policy-v2:shadow",
+            source_ids["apple_notes"],
+        )
+        assurance = client.portal.call(
+            _settled_source_assurance, runtime, source_ids["apple_notes"]
+        )
+        assert assurance["state"] == "healthy", assurance
+        _assert_history(client.portal.call(_history, runtime.event_log))
+        assert (
+            len(
+                client.get("/api/capture/v1/knowledge", headers=MEMBER_HEADERS).json()[
+                    "items"
+                ]
+            )
+            == 1
+        )
+        assert (
+            client.get("/api/capture/v1/knowledge", headers=OTHER_HEADERS).json()[
+                "items"
+            ]
+            == []
+        )
+        connections = [
+            item
+            for item in _control(client)["connections"]
+            if item.get("deployment") == "member bridge"
+        ]
+        assert len(connections) == 3
+        assert all(
+            item["setup"] == "connected" and not item["safety"]["writes_execute"]
+            for item in connections
+        )
+        for kind in (
+            "external.sent",
+            "external_sync.write_requested",
+            "external_sync.write_completed",
+            "triage.item.proposed",
+        ):
+            assert client.portal.call(_events, runtime, kind) == []
+        retained_progress = client.portal.call(
+            _events, runtime, "bridge.enrollment_progressed"
+        )
+    with TestClient(
+        create_application(settings), base_url="https://central-fixture.ts.net"
+    ) as restarted:
+        runtime = restarted.app.state.runtime
+        assert (
+            _control(restarted)["bridge_wizard"]["current"]["state"]
+            == "active_observation"
+        )
+        restarted_progress = restarted.portal.call(
+            _events, runtime, "bridge.enrollment_progressed"
+        )
+        assert restarted_progress == retained_progress
+        _assert_history(restarted.portal.call(_history, runtime.event_log))
+        assert _initial_start_status(restarted, helper)["initial_start_recovery"] == {}
+        assert restarted.portal.call(_events, runtime, "external.sent") == []
+
+
+@pytest.mark.parametrize("capability", CAPABILITIES)
+@pytest.mark.parametrize(
+    "case", ["missing", "malformed", "changed", "observed_race", "config_drift"]
+)
+def test_initial_start_proof_refusals_precede_nonce_consumption_and_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capability: str,
+    case: str,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    with TestClient(
+        create_application(_configuration_settings(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        _manual_policies(client)
+        original, transfer = _prepare_helper(client, tmp_path, CAPABILITIES)
+        _block_at_initial_start(original, monkeypatch, capability)
+        proof = _initial_start_status(client, original)["initial_start_recovery"][
+            capability
+        ]["proof_sha256"]
+        record = runtime.settings.bridge_enrollments[
+            MEMBER_HEADERS["Tailscale-User-Login"]
+        ]
+        if case == "observed_race":
+            accepted = client.post(
+                "/api/bridge/ingest",
+                headers=_bridge_headers(transfer),
+                json=_observation(
+                    runtime, capability, "initial-start-observation-race"
+                ),
+            )
+            assert accepted.status_code == 202, accepted.text
+            assert (
+                _control(client)["bridge_wizard"]["current"]["capability_states"][
+                    capability
+                ]["state"]
+                == "degraded"
+            )
+        if case == "config_drift":
+            changed_config = copy.deepcopy(record["pack_config"])
+            changed_config[PACKS[capability]]["ownership_attested"] = False
+            monkeypatch.setitem(record, "pack_config", changed_config)
+        before_record = copy.deepcopy(record)
+        before = client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+        before_receipt = original.paths.receipt_path.read_bytes()
+        before_config = original.paths.config_path.read_bytes()
+        provided = (
+            None
+            if case == "missing"
+            else "not-a-proof"
+            if case == "malformed"
+            else "0" * 64
+            if case == "changed"
+            else proof
+        )
+        denied = _initial_start_post(client, original, capability, provided)
+        assert denied.status_code == 409, denied.text
+        assert (
+            denied.json()["detail"]["error"] == "bridge_progress_stale_before_mutation"
+        )
+        assert denied.json()["detail"]["effects"] == "none"
+        assert record == before_record
+        assert (
+            client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+            == before
+        )
+        assert original.paths.receipt_path.read_bytes() == before_receipt
+        assert original.paths.config_path.read_bytes() == before_config
+        if case in {"missing", "malformed", "changed"}:
+            # Same nonce remains usable after the proven pre-mutation refusal.
+            accepted = _initial_start_post(client, original, capability, proof)
+            assert accepted.status_code == 202, accepted.text
+        assert client.portal.call(_events, runtime, "external.sent") == []
+
+
+@pytest.mark.parametrize("case", ["revoked", "previously_observing", "unknown"])
+def test_initial_start_does_not_resume_revoked_active_or_unknown_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    with TestClient(
+        create_application(_configuration_settings(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        _manual_policies(client)
+        original, _transfer = _prepare_helper(client, tmp_path, CAPABILITIES)
+        if case == "previously_observing":
+            _enable(original, "apple_notes")
+            original.record_capability_degraded(
+                "apple_notes", reason="local_capability_test_failed"
+            )
+        else:
+            _block_at_initial_start(original, monkeypatch)
+        if case == "revoked":
+            response = client.post(
+                f"/api/member/v1/settings/bridges/{REQUEST_ID}/control",
+                headers=MEMBER_HEADERS,
+                json={"command_id": "initial-start-revoke", "action": "revoke"},
+            )
+            assert response.status_code == 200, response.text
+        if case == "unknown":
+            pending = original.paths.root / "permission-controller-pending.json"
+            pending.write_text('{"outcome":"unknown"}')
+            pending.chmod(0o600)
+        before = client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+        config = original.paths.config_path.read_bytes()
+        receipt = original.paths.receipt_path.read_bytes()
+        interaction = NativeFixture()
+        result = _run(client, _resume(client, original), interaction)
+        assert result["outcome"] == ("unknown" if case == "unknown" else "blocked"), (
+            result
+        )
+        assert interaction.calls == []
+        assert original.paths.receipt_path.read_bytes() == receipt
+        assert original.paths.config_path.read_bytes() == config
+        assert (
+            client.portal.call(_events, runtime, "bridge.enrollment_progressed")
+            == before
+        )
+        assert client.portal.call(_events, runtime, "external.sent") == []
 
 
 def test_three_blocked_apple_paths_recover_with_original_signed_history_and_settle(

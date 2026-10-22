@@ -255,6 +255,26 @@ adapter attestation or observation startup. The retained adapter-authentication
 idempotency contract does not establish fresh authority for a later same-source
 reauthorization. Such a source is reported as unsupported before new permission,
 configuration or proof mutations; the helper must not attempt it and fail later.
+A separate initial-start continuation preserves an already verified source whose
+first local daemon start rolled back. It is not permission retry or active-source
+reauthorization. The central snapshot must prove one original signed permission,
+attestation and observation-start chain ending in the exact degraded receipt,
+unchanged source authority and coordinates, no prior observation or activation,
+and no intervening owner control. The recovery POST rechecks that proof under the
+source-admission lock before consuming its nonce or appending any event; an
+observation arriving after the snapshot invalidates it even without wizard drift.
+
+The sealed helper requires the entire local selection stopped and absent from
+launchd, no surviving daemon, no enabled pack, and no unresolved command journal.
+It rechecks these prerequisites after explicit native continuation consent,
+continues the single failed start first, and retains that source's permission and
+configuration. Multiple ambiguous start recoveries, an already enabled source,
+prior activation, revocation and unknown outcomes remain blocked. The retained
+runtime and original signed progress writer are unchanged. The helper-owned
+launch adapter synchronizes unloading, startup and confirmed-stop rollback;
+unknown cleanup never restores configuration underneath a possibly live process.
+Actual admitted observations and projection settlement still establish usability.
+
 Cancelling a native permission dialog or source picker stops subsequent prompts
 without recording a false missing-prerequisite or degraded-source fact.
 

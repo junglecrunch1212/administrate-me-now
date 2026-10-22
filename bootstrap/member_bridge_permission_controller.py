@@ -23,6 +23,7 @@ import importlib
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import threading
@@ -108,6 +109,16 @@ CODES = frozenset(
         "invalid_result",
         "another_helper_running",
         "central_protocol_unavailable",
+        "launch_binding_mismatch",
+        "launch_config_mismatch",
+        "launch_not_quiescent",
+        "launch_state_unknown",
+        "launch_stop_unknown",
+        "launch_start_unknown",
+        "launch_recovery_pending",
+        "launch_rollback_failed",
+        "launch_start_failed",
+        "launch_busy",
     }
 )
 EXIT_CODES = {"ready": 0, "cancelled": 0, "blocked": 2, "unknown": 3}
@@ -163,6 +174,7 @@ def http_progress_report(
     signature: str,
     *,
     state_sha256: str,
+    initial_start_recovery_sha256: str | None = None,
     post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Use the retained signer through its reporter injection, with normal TLS."""
@@ -170,13 +182,20 @@ def http_progress_report(
 
     central = str(transfer.get("central_url") or "")
     validate_origin(central)
+    headers = {
+        "X-AdministrateMe-Bridge-Enrollment": str(transfer["enrollment_id"]),
+        "X-AdministrateMe-Bridge-State-SHA256": state_sha256,
+    }
+    if initial_start_recovery_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", initial_start_recovery_sha256):
+            raise PermissionFailure("unsupported_recovery")
+        headers["X-AdministrateMe-Bridge-Initial-Start-Recovery"] = (
+            initial_start_recovery_sha256
+        )
     try:
         response = (post or httpx.post)(
             central.rstrip("/") + "/api/bridge/enrollment/progress",
-            headers={
-                "X-AdministrateMe-Bridge-Enrollment": str(transfer["enrollment_id"]),
-                "X-AdministrateMe-Bridge-State-SHA256": state_sha256,
-            },
+            headers=headers,
             json={**payload, "signature": signature},
             timeout=20,
             follow_redirects=False,
@@ -301,8 +320,12 @@ def compatible_helper_class(base: Any) -> Any:
         _observation_snapshot: Any = None
         _expected_central_commit = ""
         _permission_retry_capabilities: frozenset[str] = frozenset()
+        _initial_start_recovery: dict[str, dict[str, str]]
+        _initial_start_preflight: frozenset[str] = frozenset()
+        _initial_start_proof: str | None = None
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._initial_start_recovery = {}
             reporter = kwargs.pop("reporter", None) or http_progress_report
 
             def checked_reporter(
@@ -319,7 +342,10 @@ def compatible_helper_class(base: Any) -> Any:
                         separators=(",", ":"),
                     ).encode()
                 ).hexdigest()
-                result = reporter(transfer, payload, signature, state_sha256=digest)
+                options: dict[str, Any] = {"state_sha256": digest}
+                if self._initial_start_proof is not None:
+                    options["initial_start_recovery_sha256"] = self._initial_start_proof
+                result = reporter(transfer, payload, signature, **options)
                 validate_progress_ack(result, payload)
                 return result
 
@@ -394,6 +420,9 @@ def compatible_helper_class(base: Any) -> Any:
             self._permission_retry_capabilities = frozenset(
                 snapshot["permission_retry_capabilities"]
             )
+            self._initial_start_recovery = dict(
+                snapshot.get("initial_start_recovery", {})
+            )
             if state == self.state and capabilities == self.capability_states:
                 return False
 
@@ -438,6 +467,10 @@ def compatible_helper_class(base: Any) -> Any:
                         )
                     except UncommittedProgressConflict:
                         self._definite_progress_stop = True
+                        if self._initial_start_proof is not None:
+                            # A source can arrive without changing the wizard
+                            # state. Never refresh and retry this start proof.
+                            raise PermissionFailure("unsupported_recovery") from None
                         if self._observation_snapshot is None:
                             raise PermissionFailure("state_mismatch") from None
                         self._known_uncommitted_report = True
@@ -494,6 +527,45 @@ def compatible_helper_class(base: Any) -> Any:
                 capability_id=capability,
                 capability_state="permission_required",
             )
+
+        def continue_initial_start(self, capability: str, *, confirmed: bool) -> None:
+            self.reconcile_observation_progress()
+            proof = self._initial_start_recovery.get(capability)
+            if (
+                not confirmed
+                or capability not in self._initial_start_preflight
+                or self.capability_states.get(capability) != "degraded"
+                or proof is None
+            ):
+                raise PermissionFailure("unsupported_recovery")
+            from adminme.bridge_enrollment import CAPABILITIES
+
+            try:
+                self.installer.verify_initial_start_recovery(
+                    {str(CAPABILITIES[key]["pack"]) for key in self.capability_states}
+                )
+            except Exception as exc:
+                raise PermissionFailure(
+                    getattr(exc, "code", "launch_state_unknown"),
+                    unknown=getattr(exc, "unknown", True),
+                ) from exc
+
+            def start() -> None:
+                self.permission_stage = "start"
+                self._initial_start_proof = proof["proof_sha256"]
+                try:
+                    self._report(
+                        self.state,
+                        capability_id=capability,
+                        capability_state="observation_starting",
+                    )
+                finally:
+                    self._initial_start_proof = None
+                self.installer.enable_pack(str(CAPABILITIES[capability]["pack"]))
+
+            # Preserve the whole known/unknown operation boundary, including
+            # local startup after the central signed acknowledgement.
+            self._component_operation(start, "start_failed")
 
     return Retained043PermissionHelper
 
@@ -807,6 +879,26 @@ def validate_observation_snapshot(
         )
     ):
         raise PermissionFailure("central_protocol_unavailable")
+    starts = value.get("initial_start_recovery", {})
+    if not isinstance(starts, dict) or set(starts) & set(retryable):
+        raise PermissionFailure("central_protocol_unavailable")
+    for capability, proof in starts.items():
+        if (
+            capability not in SELECTED
+            or capability not in helper.capability_states
+            or current["capability_states"][capability]["state"] != "degraded"
+            or current["capability_states"][capability].get(
+                "last_successful_observation"
+            )
+            is not None
+            or not isinstance(proof, dict)
+            or set(proof) != {"proof_sha256", "configured_source_sha256"}
+            or not isinstance(proof.get("proof_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", proof["proof_sha256"])
+            or proof.get("configured_source_sha256") != expected_digests.get(capability)
+            or capability not in expected_digests
+        ):
+            raise PermissionFailure("central_protocol_unavailable")
     final_states = {
         key: row["state"] for key, row in current["capability_states"].items()
     }
@@ -1189,8 +1281,28 @@ def run_controller(
                 ],
             )
         retry_confirmed = False
-        if set(blocked) - helper._permission_retry_capabilities:
+        initial_starts = set(helper._initial_start_recovery)
+        if set(blocked) - helper._permission_retry_capabilities - initial_starts:
             raise PermissionFailure("unsupported_recovery")
+        helper._initial_start_preflight = frozenset()
+        if initial_starts:
+            if len(initial_starts) != 1:
+                raise PermissionFailure("unsupported_recovery")
+            selected = tuple(
+                sorted(selected, key=lambda key: key not in initial_starts)
+            )
+            # A start failure can leave a daemon that loaded temporary config.
+            # Prove the whole selection quiescent before any sibling starts.
+            try:
+                helper.installer.verify_initial_start_recovery(
+                    {str(descriptors[key]["pack"]) for key in selected}
+                )
+            except Exception as exc:
+                raise PermissionFailure(
+                    getattr(exc, "code", "launch_state_unknown"),
+                    unknown=getattr(exc, "unknown", True),
+                ) from exc
+            helper._initial_start_preflight = frozenset(initial_starts)
         if blocked:
             if operation != "continue":
                 raise PermissionFailure("unsupported_recovery")
@@ -1226,6 +1338,11 @@ def run_controller(
                     continue
                 if state in {"paused", "revoked", "unsupported"}:
                     raise PermissionFailure("unsupported_recovery")
+                if capability in initial_starts:
+                    helper.continue_initial_start(capability, confirmed=retry_confirmed)
+                    helper.record_observing(capability)
+                    rows.append(_row(capability, "observing", "complete", "ok"))
+                    continue
                 if state in BLOCKED:
                     helper.request_permission_retry(
                         capability, confirmed=retry_confirmed
@@ -1327,7 +1444,11 @@ def run_controller(
                 )
                 if exc.native_error_number is not None:
                     rows[-1]["native_error_number"] = exc.native_error_number
-                if exc.unknown or helper.permission_stage == "preflight":
+                if (
+                    exc.unknown
+                    or helper.permission_stage == "preflight"
+                    or capability in initial_starts
+                ):
                     for remaining in selected[len(rows) :]:
                         rows.append(
                             _row(
@@ -1383,12 +1504,28 @@ def validate_runtime_interfaces(root: Path) -> None:
             raise PermissionFailure("runtime_mismatch")
 
 
+def load_launch_controller(path: Path, expected_sha256: str) -> dict[str, Any]:
+    """Load only the separately sealed helper resource, never an ambient module."""
+    _private_file(path)
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+        or hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256
+    ):
+        raise PermissionFailure("runtime_mismatch")
+    module = runpy.run_path(str(path))
+    if not callable(module.get("compatible_installer_class")):
+        raise PermissionFailure("runtime_mismatch")
+    return module
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-root", required=True, type=Path)
     parser.add_argument("--expected-runtime-commit", required=True)
     parser.add_argument("--expected-central-commit", required=True)
     parser.add_argument("--bridge-root", required=True, type=Path)
+    parser.add_argument("--launch-controller", required=True, type=Path)
+    parser.add_argument("--launch-controller-sha256", required=True)
     parser.add_argument("--operation", choices=("initial", "continue"), required=True)
     args = parser.parse_args(argv)
     selected: tuple[str, ...] = ()
@@ -1412,7 +1549,7 @@ def main(argv: list[str] | None = None) -> int:
             MacOSEnrollmentInteraction,
             MemberBridgeEnrollmentWizard,
         )
-        from bootstrap.bridge_enrollment import MemberBridgePaths
+        from bootstrap.bridge_enrollment import MemberBridgeInstaller, MemberBridgePaths
 
         if (
             reviewed_release(
@@ -1422,8 +1559,14 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise PermissionFailure("runtime_mismatch")
         paths = MemberBridgePaths.from_root(args.bridge_root, production=True)
+        launch_module = load_launch_controller(
+            args.launch_controller, args.launch_controller_sha256
+        )
+        installer = launch_module["compatible_installer_class"](MemberBridgeInstaller)(
+            paths, root=root
+        )
         helper = compatible_helper_class(MemberBridgeEnrollmentHelper).resume(
-            paths, repository_root=root
+            paths, repository_root=root, installer=installer
         )
         selected = tuple(helper.capability_states)
         interaction = native_interaction(MacOSEnrollmentInteraction, LocalSourceChoice)

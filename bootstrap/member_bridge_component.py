@@ -156,6 +156,7 @@ HELPER_COMPONENT_PATHS = frozenset(
         "bootstrap/member_bridge_helper_app.py",
         "bootstrap/member_bridge_component.py",
         "bootstrap/member_bridge_permission_controller.py",
+        "bootstrap/member_bridge_launch.py",
     }
 )
 NON_RUNTIME_PATHS = frozenset({"scripts/release_scope.py"})

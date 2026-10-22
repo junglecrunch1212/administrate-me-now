@@ -107,6 +107,7 @@ jobs:
             tests/unit/bootstrap/test_member_bridge_helper_app.py \
             tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
             tests/unit/bootstrap/test_member_bridge_permission_controller.py \
+            tests/unit/bootstrap/test_member_bridge_launch.py \
             tests/unit/bootstrap/test_member_bridge_component.py \
             tests/unit/bootstrap/test_bridge_enrollment.py \
             tests/unit/test_bridge_release_identity.py \
@@ -204,6 +205,7 @@ jobs:
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_member_bridge_permission_controller.py
+          tests/unit/bootstrap/test_member_bridge_launch.py
           tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_authorization.py

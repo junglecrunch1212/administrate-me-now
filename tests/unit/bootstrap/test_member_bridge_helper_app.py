@@ -116,6 +116,17 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
         == result.permission_controller_sha256
     )
     assert manifest["permission_controller_sha256"] in launcher
+    launch = destination / manifest["launch_controller_path"]
+    assert (
+        launch.read_bytes()
+        == (REPO_ROOT / "bootstrap/member_bridge_launch.py").read_bytes()
+    )
+    assert (
+        hashlib.sha256(launch.read_bytes()).hexdigest()
+        == manifest["launch_controller_sha256"]
+        == result.launch_controller_sha256
+    )
+    assert manifest["launch_controller_sha256"] in launcher
     assert stat.S_IMODE(controller.stat().st_mode) == 0o600
     assert len(manifest["installer_sha256"]) == 64
     assert len(manifest["release_archive_sha256"]) == 64
