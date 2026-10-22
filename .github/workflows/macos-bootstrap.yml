@@ -127,7 +127,7 @@ jobs:
         run: |
           poetry run ruff check .
           poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
-          poetry run mypy bootstrap scripts/release_scope.py
+          poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py
           bash scripts/verify_invariants.sh
           poetry check --lock
           poetry -C bridge check --lock
@@ -178,6 +178,9 @@ jobs:
         run: |
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
+
+      - name: Validate helper bootstrap type boundary
+        run: poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py --no-error-summary
 
       # Collect all selected lifecycle failures within the existing job bound.
       - name: Validate native helper and enrollment composition
@@ -562,7 +565,7 @@ jobs:
       - name: Static checks and secret-safe tree
         run: |
           poetry run ruff check bootstrap tests/unit/bootstrap tests/acceptance/test_macos_bootstrap_operations.py
-          poetry run mypy bootstrap --no-error-summary
+          poetry run mypy bootstrap bridge/adminme_bridge --no-error-summary
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git diff --check "origin/${{ github.base_ref }}...HEAD"
           fi

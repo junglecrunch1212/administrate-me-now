@@ -128,7 +128,7 @@ jobs:
         run: |
           poetry run ruff check .
           poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
-          poetry run mypy bootstrap scripts/release_scope.py
+          poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py
           bash scripts/verify_invariants.sh
           poetry check --lock
           poetry -C bridge check --lock

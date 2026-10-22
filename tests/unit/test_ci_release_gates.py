@@ -431,6 +431,29 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
     assert job["steps"][-1]["id"] == "validated"
 
 
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_bootstrap_type_checks_include_the_imported_bridge_sources(
+    filename: str,
+) -> None:
+    checks = []
+    for job in _workflow(filename)["jobs"].values():
+        for step in job["steps"]:
+            for line in step.get("run", "").splitlines():
+                if "poetry run mypy" not in line:
+                    continue
+                tokens = shlex.split(line, comments=True)
+                if "bootstrap" in tokens:
+                    checks.append(tokens)
+    assert checks
+    assert all("bridge/adminme_bridge" in tokens for tokens in checks)
+    if filename == "macos-bootstrap.yml":
+        steps = _workflow(filename)["jobs"]["bridge-development"]["steps"]
+        names = [step.get("name") for step in steps]
+        assert names.index("Validate helper bootstrap type boundary") < names.index(
+            "Validate native helper and enrollment composition"
+        )
+
+
 def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
     assert job["if"] == "${{ needs.release-scope.outputs.scope != 'documentation' }}"
