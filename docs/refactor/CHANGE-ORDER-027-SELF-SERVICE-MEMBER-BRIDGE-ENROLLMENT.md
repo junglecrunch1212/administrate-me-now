@@ -166,6 +166,125 @@ The supported component delivery procedure is:
 Packaging tests prove that the verified predecessor remains intact; they are
 not a claim that an actual device replacement or rollback was performed.
 
+### Permission recovery and concurrent source settlement
+
+**MODERNIZE:** a sealed helper-owned permission controller may use a retained,
+unchanged runtime through an explicit compatibility adapter. The controller is
+an exact component resource with a manifest and launcher hash; it is not copied
+into the installed runtime or imported by the central application. Compatibility
+binds the expected runtime source identity and the exact interface implementation
+used by the adapter. A changed or unknown interface fails closed. Excluding this
+helper resource from the runtime fingerprint does not exclude shared bridge
+code, central policy, schemas or dependencies from release validation.
+
+Permission recovery also depends on the central enrollment protocol. Source
+observations can arrive while another source's native dialog is open, or before
+the helper receives confirmation that its daemon started. Central progress must
+serialize validation, proof consumption, index changes and durable progress
+with observation settlement and member controls. An observation arriving while
+its source is `observation_starting` remains durably admitted. After the genuine
+helper reports `observing`, central catch-up finds the first admitted observation
+after that source's exact authorization boundary and appends the existing
+`settling`/`settled` progress. It preserves the helper command's acknowledgement.
+No new centrally reported `observing` fact is introduced: the predecessor's
+historical auditor and existing transition semantics remain compatible.
+Configuring another source preserves the aggregate attestation derived from all
+configured sources; an already attested source must remain admitted while the
+new source awaits its own proof. This uses the existing index commit procedure
+and never gives the new source authority before attestation.
+
+The controller's restrictive state-vector hash precondition covers every selected
+capability as well as the aggregate state. A source can settle while the aggregate
+remains `settling`; checking only that aggregate would accept a stale helper
+vector and lose the reconciliation base. This header grants no authority and
+does not replace the retained signed body or any identity check.
+
+The explicit builder option `--runtime-compatibility-contract
+bridge-permission-recovery-v1` supports this mixed central/helper repair. It permits
+only regular-file modifications of the fixed central enrollment router and
+the exact reviewed old/new source pair for the central coordinator fix, plus the
+closed `cos-standing-replies-457-v1` central overlay. The overlay is a single
+coherent group of 23 exact path/presence/mode/hash pairs from retained public
+release `043ac68915b185be4ada771f6893a4d69c3f994b` to the reviewed PR457 central
+sources at `d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21`. Its four added central
+files must be absent from the retained archive. Partial mixtures, unknown bytes,
+mode drift and any other dependency or edge-contract change fail closed. This
+does not establish a generic central-code exclusion or change release scope.
+A separate `hosted-gateway-startup-probe-456-v1` exact regular-file hash pair
+covers the hosted approval probe's pinned disabled-heartbeat startup check.
+It is recorded independently of the unchanged PR457 group, remains a runtime
+input for default compatibility and CI, and is never copied over the retained
+archive. Its corrected bytes execute only in the isolated hosted probe.
+The exact coordinator
+pair changes only the body of `BridgeEnrollmentCoordinator.configure_capability`;
+the edge-used definitions remain unchanged. Unknown shared-module bytes fail
+closed. The manifest records both hashes and retains every byte of the paired
+archive. The controller accepts only the exact
+reviewed retained/current interface hashes. Default compatibility and the CI
+runtime fingerprint remain strict. The
+launcher binds the expected central release independently of the paired edge
+release; the authenticated protocol must match before any permission action.
+The real packaged installation gate uses the complete `043` archive, whose
+SHA-256 is `12eaab9cd6325200b0fa795236fd5da917f221282a582cc8a8767e94e6847df3`,
+and verifies every retained and candidate overlay coordinate. It checks fresh
+and interrupted installs and loads the sealed current controller through the
+retained interpreter. Central reply schemas remain confined to the central
+runtime; bridge enrollment, source-observation envelopes and provider authority
+continue to use their unchanged contracts. The authenticated current-central
+composition tests remain necessary alongside the archive/import smoke. This
+evidence does not assert real macOS permission grants or member-device usability.
+
+The adapter reuses the retained helper's signed progress, central validation and
+acknowledged local persistence, and its read-only `_identity()` device probe.
+Current Tailscale login and node must match both the local binding and central
+member/request evidence. Its narrowly documented protected `_report` seam supports a fresh `permission_required` transition for an explicitly selected
+blocked source after local retry consent. It does not manufacture a permission,
+attestation, member identity or provider action. The same request and original
+failure history remain intact. Paused, revoked, unexpected or mismatched current
+bindings stop before source access; settled sources remain untouched. An
+authenticated, exact-bound central snapshot may reconcile only proven monotonic
+observation progress through the helper's supported persistence path. It cannot
+grant permission, configure a source, establish an attestation or resolve an
+unknown command. A typed stale-state refusal may be retried only when the central
+protocol proves it preceded nonce consumption and every durable effect, and only
+for that individual report. Lost responses and ambiguous local persistence remain
+unknown and stop; a new nonce never substitutes for missing command evidence.
+
+Retry eligibility is limited to initial permission failures that never reached
+adapter attestation or observation startup. The retained adapter-authentication
+idempotency contract does not establish fresh authority for a later same-source
+reauthorization. Such a source is reported as unsupported before new permission,
+configuration or proof mutations; the helper must not attempt it and fail later.
+Cancelling a native permission dialog or source picker stops subsequent prompts
+without recording a false missing-prerequisite or degraded-source fact.
+
+Calendar and Reminders selection uses EventKit metadata and verifies the selected
+identifier through the same EventKit lookup used by the daemon. Scripting IDs are
+not assumed to be EventKit identifiers. Calendar read setup requires macOS Full
+Calendar access, not Add Only access; macOS has no separate read-only grant.
+AdministrateMe still denies provider writes throughout this setup. Notes retains
+its native scripting permission and content-free availability check. Native
+permission choices are made by the member; the helper never clicks TCC dialogs.
+Purpose strings explain the access used by these selected-source checks.
+
+Diagnostics contain only enumerated capability, stage and result codes. Native
+source output, raw exception text, container labels/coordinates, account data and
+credentials are not retained. Blocked or uncertain results must not show a
+successful enrollment message. The helper's permission status and successful
+local probe do not prove the separately launched daemon can observe: actual
+central settlement and the ordinary device health check remain required.
+
+Validation includes all three permission recovery paths through
+production enrollment/progress/attestation, private manual source admission,
+historical attribution and readiness; cancellation, denied and partial states;
+restart, stale binding, revocation and unknown outcomes; observations interleaved
+with daemon startup and remaining native prompts; packaged invocation,
+resource integrity and secret cleanup. Hosted native ABI, authorization-status
+and error checks are distinct from synthetic granted-access composition. No
+native grant is fabricated to turn a hosted limitation into a successful source
+read. Actual member permission and daemon observation remain deployment
+acceptance requirements.
+
 ## Independent lifecycle and capability gates
 
 The wizard uses the one exact lifecycle:

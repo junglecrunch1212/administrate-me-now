@@ -34,6 +34,7 @@ const plugin = path.join(directory, "plugin");
 await mkdir(state, { mode: 0o700 });
 await mkdir(path.join(plugin, "node_modules"), { recursive: true, mode: 0o700 });
 const readyFile = path.join(directory, "ready");
+const cronReadyFile = path.join(directory, "cron-ready.json");
 const seedFile = path.join(directory, "seeds.json");
 const token = randomBytes(32).toString("hex");
 const secret = randomBytes(32).toString("hex");
@@ -141,9 +142,62 @@ async function connect(port, scopes, caps = []) {
     caps,
     auth: { token },
   });
+  const connectionPhase = evidence.phase;
+  evidence.phase = `${connectionPhase}:hello-type`;
   assert.equal(hello.type, "hello-ok");
+  evidence.phase = `${connectionPhase}:hello-scopes`;
   for (const scope of scopes) assert.ok(hello.auth.scopes.includes(scope));
+  evidence.phase = connectionPhase;
   return client;
+}
+
+
+async function assertDisabledHeartbeatCron(scheduler, phase) {
+  evidence.phase = `${phase}:read`;
+  const [status, page, enabled] = await Promise.all([
+    scheduler.request("cron.status", {}),
+    scheduler.request("cron.list", { includeDisabled: true, includeDeliveryPreviews: false }),
+    scheduler.request("cron.list", { enabled: "enabled", includeDeliveryPreviews: false }),
+  ]);
+  evidence.phase = `${phase}:status`;
+  assert.equal(status.enabled, true);
+  assert.equal(status.jobs, 1);
+  assert.equal(status.nextWakeAtMs, null);
+  evidence.phase = `${phase}:inventory`;
+  assert.equal(page.total, 1);
+  assert.equal(page.hasMore, false);
+  assert.equal(page.jobs.length, 1);
+  const job = page.jobs[0];
+  evidence.phase = `${phase}:disabled-system-heartbeat`;
+  assert.deepEqual({
+    declarationKey: job.declarationKey, agentId: job.agentId, name: job.name,
+    enabled: job.enabled, payload: job.payload,
+    sessionTarget: job.sessionTarget, wakeMode: job.wakeMode,
+  }, {
+    declarationKey: `heartbeat:${agent}`, agentId: agent, name: `heartbeat-${agent}`,
+    enabled: false, payload: { kind: "heartbeat" },
+    sessionTarget: "main", wakeMode: "next-heartbeat",
+  });
+  // This pin retains one disabled monitor even for every="0m". Its fallback
+  // cadence is metadata, not enabled work; arbitrary extra jobs remain forbidden.
+  assert.equal(job.schedule.kind, "every");
+  assert.equal(job.schedule.everyMs, 30 * 60 * 1_000);
+  assert.ok(Number.isFinite(job.schedule.anchorMs));
+  assert.equal(job.trigger, undefined);
+  evidence.phase = `${phase}:no-scheduled-or-completed-work`;
+  for (const key of ["nextRunAtMs", "runningAtMs", "lastRunAtMs", "lastRunStatus", "lastStatus"]) {
+    assert.equal(job.state[key], undefined);
+  }
+  assert.equal(job.nextRunAtMs, undefined);
+  assert.equal(job.lastRunAtMs, undefined);
+  assert.equal(job.lastRunStatus, undefined);
+  assert.deepEqual(enabled.jobs, []);
+  assert.equal(enabled.total, 0);
+  assert.equal(enabled.hasMore, false);
+  return {
+    enabled: status.enabled, jobs: status.jobs, listed_jobs: page.jobs.length,
+    enabled_jobs: enabled.total, disabled_system_heartbeat: true, next_wake_absent: true,
+  };
 }
 
 function ticket(operation, overrides = {}) {
@@ -238,17 +292,20 @@ try {
     OPENCLAW_SKIP_CANVAS_HOST: "1", OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     ADMINME_APPROVAL_PROBE_SECRET: secret,
     ADMINME_APPROVAL_PROBE_SEEDS: seedFile, ADMINME_APPROVAL_PROBE_READY: readyFile,
+    ADMINME_APPROVAL_PROBE_CRON_READY: cronReadyFile,
   });
   // On this exact pin the first two flags select sidecarStartup="defer",
   // hiding the effect of synchronous service-start waits on normal readiness.
   // Explicitly clear these even if the parent or permission environment set
-  // them; an enabled empty scheduler must also execute its normal lifecycle.
+  // them; the enabled scheduler must also execute its normal lifecycle.
   for (const key of ["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS", "OPENCLAW_SKIP_CRON"]) {
     delete env[key];
     assert.equal(env[key], undefined);
   }
   evidence.startup_mode = "normal";
   evidence.phase = "gateway-normal-startup";
+  assert.deepEqual(await readdir(state), []);
+  evidence.checks.push("isolated-state-initially-empty");
   const startupAt = Date.now();
   gateway = spawn(process.execPath, [path.join(source, "openclaw.mjs"), "gateway", "run"], {
     cwd: directory, env, stdio: ["ignore", "pipe", "pipe"],
@@ -271,26 +328,30 @@ try {
   }, "normal Gateway readiness after production service startup", 60_000);
   evidence.checks.push("production-service-started");
   evidence.normal_startup_ms = Date.now() - startupAt;
-  evidence.phase = "normal-cron-readiness";
+  evidence.phase = "normal-cron-reconciliation";
+  // /readyz precedes post-ready cron startup on this pin. The public hook is
+  // emitted only after cron.start and system-heartbeat reconciliation finish.
+  const cronMarker = await until(async () => {
+    try { return JSON.parse(await readFile(cronReadyFile, "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") throw error; return false; }
+  }, "normal cron startup reconciliation", 30_000);
+  evidence.phase = "normal-cron-reconciliation-marker";
+  assert.deepEqual(cronMarker, {
+    contract: "cos-approval-probe-cron-ready-v1", reason: "startup", enabled: true,
+  });
+  evidence.cron_reconciliation = cronMarker;
+  evidence.phase = "normal-cron-connect";
   const scheduler = await connect(port, ["operator.read"]);
-  const [cronStatus, cronPage] = await Promise.all([
-    scheduler.request("cron.status", {}),
-    scheduler.request("cron.list", { includeDisabled: true, includeDeliveryPreviews: false }),
-  ]);
-  assert.equal(cronStatus.enabled, true);
-  assert.equal(cronStatus.jobs, 0);
-  assert.equal(cronStatus.nextWakeAtMs, null);
-  assert.deepEqual(cronPage.jobs, []);
-  assert.equal(cronPage.total, 0);
-  assert.equal(cronPage.hasMore, false);
-  evidence.cron = { enabled: cronStatus.enabled, jobs: cronStatus.jobs, listed_jobs: cronPage.jobs.length };
-  evidence.checks.push("normal-startup-ready-and-empty-cron-responsive");
+  evidence.cron = await assertDisabledHeartbeatCron(scheduler, "normal-cron");
+  evidence.checks.push("normal-cron-reconciled-with-one-disabled-heartbeat-and-no-enabled-work");
+  evidence.phase = "approval-connections";
   const requester = await connect(port, ["operator.approvals"]);
   const dashboard = await connect(port, ["operator.read", "operator.write"]);
   const unrelatedApprover = await connect(port, ["operator.approvals"]);
   const list = (overrides = {}) => dashboard.request(
     "administrateme.cosApprovals.list", ticket("list", overrides),
   );
+  evidence.phase = "approval-registry-readiness";
   assert.deepEqual(await requester.request("plugin.approval.list", {}), []);
   // The service hook must return before the public native SDK hello can finish.
   // Poll the production fail-closed read seam with a fresh ticket on every try;
@@ -413,6 +474,9 @@ try {
     await assert.rejects(resolve({ decision }), /RPC refused/);
     evidence.checks.push(`${name}-decision-native-pending-finalized-and-replay-denied`);
   }
+  evidence.cron_after_approvals = await assertDisabledHeartbeatCron(scheduler, "final-cron");
+  evidence.checks.push("disabled-heartbeat-remained-idle-through-approval-probes");
+  evidence.phase = "no-agent-transcripts-or-pending-approvals";
   const stateFiles = await readdir(state, { recursive: true });
   assert.deepEqual(stateFiles.filter((name) => /sessions\/.*\.jsonl$/.test(name)), []);
   evidence.checks.push("no-agent-transcripts-or-pending-approvals");
@@ -420,7 +484,8 @@ try {
   evidence.phase = "complete";
 } catch (error) {
   // Errors contain operation names/codes only; never echo tickets or credentials.
-  evidence.error = error instanceof assert.AssertionError ? "Assertion failed" : String(error.message);
+  evidence.error = error instanceof assert.AssertionError
+    ? `Assertion failed: ${evidence.phase}` : String(error.message);
   process.exitCode = 1;
 } finally {
   for (const client of clients) client.close();

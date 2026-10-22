@@ -38,7 +38,9 @@ HELPER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_member_bridge_component.py",
         "tests/unit/bootstrap/test_member_bridge_helper_app.py",
         "tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py",
+        "tests/unit/bootstrap/test_member_bridge_permission_controller.py",
         "tests/acceptance/test_member_bridge_installer_runtime.py",
+        "tests/acceptance/test_member_bridge_permission_recovery.py",
     }
 )
 SCOPES = frozenset({"documentation", "bridge-helper", "system-wide"})

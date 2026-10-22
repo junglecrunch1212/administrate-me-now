@@ -1,6 +1,6 @@
 // Hosted-only plugin: real production relay, real Gateway services and registry.
 // This fixture adds no production API and never registers a tool or channel.
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { registerCosApprovalRelay } from "./cos-approval-relay.js";
 import { registerCosPermissionPreflight } from "./cos-permission-preflight.js";
 
@@ -15,6 +15,18 @@ export default {
     };
     const relay = registerCosApprovalRelay(api, runtime);
     registerCosPermissionPreflight(api, runtime);
+    // This public pinned lifecycle hook follows real cron.start and disabled
+    // heartbeat convergence. It only records fixed metadata; it changes no job.
+    api.on("cron_reconciled", async (event, context) => {
+      if (event.reason !== "startup" || context.abortSignal.aborted) return;
+      const marker = process.env.ADMINME_APPROVAL_PROBE_CRON_READY;
+      const temporary = `${marker}.tmp`;
+      await writeFile(temporary, JSON.stringify({
+        contract: "cos-approval-probe-cron-ready-v1",
+        reason: event.reason, enabled: event.enabled,
+      }), { mode: 0o600 });
+      if (!context.abortSignal.aborted) await rename(temporary, marker);
+    });
     // Synthetic emitter only: delivery and session filtering use the actual
     // pinned Gateway, without a model, provider, or household transcript.
     api.registerGatewayMethod("administrateme.probe.chat.emit", ({ params, context, respond }) => {

@@ -24,11 +24,30 @@ import pytest
 
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from bootstrap.source_identity import write_source_marker
-from bootstrap.member_bridge_component import runtime_interface_fingerprint
+from bootstrap.member_bridge_component import (
+    PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
+    PERMISSION_RECOVERY_COMPATIBILITY,
+    PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
+    PERMISSION_RECOVERY_COS_OVERLAY,
+    PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+    PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+    PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+    PERMISSION_RECOVERY_METHOD_RULE,
+    PERMISSION_RECOVERY_PROTOCOL,
+    PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+    PERMISSION_RECOVERY_SHARED_MODULE,
+    runtime_interface_fingerprint,
+)
 from bootstrap.member_bridge_helper_app import build_member_bridge_helper_app
 
 
 ROOT = Path(__file__).resolve().parents[2]
+RETAINED_RUNTIME_ARCHIVE_SHA256 = (
+    "12eaab9cd6325200b0fa795236fd5da917f221282a582cc8a8767e94e6847df3"
+)
 pytestmark = pytest.mark.skipif(
     os.environ.get("ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME") != "1",
     reason="real bridge installation requires its explicit isolated hosted job",
@@ -323,89 +342,24 @@ def test_real_clean_and_interrupted_member_install_preview(
         env=env,
         log=artifact_dir / "candidate.log",
     ).stdout.strip()
-    candidate_commit = commit
-    candidate_archive = workspace / "candidate source.tar"
-    _run(
-        [
-            "/usr/bin/git",
-            "--no-replace-objects",
-            "-C",
-            str(ROOT),
-            "archive",
-            "--format=tar",
-            f"--output={candidate_archive}",
-            candidate_commit,
-        ],
-        cwd=workspace,
-        env=env,
-        log=artifact_dir / "candidate-archive.log",
-    )
-    # Isolated compatibility fixture: A retains exactly the candidate runtime
-    # bytes, with an older helper-only comment. B restores the exact candidate
-    # installer. Real install/preview must bind A while executing installer B.
-    # Build the actual sealed mixed component and use its bundled installer and
-    # archive, crossing the packager/installer/production-preview boundaries.
-    fixture_repository = workspace / "component compatibility repository"
-    fixture_repository.mkdir(mode=0o700)
-    with tarfile.open(candidate_archive) as package_archive:
-        package_archive.extractall(fixture_repository, filter="data")
-    installer = fixture_repository / "bootstrap/install-member-bridge.sh"
-    candidate_installer = installer.read_bytes()
-    installer.write_bytes(
-        candidate_installer + b"\n# Synthetic retained helper revision.\n"
-    )
-    git_steps = [
-        ["init", "-b", "fixture"],
-        ["config", "user.name", "Component fixture"],
-        ["config", "user.email", "component-fixture@example.invalid"],
-        ["add", "--force", "--all"],
-        ["commit", "-m", "Synthetic retained runtime with older helper"],
-    ]
-    for index, arguments in enumerate(git_steps):
-        _run(
-            ["/usr/bin/git", "-C", str(fixture_repository), *arguments],
-            cwd=workspace,
-            env=env,
-            log=artifact_dir / f"component-fixture-{index}.log",
-        )
-    commit = _run(
-        ["/usr/bin/git", "-C", str(fixture_repository), "rev-parse", "HEAD"],
-        cwd=workspace,
-        env=env,
-        log=artifact_dir / "retained-runtime-commit.log",
-    ).stdout.strip()
-    installer.write_bytes(candidate_installer)
-    for index, arguments in enumerate(
-        [
-            ["add", "--", "bootstrap/install-member-bridge.sh"],
-            ["commit", "-m", "Exact candidate helper with retained runtime"],
-        ]
-    ):
-        _run(
-            ["/usr/bin/git", "-C", str(fixture_repository), *arguments],
-            cwd=workspace,
-            env=env,
-            log=artifact_dir / f"component-helper-{index}.log",
-        )
-    component_commit = _run(
-        ["/usr/bin/git", "-C", str(fixture_repository), "rev-parse", "HEAD"],
-        cwd=workspace,
-        env=env,
-        log=artifact_dir / "helper-component-commit.log",
-    ).stdout.strip()
-    assert commit != component_commit != candidate_commit
-    runtime_fingerprint = runtime_interface_fingerprint(fixture_repository, commit)
-    assert runtime_fingerprint == runtime_interface_fingerprint(
-        fixture_repository, component_commit
-    )
-    assert runtime_fingerprint == runtime_interface_fingerprint(ROOT, candidate_commit)
+    candidate_commit = component_commit = commit
+    commit = PERMISSION_RECOVERY_COS_RETAINED_COMMIT
+    # Use the actual complete public retained release, not a candidate tree with
+    # only the enrollment repair undone. This exercises every reviewed central
+    # CoS delta while preserving the existing request's exact archive identity.
+    candidate_installer = (ROOT / "bootstrap/install-member-bridge.sh").read_bytes()
+    candidate_route = (ROOT / "adminme/products/bridge/routers/ingest.py").read_bytes()
+    assert component_commit != commit
+    runtime_fingerprint = runtime_interface_fingerprint(ROOT, commit)
+    component_fingerprint = runtime_interface_fingerprint(ROOT, component_commit)
+    assert runtime_fingerprint != component_fingerprint
     archive = workspace / "retained runtime.tar"
     _run(
         [
             "/usr/bin/git",
             "--no-replace-objects",
             "-C",
-            str(fixture_repository),
+            str(ROOT),
             "archive",
             "--format=tar",
             f"--output={archive}",
@@ -421,20 +375,40 @@ def test_real_clean_and_interrupted_member_install_preview(
         package_archive.extractall(source, filter="data")
     write_source_marker(source, commit)
     assert not (source / ".git").exists()
+    assert not (source / "bootstrap/member_bridge_permission_controller.py").exists()
     archive_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert archive_sha256 == RETAINED_RUNTIME_ARCHIVE_SHA256
+    legacy_route = (source / "adminme/products/bridge/routers/ingest.py").read_bytes()
     helper_app = workspace / "Current Bridge Helper.app"
     built = build_member_bridge_helper_app(
         helper_app,
-        root=fixture_repository,
+        root=ROOT,
         expected_commit=component_commit,
         runtime_commit=commit,
         expected_runtime_archive_sha256=archive_sha256,
+        runtime_compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
     )
     manifest = json.loads(
         (helper_app / "Contents/Resources/helper-manifest.json").read_text()
     )
     bundled_installer = helper_app / manifest["installer_path"]
     bundled_archive = helper_app / manifest["release_archive_path"]
+    bundled_controller = helper_app / manifest["permission_controller_path"]
+    candidate_controller = (
+        ROOT / "bootstrap/member_bridge_permission_controller.py"
+    ).read_bytes()
+    assert bundled_controller.read_bytes() == candidate_controller
+    assert (
+        manifest["permission_controller_sha256"]
+        == hashlib.sha256(candidate_controller).hexdigest()
+    )
+    info = plistlib.loads((helper_app / "Contents/Info.plist").read_bytes())
+    for key in (
+        "NSCalendarsFullAccessUsageDescription",
+        "NSRemindersFullAccessUsageDescription",
+        "NSAppleEventsUsageDescription",
+    ):
+        assert info[key]
     assert (
         built.helper_component_commit
         == manifest["helper_component_commit"]
@@ -449,7 +423,97 @@ def test_real_clean_and_interrupted_member_install_preview(
     assert (
         manifest["runtime_compatibility"]["runtime_input_sha256"] == runtime_fingerprint
     )
-    assert manifest["runtime_compatibility"]["runtime_inputs_unchanged"] is True
+    assert manifest["runtime_compatibility"]["runtime_inputs_unchanged"] is False
+    assert manifest["runtime_compatibility"]["retained_edge_inputs_unchanged"] is True
+    assert (
+        manifest["runtime_compatibility"]["central_candidate_runtime_input_sha256"]
+        == component_fingerprint
+    )
+    assert manifest["required_central_protocol"] == PERMISSION_RECOVERY_PROTOCOL
+    assert manifest["required_central_release_commit"] == component_commit
+    expected_differences = [
+        {
+            "path": PERMISSION_RECOVERY_SHARED_MODULE,
+            "retained": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
+            },
+            "compatibility_rule": PERMISSION_RECOVERY_METHOD_RULE,
+            "reviewed_central_method_body": "BridgeEnrollmentCoordinator.configure_capability",
+        },
+        {
+            "path": "adminme/products/bridge/routers/ingest.py",
+            "retained": {
+                "mode": "100644",
+                "sha256": hashlib.sha256(legacy_route).hexdigest(),
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": hashlib.sha256(candidate_route).hexdigest(),
+            },
+        },
+    ]
+    for path, (old_sha, new_sha) in PERMISSION_RECOVERY_COS_OVERLAY.items():
+        old_file = source / path
+        if old_sha is None:
+            assert not old_file.exists()
+        else:
+            assert hashlib.sha256(old_file.read_bytes()).hexdigest() == old_sha
+        assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == new_sha
+        expected_differences.append(
+            {
+                "path": path,
+                "retained": {"mode": "100644", "sha256": old_sha} if old_sha else None,
+                "central_candidate": {"mode": "100644", "sha256": new_sha},
+                "compatibility_rule": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+            }
+        )
+    assert (
+        hashlib.sha256(
+            (source / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).read_bytes()
+        ).hexdigest()
+        == PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256
+    )
+    assert (
+        hashlib.sha256(
+            (ROOT / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).read_bytes()
+        ).hexdigest()
+        == PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256
+    )
+    expected_differences.append(
+        {
+            "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+            "retained": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+            },
+            "compatibility_rule": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+        }
+    )
+    assert manifest["runtime_compatibility"]["central_differences"] == sorted(
+        expected_differences, key=lambda row: str(row["path"])
+    )
+    assert manifest["runtime_compatibility"]["reviewed_central_overlay"] == {
+        "contract": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+        "retained_reference_commit": PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
+        "central_reference_commit": PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
+        "paths": sorted(PERMISSION_RECOVERY_COS_OVERLAY),
+        "complete_group_verified": True,
+    }
+    assert manifest["runtime_compatibility"]["reviewed_hosted_gateway_probe"] == {
+        "contract": PERMISSION_RECOVERY_GATEWAY_PROBE_RULE,
+        "path": PERMISSION_RECOVERY_GATEWAY_PROBE_PATH,
+        "retained_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256,
+        "central_candidate_sha256": PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256,
+    }
     assert (
         built.release_archive_sha256
         == manifest["release_archive_sha256"]
@@ -594,14 +658,71 @@ def test_real_clean_and_interrupted_member_install_preview(
         proof = json.loads(probe.stdout)
         assert Path(proof["prefix"]) == release / ".venv"
         outcomes.append({"stage": stage, "status": "passed", **proof})
+    # Real installed dependency ABI and sealed resource loading, without
+    # requesting/granting TCC or reading any real calendar/reminder records.
+    native_probe = _run(
+        [
+            str(installed_python),
+            "-I",
+            "-c",
+            "import hashlib,json,runpy,sys; from pathlib import Path; import EventKit; "
+            "controller=Path(sys.argv[1]); "
+            "assert hashlib.sha256(controller.read_bytes()).hexdigest()==sys.argv[2]; "
+            "namespace=runpy.run_path(str(controller)); assert callable(namespace['validate_result']); "
+            "runtime_root=Path(sys.prefix).parent; "
+            "namespace['validate_runtime_interfaces'](runtime_root); "
+            "assert hashlib.sha256((runtime_root/'adminme/bridge_enrollment.py').read_bytes()).hexdigest()==sys.argv[3]; "
+            "from adminme_bridge.enrollment_helper import MemberBridgeEnrollmentHelper; "
+            "from adminme_bridge.enrollment_ui import MacOSEnrollmentInteraction; "
+            "from bootstrap.bridge_enrollment import MemberBridgePaths; "
+            "assert callable(MemberBridgeEnrollmentHelper.resume) and callable(MacOSEnrollmentInteraction) and callable(MemberBridgePaths.from_root); "
+            "store=EventKit.EKEventStore.alloc().init(); "
+            "assert callable(store.requestFullAccessToEventsWithCompletion_); "
+            "assert callable(store.requestFullAccessToRemindersWithCompletion_); "
+            "statuses=[int(EventKit.EKEventStore.authorizationStatusForEntityType_(kind)) for kind in (EventKit.EKEntityTypeEvent,EventKit.EKEntityTypeReminder)]; "
+            "assert all(status in (0,1,2) for status in statuses), 'hosted runner must not have real granted store access'; "
+            "calendar=EventKit.EKCalendar.calendarForEntityType_eventStore_(EventKit.EKEntityTypeEvent,store); "
+            "calendar.setTitle_('Synthetic unsaved calendar'); "
+            "assert calendar.title()=='Synthetic unsaved calendar'; "
+            "assert int(calendar.allowedEntityTypes()) & 1; "
+            "assert callable(store.calendarWithIdentifier_); "
+            "interaction=namespace['native_interaction'](object,object); "
+            "failure=namespace['PermissionFailure']\n"
+            "try:\n"
+            "    interaction._run_native(['/usr/bin/osascript','-e','error \"synthetic authorization denial\" number -1743'])\n"
+            "except failure as exc:\n"
+            "    assert exc.code=='native_permission_denied'\n"
+            "else:\n"
+            "    raise AssertionError('native denial was not classified')\n"
+            "print(json.dumps({'sealed_controller_import':True,'eventkit_abi':True,'authorization_states':statuses,'unsaved_metadata':True,'permission_requested':False,'provider_records_read':False,'provider_writes':False,'osascript_native_error_classification':'native_permission_denied'}))",
+            str(bundled_controller),
+            manifest["permission_controller_sha256"],
+            PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
+        ],
+        cwd=workspace,
+        env=env,
+        log=artifact_dir / "permission-native-abi.log",
+    )
+    native_permission_proof = json.loads(native_probe.stdout)
     (artifact_dir / "installer-runtime-proof.json").write_text(
         json.dumps(
             {
                 "release_commit": commit,
                 "candidate_source_commit": candidate_commit,
-                "synthetic_helper_component_commit": component_commit,
+                "helper_component_commit": component_commit,
+                "actual_retained_archive": True,
+                "reviewed_central_overlay": manifest["runtime_compatibility"][
+                    "reviewed_central_overlay"
+                ],
                 "runtime_input_sha256": runtime_fingerprint,
+                "central_candidate_runtime_input_sha256": component_fingerprint,
+                "retained_edge_inputs_unchanged": True,
+                "required_central_protocol": PERMISSION_RECOVERY_PROTOCOL,
                 "installer_sha256": hashlib.sha256(candidate_installer).hexdigest(),
+                "permission_controller_sha256": manifest[
+                    "permission_controller_sha256"
+                ],
+                "native_permission_smoke": native_permission_proof,
                 "mixed_component_and_retained_runtime": True,
                 "sealed_combined_package": True,
                 "runtime_archive_sha256": archive_sha256,
