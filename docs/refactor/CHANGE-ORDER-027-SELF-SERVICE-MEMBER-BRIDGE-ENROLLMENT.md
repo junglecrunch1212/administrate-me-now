@@ -472,3 +472,20 @@ color reader, bridge integration, privacy/authorization and launch/recovery
 contracts. Unlisted paths, dependency changes and mode changes select the system
 gate. Native installation tests now package the candidate runtime, because a
 color-reader change cannot honestly claim the retained runtime is unchanged.
+
+### Selected Reminders acquisition repair (2026-10-22)
+
+PRESERVE the enrolled read ceiling before native acquisition and all source
+emissions. The Reminders bridge resolves only approved list identifiers and
+fetches their reminders, so an unrelated list cannot abort the permitted sync
+with a central container denial. Unselected list metadata and reminder content
+stay on the member device. The central admission rules remain unchanged.
+
+The contained runtime repair also supports a successor to an already repaired
+runtime while preserving the original enrollment identity. Only the reviewed
+Reminders adapter and native shim may differ; source configuration, dependency,
+credential, history and all other edge interfaces remain fixed. Both the original
+and already-deployed CoS schema overlay are recognized for the predecessor.
+The same preparation, stopped replacement, settlement and exact-operation
+rollback contract applies. An intentionally empty selected calendar is not
+proof of a read failure; report zero records without inventing a provider write.

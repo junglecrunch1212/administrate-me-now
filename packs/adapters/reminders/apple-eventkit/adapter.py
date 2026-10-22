@@ -327,6 +327,20 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         max_inbound_cycles: int | None = None,
     ) -> None:
         self._config = dict(config)
+        allowed_list_ids = self._config.get("allowed_container_ids")
+        if "allowed_container_ids" in self._config and (
+            not isinstance(allowed_list_ids, list)
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in allowed_list_ids
+            )
+        ):
+            raise ValueError("config.allowed_container_ids must be a list of list IDs")
+        self._allowed_read_list_ids: tuple[str, ...] | None = (
+            tuple(dict.fromkeys(allowed_list_ids))
+            if isinstance(allowed_list_ids, list)
+            else None
+        )
         # [§6 invariant 10] re-assert the class-level floor against the
         # resolved config. Reminders does NOT allow raising to
         # ``privileged`` via config (unlike Gmail) because adapter-level
@@ -1069,6 +1083,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             and int(self._config.get("emit_schema_version", 1)) >= 2
         ):
             for missing_id in self._known_inbound_ids - observed_ids:
+                list_id = str(
+                    self._inbound_snapshots.get(missing_id, {}).get("list_external_id")
+                    or self._config["target_list_identifier"]
+                )
+                if not self._read_list_allowed(list_id):
+                    continue
                 await self._append(
                     ctx=ctx,
                     event_type="list_item.deleted",
@@ -1080,12 +1100,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                             self._config.get("provider_account_id")
                             or self._config["member_id"]
                         ),
-                        "list_external_id": str(
-                            self._inbound_snapshots.get(missing_id, {}).get(
-                                "list_external_id"
-                            )
-                            or self._config["target_list_identifier"]
-                        ),
+                        "list_external_id": list_id,
                         "item_external_id": missing_id,
                         "deleted_at": ctx.now_factory().isoformat(),
                         "sync_cycle_id": sync_cycle_id,
@@ -1099,26 +1114,56 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         await self._maybe_emit_inbound_cursor_advance(ctx=ctx)
         return emitted
 
+    def _read_list_allowed(self, list_id: str) -> bool:
+        return (
+            self._allowed_read_list_ids is None
+            or list_id in self._allowed_read_list_ids
+        )
+
+    def _list_passes_never_sync(self, list_name: str) -> bool:
+        return passes_never_sync(
+            list_name=list_name,
+            title="",
+            notes=None,
+            member_role=self._member_role_resolver(
+                str(self._config.get("member_id", ""))
+            ),
+            never_sync_list_substrings=self._never_sync_list_substrings,
+            never_sync_tag_substrings=self._never_sync_tag_substrings,
+        )
+
     async def _sync_lists(self, *, ctx: AdapterContext) -> None:
-        """Mirror every EventKit reminder list, including empty lists."""
+        """Mirror only permitted EventKit reminder lists, including empty lists."""
 
         ek_store = self._ek_store
-        if ek_store is None or not hasattr(ek_store, "fetch_lists"):
+        if (
+            ek_store is None
+            or not self._list_passes_never_sync("")
+            or not hasattr(ek_store, "fetch_lists")
+        ):
             return
         current: dict[str, dict[str, Any]] = {}
         provider_account_id = str(
             self._config.get("provider_account_id") or self._config["member_id"]
         )
-        for native_list in ek_store.fetch_lists():
+        native_lists = (
+            ek_store.fetch_lists()
+            if self._allowed_read_list_ids is None
+            else ek_store.fetch_lists(list_identifiers=self._allowed_read_list_ids)
+        )
+        for native_list in native_lists:
             list_id = str(
                 getattr(native_list, "calendarIdentifier", None)
                 or getattr(native_list, "calendar_identifier", None)
                 or ""
             )
-            if not list_id:
+            if not list_id or not self._read_list_allowed(list_id):
+                continue
+            list_name = str(getattr(native_list, "title", None) or list_id)
+            if not self._list_passes_never_sync(list_name):
                 continue
             snapshot = {
-                "list_name": str(getattr(native_list, "title", None) or list_id),
+                "list_name": list_name,
                 "color": getattr(native_list, "color", None),
                 "is_default": bool(getattr(native_list, "is_default", False)),
             }
@@ -1143,6 +1188,8 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 )
         if self._initial_sync_complete:
             for missing_id in set(self._known_lists) - set(current):
+                if not self._read_list_allowed(missing_id):
+                    continue
                 await self._append(
                     ctx=ctx,
                     event_type="list.deleted",
@@ -1157,7 +1204,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         self._known_lists = current
 
     def _fetch_reminders_filtered(self) -> list[Any]:
-        """Fetch every reminder across non-never-sync lists and apply
+        """Fetch reminders only from selected, non-never-sync lists and apply
         the never-sync predicate per item. Symmetric with the outbound
         boundary's filter — the same three rules (list-name substring,
         item-tag substring, owning-member role) gate both directions.
@@ -1170,12 +1217,25 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         ek_store = self._ek_store
         if ek_store is None:
             return []
-        all_reminders = ek_store.fetch_reminders()
         member_id = str(self._config.get("member_id", ""))
         member_role = self._member_role_resolver(member_id)
+        if not self._list_passes_never_sync(""):
+            return []
+        if self._allowed_read_list_ids is None:
+            all_reminders = ek_store.fetch_reminders()
+        else:
+            all_reminders = []
+            for list_id in self._allowed_read_list_ids:
+                list_name = ek_store.list_name_for_identifier(list_id)
+                if self._list_passes_never_sync(list_name):
+                    all_reminders.extend(
+                        ek_store.fetch_reminders(list_identifier=list_id)
+                    )
         passing: list[Any] = []
         for rem in all_reminders:
             list_id = str(getattr(rem, "list_identifier", "") or "")
+            if not self._read_list_allowed(list_id):
+                continue
             list_name = ek_store.list_name_for_identifier(list_id)
             title = str(getattr(rem, "title", "") or "")
             notes = getattr(rem, "notes", None)
@@ -1237,8 +1297,10 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         — the Pydantic model's enforcement is at registration time, not
         at adapter-emit time, but defending in depth is cheap."""
         member_id = str(self._config.get("member_id", ""))
-        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
         list_id = str(getattr(reminder, "list_identifier", "") or "")
+        if not self._read_list_allowed(list_id):
+            return
+        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
         ek_store = self._ek_store
         list_name = (
             ek_store.list_name_for_identifier(list_id)

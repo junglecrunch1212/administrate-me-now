@@ -41,11 +41,18 @@ reader = object.__new__(module.PyObjCEventStore)
 reader._store = SimpleNamespace(
     defaultCalendarForNewReminders=lambda: calendars[0],
     calendarsForEntityType_=lambda _: calendars,
+    calendarWithIdentifier_=lambda identifier: next(
+        item for item in calendars if item.calendarIdentifier == identifier
+    ),
 )
 for _ in range(100):
     lists = reader.fetch_lists()
     assert [item.color for item in lists] == ["#FF8000", "#808080"]
     assert [item.is_default for item in lists] == [True, False]
+    selected = reader.fetch_lists(list_identifiers=("gray",))
+    assert len(selected) == 1 and selected[0].color == "#808080"
+    assert not selected[0].is_default
+    assert reader.fetch_lists(list_identifiers=()) == []
 print("native reminder-list color acquisition passed")
 """
     result = subprocess.run(

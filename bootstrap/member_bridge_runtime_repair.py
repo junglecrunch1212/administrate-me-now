@@ -27,6 +27,9 @@ from bootstrap.member_bridge_component import PERMISSION_RECOVERY_COS_OVERLAY
 
 CONTRACT = "administrateme-member-runtime-repair-v1"
 COLOR_SHIM = "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py"
+ACQUISITION_PATHS = frozenset(
+    {COLOR_SHIM, "packs/adapters/reminders/apple-eventkit/adapter.py"}
+)
 UNCHANGED_FILES = (
     "poetry.lock",
     "bridge/poetry.lock",
@@ -75,7 +78,7 @@ def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
     result = {}
     for path in paths:
         relative = path.relative_to(root).as_posix()
-        if relative == COLOR_SHIM:
+        if relative in ACQUISITION_PATHS:
             continue
         if not launch._owned(path):
             raise ValueError("runtime interface missing or unsafe")
@@ -87,7 +90,8 @@ def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
             # These central-only schemas were already deployed independently;
             # the edge state and command formats remain byte-identical.
             old_digest, new_digest = PERMISSION_RECOVERY_COS_OVERLAY[relative]
-            if digest != (old_digest if retained else new_digest):
+            accepted = {old_digest, new_digest} if retained else {new_digest}
+            if digest not in accepted:
                 raise ValueError("unreviewed central schema difference")
             digest = str(old_digest)
         result[relative] = digest

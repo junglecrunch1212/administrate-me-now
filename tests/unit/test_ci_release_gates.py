@@ -1285,6 +1285,12 @@ def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies():
     changes = [
         ("A", "bootstrap/member_bridge_runtime_repair.py"),
         ("M", "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py"),
+        ("M", "packs/adapters/reminders/apple-eventkit/adapter.py"),
+        ("A", "tests/unit/adapters/reminders/test_eventkit_selected_sources.py"),
+        (
+            "M",
+            "tests/integration/test_adapter_apple_eventkit_dual_deployment_integration.py",
+        ),
     ]
     modes = {path: {"100644"} for _, path in changes}
     assert (
