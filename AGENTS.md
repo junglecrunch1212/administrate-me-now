@@ -21,7 +21,7 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 
 ## Deployment safety
 
-A deployment operates on the immutable merge commit from protected `main`. Use the existing guarded updater; keep observation mode active; verify an encrypted backup before switching; and roll back automatically on a new degradation or failed prerequisite. After activation, require bounded settlement, full Doctor, privacy and tenant-isolation checks, authenticated read-only browser acceptance for changed behavior, backup/rollback evidence, and zero unintended provider effects.
+A deployment operates on the immutable merge commit from protected `main`. A central runtime deployment uses the existing guarded updater, observation mode, verified encrypted backup, and automatic rollback on a new degradation or failed prerequisite. After central activation, require bounded settlement, full Doctor, privacy and tenant-isolation checks, authenticated read-only browser acceptance for changed behavior, backup/rollback evidence, and zero unintended provider effects. A supported compatible component release follows its bounded installation, health and rollback contract without manufacturing a central deployment or maintenance cycle.
 
 Runtime or dependency migration, provider enrollment, write enablement, Keychain or permission changes, and unrelated live repairs always require their own explicit owner request. Never edit an installed release, active virtual environment, LaunchAgent, encrypted state, or provider configuration to make activation pass. Hosted CI and subagents must not access the live family instance or credentials.
 
@@ -49,25 +49,22 @@ change crosses application boundaries. Run behavioral checks only in hosted CI
 or an authorized disposable lab; targeted testing does not authorize experiments
 on the family Mac, member acceptance devices, or the live instance.
 
-Keep the pull request in draft while iterating. The hosted development jobs run
-the selected bridge enrollment, installed-release identity, helper, and browser
-regressions; update that selection for the behavior and risk of the next change.
-The stable full-release job names deliberately fail on draft PRs, so a targeted
-pass cannot satisfy release approval. After a failure, reproduce and fix its
-concrete cause, batch related corrections, and pass the relevant regressions
-before requesting full release validation again. Return the PR to draft before
-publishing corrective development commits.
+Keep the pull request in draft while iterating. Select development checks by
+affected behavior and dependencies; a development pass is not automatically
+final release evidence. After a failure, reproduce and fix the concrete cause,
+batch related corrections, and pass relevant regressions before requesting
+another release run. Return an invalidated candidate to draft.
 
-When the candidate is settled, mark the same PR ready for review. This ordinary
-PR transition automatically runs the complete Linux and macOS release suites;
-it requires no label, staged review, or prescribed authorization phrase. Both
-complete suites must pass at the final candidate revision, along with every
-applicable protected check, before merge and the existing guarded deployment
-procedure. Missing, skipped, stale, or partial release results do not qualify.
-Preserve useful full checks already running at an unchanged revision. Do not
-restart them solely to adopt this workflow or repeat passed checks without new
-changes, failures, or unresolved concerns. Report targeted development results
-and complete release results distinctly, including failures and coverage gaps.
+When the candidate is settled, mark the same PR ready for its selected release
+scope. The stable protected jobs evaluate that scope and require its actual
+passing checks. Missing, failed, cancelled, skipped, stale or incomplete
+required evidence cannot approve release. No label, separate review artifact,
+prescribed phrase or additional owner approval is needed to select the
+authorized scope. Preserve useful running checks; do not restart them solely
+to adopt this policy. Retire an unnecessary broad run only after a legitimate
+scoped gate exists and its required evidence passes. Report development,
+scoped release and full-system results separately, with concrete failures and
+coverage gaps.
 
 ```bash
 poetry sync --with dev
@@ -81,9 +78,57 @@ npm --prefix openclaw/administrateme run check
 npm --prefix openclaw/administrateme test
 ```
 
-Before a deployment, also run the full unscoped lint suite, all pack/package validators, identity and instance-path scans, replay/isolation/backup tests, and the clean macOS lab rehearsal in `docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and failures verbatim.
+These commands are the full-system inventory, not a requirement to run every
+suite for every change. Full-system deployment validation also includes
+unscoped lint, all pack/package validators, identity and instance-path scans,
+replay/isolation/backup tests, and the clean macOS lab rehearsal in
+`docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and
+failures verbatim.
 
-## Readiness before full release validation
+## Risk-based release scope
+
+Owner-directed policy (2026-10-21) supersedes the earlier blanket requirement
+for complete Linux and macOS suites on every release. Optimize delivery for
+this household with bounded validation and recoverable changes:
+
+- Documentation, copy and other non-executable changes require relevant
+  document/static checks, not an application release or behavioral suite.
+- An isolated reversible component may release after its final scoped checks
+  cover the changed behavior, affected dependencies/interfaces, privacy and
+  security boundaries, and realistic installation/use on the affected platform.
+  File size alone does not establish isolation.
+- Broaden coverage for shared runtime/composition, encrypted storage or event
+  schema/migrations, cross-member identity/authorization, external-write
+  governance, or widely shared dependencies. Require full-system validation
+  when effects are system-wide or cannot be credibly bounded, and explain the
+  concrete reason. A localized sensitive fix still needs its complete affected
+  security/data contract; a bootstrap path or new commit alone is not a reason
+  to run every subsystem.
+- A bridge-helper-only installer/SDK/diagnostics release normally qualifies as
+  a component: prove actual packaged installation on the affected toolchain,
+  helper integrity, interrupted recovery, diagnostic/secret cleanup and deployed
+  enrollment-interface compatibility. Reuse the unchanged central runtime
+  through the supported compatible component path. Identify actual coupling
+  rather than silently rebuilding or redeploying the central application.
+- Retain the known-working predecessor and supported rollback. Perform bounded
+  component health/use checks after authorized deployment and roll back on a
+  regression. Verify backup/restore compatibility before persistent-state
+  changes; reuse valid unchanged evidence where its bindings permit.
+- Preserve ownership/isolation, encryption, append-only history, recipient
+  restrictions, independent sending approvals, credential handling and audited
+  external effects. Rollback cannot undo a disclosure or send. No candidate
+  experiments on family/member systems, installed-release edits or invented
+  permissions are permitted.
+- Keep protected PR delivery. The gate must evaluate the selected scope and
+  actual passing evidence; never remove protection, forge a status or bypass
+  the current gate while adding a narrower path. Policy/CI changes need focused
+  selection and validation tests, not inherently unrelated application suites.
+- Bind evidence to the component/artifact, relevant toolchain, locks,
+  dependencies and interfaces. Reuse unchanged component evidence only when
+  those inputs demonstrably match. Changed behavior and new interactions need
+  fresh checks; unrelated prose alone does not invalidate all prior evidence.
+
+## Readiness before release validation
 
 Owner-directed policy (2026-10-21): before declaring a behavioral candidate
 ready, trace the affected user workflow through its real production boundaries.
@@ -111,12 +156,12 @@ disposable lab. Preserve consent, permission, evidence-expiry and operational
 guards.
 
 Complete this bounded review and the relevant lifecycle checks before marking
-a draft ready or launching long release suites. Resolve known blockers and
+a draft ready or requesting final validation for its selected scope. Resolve known blockers and
 actionable findings, pass focused checks, and settle the candidate first. A new
 invalidating defect returns the PR to draft and relevant focused validation;
 explain the concrete reason for restarting. Preserve useful unchanged evidence
-and every required final-candidate gate. Report focused checks passed, full
-checks passed, deployed, and verified usable separately. Remaining dependencies
+and every required final-candidate gate. Report development checks passed,
+scoped/full release checks passed, deployed, and verified usable separately. Remaining dependencies
 are distinct from CI duration; test estimates are not completion promises.
 Summarize late defects and added coverage in the existing PR without another
 tracking/review task or permission ceremony.

@@ -15,9 +15,138 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-scope:
+    name: Select and validate release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      scope: ${{ steps.proof.outputs.scope }}
+      validated_sha: ${{ steps.proof.outputs.validated_sha }}
+      interface_sha256: ${{ steps.proof.outputs.interface_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14.7"
+      - name: Validate release policy and protected gate behavior
+        run: |
+          python -m pip install 'pytest==9.0.3' 'PyYAML==6.0.3'
+          python -m pytest -p no:cacheprovider --runxfail -q tests/unit/test_ci_release_gates.py
+      - name: Select scope from immutable Git inputs
+        id: proof
+        run: >-
+          python -m scripts.release_scope select
+          --event "$GITHUB_EVENT_PATH" --checkout-sha "$GITHUB_SHA"
+          --output "$RUNNER_TEMP/release-scope.json" --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-scope-linux
+          path: ${{ runner.temp }}/release-scope.json
+          if-no-files-found: error
+          retention-days: 7
+
+  documentation-validation:
+    name: Documentation release validation (linux)
+    needs: [release-scope]
+    if: ${{ needs.release-scope.outputs.scope == 'documentation' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14.7"
+      - name: Validate prose changes and repository invariants
+        run: |
+          git diff --check "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          bash scripts/verify_invariants.sh
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+  bridge-helper-validation:
+    name: Bridge helper component release (linux)
+    needs: [release-scope]
+    if: ${{ needs.release-scope.outputs.scope == 'bridge-helper' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ADMINME_TEST_MODE: "1"
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed"
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14.7"
+      - name: Install locked component test environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+      - name: Validate helper integrity, recovery, and retained runtime compatibility
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra -k 'not test_builds_reviewed_document_helper_without_secret_or_remote_execution and not test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback' \
+            --basetemp="$RUNNER_TEMP/adminme-helper-component" \
+            --junitxml="$RUNNER_TEMP/helper-component.xml" \
+            tests/unit/bootstrap/test_member_bridge_helper_app.py \
+            tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
+            tests/unit/bootstrap/test_member_bridge_component.py \
+            tests/unit/bootstrap/test_bridge_enrollment.py \
+            tests/unit/test_bridge_release_identity.py \
+            tests/unit/test_ci_release_gates.py \
+            tests/acceptance/test_self_service_member_bridge_enrollment.py \
+            tests/acceptance/test_bridge_readiness_transition.py
+          python - "$RUNNER_TEMP/helper-component.xml" <<'CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          suites = list(ET.parse(sys.argv[1]).getroot().iter('testsuite'))
+          assert sum(int(s.get('tests', '0')) for s in suites) > 0
+          assert all(int(s.get(k, '0')) == 0 for s in suites for k in ('skipped', 'failures', 'errors'))
+          CHECK
+      - name: Validate component source and privacy
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run mypy bootstrap scripts/release_scope.py
+          bash scripts/verify_invariants.sh
+          poetry check --lock
+          poetry -C bridge check --lock
+          bash -n bootstrap/install-member-bridge.sh
+          git diff --check
+          test -z "$(git status --porcelain)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: bridge-helper-component-linux
+          path: ${{ runner.temp }}/helper-component.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
   bridge-development:
+    needs: [release-scope]
     name: Targeted bridge development (Linux)
-    if: ${{ github.event.pull_request.draft }}
+    if: ${{ github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -66,6 +195,7 @@ jobs:
           tests/unit/test_cos_member_bridge_acquisition_policy.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_member_bridge_helper_app.py
+          tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_authorization.py
           tests/unit/test_bridge_release_identity.py
@@ -98,8 +228,11 @@ jobs:
           git diff --check
           test -z "$(git status --porcelain)"
 
-  # Keep this job name stable because protected main requires it.
-  deterministic-consistency:
+  # Preserve every system-wide release stage; the stable aggregate below selects it.
+  system-consistency:
+    name: System release validation (Linux)
+    needs: [release-scope]
+    if: ${{ !github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide' }}
     runs-on: ubuntu-latest
     # The complete rehearsal exceeded 90 minutes after all Python tests passed.
     # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
@@ -109,9 +242,10 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       # Preserve failed fixtures for diagnosis, releasing passed test trees.
       PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed"
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
     steps:
-      # Never skip the protected job: skipped jobs can satisfy protection.
-      # Ready PRs execute every existing full release step below.
+      # System-wide ready PRs execute every existing full release step below.
       - name: Require complete release validation
         if: ${{ github.event.pull_request.draft }}
         run: |
@@ -384,3 +518,31 @@ jobs:
           if [[ -d "${RUNNER_TEMP}/adminme-consistency-pytest" ]]; then
             du -sh "${RUNNER_TEMP}/adminme-consistency-pytest"
           fi
+
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+
+  deterministic-consistency:
+    name: deterministic-consistency
+    needs: [release-scope, documentation-validation, bridge-helper-validation, system-consistency]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14.7"
+      - name: Require complete evidence for the selected release scope
+        env:
+          RELEASE_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: >-
+          python -m scripts.release_scope gate --platform linux
+          --event "$GITHUB_EVENT_PATH" --checkout-sha "$GITHUB_SHA"

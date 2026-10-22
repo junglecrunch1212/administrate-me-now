@@ -70,6 +70,102 @@ central code, install an updater or remote shell, or start a connector merely
 because transport paired. The legacy unsigned bootstrap package remains
 accepted only by the established legacy path.
 
+Installation failures must remain diagnosable after a native dialog exits.
+The helper records a private, content-free phase and terminal exit receipt;
+dependency preparation retains a bounded private log before transfer-package
+inspection. Dependency progress is separate from the safe enrollment preview.
+Transfer codes and later enrollment output remain temporary and are deleted
+on exit. A phase receipt is diagnostic evidence, never acceptance, permission,
+source attestation or proof that installation completed. This MODERNIZE preserves
+the existing enrollment and write-authorization gates.
+
+Native dependency preparation must use an SDK compatible with the selected
+Apple developer tools. An unqualified `xcrun` SDK lookup can select a newer SDK
+than those tools support. Without an explicit SDK override, the installer uses
+the selected developer directory's canonical `MacOSX.sdk` and validates it.
+The locked native dependency build verifies compilation and linking. Explicit
+SDK or compiler selections are retained or fail with an actionable diagnostic;
+they are never silently replaced. Build-specific environment settings stay
+inside dependency preparation and do not reach enrollment or the running bridge.
+No system developer selection, SDK installation or symlink is changed. A complete
+existing environment and local continue/uninstall do not acquire a new build
+prerequisite. This MODERNIZE preserves the pinned dependencies and runtime.
+
+## Compatible helper component releases
+
+The owner-directed risk-based release policy in AC-21 **MODERNIZES** helper
+packaging without changing enrollment authority. A reviewed helper/installer
+component can be delivered separately while retaining the exact deployed
+runtime archive. The default build still uses one commit. The compatible build
+records two distinct immutable identities: the helper component source and the
+retained runtime. Existing `release_commit`, installed source markers, target
+runtime paths and handoff equality checks keep their runtime meaning. New
+helper/installer bytes remain outside that runtime archive and installed tree.
+
+The builder must prove compatibility from fixed Git objects, including paths,
+contents and executable modes. The versioned policy includes every tracked
+runtime input by default and excludes only explicit helper packaging files and
+identified non-runtime test/CI/prose paths. Dependency locks, package metadata,
+enrollment interfaces, schemas, runtime Markdown and unknown paths remain
+included. An addition, deletion or mode/content change to an included input
+refuses the compatible build. Component source must match its clean immutable
+commit, including bytes/modes hidden by Git index flags. The retained runtime
+must be an ancestor. Provenance does not replace protected PR approval.
+
+The sealed manifest binds both identities, compatibility policy and fingerprint,
+installer/launcher hashes and runtime archive hash. Verify the complete archive
+inventory against the fixed runtime tree and the supplied previously verified
+archive hash; Git attributes cannot silently change retained source. The new
+installer installs or resumes that retained runtime through the existing
+supported path. It cannot relabel changed runtime bytes as an old release,
+relax a transfer guard or overlay a patch onto an installed release.
+
+Final component validation covers the actual combined package on the affected
+macOS toolchain: Git-free installation, interrupted recovery, production preview,
+local management, integrity and secret cleanup, plus negative incompatible,
+dirty/tampered source, archive, mode and identity cases. Changes to scope/CI
+policy require their focused selection and fail-closed gate tests. A compatible
+helper-only release does not need unrelated full application suites or central
+redeployment. New runtime/interface interactions require fresh evidence even
+when unchanged installer/toolchain checks can be reused with matching bindings.
+
+After the component's protected-main merge, build and verify the sealed bundle,
+retain the known-working sealed predecessor, and install through the supported
+helper replacement procedure. Perform bounded installation/use checks on the
+authorized device. On regression, restore that predecessor bundle and document
+association; preserve runtime files, enrollment state, permissions and attempt
+history. Enrollment itself still requires a fresh valid handoff and actual
+member acceptance/permission gates. This component path neither grants those
+permissions nor requires maintenance of the unaffected central runtime.
+
+The supported component delivery procedure is:
+
+1. Verify the component's immutable protected-main identity and passing selected
+   checks. Read the runtime identity and previously verified archive SHA-256
+   from the retained helper's verified manifest. Build in a clean checkout with
+   `python -m bootstrap.member_bridge_helper_app`, a new `.app` destination,
+   `--expected-commit` for the component, `--runtime-commit` for the retained
+   runtime and `--expected-runtime-archive-sha256` for that archive. Verify the
+   resulting manifest, hashes and strict code seal before distribution.
+2. On the authorized device, confirm no helper run or dialog is active. Record
+   the original bundle location and document association, retain the exact
+   original sealed bundle with its metadata and hash receipt, and stage and
+   verify the replacement before replacing the bundle at that location. Register
+   the verified replacement's document association through macOS's supported
+   application-registration path. Do not modify any installed runtime files.
+3. Verify the installed bundle's manifest/hashes/seal and actual launch identity,
+   then use the ordinary fresh-handoff enrollment or existing local management
+   flow. A permission dialog remains a real member action; installation is not
+   enrollment, source readiness or permission evidence.
+4. If the component regresses, close its helper run, restore the exact preserved
+   bundle at the original location and restore/register its document association.
+   Recheck hashes/seal and launch identity. Preserve runtime files, enrollment,
+   permissions, diagnostics and attempts. If the predecessor was already stalled,
+   report restoration of that pre-change state, not successful onboarding.
+
+Packaging tests prove that the verified predecessor remains intact; they are
+not a claim that an actual device replacement or rollback was performed.
+
 ## Independent lifecycle and capability gates
 
 The wizard uses the one exact lifecycle:
@@ -162,8 +258,27 @@ development-checkout identity path.
 document handler, portable exact-release archive, installer binding, resumable
 native per-capability workflow, protected secret transport, and absence of
 updater, remote-shell, arbitrary-code, TCC bypass, and write authority. Existing
-bootstrap, bridge-ingest, Calendar, Reminders, Settings, replay, browser,
-clean-macOS rehearsal, and aggregate release gates remain required.
+bootstrap, bridge-ingest, Calendar, Reminders, Settings, replay, browser and
+clean-macOS coverage remains required when those contracts change. Final
+validation and protected aggregates select the actual affected scope under
+AC-21; unchanged central behavior can be reused for a compatible helper release.
+
+`tests/acceptance/test_member_bridge_installer_runtime.py` adds the actual
+packaged dependency-installation boundary in isolated hosted macOS: a Git-free
+archive, paths containing spaces, fresh tooling and dependency caches, a real
+main-only bridge environment, production preview, and recovery of an interrupted
+dependency installation. Both setup-python and actual Homebrew interpreters are
+covered. An older Apple linker with a newer SDK must reproduce the specific
+architecture-parser failure; the matching SDK must then support the real
+packaged installation and recovery. Compiler, linker and resolved SDK evidence
+distinguish these cases. FileVault and Tailscale host boundaries are synthetic;
+the setup-python case also substitutes only the Homebrew interpreter lookup.
+No member device or Apple source is used as a test target. The
+explicit installer job rejects empty or skipped coverage. Its exact success is
+required by the protected macOS aggregate for a helper component or full-system
+release. The aggregate fails explicitly if required evidence fails, is
+cancelled, skipped or missing. Combined component/runtime packaging requires
+its additional compatibility and actual installation proof.
 
 `tests/acceptance/test_cos_member_bridge_acquisition.py` covers the explicit
 read-only source exception through that same production composition with the
