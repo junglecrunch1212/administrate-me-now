@@ -78,16 +78,31 @@ smoke, synthetic granted-access composition and final member-owned permission
 and daemon settlement are separate evidence categories. A UI permission toggle
 or helper exit code alone cannot establish usable bridge observation.
 
-Concurrent permission recovery changes central signed progress, source admission
-and settlement evidence consumed by the unchanged historical auditor. Its explicit retained-edge packaging
-compatibility does not reduce that central release to a helper-only scope. Keep
-the protected system validation and guarded central deployment for these shared
-boundaries. Focused development must first prove observation during startup and
-remaining native prompts, stale refusal before any nonce/index/event effect,
-single and batch ingest serialized with revocation, unchanged admission for an
-already attested source while another is configured, and unknown-result refusal.
-The actual paired edge archive and its permissions remain unchanged; the new
-controller must negotiate the authenticated central protocol before any action.
+The narrowly bounded `bridge-enrollment` scope is a **SUPERSEDE** of the earlier
+blanket system-suite requirement for localized ingress/controller recovery,
+under the owner-directed risk-based release policy in `AGENTS.md`. It allows
+only a regular-file modification of the existing bridge ingress module, helper
+component resources, explicitly listed tests/policy and governing prose. Fixed
+Git fingerprints must prove that all other runtime inputs are identical across
+base, head and test merge: shared coordinator/history, event schemas/storage,
+authorization policies, composition, dependency locks and updater remain outside
+this scope. Unknown paths, additions/deletions of ingress, mode drift or any
+outside-runtime difference require system-wide validation.
+
+Its final workers execute the complete ingress and edge security/data contract:
+owner/device binding, all source families including Messages, single/batch
+admission serialized with revocation, signed permission/start continuation,
+stale refusal before nonce/index/event effects, historical attribution/replay,
+projection and readiness settlement, restart and rollback, uncertainty and
+provider-write denial. Both platforms require strict zero-skip JUnit evidence
+for the selected contract and bridge package; Linux explicitly excludes only the
+three native helper packaging cases that macOS executes. macOS also requires
+member enrollment browser acceptance and the three actual packaged installation
+and two real sealed launchd cases. Final exact-revision aggregate checks cannot
+accept a draft or missing, skipped, failed, cancelled or stale worker result.
+This scope is a central release and retains the guarded updater, fresh encrypted
+backup/restore rehearsal, Doctor and real member acceptance. It does not change
+retained-edge compatibility or weaken deployment authorization.
 
 Readiness-before-release amendment (2026-10-21), **MODERNIZE** under the
 owner's standing instruction: finish a bounded production-workflow impact map
