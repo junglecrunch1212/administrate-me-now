@@ -267,7 +267,9 @@ def test_exact_hosted_gateway_probe_pair_is_independent_and_retains_old_archive(
         }
     ]
     assert ("reviewed_central_overlay" in inspected.compatibility) is with_cos
-    assert len(differences) == (32 if with_cos else 1)
+    assert len(differences) == (
+        len(PERMISSION_RECOVERY_COS_OVERLAY) + 1 if with_cos else 1
+    )
     assert inspected.compatibility["required_central_release_commit"] == candidate
     assert (
         inspected.compatibility["required_central_protocol"]
