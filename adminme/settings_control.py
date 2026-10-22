@@ -2267,13 +2267,13 @@ def compose_source_policy_v2_sources(
             source["connection_state"] = "disconnected"
     observed_google_keys: set[str] = set()
     for source in sources:
-        coordinate = source.get("coordinate") or {}
+        source_coordinate_data = source.get("coordinate") or {}
         selected = selected_source_entry(
             observed_google,
-            owner_id=str(coordinate.get("owner_principal_id") or ""),
-            account_id=str(coordinate.get("provider_account_id") or ""),
-            adapter_id=str(coordinate.get("adapter_instance_id") or ""),
-            kind=str(coordinate.get("adapter_kind") or ""),
+            owner_id=str(source_coordinate_data.get("owner_principal_id") or ""),
+            account_id=str(source_coordinate_data.get("provider_account_id") or ""),
+            adapter_id=str(source_coordinate_data.get("adapter_instance_id") or ""),
+            kind=str(source_coordinate_data.get("adapter_kind") or ""),
         )
         if selected is None:
             continue

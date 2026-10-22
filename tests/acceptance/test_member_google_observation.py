@@ -499,8 +499,18 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
                 "triage.item.proposed",
                 "triage.intent.submitted",
                 "external_sync.write_requested",
+                "skill.call.recorded",
+                "skill.call.failed",
+                "skill.call.suppressed",
+                "messaging.semantic_features_extracted",
             ):
                 assert client.portal.call(_events, runtime, event_type) == []
+            skipped = client.portal.call(
+                _events, runtime, "communication_intake.source_skipped"
+            )
+            assert len(skipped) == 1
+            assert skipped[0]["payload"]["language_called"] is False
+            assert skipped[0]["payload"]["candidate_count"] == 0
             for event_type in (
                 "messaging.received",
                 "calendar.event_added",
