@@ -596,3 +596,6 @@ that advertises `administrateme-apple-service-permission-v1`; an older runtime
 cannot safely interpret an unfinished Apple action. Recovery revokes the affected
 service write permission and reconciles retained results on a supporting release,
 without restoring a pre-permission history or retrying an unknown provider effect.
+The independent bridge component also refuses an older dispatcher when its sealed
+local command ledger retains an attempt or an Apple effect/unknown result, checking
+before stopping and again before selector restoration without replacing that history.

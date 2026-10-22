@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
@@ -17,11 +19,78 @@ from tests.unit.bootstrap.test_member_bridge_launch import FakeLaunchd
 
 
 OLD, NEW = "a" * 40, "b" * 40
+OLD_DISPATCHER, NEW_DISPATCHER = b"retained dispatcher\n", b"write-aware dispatcher\n"
+
+
+def _ledger(paths: MemberBridgePaths) -> sqlite3.Connection:
+    connection = sqlite3.connect(paths.root / "adapter-cursors.db")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS bridge_command_attempts ("
+        "command_id TEXT PRIMARY KEY, request_fingerprint TEXT NOT NULL, "
+        "started_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS bridge_command_results ("
+        "command_id TEXT PRIMARY KEY, envelope_json TEXT NOT NULL)"
+    )
+    connection.commit()
+    return connection
+
+
+def _attempt(paths: MemberBridgePaths) -> None:
+    connection = _ledger(paths)
+    try:
+        connection.execute(
+            "INSERT INTO bridge_command_attempts VALUES (?, ?, ?)",
+            ("fixture-command", "f" * 64, "2034-01-01T00:00:00Z"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _result(
+    paths: MemberBridgePaths, *, called: bool = False, outcome: str = "suppressed"
+) -> None:
+    connection = _ledger(paths)
+    try:
+        connection.execute(
+            "INSERT INTO bridge_command_results VALUES (?, ?)",
+            (
+                "fixture-command",
+                json.dumps(
+                    {
+                        "type": "external_sync.write_completed",
+                        "schema_version": 2,
+                        "payload": {
+                            "command_id": "fixture-command",
+                            "provider": "apple_calendar",
+                            "provider_called": called,
+                            "request_fingerprint": "f" * 64,
+                            "result": {"outcome": outcome},
+                        },
+                    }
+                ),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 @pytest.fixture
 def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, Any]:
-    monkeypatch.setattr(repair, "APPLE_SERVICE_WRITE_OVERLAY", {})
+    monkeypatch.setattr(
+        repair,
+        "APPLE_SERVICE_WRITE_OVERLAY",
+        {
+            repair._DISPATCHER_PATH: (
+                hashlib.sha256(OLD_DISPATCHER).hexdigest(),
+                hashlib.sha256(NEW_DISPATCHER).hexdigest(),
+            )
+        },
+    )
     paths = MemberBridgePaths.from_root(tmp_path / "bridge")
     paths.create()
     for commit in (OLD, NEW):
@@ -40,6 +109,9 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, Any]
             ".venv/.administrateme-bridge-installed-commit",
         ):
             (root / name).write_text(commit + "\n")
+        (root / repair._DISPATCHER_PATH).write_bytes(
+            OLD_DISPATCHER if commit == OLD else NEW_DISPATCHER
+        )
     config = {
         "requested_packs": ["knowledge-apple-notes"],
         "configured_packs": ["knowledge-apple-notes"],
@@ -52,7 +124,9 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, Any]
         "request_id": "fixture-request",
         "instance_id": "fixture-instance",
         "release_commit": OLD,
+        "cursor_db_path": str(paths.root / "adapter-cursors.db"),
     }
+    _ledger(paths).close()
     atomic_write(paths.config_path, yaml.safe_dump(config).encode())
     repair._write(
         paths.receipt_path,
@@ -244,7 +318,10 @@ def test_reviewed_write_overlay_requires_exact_bytes_without_changing_read_state
     monkeypatch.setattr(
         repair,
         "APPLE_SERVICE_WRITE_OVERLAY",
-        {relative: (None, hashlib.sha256(new_bytes).hexdigest())},
+        {
+            **repair.APPLE_SERVICE_WRITE_OVERLAY,
+            relative: (None, hashlib.sha256(new_bytes).hexdigest()),
+        },
     )
     candidate_file = paths.root / "app/releases" / NEW / relative
     candidate_file.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +337,9 @@ def test_unreviewed_write_overlay_refuses_before_switch(rig, monkeypatch):
     paths, fake, _ = rig
     relative = "adminme/apple_service_permissions.py"
     monkeypatch.setattr(
-        repair, "APPLE_SERVICE_WRITE_OVERLAY", {relative: (None, "a" * 64)}
+        repair,
+        "APPLE_SERVICE_WRITE_OVERLAY",
+        {**repair.APPLE_SERVICE_WRITE_OVERLAY, relative: (None, "a" * 64)},
     )
     candidate_file = paths.root / "app/releases" / NEW / relative
     candidate_file.parent.mkdir(parents=True, exist_ok=True)
@@ -280,3 +359,179 @@ def test_candidate_write_overlay_pins_match_committed_files():
         assert hashlib.sha256((root / relative).read_bytes()).hexdigest() == expected, (
             relative
         )
+
+
+@pytest.mark.parametrize("cached_no_effect", [False, True])
+def test_empty_or_exact_no_effect_history_keeps_pre_effect_rollback_available(
+    rig, cached_no_effect
+):
+    paths, fake, _ = rig
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    if cached_no_effect:
+        _result(paths)
+    database = paths.root / "adapter-cursors.db"
+    before = database.read_bytes()
+    assert (
+        repair.rollback(paths, activated["operation_id"])["status"]
+        == "rolled_back_stopped"
+    )
+    assert not fake.loaded
+    assert database.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "history", ["attempt", "attempt-false-result", "called", "ambiguous", "unknown"]
+)
+def test_unsafe_history_refuses_unaware_target_before_stop_or_selector_change(
+    rig, history
+):
+    paths, fake, _ = rig
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    if history.startswith("attempt"):
+        _attempt(paths)
+        if history == "attempt-false-result":
+            _result(paths)
+    else:
+        _result(
+            paths,
+            called=history == "called",
+            outcome="applied" if history == "called" else history,
+        )
+    pointer = paths.root / "app/current-release.json"
+    before = pointer.read_bytes()
+    stops = len(fake.actions("bootout"))
+    with pytest.raises(ValueError, match="require a write-aware recovery target"):
+        repair.rollback(paths, activated["operation_id"])
+    assert pointer.read_bytes() == before
+    assert len(fake.actions("bootout")) == stops
+    assert fake.loaded
+
+
+def test_aware_target_can_recover_without_restoring_attempt_history(rig):
+    paths, fake, _ = rig
+    (paths.root / "app/releases" / OLD / repair._DISPATCHER_PATH).write_bytes(
+        NEW_DISPATCHER
+    )
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    _attempt(paths)
+    before = (paths.root / "adapter-cursors.db").read_bytes()
+    assert (
+        repair.rollback(paths, activated["operation_id"])["status"]
+        == "rolled_back_stopped"
+    )
+    assert not fake.loaded
+    assert (paths.root / "adapter-cursors.db").read_bytes() == before
+
+
+def test_rollback_reads_committed_attempt_in_live_sqlite_wal(rig):
+    paths, fake, _ = rig
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    connection = _ledger(paths)
+    try:
+        connection.execute(
+            "INSERT INTO bridge_command_attempts VALUES (?, ?, ?)",
+            ("fixture-command", "f" * 64, "2034-01-01T00:00:00Z"),
+        )
+        connection.commit()
+        assert (paths.root / "adapter-cursors.db-wal").is_file()
+        with pytest.raises(ValueError, match="require a write-aware recovery target"):
+            repair.rollback(paths, activated["operation_id"])
+        assert fake.loaded
+        assert repair._json(paths.root / "app/current-release.json")["commit"] == NEW
+    finally:
+        connection.close()
+
+
+def test_attempt_racing_stop_blocks_selector_restore_and_retains_current_history(
+    rig, monkeypatch
+):
+    paths, fake, _ = rig
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    installer_factory = repair._installer
+
+    def installer_with_race(p, root):
+        installer = installer_factory(p, root)
+        original_stop = installer._stop
+
+        def stop():
+            _attempt(paths)
+            return original_stop()
+
+        installer._stop = stop
+        return installer
+
+    monkeypatch.setattr(repair, "_installer", installer_with_race)
+    with pytest.raises(ValueError, match="require a write-aware recovery target"):
+        repair.rollback(paths, activated["operation_id"])
+    assert not fake.loaded
+    assert repair._json(paths.root / "app/current-release.json")["commit"] == NEW
+    connection = sqlite3.connect(paths.root / "adapter-cursors.db")
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM bridge_command_attempts"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing",
+        "unreadable",
+        "redirected",
+        "writable",
+        "schema",
+        "result",
+        "cursor-coordinate",
+        "dispatcher",
+    ],
+)
+def test_unverifiable_history_or_recovery_coordinate_refuses_before_stop(rig, defect):
+    paths, fake, config = rig
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    database = paths.root / "adapter-cursors.db"
+    if defect == "missing":
+        database.unlink()
+    elif defect == "unreadable":
+        database.write_bytes(b"not a SQLite ledger")
+    elif defect == "redirected":
+        other = paths.root / "redirected.db"
+        database.rename(other)
+        database.symlink_to(other)
+    elif defect == "writable":
+        database.chmod(0o666)
+    elif defect == "schema":
+        connection = sqlite3.connect(database)
+        connection.execute("DROP TABLE bridge_command_attempts")
+        connection.close()
+    elif defect == "result":
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "INSERT INTO bridge_command_results VALUES ('fixture-command', 'not json')"
+        )
+        connection.commit()
+        connection.close()
+    elif defect == "cursor-coordinate":
+        config["cursor_db_path"] = str(paths.root / "other.db")
+        atomic_write(paths.config_path, yaml.safe_dump(config).encode())
+        operation = paths.root / "runtime-repairs" / activated["operation_id"]
+        journal = repair._json(operation / "journal.json")
+        # An authentic sealed config with an unsupported cursor path is still
+        # refused; a different live config hash has its own earlier guard.
+        journal["config_sha256"] = hashlib.sha256(
+            paths.config_path.read_bytes()
+        ).hexdigest()
+        repair._write(operation / "journal.json", journal)
+    else:
+        (paths.root / "app/releases" / OLD / repair._DISPATCHER_PATH).write_bytes(
+            b"unknown dispatcher"
+        )
+    stops = len(fake.actions("bootout"))
+    with pytest.raises(
+        ValueError, match="cannot be verified|unsupported bridge dispatcher"
+    ):
+        repair.rollback(paths, activated["operation_id"])
+    assert len(fake.actions("bootout")) == stops
+    assert fake.loaded
+    assert repair._json(paths.root / "app/current-release.json")["commit"] == NEW
