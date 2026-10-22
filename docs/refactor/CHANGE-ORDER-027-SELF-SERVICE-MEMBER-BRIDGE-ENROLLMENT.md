@@ -203,16 +203,23 @@ The explicit builder option `--runtime-compatibility-contract
 bridge-permission-recovery-v1` supports this mixed central/helper repair. It permits
 only regular-file modifications of the fixed central enrollment router and
 the exact reviewed old/new source pair for the central coordinator fix, plus the
-closed `cos-standing-replies-457-v1` central overlay. The overlay is a single
-coherent group of 23 exact path/presence/mode/hash pairs from retained public
+closed `cos-standing-replies-457-hooks-458-v1` central overlay. The overlay is a single
+coherent group of 24 exact path/presence/mode/hash pairs from retained public
 release `043ac68915b185be4ada771f6893a4d69c3f994b` to the reviewed PR457 central
-sources at `d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21`. Its four added central
+sources plus the PR458 native reply-hook correction at
+`6035a997614b52f537bb9ce91d24d01464d878a2`. Its five added central
 files must be absent from the retained archive. Partial mixtures, unknown bytes,
 mode drift and any other dependency or edge-contract change fail closed. This
 does not establish a generic central-code exclusion or change release scope.
+The PR458 revision replaces only the three exact changed CoS source coordinates
+and adds the grant-derived native hook policy module; no updated central bytes
+enter the retained edge archive. Current helper builds require the complete
+updated group. Older immutable helpers retain their own versioned manifests.
+Focused compatibility checks reject unknown bytes on either side and incomplete
+hook-policy groups before packaged clean/interrupted installation is accepted.
 A separate `hosted-gateway-startup-probe-456-v1` exact regular-file hash pair
 covers the hosted approval probe's pinned disabled-heartbeat startup check.
-It is recorded independently of the unchanged PR457 group, remains a runtime
+It is recorded independently of the CoS source group, remains a runtime
 input for default compatibility and CI, and is never copied over the retained
 archive. Its corrected bytes execute only in the isolated hosted probe.
 The exact coordinator

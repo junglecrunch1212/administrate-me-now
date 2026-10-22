@@ -52,13 +52,13 @@ PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256 = (
 )
 # Closed reviewed central overlay. The retained edge never receives these bytes.
 # Every path/presence/mode/hash must match as one coherent group before reuse.
-PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = "cos-standing-replies-457-v1"
+PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = "cos-standing-replies-457-hooks-458-v1"
 PERMISSION_RECOVERY_COS_RETAINED_COMMIT = "043ac68915b185be4ada771f6893a4d69c3f994b"
-PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21"
+PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "6035a997614b52f537bb9ce91d24d01464d878a2"
 PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     "adminme/cos_channel_operation.py": (
         "dad867bca64ff6f294d8079fa98f33d6fe55f0c3c86ee9a6d312ed45c4180266",
-        "4eb1bb45e89c5e2e37afca76af5aa1011abcf33b61d3d85aba221144f9ea8edf",
+        "bd7ca21ee320f289731a13bba6662b345f6c1d75382855d504987c643a395288",
     ),
     "adminme/cos_response_assurance.py": (
         "74531b1a4b21879ca6b9a7c290977c6ee8e58e0a127b34b1df41eb19d37d1489",
@@ -102,7 +102,11 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
     "bootstrap/cos_channel_activation.py": (
         "e686393e3baf0b444ed74cf1fbd0eee72c1e906e32d00a997031b5e19557d796",
-        "7aed2ffb67793d78f444bc864f63465af4a1b36b75cff5fde6178c2e4874863f",
+        "6f66ecc10df1dbfb6551a3a1548be93a1657220cff1a19a54e91643d4c3046b5",
+    ),
+    "bootstrap/cos_reply_hooks.py": (
+        None,
+        "8b17bb5b50ae361d58f37565990971c6a7551941e770f3d0dcd9d32368e91890",
     ),
     "bootstrap/openclaw_tools.py": (
         "4ede4ef79721ad0ab2076c3d394b11ced3e91f9c23b602e47a88a57e990eb4dc",
@@ -118,7 +122,7 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
     "openclaw/administrateme/scripts/check-cos-imessage-text.mjs": (
         "5d8a0df6dcb0c25d615d9c280df8f4ffc9818dc91d72d07a6a637fc05a7fb2c8",
-        "97b962d788ff1016663f806442472178846baa89d440134ae7727cf0c1736f5d",
+        "651ca7faab4398a724de606dfe8d24cb7d2a02fa20b61d25410f16e27ccb699a",
     ),
     "openclaw/administrateme/skills/administrateme-household/SKILL.md": (
         "d5623c9587e6e32e94b2647b84f0cd769950f08be46fa6a83aba2b9868831208",
