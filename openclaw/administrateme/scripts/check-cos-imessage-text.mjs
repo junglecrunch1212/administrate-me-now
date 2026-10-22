@@ -85,20 +85,9 @@ try {
   // Internal host modules use workspace aliases that are deliberately not
   // public package exports. Resolve all of them from this exact source pin's
   // own tsconfig, just as its source build does; do not stub a missing module.
-  const tsconfig = ts.parseConfigFileTextToJson("tsconfig.json",
-    await readFile(path.join(sourceRoot, "tsconfig.json"), "utf8"));
-  assert.equal(tsconfig.error, undefined);
-  const sourcePaths = Object.entries(tsconfig.config.compilerOptions.paths)
-    .filter(([name]) => name.startsWith("@openclaw/"));
-  const paths = new Map(sourcePaths.filter(([name]) => name.endsWith("/*"))
-    .map(([name, targets]) => [name.slice(0, -2), path.resolve(sourceRoot, targets[0].split("*")[0])]));
-  for (const [name, targets] of sourcePaths.filter(([name]) => !name.includes("*"))) {
-    const target = path.resolve(sourceRoot, targets[0]);
-    if (paths.has(name)) assert.equal(target, path.join(paths.get(name), "index.ts"));
-    else paths.set(name, target);
-  }
-  const alias = Object.fromEntries([...paths].sort(([a], [b]) => b.length - a.length));
-  const jiti = createJiti(path.join(sourceRoot, "package.json"), { alias });
+  const jiti = createJiti(path.join(sourceRoot, "package.json"), {
+    tsconfigPaths: path.join(sourceRoot, "tsconfig.json"),
+  });
   const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
   const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
   const preparedPolicies = JSON.parse(execFileSync("python3", ["-c", `
