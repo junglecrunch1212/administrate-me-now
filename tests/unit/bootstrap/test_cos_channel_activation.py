@@ -810,7 +810,8 @@ def test_google_observation_activation_checks_owner_before_live_changes(
         assert CONFIG_KEY not in restored
         assert not controller.journal_path.exists()
     else:
-        controller.activate(changed, enable_live=False)
+        result = controller.activate(changed, enable_live=False)
+        assert result["personal_channel_polling"] is True
         installed = json.loads((controller.config_dir / "adapters.json").read_text())
         selected = [
             e for e in installed["adapters"] if e["config"].get("member_id") == MEMBER_A

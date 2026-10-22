@@ -122,6 +122,9 @@ from adminme.service_identities import (
     cos_message_channel_for_account,
     validate_service_identity_config,
 )
+from adminme.adapters.member_google_observation import (
+    selected_entries as selected_google_entries,
+)
 from adminme.deployment_readiness import evaluate_deployment_readiness
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
@@ -3209,6 +3212,7 @@ class AdministrateMeRuntime:
             committer is not None and committer.pending
         ):
             host_topology = {**host_topology, "deployment_binding": {}}
+        google_source_ids = selected_google_entries(self.settings.adapter_config)
         return evaluate_deployment_readiness(
             required=self.settings.deployment_evidence_required,
             host_topology=host_topology,
@@ -3229,6 +3233,10 @@ class AdministrateMeRuntime:
             cos_live_authorization=self._cos_live_authorization,
             cos_acquisition_configured="cos_channel_acquisition"
             in self.settings.adapter_config,
+            member_google_readonly_source_count=sum(
+                adapter_id in google_source_ids
+                for adapter_id in (self.adapters.inventory() if self.adapters else {})
+            ),
         )
 
     async def diagnostics(self, *, refresh_capabilities: bool = True) -> dict[str, Any]:

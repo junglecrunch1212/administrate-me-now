@@ -1400,7 +1400,10 @@ class CoSChannelActivator:
                     "activation_id": activation_id,
                     "channels": sorted(expected),
                     "observation_active": not enable_live,
-                    "personal_channel_polling": False,
+                    "personal_channel_polling": any(
+                        entry.get("enabled") is not False
+                        for entry in selected_entries(prepared).values()
+                    ),
                     "retained_test_policy_sha256": policy.retained_test_policy_sha256,
                     "provider_test_messages_sent": 0,
                 }

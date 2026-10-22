@@ -140,6 +140,7 @@ def evaluate_deployment_readiness(
     disposable_test_dataset: dict[str, Any] | None = None,
     cos_live_authorization: dict[str, Any] | None = None,
     cos_acquisition_configured: bool = False,
+    member_google_readonly_source_count: int = 0,
 ) -> dict[str, Any]:
     """Evaluate independent activation axes without exposing identities."""
 
@@ -530,13 +531,14 @@ def evaluate_deployment_readiness(
         mode_ready = observation_active or cos_live_ready
         dimensions["cos_channel_operation"] = _dimension(
             "healthy" if mode_ready else "blocked",
-            "CoS-only acquisition is active under observation"
+            "CoS acquisition and separately selected read-only sources are under observation"
             if observation_active
             else "live CoS replies require current recipient policy and verified sender activation",
             evidence={
                 "observation_active": observation_active,
                 "live_authorized": cos_live_ready,
-                "personal_channel_polling": False,
+                "personal_channel_polling": member_google_readonly_source_count > 0,
+                "member_google_readonly_source_count": member_google_readonly_source_count,
                 "activated_channels": (cos_live_authorization or {}).get(
                     "activated_channels", []
                 ),
