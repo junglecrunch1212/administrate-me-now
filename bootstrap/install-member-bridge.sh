@@ -13,6 +13,7 @@ PREVIEW_ONLY="false"
 RELEASE_ARCHIVE=""
 RELEASE_ARCHIVE_SHA256=""
 COMPLETE_WIZARD="false"
+PREPARE_RUNTIME_ONLY="false"
 
 while (($#)); do
   case "$1" in
@@ -44,6 +45,10 @@ while (($#)); do
       (($# >= 2)) || { echo "--release-sha256 requires a value" >&2; exit 2; }
       RELEASE_ARCHIVE_SHA256="$2"
       shift 2
+      ;;
+    --prepare-runtime-only)
+      PREPARE_RUNTIME_ONLY="true"
+      shift
       ;;
     --complete-wizard)
       COMPLETE_WIZARD="true"
@@ -78,8 +83,13 @@ cleanup() {
 trap cleanup EXIT
 
 report_phase preflight
-[[ -n "$PACKAGE" && -f "$PACKAGE" && ! -L "$PACKAGE" ]] \
-  || fail "provide the exported .adminmebridge file"
+if [[ "$PREPARE_RUNTIME_ONLY" == "true" ]]; then
+  [[ -z "$PACKAGE" && -z "$TRANSFER_CODE_FILE" && "$PREVIEW_ONLY" == "false" && "$COMPLETE_WIZARD" == "false" ]] \
+    || fail "runtime preparation accepts no enrollment material or wizard action"
+else
+  [[ -n "$PACKAGE" && -f "$PACKAGE" && ! -L "$PACKAGE" ]] \
+    || fail "provide the exported .adminmebridge file"
+fi
 [[ "$BRIDGE_ROOT" == /* && "$BRIDGE_ROOT" != "/" && "$BRIDGE_ROOT" != "$HOME" ]] \
   || fail "the member-bridge root must be a narrow absolute path"
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] \
@@ -302,6 +312,11 @@ os.fsync(4)
   exec 4>&-
 else
   prepare_environment >&2
+fi
+
+if [[ "$PREPARE_RUNTIME_ONLY" == "true" ]]; then
+  printf '{"status":"prepared","commit":"%s","service_started":false}\n' "$commit"
+  exit 0
 fi
 
 export ADMINME_REPOSITORY_ROOT="$release_dir"

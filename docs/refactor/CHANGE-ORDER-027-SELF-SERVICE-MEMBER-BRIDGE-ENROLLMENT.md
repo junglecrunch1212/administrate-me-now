@@ -438,3 +438,37 @@ history. `tests/acceptance/test_bridge_readiness_transition.py` covers the guard
 index/readiness transaction, exact restart recovery and refusal of unrelated
 configuration drift. These remain isolated hosted proofs, not live enrollment
 or member-device permission evidence.
+
+
+### Contained EventKit runtime repair (2026-10-22)
+
+MODERNIZE the Apple Reminders native color boundary: register Quartz before
+reading the EventKit color and use its explicit component count. Unsized PyObjC
+arrays must never be enumerated. Isolated macOS acceptance exercises real Quartz
+colors through the production list reader, without querying or writing a store.
+
+PRESERVE the existing enrollment, source configuration, proof key, cursor state,
+private ownership and read-only ceiling during a contained runtime repair.
+`install-member-bridge.sh --prepare-runtime-only` prepares a new immutable release
+and dependencies without consuming a handoff or starting a service. The prepared
+release's `bootstrap.member_bridge_runtime_repair` command requires the exact
+stopped, disabled predecessor and an unchanged edge/dependency/state interface.
+It switches the launch definition and release pointer under the existing helper
+and launch locks, observes one stable process for 30 seconds, and records the
+original enrollment release separately from the new execution release.
+
+The operation retains private predecessor snapshots and transition history.
+Known failures roll back to the original **stopped** state. The same prepared
+command with `--rollback-operation <operation-id> --expected-candidate <commit>
+--bridge-root <root>` restores that state after a later regression. Unknown
+launch outcomes retain the selected candidate and the existing recovery block;
+they never authorize a second start. Original receipts, configuration and events
+are not replaced by a new enrollment. A successful process start is not source
+acceptance: require actual permitted Calendar, Reminders and Notes acquisition
+through the member surface after activation. Provider-write tests remain separate.
+
+The bounded `bridge-runtime` PR scope checks the exact repair, installer, native
+color reader, bridge integration, privacy/authorization and launch/recovery
+contracts. Unlisted paths, dependency changes and mode changes select the system
+gate. Native installation tests now package the candidate runtime, because a
+color-reader change cannot honestly claim the retained runtime is unchanged.

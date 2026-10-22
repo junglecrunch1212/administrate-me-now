@@ -49,7 +49,7 @@ def test_color_reads_exact_native_bounds(monkeypatch, channels, expected):
             CGColorGetComponents=lambda value: NativeArray(),
         ),
     )
-    assert _shim()._cgcolor_hex(color) == expected
+    assert _shim()._calendar_color_hex(SimpleNamespace(CGColor=color)) == expected
     assert reads == list(range(len(channels)))
 
 
@@ -66,9 +66,9 @@ def test_unsupported_color_has_no_native_array_access(monkeypatch, count):
             CGColorGetComponents=unread,
         ),
     )
-    assert _shim()._cgcolor_hex(object()) is None
+    assert _shim()._calendar_color_hex(SimpleNamespace(CGColor=object())) is None
 
 
 def test_absent_color_does_not_load_quartz(monkeypatch):
     monkeypatch.setitem(sys.modules, "Quartz", None)
-    assert _shim()._cgcolor_hex(None) is None
+    assert _shim()._calendar_color_hex(SimpleNamespace(CGColor=None)) is None

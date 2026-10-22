@@ -213,11 +213,15 @@ def _ensure_access(store: Any) -> None:
         )
 
 
-def _cgcolor_hex(value: Any) -> str | None:
-    if value is None:
-        return None
+def _calendar_color_hex(calendar: Any) -> str | None:
     try:
+        # Register Quartz CF types before EventKit returns its CGColor. Without
+        # this, PyObjC can expose an opaque pointer instead of a managed color.
         from Quartz import CGColorGetComponents, CGColorGetNumberOfComponents
+
+        value = _call(calendar, "CGColor")
+        if value is None:
+            return None
 
         # PyObjC returns an objc.varlist over a C array, not a sized Python
         # sequence. Iterating it can read past the allocation and crash the
@@ -508,7 +512,7 @@ class PyObjCEventStore:
             ReminderListRecord(
                 calendarIdentifier=str(_call(calendar, "calendarIdentifier") or ""),
                 title=str(_call(calendar, "title") or ""),
-                color=_cgcolor_hex(_call(calendar, "CGColor")),
+                color=_calendar_color_hex(calendar),
                 is_default=str(_call(calendar, "calendarIdentifier") or "")
                 == default_id,
             )
