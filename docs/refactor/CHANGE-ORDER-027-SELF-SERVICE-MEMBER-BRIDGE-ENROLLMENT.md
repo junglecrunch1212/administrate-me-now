@@ -202,7 +202,15 @@ does not replace the retained signed body or any identity check.
 The explicit builder option `--runtime-compatibility-contract
 bridge-permission-recovery-v1` supports this mixed central/helper repair. It permits
 only regular-file modifications of the fixed central enrollment router and
-the exact reviewed old/new source pair for the central coordinator fix. That
+the exact reviewed old/new source pair for the central coordinator fix, plus the
+closed `cos-standing-replies-457-v1` central overlay. The overlay is a single
+coherent group of 23 exact path/presence/mode/hash pairs from retained public
+release `043ac68915b185be4ada771f6893a4d69c3f994b` to the reviewed PR457 central
+sources at `d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21`. Its four added central
+files must be absent from the retained archive. Partial mixtures, unknown bytes,
+mode drift and any other dependency or edge-contract change fail closed. This
+does not establish a generic central-code exclusion or change release scope.
+The exact coordinator
 pair changes only the body of `BridgeEnrollmentCoordinator.configure_capability`;
 the edge-used definitions remain unchanged. Unknown shared-module bytes fail
 closed. The manifest records both hashes and retains every byte of the paired
@@ -211,6 +219,15 @@ reviewed retained/current interface hashes. Default compatibility and the CI
 runtime fingerprint remain strict. The
 launcher binds the expected central release independently of the paired edge
 release; the authenticated protocol must match before any permission action.
+The real packaged installation gate uses the complete `043` archive, whose
+SHA-256 is `12eaab9cd6325200b0fa795236fd5da917f221282a582cc8a8767e94e6847df3`,
+and verifies every retained and candidate overlay coordinate. It checks fresh
+and interrupted installs and loads the sealed current controller through the
+retained interpreter. Central reply schemas remain confined to the central
+runtime; bridge enrollment, source-observation envelopes and provider authority
+continue to use their unchanged contracts. The authenticated current-central
+composition tests remain necessary alongside the archive/import smoke. This
+evidence does not assert real macOS permission grants or member-device usability.
 
 The adapter reuses the retained helper's signed progress, central validation and
 acknowledged local persistence, and its read-only `_identity()` device probe.

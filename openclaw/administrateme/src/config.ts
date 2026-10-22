@@ -10,6 +10,7 @@ const DEFAULTS: PluginConfig = {
   forwardIntakeAccounts: [],
   modelSessionPrefix: "adminme:",
   dmScope: "per_account_channel_peer",
+  standingSelfReplyBindings: [],
   memberAgentIds: [],
   bindingFingerprints: [],
   uniqueAgents: true,
@@ -87,6 +88,12 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
   if (raw.dmScope !== undefined && raw.dmScope !== "per_account_channel_peer") {
     throw new Error("AdministrateMe dmScope must be per_account_channel_peer");
   }
+  const replies = raw.standingSelfReplyBindings ?? [];
+  if (!Array.isArray(replies) || replies.length > 20 ||
+      replies.some((value: unknown) => typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) ||
+      new Set(replies).size !== replies.length) {
+    throw new Error("Standing self replies require distinct exact binding fingerprints");
+  }
   const memberAgentIds = stringArray(raw.memberAgentIds);
   const bindingFingerprints = stringArray(raw.bindingFingerprints);
   if (memberAgentIds.some((value) => !/^adminme-[0-9a-f]{16}$/.test(value))) {
@@ -114,6 +121,7 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
         ? raw.modelSessionPrefix
         : DEFAULTS.modelSessionPrefix,
     dmScope: "per_account_channel_peer",
+    standingSelfReplyBindings: replies,
     memberAgentIds,
     bindingFingerprints,
     uniqueAgents: new Set(memberAgentIds).size === memberAgentIds.length,

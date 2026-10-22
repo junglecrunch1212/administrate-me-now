@@ -84,6 +84,36 @@ class CosChannelActivation(BaseModel):
         return self
 
 
+class CosChannelActivationV2(CosChannelActivation):
+    """Explicit standing authority for replies to exact private member bindings.
+
+    Empty by default: historical recipient lists never become sending grants.
+    The hashes contain member, agent, account and sender, not contact data.
+    """
+
+    self_reply_bindings: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def valid_reply_bindings(self) -> CosChannelActivationV2:
+        import re
+
+        if len(set(self.self_reply_bindings)) != len(self.self_reply_bindings) or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in self.self_reply_bindings
+        ):
+            raise ValueError("standing replies require distinct exact binding hashes")
+        return self
+
+
+def parse_activation(payload: dict[str, Any]) -> CosChannelActivation:
+    model = (
+        CosChannelActivationV2
+        if "self_reply_bindings" in payload
+        else CosChannelActivation
+    )
+    return model.model_validate(payload)
+
+
 def read_receipt(
     config_dir: Path, *, allow_verification: bool = False
 ) -> dict[str, Any]:
@@ -128,7 +158,7 @@ async def live_authorization(
     try:
         if set(receipt) != {"event_id", "activation"}:
             return refused
-        activation = CosChannelActivation.model_validate(receipt["activation"])
+        activation = parse_activation(receipt["activation"])
         policy = policy_from_config(adapter_config)
         restrict_cos_adapter_config(adapter_config)
         if policy is None or policy.digest() != activation.acquisition_sha256:
@@ -187,6 +217,7 @@ async def live_authorization(
             "release_commit": activation.release_commit,
             "allowlist_revision": current["revision"],
             "activated_channels": [proof.channel for proof in activation.channels],
+            "self_reply_bindings": getattr(activation, "self_reply_bindings", []),
         }
     except Exception:
         return refused

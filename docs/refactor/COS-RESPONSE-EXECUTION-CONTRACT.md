@@ -172,3 +172,68 @@ refused until cleanup succeeds. The relay never automatically retries startup
 or an uncertain approval resolution. These bounds preserve OpenClaw's ownership
 of native approval authority under `BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md` without
 allowing a stalled approval connection to block the ordinary Gateway lifecycle.
+
+## Standing replies to the owner
+
+**MODERNIZE**, owner-directed 2026-10-21: an explicit standing self-reply grant
+permits ordinary final answers to that owner's incoming private iMessages
+without asking them to approve each answer. The historical recipient ceiling
+alone does not create this grant. The guarded channel activation request's
+`allow_owner_self_replies: true` records exact owner/agent/account/recipient
+binding hashes in `cos.channels.activated` schema 2 and independently in the
+OpenClaw plugin configuration. Omission retains only existing matching grants
+in both places; `false` removes the authorizing owner's bindings. Existing
+grants for other members are retained only while their exact routes and
+recipient policy still match. An observation pause retains permission while
+suppressing sending. Routine reactivation therefore preserves
+standing permission while revoked or changed destinations cannot inherit it.
+Existing schema 1 activations and exact manual approvals retain their behavior.
+
+The plugin binds the trusted `message_received` native message ID to its durable
+private intake receipt and the matching `agent_end` user transcript transport
+metadata. The pinned dispatcher does not populate the inbound run ID despite
+its optional SDK declaration. A host-collected followup uses its protected
+collection marker and exact pending source text in the same private session.
+When an inbound run ID is present it must also match. It awaits intake even when that hook is still completing, isolates queued
+runs in the same conversation, excludes analysis/tool/progress/silence output,
+and consumes the run before attempting delivery. No model tool can grant the
+permission. The internal self-reply route verifies the exact principal, current
+private delegation, agent, session, native source message, recipient ceiling,
+active service channel, domain grant and independently enabled host binding.
+The incoming receipt must be newer than activation and at most one hour old.
+Every check is repeated at the guarded native boundary; observation still
+suppresses the effect. Generic delivery and third-party sends remain blocked.
+
+A standing reply records a schema 2 `cos.response.approved` fact with the CoS
+actor and the real standing authority/source references, followed by a distinct
+`cos.reply.openclaw_authorized` receipt. It never fabricates a human exact-content
+confirmation or OpenClaw allow-once decision. Existing attempt, claim, native
+terminal, privacy guard, rate limit and source/historical assurance paths remain
+mandatory. Duplicate incoming receipts and restart cannot resend an attempted
+part; unknown outcomes are not automatically retried.
+
+Answers are flattened to plain-text lines, split into at most sixteen 3,500
+UTF-16-unit parts, and ASCII punctuation is escaped before the pinned native
+renderer. Admission binds the exact resulting text. A later part requires proof
+that the preceding part was sent. The pinned source-install formatter check
+covers this production escape function, Unicode, links, punctuation, directives
+and long responses. `test_cos_self_replies.py` covers production API composition,
+revocation, duplicate delivery, restart, observation, ownership and assurance;
+`self-replies.test.ts` covers real plugin hook wiring and concurrent run binding.
+
+Impact map: channel activation and rollback -> activation/reconciliation tests;
+private intake/session -> forwarded-intake and standing-reply tests; external
+send authority and terminal audit -> response execution, source and historical
+assurance; native formatting -> authenticated pinned formatter corpus. Gmail
+and unrelated acquisition behavior are unchanged. This touches shared external
+write governance and event schemas, so the existing protected system release
+gates remain required after focused development checks. No test authorizes
+provider contact or substitutes for observed live delivery.
+
+Integration findings: the pinned inbound dispatcher omits its optional run ID,
+and Codex reasoning mirrors lack a phase tag. Regression cases use the actual
+pinned inbound mapper, retained native transport metadata, collected followups,
+and mirror identity to avoid silent correlation failure or disclosure of
+reasoning. Source assurance loads the exact standing grant and input references
+plus activation changes; metadata-only collection otherwise loses the authority
+chain even after a valid native send.

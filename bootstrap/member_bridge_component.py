@@ -39,6 +39,106 @@ PERMISSION_RECOVERY_RETAINED_MODULE_SHA256 = (
 PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256 = (
     "a6aa140fea3b3bdf63437eb818f1f9974b9cdd5f23fc09cb3352ee6b467a21e9"
 )
+# Closed reviewed central overlay. The retained edge never receives these bytes.
+# Every path/presence/mode/hash must match as one coherent group before reuse.
+PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = "cos-standing-replies-457-v1"
+PERMISSION_RECOVERY_COS_RETAINED_COMMIT = "043ac68915b185be4ada771f6893a4d69c3f994b"
+PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21"
+PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
+    "adminme/cos_channel_operation.py": (
+        "dad867bca64ff6f294d8079fa98f33d6fe55f0c3c86ee9a6d312ed45c4180266",
+        "4eb1bb45e89c5e2e37afca76af5aa1011abcf33b61d3d85aba221144f9ea8edf",
+    ),
+    "adminme/cos_response_assurance.py": (
+        "74531b1a4b21879ca6b9a7c290977c6ee8e58e0a127b34b1df41eb19d37d1489",
+        "7f7fa9abc4698ef692e3788449eece25aac1ba7d54790cc6f3ae4c752554005c",
+    ),
+    "adminme/cos_self_replies.py": (
+        None,
+        "c667b67bbb91ae7f4670d342fddf19099ad93a6651cf34db9d1c7739a90b2a3e",
+    ),
+    "adminme/events/schemas/cos_channels.py": (
+        "da0dd6e94e5192ed55dd678a0e9104bced5e464e37f18d4695410cf11802e832",
+        "f0a3d53b5d04b2e4131115a65ba2257441718f149170a5175079a929e9bbe291",
+    ),
+    "adminme/events/schemas/cos_responses.py": (
+        "0c73204ad9e3b2d1d6210ee4bff933d2b275d9df62ced3d5f3c7a8efd371ce5b",
+        "ba3857a1fd740f6be29684ba3bf8030f666d156db0f87d7127e9628a73c8e18c",
+    ),
+    "adminme/historical_attribution.py": (
+        "cd72392cf807cc6849555c7d404b85b69cf2be1e11c28d3d30be9fafcd091d67",
+        "e13c3db91d65a52f19fbd6d2b6f08eb6e5d0797077535e8407cfbc75d7941404",
+    ),
+    "adminme/lifecycle_catalog.py": (
+        "2238b47e2f7ed69d0f1ef7906f81a26423ef4dfe31684dc49fa4621fc8475b87",
+        "f9558df42f530769ab1efcbb983378d7a60d051108ba5f0e3985d4fb3af8daff",
+    ),
+    "adminme/products/openclaw/cos_responses.py": (
+        "8c70b96e7c62435805bd076657de3f51b568674ee6b85c66245640dd2249f65f",
+        "2d99eb38bb11eaabd46c5afd8b4010a3f5800d70184e48b563698064767eac96",
+    ),
+    "adminme/products/openclaw/cos_self_replies.py": (
+        None,
+        "2ab96c84bcc80e06e51ddb2e4aed2d078a99e8a60e78f1cad7121eeeb6b98e8e",
+    ),
+    "adminme/runtime/application.py": (
+        "eda3671a4cfdbda08a565ce521ab2afa13878d1198ca00378780e7b74a016422",
+        "f66d009de9158221d7e4551f219a1208e69af936e851c381bcd89d47fd8cb9e1",
+    ),
+    "adminme/source_assurance.py": (
+        "0592edb883f25d8d6e6d116cdd5707331351c3c4e32677f93a1aa05b3216ee6d",
+        "78297d066998bff698b8d690d2d5eae8afff5780f4219c4ccda73c3b943daf4a",
+    ),
+    "bootstrap/cos_channel_activation.py": (
+        "e686393e3baf0b444ed74cf1fbd0eee72c1e906e32d00a997031b5e19557d796",
+        "7aed2ffb67793d78f444bc864f63465af4a1b36b75cff5fde6178c2e4874863f",
+    ),
+    "bootstrap/openclaw_tools.py": (
+        "4ede4ef79721ad0ab2076c3d394b11ced3e91f9c23b602e47a88a57e990eb4dc",
+        "8181443acb595849cfefa7dd0c7bab4c9f61477cfb110a4b8d5cd67de6d12812",
+    ),
+    "docs/refactor/evidence/event-lifecycle-catalog.json": (
+        "b32ea2a138a21ffd08fc8e647de25847fc3c9e19821e8b76d8c44fa63e953434",
+        "eaedd34e2d87dcddc77ddb093a0326ea3955295aff63fee146f4728a403a9d42",
+    ),
+    "openclaw/administrateme/openclaw.plugin.json": (
+        "8ac97090995fc5afc2e87bc35ee0f69bd90b732157c06a56f380621ce7ccd52a",
+        "6c7bdccf285af12aabb75a7eb220333ebf726a650ae61aeb4e08a72c5faa1d0e",
+    ),
+    "openclaw/administrateme/scripts/check-cos-imessage-text.mjs": (
+        "5d8a0df6dcb0c25d615d9c280df8f4ffc9818dc91d72d07a6a637fc05a7fb2c8",
+        "97b962d788ff1016663f806442472178846baa89d440134ae7727cf0c1736f5d",
+    ),
+    "openclaw/administrateme/skills/administrateme-household/SKILL.md": (
+        "d5623c9587e6e32e94b2647b84f0cd769950f08be46fa6a83aba2b9868831208",
+        "35390c16a80ca0fcee50a1cc3c2de2fdccf970e3e402fe95395f2ae1551e8b82",
+    ),
+    "openclaw/administrateme/src/config.ts": (
+        "2f1ac4d33f0d9357f973798b663a5a1914a26bc11bf0bfa0ad232473b13cdb08",
+        "b6abe66ea858851824b87fbacb5320d58a8cc2d7ff9843298351ded01b448d73",
+    ),
+    "openclaw/administrateme/src/contract.ts": (
+        "34ddb06bb18b3952425fb9cd76e40ba030aae490bc7cbcdf5bb34fb76495cda8",
+        "d88c6bbb38452ad8aa2f5f3a3e6323b3a3e1c3bd27272aba589cfb03626ea505",
+    ),
+    "openclaw/administrateme/src/hooks.ts": (
+        "c925395af1be5cebd132627ba0dcc8b820b83580ebf31a3d4866580b119a5b85",
+        "6a4bcb0b7c4831843b67c016814c2c4f7c67dcac2ab3c0aacff4e8fb50439e08",
+    ),
+    "openclaw/administrateme/src/self-replies.ts": (
+        None,
+        "f8e44083e13975c967d806fb4e5a8a79ce40bbf4778b4dc9e1f93d8e3525ed42",
+    ),
+    "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts": (
+        "5a8ef3477b9987d830548f4c4eac6a6df47e6a1a9ccb81cd7b96ddebe7c09633",
+        "b8382bf2ef0d59959591adce4d7d24271957f7d3a7635894f0b5f504387c93eb",
+    ),
+    "openclaw/administrateme/test/self-replies.test.ts": (
+        None,
+        "20a32bb7e6f59d58a2ca4313504df0bf7196826241d46f41ba84b2b71914e926",
+    ),
+}
+
 HELPER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/install-member-bridge.sh",
@@ -100,6 +200,8 @@ def _fingerprint(inventory: dict[str, dict[str, str]]) -> str:
 
 def _retained_edge_inventory(
     inventory: dict[str, dict[str, str]],
+    *,
+    reviewed_overlay: dict[str, dict[str, str] | None],
 ) -> dict[str, dict[str, str]]:
     selected = {
         path: dict(coordinate)
@@ -118,7 +220,38 @@ def _retained_edge_inventory(
         # Only this reviewed pair differs solely inside the central coordinator's
         # configure_capability body. No generic class or source exemption exists.
         coordinate["sha256"] = PERMISSION_RECOVERY_RETAINED_MODULE_SHA256
+    # This normalization is supplied only after every reviewed pair is checked.
+    # Newly central-only files are absent from the exact retained archive.
+    for path, retained in reviewed_overlay.items():
+        if retained is None:
+            selected.pop(path, None)
+        else:
+            selected[path] = dict(retained)
     return selected
+
+
+def _reviewed_cos_overlay(
+    candidate: dict[str, dict[str, str]],
+    retained: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str] | None]:
+    """Allow only the complete reviewed old-to-new central source group."""
+
+    if all(
+        candidate.get(path) == retained.get(path)
+        for path in PERMISSION_RECOVERY_COS_OVERLAY
+    ):
+        return {}
+    normalization: dict[str, dict[str, str] | None] = {}
+    for path, (old_sha, new_sha) in PERMISSION_RECOVERY_COS_OVERLAY.items():
+        previous = {"mode": "100644", "sha256": old_sha} if old_sha else None
+        current = {"mode": "100644", "sha256": new_sha}
+        if retained.get(path) != previous or candidate.get(path) != current:
+            raise RuntimeError(
+                "retained edge compatibility changes unsupported runtime inputs: "
+                "reviewed central overlay is incomplete or changed"
+            )
+        normalization[path] = previous
+    return normalization
 
 
 def runtime_interface_fingerprint(repository: Path, revision: str) -> str:
@@ -173,11 +306,15 @@ def inspect_helper_component(
         runtime_fingerprint = _fingerprint(runtime_inventory)
         central_differences: list[dict[str, object]] = []
         retained_edge_fingerprint: str | None = None
+        reviewed_overlay: dict[str, dict[str, str] | None] = {}
         if compatibility_contract == PERMISSION_RECOVERY_COMPATIBILITY:
             # This is a mixed central/helper release, never a smaller CI scope.
             # The public runtime fingerprint remains conservative. Only these
             # versioned central protocol implementation paths may differ; the
             # delivered archive still contains the exact retained bytes.
+            reviewed_overlay = _reviewed_cos_overlay(
+                component_inventory, runtime_inventory
+            )
             for path in sorted(component_inventory.keys() | runtime_inventory.keys()):
                 candidate = component_inventory.get(path)
                 retained = runtime_inventory.get(path)
@@ -186,6 +323,16 @@ def inspect_helper_component(
                     for entry in (candidate, retained)
                     if entry is not None
                 ):
+                    continue
+                if path in reviewed_overlay:
+                    central_differences.append(
+                        {
+                            "path": path,
+                            "retained": retained,
+                            "central_candidate": candidate,
+                            "compatibility_rule": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+                        }
+                    )
                     continue
                 if (
                     path not in PERMISSION_RECOVERY_CENTRAL_PATHS
@@ -221,10 +368,14 @@ def inspect_helper_component(
                     )
                 central_differences.append(difference)
             retained_edge_fingerprint = _fingerprint(
-                _retained_edge_inventory(runtime_inventory)
+                _retained_edge_inventory(
+                    runtime_inventory, reviewed_overlay=reviewed_overlay
+                )
             )
             if retained_edge_fingerprint != _fingerprint(
-                _retained_edge_inventory(component_inventory)
+                _retained_edge_inventory(
+                    component_inventory, reviewed_overlay=reviewed_overlay
+                )
             ):
                 raise RuntimeError("retained edge inputs differ")
         elif component_fingerprint != runtime_fingerprint:
@@ -303,6 +454,14 @@ def inspect_helper_component(
                     "central_differences": central_differences,
                 }
             )
+            if reviewed_overlay:
+                compatibility["reviewed_central_overlay"] = {
+                    "contract": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+                    "retained_reference_commit": PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
+                    "central_reference_commit": PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
+                    "paths": sorted(reviewed_overlay),
+                    "complete_group_verified": True,
+                }
     if reviewed_candidate_commit(repository) != component_commit:
         raise RuntimeError("helper component source changed during inspection")
     return HelperComponentInputs(compatibility, sources, payloads, runtime_inventory)

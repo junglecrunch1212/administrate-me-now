@@ -71,9 +71,11 @@ def test_plugin_status_rejects_a_loaded_stale_release(
     assert expected != stale
 
 
+@pytest.mark.parametrize("standing_supported", [False, True])
 def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    standing_supported: bool,
 ) -> None:
     paths = DeploymentPaths.from_root(tmp_path / "instance")
     release = tmp_path / "releases" / "candidate"
@@ -89,6 +91,11 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
                         "bindingFingerprints": {},
                         "dmScope": {},
                         "memberAgentIds": {},
+                        **(
+                            {"standingSelfReplyBindings": {}}
+                            if standing_supported
+                            else {}
+                        ),
                     },
                 }
             }
@@ -128,7 +135,13 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
                         "match": {"channel": "stale"},
                     },
                 ],
-                "plugins": {"entries": {"administrateme": {"config": {}}}},
+                "plugins": {
+                    "entries": {
+                        "administrateme": {
+                            "config": {"standingSelfReplyBindings": ["f" * 64]}
+                        }
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -165,6 +178,9 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         "content_exposed": False,
     }
     stored = json.loads((runtime_dir / "openclaw.json").read_text("utf-8"))
+    assert stored["plugins"]["entries"]["administrateme"]["config"].get(
+        "standingSelfReplyBindings", []
+    ) == (["f" * 64] if standing_supported else [])
     assert {row["id"] for row in stored["agents"]["list"]} == {
         "operator",
         member_agent_id("member-a"),

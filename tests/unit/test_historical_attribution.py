@@ -272,11 +272,17 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
         "fingerprint",
     ],
 )
+@pytest.mark.parametrize("approval_version", [1, 2])
 async def test_internal_cos_attribution_requires_exact_private_approval_context(
-    tmp_path: Path, defect: str
+    tmp_path: Path, defect: str, approval_version: int
 ) -> None:
     events = _chain()
     approved, attempt = events[1], events[3]
+    if approval_version == 2:
+        from adminme.events.schemas.cos_responses import upcast_response_approval
+
+        approved["schema_version"] = 2
+        approved["payload"] = upcast_response_approval(approved["payload"])
     for event in (approved, attempt):
         event.update(source_adapter="openclaw-plugin", source_account_id="cos-response")
     if defect == "service_actor":

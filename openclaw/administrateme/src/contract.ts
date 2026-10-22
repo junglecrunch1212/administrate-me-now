@@ -37,6 +37,7 @@ export type PluginConfig = {
   forwardIntakeAccounts: readonly { channelId: "imessage" | "bluebubbles"; accountId: string }[];
   modelSessionPrefix: string;
   dmScope: "per_account_channel_peer";
+  standingSelfReplyBindings: readonly string[];
   memberAgentIds: readonly string[];
   bindingFingerprints: readonly string[];
   uniqueAgents: boolean;

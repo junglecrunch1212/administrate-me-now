@@ -226,6 +226,28 @@ def reconcile_administrateme_plugin(
             raise RuntimeError("bounded OpenClaw plugin command timed out") from exc
 
     try:
+        # A rollback to the preceding plugin cannot retain a setting that its
+        # schema does not recognize. Preserve every unrelated config field.
+        properties = (
+            json.loads(manifest.read_text("utf-8"))
+            .get("configSchema", {})
+            .get("properties", {})
+        )
+        if "standingSelfReplyBindings" not in properties:
+            current = json.loads(config_path.read_text("utf-8"))
+            plugin_config = (
+                current.get("plugins", {})
+                .get("entries", {})
+                .get(ADMINISTRATEME_PLUGIN, {})
+                .get("config", {})
+            )
+            if "standingSelfReplyBindings" in plugin_config:
+                plugin_config.pop("standingSelfReplyBindings")
+                atomic_write(
+                    config_path,
+                    json.dumps(current, indent=2, sort_keys=True).encode(),
+                    mode=original_mode,
+                )
         if not supports_member_topology:
             # OpenClaw validates the existing entry against the incoming manifest
             # before installation. Remove only candidate-owned fields/rows first so

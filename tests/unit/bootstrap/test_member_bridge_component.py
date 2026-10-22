@@ -21,6 +21,10 @@ from bootstrap.member_bridge_component import (
     PERMISSION_RECOVERY_CENTRAL_PATHS,
     PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256,
     PERMISSION_RECOVERY_COMPATIBILITY,
+    PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
+    PERMISSION_RECOVERY_COS_OVERLAY,
+    PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+    PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
     PERMISSION_RECOVERY_METHOD_RULE,
     PERMISSION_RECOVERY_PROTOCOL,
     PERMISSION_RECOVERY_RETAINED_MODULE_SHA256,
@@ -120,6 +124,234 @@ def _component_revision(repository: Path) -> str:
 def _archive(repository: Path, revision: str, destination: Path) -> str:
     _git(repository, "archive", "--format=tar", f"--output={destination}", revision)
     return hashlib.sha256(destination.read_bytes()).hexdigest()
+
+
+def _write_cos_overlay(repository: Path, *, candidate: bool) -> None:
+    for path, (old_sha, new_sha) in PERMISSION_RECOVERY_COS_OVERLAY.items():
+        target = repository / path
+        if candidate:
+            payload = (ROOT / path).read_bytes()
+            assert hashlib.sha256(payload).hexdigest() == new_sha
+        elif old_sha is None:
+            target.unlink(missing_ok=True)
+            continue
+        else:
+            payload = subprocess.run(
+                [
+                    "/usr/bin/git",
+                    "-C",
+                    str(ROOT),
+                    "show",
+                    f"{PERMISSION_RECOVERY_COS_RETAINED_COMMIT}:{path}",
+                ],
+                env=sanitized_git_environment(),
+                capture_output=True,
+                check=True,
+                timeout=30,
+            ).stdout
+            assert hashlib.sha256(payload).hexdigest() == old_sha
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        target.chmod(0o644)
+
+
+def _cos_overlay_repository(directory: Path) -> tuple[Path, str, str]:
+    repository, _ = _repository(directory)
+    _write_cos_overlay(repository, candidate=False)
+    retained = _commit(repository)
+    _write_cos_overlay(repository, candidate=True)
+    return repository, retained, _commit(repository)
+
+
+def test_complete_reviewed_cos_overlay_preserves_exact_retained_archive(
+    tmp_path: Path,
+) -> None:
+    repository, retained, candidate = _cos_overlay_repository(tmp_path)
+    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 23
+    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 4
+    assert all(is_runtime_input(path) for path in PERMISSION_RECOVERY_COS_OVERLAY)
+    assert runtime_interface_fingerprint(
+        repository, candidate
+    ) != runtime_interface_fingerprint(repository, retained)
+    with pytest.raises(RuntimeError, match="changes retained runtime inputs"):
+        inspect_helper_component(repository, candidate, retained)
+    inspected = inspect_helper_component(
+        repository,
+        candidate,
+        retained,
+        compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+    )
+    expected = [
+        {
+            "path": path,
+            "retained": {"mode": "100644", "sha256": old} if old else None,
+            "central_candidate": {"mode": "100644", "sha256": new},
+            "compatibility_rule": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+        }
+        for path, (old, new) in sorted(PERMISSION_RECOVERY_COS_OVERLAY.items())
+    ]
+    assert inspected.compatibility["central_differences"] == expected
+    assert inspected.compatibility["reviewed_central_overlay"] == {
+        "contract": PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT,
+        "retained_reference_commit": PERMISSION_RECOVERY_COS_RETAINED_COMMIT,
+        "central_reference_commit": PERMISSION_RECOVERY_COS_CENTRAL_COMMIT,
+        "paths": sorted(PERMISSION_RECOVERY_COS_OVERLAY),
+        "complete_group_verified": True,
+    }
+    assert inspected.compatibility["runtime_inputs_unchanged"] is False
+    assert inspected.compatibility["retained_edge_inputs_unchanged"] is True
+    assert inspected.compatibility["required_central_release_commit"] == candidate
+    assert (
+        inspected.compatibility["required_central_protocol"]
+        == PERMISSION_RECOVERY_PROTOCOL
+    )
+    archive = tmp_path / "retained-with-old-cos.tar"
+    _archive(repository, retained, archive)
+    verify_runtime_archive(archive, inspected.runtime_inventory)
+    with tarfile.open(archive) as package:
+        for path, (old, _) in PERMISSION_RECOVERY_COS_OVERLAY.items():
+            if old is None:
+                assert path not in package.getnames()
+            else:
+                stream = package.extractfile(path)
+                assert stream is not None
+                assert hashlib.sha256(stream.read()).hexdigest() == old
+
+
+@pytest.mark.parametrize("path", sorted(PERMISSION_RECOVERY_COS_OVERLAY))
+@pytest.mark.parametrize("side", ["retained", "candidate"])
+def test_reviewed_cos_overlay_rejects_unknown_bytes_in_every_source_pair(
+    tmp_path: Path,
+    path: str,
+    side: str,
+) -> None:
+    repository, retained, _ = _cos_overlay_repository(tmp_path)
+    if side == "retained":
+        _git(repository, "checkout", "--detach", retained)
+    target = repository / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(
+        (target.read_bytes() if target.exists() else b"") + b"\nunknown\n"
+    )
+    changed = _commit(repository)
+    if side == "retained":
+        retained = changed
+        _write_cos_overlay(repository, candidate=True)
+        changed = _commit(repository)
+    with pytest.raises(
+        RuntimeError, match="reviewed central overlay is incomplete or changed"
+    ):
+        inspect_helper_component(
+            repository,
+            changed,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+@pytest.mark.parametrize(
+    "path", ["adminme/cos_channel_operation.py", "adminme/cos_self_replies.py"]
+)
+@pytest.mark.parametrize("defect", ["missing", "mode", "old_coordinate"])
+def test_reviewed_cos_overlay_rejects_partial_group_and_candidate_mode_drift(
+    tmp_path: Path,
+    path: str,
+    defect: str,
+) -> None:
+    repository, retained, _ = _cos_overlay_repository(tmp_path)
+    target = repository / path
+    if defect == "missing":
+        target.unlink()
+    elif defect == "mode":
+        target.chmod(0o755)
+    elif PERMISSION_RECOVERY_COS_OVERLAY[path][0] is None:
+        target.unlink()
+    else:
+        _git(repository, "checkout", retained, "--", path)
+    candidate = _commit(repository)
+    with pytest.raises(
+        RuntimeError, match="reviewed central overlay is incomplete or changed"
+    ):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+@pytest.mark.parametrize("defect", ["mode", "missing", "new_coordinate"])
+def test_reviewed_cos_overlay_requires_the_exact_retained_group(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    repository, retained, _ = _cos_overlay_repository(tmp_path)
+    _git(repository, "checkout", "--detach", retained)
+    path = "adminme/cos_channel_operation.py"
+    target = repository / path
+    if defect == "mode":
+        target.chmod(0o755)
+    elif defect == "missing":
+        target.unlink()
+    else:
+        target.write_bytes((ROOT / path).read_bytes())
+    retained = _commit(repository)
+    _write_cos_overlay(repository, candidate=True)
+    candidate = _commit(repository)
+    with pytest.raises(
+        RuntimeError, match="reviewed central overlay is incomplete or changed"
+    ):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+def test_reviewed_cos_overlay_cannot_be_reversed_to_downgrade_central(
+    tmp_path: Path,
+) -> None:
+    repository, _, retained = _cos_overlay_repository(tmp_path)
+    _write_cos_overlay(repository, candidate=False)
+    candidate = _commit(repository)
+    with pytest.raises(
+        RuntimeError, match="reviewed central overlay is incomplete or changed"
+    ):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "bridge/poetry.lock",
+        "adminme/bridge_history.py",
+        "adminme/events/envelope.py",
+        "bridge/adminme_bridge/enrollment_helper.py",
+        "adminme/bridge_authorization.py",
+    ],
+)
+def test_verified_cos_overlay_does_not_exempt_any_other_dependency_or_edge_contract(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    repository, retained, _ = _cos_overlay_repository(tmp_path)
+    target = repository / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"unreviewed edge or dependency change\n")
+    candidate = _commit(repository)
+    with pytest.raises(RuntimeError, match="unsupported runtime inputs"):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
 
 
 def test_helper_only_revision_preserves_fixed_runtime_bytes_and_modes(

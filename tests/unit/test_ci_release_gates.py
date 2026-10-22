@@ -460,7 +460,15 @@ def test_bridge_development_includes_strict_readiness_composition(
 ) -> None:
     steps = _workflow(filename)["jobs"]["bridge-development"]["steps"]
     commands = "\n".join(step.get("run", "") for step in steps)
-    assert "tests/integration/test_runtime_application.py" in commands
+    for boundary in (
+        "tests/integration/test_runtime_application.py",
+        "tests/acceptance/test_cos_self_replies.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_historical_attribution.py",
+    ):
+        assert boundary in commands
     assert "--runxfail" in commands
 
 
