@@ -722,27 +722,58 @@ describe("native OpenClaw contract fixture", () => {
     await service.stop?.();
   });
 
-  it("waits for receipt publication even when the pinned host does not await onResolution", async () => {
+  it.each([
+    { name: "administrateme_cos_response", path: "/tools/cos-response",
+      params: { request_id: "publication-race", approval_event_id: "approved-private" } },
+    { name: "administrateme_execute_pending_provider_action", path: "/tools/execute-pending-provider-action",
+      params: { domain_approval_event_id: "approved-private" } },
+  ])("$name waits for receipt publication when the pinned host does not await onResolution", async ({ name, path, params }) => {
     const runtime = fakeApi();
-    const params = { request_id: "publication-race", approval_event_id: "approved-private" };
     const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
-    const gated = await hook({ toolName: "administrateme_cos_response", params }, {}) as {
+    const gated = await hook({ toolName: name, params }, {}) as {
       params: Record<string, unknown>;
       requireApproval: { onResolution(decision: string): Promise<void> };
     };
     let complete!: (value: Response) => void;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { complete = resolve; }));
     const publication = gated.requireApproval.onResolution("allow-once");
-    const tool = runtime.tools.get("administrateme_cos_response")!(toolContext()) as AnyAgentTool;
+    const tool = runtime.tools.get(name)!(toolContext()) as AnyAgentTool;
     const execution = tool.execute("call-publication-race", gated.params);
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/approvals/resolve");
     complete(jsonResponse({ accepted: true }));
     await publication;
     await execution;
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]?.[0]).toContain("/tools/cos-response");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain(path);
   });
+
+  it.each(["administrateme_cos_response", "administrateme_execute_pending_provider_action"])(
+    "%s refuses dispatch when its exact receipt publication fails", async (name) => {
+      const runtime = fakeApi();
+      const params = name === "administrateme_cos_response"
+        ? { request_id: "publication-failure", approval_event_id: "approved-private" }
+        : { domain_approval_event_id: "approved-private" };
+      const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
+      const gated = await hook({ toolName: name, params }, {}) as {
+        params: Record<string, unknown>;
+        requireApproval: { onResolution(decision: string): Promise<void> };
+      };
+      let fail!: (reason: Error) => void;
+      fetchMock.mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => { fail = reject; }));
+      const publication = gated.requireApproval.onResolution("allow-once");
+      const tool = runtime.tools.get(name)!(toolContext()) as AnyAgentTool;
+      const execution = tool.execute("call-publication-failure", gated.params);
+      const outcomes = Promise.allSettled([publication, execution]);
+      await Promise.resolve();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      fail(new Error("Fixture approval acknowledgement unavailable"));
+      expect((await outcomes).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toContain("/approvals/resolve");
+    },
+  );
 
   it("reports notification delivery through the typed result seam", async () => {
     const runtime = fakeApi();
