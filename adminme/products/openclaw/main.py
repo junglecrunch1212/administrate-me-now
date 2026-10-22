@@ -860,7 +860,14 @@ async def _consume_openclaw_approval(
         )
     except ApprovalReceiptError as exc:
         raise HTTPException(403, str(exc)) from exc
-    consumed_at = EventEnvelope.now_utc_iso()
+    if receipt.consumed_at_ms is None:
+        raise HTTPException(503, "OpenClaw approval consumption is unavailable")
+    # Preserve the store's exact first consumption, including same-binding
+    # recovery. A new whole-second timestamp can precede millisecond issuance
+    # or misrepresent an approval recovered after its original consumption.
+    consumed_at = datetime.fromtimestamp(
+        receipt.consumed_at_ms / 1000, tz=timezone.utc
+    ).isoformat()
     event_id, _ = await _append(
         runtime,
         session,

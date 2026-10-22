@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -278,7 +279,7 @@ def test_notes_requires_both_approvals_exact_scope_then_reconciles_without_resen
             # Immutable authorization attributes the old effect even after the
             # current permission is revoked; this is not a new provider binding.
             history = client.portal.call(_history, runtime.event_log)
-            assert history["state"] == "healthy", history
+            assert history["state"] == "healthy", json.dumps(history, sort_keys=True)
             assert any(
                 row["binding_state"]
                 == "internal_apple_service_member_source_reconciled"

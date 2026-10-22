@@ -855,3 +855,9 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .new-apple-note-form textarea, .new-apple-note-form select, .new-apple-note-form input { width: 100%; min-width: 0; }
 
 .apple-service-permissions [hidden], .new-apple-note [hidden] { display: none !important; }
+
+.apple-action-review { display: grid; gap: .25rem; margin: .75rem 0; }
+.apple-action-review dt { font-weight: 750; }
+.apple-action-review dd { margin: 0 0 .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.apple-execution-handoff-note { display: block; margin-top: .5rem; }

@@ -195,6 +195,7 @@ def test_private_service_permissions_enable_reconcile_revoke_and_replay(
             },
         )
         assert viewed.status_code == 403
+        revoked_providers: set[str] = set()
         for provider in commands:
             revoke = client.post(
                 f"{PATH}/{provider}",
@@ -207,6 +208,15 @@ def test_private_service_permissions_enable_reconcile_revoke_and_replay(
                 },
             )
             assert revoke.status_code == 202, revoke.text
+            revoked_providers.add(provider)
+            current_permissions = client.get(PATH, headers=MEMBER_HEADERS).json()[
+                "items"
+            ]
+            assert all(item["read_access"] for item in current_permissions)
+            assert all(
+                item["write_access"] is (item["provider"] not in revoked_providers)
+                for item in current_permissions
+            )
         assert all(
             item["state"] == "revoked" and not item["write_access"]
             for item in client.get(PATH, headers=MEMBER_HEADERS).json()["items"]

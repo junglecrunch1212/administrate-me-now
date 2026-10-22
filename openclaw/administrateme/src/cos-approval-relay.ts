@@ -4,7 +4,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { approvalRequestFingerprint } from "./approval.js";
 import type { PluginRuntime } from "./runtime.js";
 
-const TOOL = "administrateme_cos_response";
+const REPLY_TOOL = "administrateme_cos_response";
+const APPLE_TOOL = "administrateme_execute_pending_provider_action";
 const CONTRACT = "cos-member-approval-v1";
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
@@ -22,10 +23,11 @@ type Binding = {
   session_key: string; agent_id: string; domain_approval_id: string;
   request_id: string; request_fingerprint: string; receipt_id: string;
   tool_call_id: string; created_at_ms: number;
+  kind: "cos_response" | "provider_action"; tool_name: string;
 };
 type Pending = Binding & { approval_id: string; expires_at_ms: number; revision: string };
 export type CoSApprovalRelay = {
-  remember: (params: Record<string, unknown>, context: Record<string, unknown>, receiptId: string) => void;
+  remember: (params: Record<string, unknown>, context: Record<string, unknown>, receiptId: string, toolName?: string) => void;
 };
 
 export function registerCosApprovalRelay(api: OpenClawPluginApi, runtime: PluginRuntime): CoSApprovalRelay {
@@ -66,7 +68,7 @@ export function registerCosApprovalRelay(api: OpenClawPluginApi, runtime: Plugin
     prune();
     const request = record.request;
     const binding = bindings.get(request.toolCallId ?? "");
-    if (!binding || request.pluginId !== "administrateme" || request.toolName !== TOOL ||
+    if (!binding || request.pluginId !== "administrateme" || request.toolName !== binding.tool_name ||
         request.sessionKey !== binding.session_key || request.agentId !== binding.agent_id ||
         !/^plugin:[a-f0-9-]{36}$/.test(record.id) ||
         !Number.isSafeInteger(record.createdAtMs) || !Number.isSafeInteger(record.expiresAtMs) ||
@@ -221,16 +223,24 @@ export function registerCosApprovalRelay(api: OpenClawPluginApi, runtime: Plugin
     },
   });
   return {
-    remember(params, context, receiptId) {
+    remember(params, context, receiptId, toolName = REPLY_TOOL) {
       prune();
       if (!lifecycle || !active(lifecycle)) return;
+      if (![REPLY_TOOL, APPLE_TOOL].includes(toolName)) return;
+      const apple = toolName === APPLE_TOOL;
+      const domainField = apple ? "domain_approval_event_id" : "approval_event_id";
+      const allowedKeys = apple
+        ? [domainField, "openclaw_approval_receipt_id"]
+        : ["request_id", domainField, "openclaw_approval_receipt_id"];
       if (typeof context.sessionKey !== "string" || typeof context.agentId !== "string" ||
           typeof context.toolCallId !== "string" || !context.toolCallId ||
-          typeof params.approval_event_id !== "string" || typeof params.request_id !== "string" ||
-          Object.keys(params).some((key) => !["request_id", "approval_event_id", "openclaw_approval_receipt_id"].includes(key))) return;
+          typeof params[domainField] !== "string" || !params[domainField] ||
+          (!apple && typeof params.request_id !== "string") ||
+          Object.keys(params).some((key) => !allowedKeys.includes(key))) return;
       bindings.set(context.toolCallId, {
         session_key: context.sessionKey, agent_id: context.agentId,
-        domain_approval_id: params.approval_event_id, request_id: params.request_id,
+        domain_approval_id: String(params[domainField]), request_id: apple ? "" : String(params.request_id),
+        kind: apple ? "provider_action" : "cos_response", tool_name: toolName,
         request_fingerprint: approvalRequestFingerprint(params), receipt_id: receiptId,
         tool_call_id: context.toolCallId, created_at_ms: Date.now(),
       });

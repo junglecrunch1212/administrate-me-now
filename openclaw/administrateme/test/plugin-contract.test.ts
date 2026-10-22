@@ -547,24 +547,31 @@ describe("native OpenClaw contract fixture", () => {
     expect(decide.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
-  it.each(["allow-once", "deny"])("relays only exact native CoS approval with an explicit signed %s decision", async (decision) => {
+  it.each([
+    ["administrateme_cos_response", "allow-once"], ["administrateme_cos_response", "deny"],
+    ["administrateme_execute_pending_provider_action", "allow-once"], ["administrateme_execute_pending_provider_action", "deny"],
+  ])("relays only exact native %s approval with an explicit signed %s decision", async (toolName, decision) => {
     const runtime = fakeApi();
     const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay");
     await service?.start();
     const native = fixtureApprovalRuntimes.at(-1)!;
     const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
     const context = { sessionKey: "agent:adminme-a:portal-a", agentId: "adminme-a", toolCallId: "call-a" };
-    const toolParams = { request_id: "reply-a", approval_event_id: "event-private-a" };
-    await hook({ toolName: "administrateme_cos_response", params: toolParams }, context);
+    const apple = toolName === "administrateme_execute_pending_provider_action";
+    const toolParams = apple
+      ? { domain_approval_event_id: "event-private-a" }
+      : { request_id: "reply-a", approval_event_id: "event-private-a" };
+    await hook({ toolName, params: toolParams }, context);
     const now = Date.now();
     const record: PluginApprovalRequest = {
       id: "plugin:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMs: now, expiresAtMs: now + 120_000,
-      request: { pluginId: "administrateme", toolName: "administrateme_cos_response",
+      request: { pluginId: "administrateme", toolName,
         toolCallId: "call-a", agentId: context.agentId, sessionKey: context.sessionKey,
         allowedDecisions: ["allow-once", "deny"] },
     };
     for (const mismatch of [
-      { pluginId: "other" }, { toolName: "exec" }, { toolCallId: "other-call" },
+      { pluginId: "other" }, { toolName: "exec" },
+      { toolName: apple ? "administrateme_cos_response" : "administrateme_execute_pending_provider_action" }, { toolCallId: "other-call" },
       { agentId: "other-agent" }, { sessionKey: "other-session" }, { allowedDecisions: ["allow-always"] },
     ]) {
       expect(native.adapter.shouldHandle({ ...record, request: { ...record.request, ...mismatch } })).toBe(false);
@@ -583,6 +590,9 @@ describe("native OpenClaw contract fixture", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.domain_approval_id).toBe("event-private-a");
     expect(rows[0]?.receipt_id).toBeUndefined();
+    expect(rows[0]?.kind).toBe(apple ? "provider_action" : "cos_response");
+    expect(rows[0]?.tool_name).toBe(toolName);
+    expect(rows[0]?.request_fingerprint).toBe(approvalRequestFingerprint(toolParams));
     expect(native.calls).toEqual([]);
     await resolve({ params: { ...ticket("resolve"), signature: "0".repeat(64) }, client: null, respond });
     expect(respond.mock.lastCall?.[0]).toBe(false);

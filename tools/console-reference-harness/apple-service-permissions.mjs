@@ -1,3 +1,6 @@
+import { auditAppleActionHandoffs } from "./apple-action-handoffs.mjs";
+import { auditAppleNativeApprovals } from "./apple-native-approvals.mjs";
+
 // Synthetic transport boundary for the real member Settings assets. This does
 // not exercise a live bridge or substitute for production authorization tests.
 export async function auditAppleServicePermissions({ page, stalePage, otherPage, baseUrl, record, screenshot, auditAccessibility, expectHandledFailure, sourceVersion }) {
@@ -143,12 +146,30 @@ export async function auditAppleServicePermissions({ page, stalePage, otherPage,
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
     await auditAccessibility(page, `New Apple note ${width}`); await screenshot(page, `new-apple-note-${width}.png`);
   }
+  const chatPosts = [];
+  const nativeEndpoint = "/api/member/v1/chat/reply-approvals";
+  const nativeEmpty = async (route) => { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }); };
+  const chatRoute = async (route) => {
+    chatPosts.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: 'data: {"kind":"delta","text":"Synthetic conversation; no native decision or provider effect."}\n\ndata: {"kind":"final"}\n\n' });
+  };
+  await page.route(`**${nativeEndpoint}`, nativeEmpty); await page.route("**/api/member/v1/chat/stream", chatRoute);
+  await newNote.getByRole("button", { name: "Continue to execution approval", exact: true }).click();
+  await newNote.getByRole("status").filter({ hasText: "Your exact note is approved" }).waitFor();
+  await page.waitForFunction(() => !document.querySelector("#chat-send").disabled);
+  record("Notes explicit continuation hands exact immutable approval to the genuine pending-action tool", chatPosts.length === 1 && chatPosts[0].message.includes("administrateme_execute_pending_provider_action") && chatPosts[0].message.includes("synthetic-note-domain-approval") && (await page.locator("#chat-messages").textContent()).includes("Please request execution approval for the exact Apple note I just approved.") && !(await page.locator("#chat-messages").textContent()).includes("synthetic-note-domain-approval") && await newNote.getByRole("button", { name: "Continue to execution approval", exact: true }).isDisabled());
+  await page.locator("#chat-close").click(); await page.reload({ waitUntil: "networkidle" });
+  await newNote.getByRole("status").filter({ hasText: "Your exact note is approved" }).waitFor();
+  record("Notes execution handoff is not repeated after reload", chatPosts.length === 1 && notePosts.length === 1 && await newNote.getByRole("button", { name: "Continue to execution approval", exact: true }).isDisabled());
+  await page.unroute("**/api/member/v1/chat/stream", chatRoute); await page.unroute(`**${nativeEndpoint}`, nativeEmpty);
+  await auditAppleNativeApprovals({ page, baseUrl, record, screenshot });
   noteState = "unknown"; await newNote.getByRole("button", { name: "Check note status", exact: true }).click();
   await newNote.getByRole("status").filter({ hasText: "provider result is unknown" }).waitFor();
   record("Unknown Apple provider result never offers another note or a resend", notePosts.length === 1 && await newNote.getByRole("button", { name: "Prepare another note", exact: true }).isHidden() && await newNote.getByRole("button", { name: "Retry saved note approval", exact: true }).isHidden());
   await otherPage.goto(`${baseUrl}/member/notes`, { waitUntil: "networkidle" });
   await otherPage.getByText("Return to your own private view to prepare an Apple note.", { exact: true }).waitFor();
   record("View-as cannot prepare an Apple note or retrieve private writing scopes", viewReads === 0 && await otherPage.locator(".new-apple-note input, .new-apple-note textarea, .new-apple-note button").count() === 0);
+  await auditAppleActionHandoffs({ page, baseUrl, record });
   await page.unroute(noteRoute, noteHandler);
   await page.unroute(match, routeHandler); await stalePage.unroute(match, routeHandler);
 }

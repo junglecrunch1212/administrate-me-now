@@ -40,9 +40,12 @@ jobs:
           tests/acceptance/test_apple_service_permissions.py
           tests/acceptance/test_apple_service_notes.py
           tests/acceptance/test_apple_service_revocation.py
+          tests/acceptance/test_member_apple_approval.py
+          tests/acceptance/test_member_cos_approval.py
           tests/unit/test_apple_service_permission_contract.py
           tests/unit/test_apple_native_permission_boundary.py
           tests/unit/test_apple_notes_commands.py
+          tests/unit/test_openclaw_approvals.py
           tests/unit/bootstrap/test_member_bridge_runtime_repair.py
           tests/unit/test_capability_catalog.py
       - name: Check isolated bridge write boundary
@@ -51,6 +54,12 @@ jobs:
           poetry run pytest -p no:cacheprovider --import-mode=importlib -q -ra
           bridge/tests/unit/test_apple_notes_governed_writes.py
           bridge/tests/unit/test_apple_revoked_attempt.py
+      - name: Check native approval relay contract
+        if: '!cancelled()'
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
       - name: Check focused member browser behavior
         if: '!cancelled()'
         run: |

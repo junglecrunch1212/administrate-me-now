@@ -440,6 +440,7 @@ async function reconcileTriageDecision(item, action, requestId, token, error, ba
       state.triageBannerKind = "reconciliation";
       banner.hidden = false;
       banner.textContent = `The ${operation} response was interrupted, but Triage reconciled this exact candidate as ${memberStatusLabel(exact.state).toLowerCase()}. Review this receipt before taking another action.`;
+      if (action === "approve" && exact.resolution_reason === "approved_awaiting_openclaw") appendAppleExecutionHandoff(banner, exact.route?.provider, exact.domain_approval_event_id);
       return "settled";
     }
     if (mayReportRejection && refreshed.focus?.requested_candidate_id === item.proposal_id && ["pending_interpretation", "pending_review"].includes(exact?.state)) {
@@ -514,6 +515,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
         banner.append(document.createTextNode(pending ? `Confirmed. The governed provider action is awaiting approval. ${continuation} ` : `Confirmed and added to ${result.destination.label || titleCase(result.destination.surface)}. ${continuation} `));
         const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
       } else banner.textContent = `Confirmed through the household gate. ${continuation}`;
+      if (result.state === "approved_awaiting_openclaw") appendAppleExecutionHandoff(banner, item.route?.provider, result.pending_provider_action_event_id);
     } else {
       banner.textContent = contextCorrection ? `Dismissed. The exact context correction was recorded and can be reversed. ${continuation}` : feedbackReason ? `Dismissed. No household record was created. Your reversible feedback was recorded. ${continuation}` : `Dismissed. No household record or provider write was created. ${continuation}`;
     }
@@ -1627,6 +1629,33 @@ function setBanner(message) {
   banner.textContent = message;
 }
 
+function appendAppleExecutionHandoff(container, provider, approvalEventId) {
+  if (!["apple_calendar", "apple_reminders"].includes(provider) || typeof approvalEventId !== "string" || !approvalEventId) return;
+  const member = state.bootstrap?.member;
+  if (!member || member.authenticated_role !== "principal" || member.viewing_as || member.authenticated_id !== member.id) return;
+  const key = `administrateme:apple-action-handoff:${member.authenticated_id}:${approvalEventId}`;
+  let started = true;
+  try { started = sessionStorage.getItem(key) !== null; } catch { /* Fail closed without durable browser handoff tracking. */ }
+  const button = text("button", "Continue to execution approval", "button button-primary"); button.type = "button";
+  const note = text("span", started ? "Execution was already requested from this browser. Check CoS’s result before taking another action." : "Your decision is recorded. Apple still needs a separate, one-time execution approval.", "state-note apple-execution-handoff-note");
+  note.setAttribute("role", "status"); note.setAttribute("aria-live", "polite");
+  button.disabled = started || !state.bootstrap.chat.enabled || state.bootstrap.chat.state !== "healthy";
+  button.addEventListener("click", async (event) => {
+    if (started) return;
+    if (state.controller) { note.textContent = "Finish or stop the current conversation before continuing."; return; }
+    try { sessionStorage.setItem(key, JSON.stringify({ domain_approval_event_id: approvalEventId, provider })); }
+    catch { button.disabled = true; note.textContent = "This browser cannot retain the handoff reference. No execution approval was requested."; return; }
+    started = true; button.disabled = true;
+    $("#chat-panel").classList.add("open"); $("#chat-open").setAttribute("aria-expanded", "true");
+    await sendChat(event, {
+      message: `Please use administrateme_execute_pending_provider_action with domain_approval_event_id ${approvalEventId} to request the separate one-time execution approval for the exact ${titleCase(provider)} action I approved.`,
+      displayMessage: `Please request execution approval for the exact ${titleCase(provider)} action I just approved.`,
+    });
+    note.textContent = "Check CoS’s result. This action will not be requested again from this control.";
+  });
+  container.append(document.createTextNode(" "), button, note);
+}
+
 function clearBanner() {
   const banner = $("#state-banner"); banner.hidden = true; banner.textContent = "";
   state.triageBannerKind = null;
@@ -2294,6 +2323,7 @@ async function runReminderCommand(item, operation, payload = {}) {
     });
     setBanner("Your decision is saved. OpenClaw must approve this exact provider action before the provider can change.");
     await reloadActiveSurface();
+    if (item.provider === "apple_reminders" && result.state === "awaiting_openclaw_approval") appendAppleExecutionHandoff($("#state-banner"), item.provider, result.domain_approval_event_id);
   } catch (error) {
     setBanner(`${error.message} Nothing was changed or implied.`);
   }
@@ -3683,13 +3713,16 @@ function newAppleNoteCard() {
   form.append(field("Apple Notes folder", folder), field("Note title (optional)", title), field("Note text", body), text("p", "Plain text only. Review the exact note and destination before approval. Apple will change only after a separate execution approval.", "state-note"), review);
   const check = text("button", "Check note status", "button button-secondary"); check.type = "button";
   const retry = text("button", "Retry saved note approval", "button button-secondary"); retry.type = "button"; retry.hidden = true;
+  const continueAction = text("button", "Continue to execution approval", "button button-primary"); continueAction.type = "button"; continueAction.hidden = true;
   const another = text("button", "Prepare another note", "button button-quiet"); another.type = "button"; another.hidden = true;
-  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(check, retry, another, settings); card.append(form, status, actions);
+  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(check, retry, continueAction, another, settings); card.append(form, status, actions);
   function lock() {
     for (const control of form.querySelectorAll("input,select,textarea,button")) control.disabled = busy || !loaded || !canCreate || Boolean(pending);
     check.disabled = busy; check.hidden = !pending;
     retry.hidden = !retryAllowed; retry.disabled = busy || !canCreate || !retryAllowed;
     another.hidden = !receipt; another.disabled = busy;
+    continueAction.hidden = receipt?.state !== "awaiting_openclaw_approval";
+    continueAction.disabled = busy || Boolean(pending?.handoff_started) || !state.bootstrap.chat.enabled || state.bootstrap.chat.state !== "healthy";
   }
   function savePending(value) { if (value) sessionStorage.setItem(pendingKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingKey); pending = value; }
   function matchesRequest(result) {
@@ -3738,6 +3771,18 @@ function newAppleNoteCard() {
     confirmation.addEventListener("submit", (submitEvent) => { submitEvent.preventDefault(); approve.disabled = true; void submit({ body: request }); }); openActionDialog("Create this Apple note?", confirmation);
   });
   check.addEventListener("click", () => { void reconcile(); }); retry.addEventListener("click", () => { if (pending) void submit(pending, true); });
+  continueAction.addEventListener("click", async (event) => {
+    if (busy || pending?.handoff_started || receipt?.state !== "awaiting_openclaw_approval") return;
+    if (state.controller) { status.textContent = "Finish or stop the current conversation before continuing."; return; }
+    try { savePending({ ...pending, handoff_started: true }); } catch { status.textContent = "This browser cannot retain the handoff reference. No execution approval was requested."; return; }
+    continueAction.disabled = true;
+    $("#chat-panel").classList.add("open"); $("#chat-open").setAttribute("aria-expanded", "true");
+    await sendChat(event, {
+      message: `Please use administrateme_execute_pending_provider_action with domain_approval_event_id ${receipt.domain_approval_event_id} to request the separate one-time execution approval for the exact Apple note I approved.`,
+      displayMessage: "Please request execution approval for the exact Apple note I just approved.",
+    });
+    await reconcile();
+  });
   another.addEventListener("click", () => { if (!busy && receipt) { savePending(null); receipt = null; title.value = ""; body.value = ""; void reconcile(); } });
   void reconcile(); return card;
 }
@@ -5347,42 +5392,55 @@ async function refreshChatReplyApprovals(isCurrent) {
   if (!isCurrent()) return;
   const active = new Set();
   for (const row of result.items || []) {
+    const providerAction = row.kind === "provider_action";
+    if (providerAction && !["apple_calendar", "apple_reminders", "apple_notes"].includes(row.provider)) continue;
+    const expiredCopy = providerAction ? "The earlier action approval changed or expired. This Apple change cannot run." : "The earlier reply approval changed or expired. This reply cannot be sent.";
     const key = `${row.approval_id}:${row.revision}`; active.add(key);
     const existing = chatReplyApprovals.get(key);
     if (existing) {
-      if (!row.can_allow && !existing.resolving()) {
-        existing.allow.disabled = true;
-        existing.note.textContent = "The earlier reply approval changed or expired. This reply cannot be sent.";
-      }
+      if (!row.can_allow && !existing.resolving()) { existing.allow.disabled = true; existing.note.textContent = expiredCopy; }
       continue;
     }
     if (row.expires_at_ms <= Date.now()) continue;
-    const node = document.createElement("li"); node.className = "message assistant cos-send-approval";
-    node.append(text("h3", "Ready to send this reply?"), text("p", `${row.channel === "imessage" ? "iMessage" : "Email"} to ${row.recipient}`));
-    if (row.subject) node.append(text("strong", row.subject));
-    const content = text("p", row.body); content.style.whiteSpace = "pre-wrap"; node.append(content);
-    const note = text("p", row.can_allow ? "Your reply text is approved. Sending still needs this separate, one-time decision." : "The earlier reply approval changed or expired. This reply cannot be sent.", "state-note");
+    const pendingKey = `administrateme:native-action-decision:${state.bootstrap.member.authenticated_id}:${key}`;
+    let storedDecision = null;
+    try { storedDecision = JSON.parse(sessionStorage.getItem(pendingKey) || "null"); } catch { storedDecision = { unknown: true }; }
+    const node = document.createElement("li"); node.className = `message assistant cos-send-approval${providerAction ? " apple-action-approval" : ""}`;
+    if (providerAction) {
+      node.append(text("h3", "Allow this Apple change?"), text("p", `${titleCase(row.provider)} · ${titleCase(row.operation)}`), text("p", `Destination: ${row.destination}`));
+      const details = document.createElement("dl"); details.className = "apple-action-review";
+      for (const item of row.review || []) details.append(text("dt", item.label), text("dd", item.value)); node.append(details);
+    } else {
+      node.append(text("h3", "Ready to send this reply?"), text("p", `${row.channel === "imessage" ? "iMessage" : "Email"} to ${row.recipient}`));
+      if (row.subject) node.append(text("strong", row.subject));
+      const content = text("p", row.body); content.style.whiteSpace = "pre-wrap"; node.append(content);
+    }
+    const unknownCopy = providerAction ? "No execution decision is confirmed. Check the action result; this control will not retry." : "No sending decision is confirmed. Wait for CoS to report the result; this control will not retry.";
+    const approvedCopy = providerAction ? "You approved this exact action. Execution still needs this separate, one-time decision." : "Your reply text is approved. Sending still needs this separate, one-time decision.";
+    const note = text("p", storedDecision ? unknownCopy : row.can_allow ? approvedCopy : expiredCopy, "state-note");
     note.setAttribute("role", "status"); note.setAttribute("aria-live", "polite");
-    const allow = text("button", "Allow this reply once", "button button-primary"); allow.type = "button"; allow.disabled = !row.can_allow;
-    const deny = text("button", "Don’t send", "button button-secondary"); deny.type = "button";
-    let resolving = false;
+    const allow = text("button", providerAction ? "Allow this change once" : "Allow this reply once", "button button-primary"); allow.type = "button"; allow.disabled = !row.can_allow || Boolean(storedDecision);
+    const deny = text("button", providerAction ? "Don’t change Apple" : "Don’t send", "button button-secondary"); deny.type = "button"; deny.disabled = Boolean(storedDecision);
+    let resolving = Boolean(storedDecision);
     const decide = async (decision) => {
-      if (resolving || row.expires_at_ms <= Date.now()) return;
-      resolving = true; allow.disabled = true; deny.disabled = true; note.textContent = "Recording your sending decision…";
+      if (resolving || row.expires_at_ms <= Date.now() || (decision === "allow-once" && !row.can_allow)) return;
+      try { sessionStorage.setItem(pendingKey, JSON.stringify({ approval_id: row.approval_id, revision: row.revision, decision, expires_at_ms: row.expires_at_ms })); }
+      catch { allow.disabled = true; deny.disabled = true; note.textContent = "This browser cannot retain the decision reference. No decision was requested."; return; }
+      resolving = true; allow.disabled = true; deny.disabled = true; note.textContent = providerAction ? "Recording your execution decision…" : "Recording your sending decision…";
       try {
-        await api("/api/member/v1/chat/reply-approvals", {
+        const resolved = await api("/api/member/v1/chat/reply-approvals", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ approval_id: row.approval_id, revision: row.revision, decision }),
         });
-        note.textContent = decision === "allow-once" ? "Sending allowed once. CoS will report the result." : "Sending declined.";
-      } catch { note.textContent = "No sending decision is confirmed. Wait for CoS to report the result; this control will not retry."; }
+        if (resolved.resolved !== true) { note.textContent = unknownCopy; return; }
+        note.textContent = providerAction ? decision === "allow-once" ? "This Apple change is allowed once. CoS will report the result." : "Apple change declined." : decision === "allow-once" ? "Sending allowed once. CoS will report the result." : "Sending declined.";
+      } catch { note.textContent = unknownCopy; }
     };
-    allow.addEventListener("click", () => { void decide("allow-once"); });
-    deny.addEventListener("click", () => { void decide("deny"); });
+    allow.addEventListener("click", () => { void decide("allow-once"); }); deny.addEventListener("click", () => { void decide("deny"); });
     node.append(note, allow, deny); $("#chat-messages").append(node);
     const timer = setTimeout(() => {
       allow.disabled = true; deny.disabled = true;
-      if (!resolving) note.textContent = "This sending approval expired. No send is authorized by this control.";
+      if (!resolving) note.textContent = providerAction ? "This execution approval expired. No Apple change is authorized by this control." : "This sending approval expired. No send is authorized by this control.";
     }, Math.max(0, row.expires_at_ms - Date.now()));
     chatReplyApprovals.set(key, { node, timer, allow, note, resolving: () => resolving });
   }
