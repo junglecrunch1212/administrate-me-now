@@ -454,6 +454,16 @@ def test_bootstrap_type_checks_include_the_imported_bridge_sources(
         )
 
 
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_bridge_development_includes_strict_readiness_composition(
+    filename: str,
+) -> None:
+    steps = _workflow(filename)["jobs"]["bridge-development"]["steps"]
+    commands = "\n".join(step.get("run", "") for step in steps)
+    assert "tests/integration/test_runtime_application.py" in commands
+    assert "--runxfail" in commands
+
+
 def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
     assert job["if"] == "${{ needs.release-scope.outputs.scope != 'documentation' }}"

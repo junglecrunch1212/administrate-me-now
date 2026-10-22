@@ -212,6 +212,7 @@ jobs:
           tests/unit/test_cos_member_bridge_acquisition_policy.py
           tests/unit/test_pipeline_pack_loader.py
           tests/unit/test_pack_loader.py
+          tests/integration/test_runtime_application.py
 
       - name: Validate enrollment browser behavior
         env:
