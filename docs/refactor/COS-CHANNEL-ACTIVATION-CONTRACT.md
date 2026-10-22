@@ -104,6 +104,19 @@ holds every send while the operation journal exists. Full bounded Doctor
 settlement and unchanged provider-call counts must pass before commit releases
 that hold.
 
+Standing self-reply activation also derives the AdministrateMe plugin's native
+`hooks.allowConversationAccess` capability from its independently authorized
+standing bindings. The pinned Gateway requires this capability for the final
+answer hook. Reactivation preserves it while grants remain; removing the last
+grant disables it. Other hook policy, including prompt-injection restrictions,
+is preserved. The existing receipt, exact private session and native transport
+guards still decide whether any individual answer may be sent. This MODERNIZE
+completes the standing-reply deployment contract; a nonempty grant with a blocked
+native hook now fails live readiness. The hosted pinned-source gate exercises
+the real registrar with missing, denied, enabled and revoked capability, followed
+by the production reply handler. A healthy service without that admission proof
+is insufficient evidence that replies work.
+
 CoS effect accounting verifies each private member approval, its exact recipient
 policy, the consumed independent OpenClaw approval, contact intent, terminal
 result and correlated outbound fact. Duplicate or orphan facts, missing links,

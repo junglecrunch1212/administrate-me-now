@@ -1161,6 +1161,8 @@ class CoSChannelActivator:
             # Host approval and domain activation retain independent copies.
             reply_bindings: list[str] = []
             if prepared_openclaw is not None:
+                from bootstrap.cos_reply_hooks import configure_reply_hook
+
                 plugin_config = prepared_openclaw["plugins"]["entries"][
                     "administrateme"
                 ].setdefault("config", {})
@@ -1187,6 +1189,10 @@ class CoSChannelActivator:
                 plugin_config.pop("standingSelfReplyBindings", None)
                 if reply_bindings:
                     plugin_config["standingSelfReplyBindings"] = reply_bindings
+                configure_reply_hook(
+                    prepared_openclaw["plugins"]["entries"]["administrateme"],
+                    reply_bindings,
+                )
             elif request.allow_owner_self_replies:
                 raise CoSActivationError(
                     "standing replies require live guarded iMessage"

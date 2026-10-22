@@ -894,6 +894,9 @@ def test_standing_reply_operation_publishes_both_grants_or_restores_both(
             == expected
         )
         assert host["models"] == previous["models"]
+        assert host["plugins"]["entries"]["administrateme"]["hooks"] == {
+            "allowConversationAccess": True
+        }
         receipt = json.loads(
             (controller.config_dir / "cos-channel-operation.json").read_text()
         )

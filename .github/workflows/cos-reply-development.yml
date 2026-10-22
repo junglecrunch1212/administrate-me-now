@@ -48,6 +48,7 @@ jobs:
           tests/unit/test_historical_attribution.py
           tests/unit/test_lifecycle_catalog.py
           tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/unit/bootstrap/test_cos_reply_hooks.py
           tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
       - name: Validate native hook, guard and configuration contracts
         if: '!cancelled()'
@@ -79,7 +80,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.19.0'
-      - name: Exercise the authenticated pinned sender with synthetic text
+      - name: Exercise native hook admission and the pinned sender with synthetic text
         run: |
           npm ci --prefix openclaw/administrateme --ignore-scripts
           bash bootstrap/install-openclaw-source.sh --instance-root "$RUNNER_TEMP/cos-source" --python "$(command -v python)"

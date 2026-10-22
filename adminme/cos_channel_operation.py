@@ -270,6 +270,14 @@ async def runtime_live_authorization(
                 gateway, guard, adapter_config=runtime.settings.adapter_config
             )
             verify_guard_files(guard, reviewed_release=runtime.settings.repository_root)
+            from bootstrap.cos_reply_hooks import require_reply_hook
+
+            require_reply_hook(
+                gateway.get("plugins", {}).get("entries", {}).get("administrateme", {}),
+                getattr(
+                    parse_activation(receipt["activation"]), "self_reply_bindings", []
+                ),
+            )
     except Exception:
         return {"authorized": False, "reason": "cos_live_authorization_missing"}
     return await live_authorization(
