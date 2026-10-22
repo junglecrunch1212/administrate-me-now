@@ -176,3 +176,57 @@ def test_corrupt_snapshot_prevents_partial_pointer_restore(rig):
     with pytest.raises(ValueError, match="snapshot mismatch"):
         repair.rollback(paths, result["operation_id"])
     assert repair._json(paths.root / "app/current-release.json")["commit"] == NEW
+
+
+def test_successor_repair_preserves_original_enrollment_release(rig):
+    paths, fake, config = rig
+    enrolled = "c" * 40
+    config["release_commit"] = enrolled
+    atomic_write(paths.config_path, yaml.safe_dump(config).encode())
+    receipt = repair._json(paths.receipt_path)
+    receipt.update(release_commit=enrolled, runtime_release_commit=OLD)
+    repair._write(paths.receipt_path, receipt)
+    result = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    assert result["status"] == "activated"
+    assert repair._json(paths.receipt_path)["release_commit"] == enrolled
+    assert repair._json(paths.receipt_path)["runtime_release_commit"] == NEW
+    assert fake.loaded
+
+
+@pytest.mark.parametrize("retained_digest", ["old", "current"])
+def test_retained_schema_overlay_accepts_original_or_already_updated_release(
+    rig, monkeypatch, retained_digest
+):
+    import hashlib
+
+    paths, _, _ = rig
+    relative = "adminme/events/schemas/cos_channels.py"
+    old_bytes, new_bytes = b"original schema\n", b"current schema\n"
+    monkeypatch.setattr(
+        repair,
+        "PERMISSION_RECOVERY_COS_OVERLAY",
+        {
+            relative: (
+                hashlib.sha256(old_bytes).hexdigest(),
+                hashlib.sha256(new_bytes).hexdigest(),
+            )
+        },
+    )
+    for commit, content in (
+        (OLD, old_bytes if retained_digest == "old" else new_bytes),
+        (NEW, new_bytes),
+    ):
+        path = paths.root / "app/releases" / commit / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    assert repair.repair(paths, predecessor=OLD, candidate=NEW)["status"] == "activated"
+
+
+def test_acquisition_repair_does_not_allow_other_pack_changes(rig):
+    paths, fake, _ = rig
+    relative = "packs/adapters/reminders/apple-eventkit/config.schema.json"
+    for commit, content in ((OLD, b"old"), (NEW, b"changed")):
+        (paths.root / "app/releases" / commit / relative).write_bytes(content)
+    with pytest.raises(ValueError, match="unsupported runtime interfaces"):
+        repair.repair(paths, predecessor=OLD, candidate=NEW)
+    assert not fake.actions("bootstrap")
