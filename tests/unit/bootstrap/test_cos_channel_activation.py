@@ -799,5 +799,5 @@ def test_google_observation_activation_checks_owner_before_live_changes(
             e for e in installed["adapters"] if e["config"].get("member_id") == MEMBER_A
         ]
         assert len(selected) == 3 and all(e["enabled"] for e in selected)
-        assert all(e["config"]["enable_writes"] is False for e in selected)
+        assert all(e["config"]["read_only"] is True for e in selected)
         assert installed["adapters"][-1]["enabled"] is False

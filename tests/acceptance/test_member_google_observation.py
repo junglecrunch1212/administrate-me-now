@@ -49,7 +49,7 @@ def google_configuration(path: Path) -> dict[str, Any]:
     personal["kind"] = "messaging-gmail-api"
     personal["config"].update(
         user_email=PERSONAL_ACCOUNT,
-        oauth_credentials_ref="op://fixture/personal-google/credential",
+        oauth_credentials_ref="keychain://fixture/personal-google",
         ownership_attested=True,
         binding_provenance="oauth-subject",
         workspace="personal",
@@ -124,7 +124,7 @@ def test_exact_reads_are_idempotent_and_preserve_cos_and_retained_selection(
         assert adapter._scopes == [SCOPES[adapter.name]]
         if adapter.name != "messaging-gmail-api":
             assert adapter.write_capabilities == []
-        assert adapter._config.get("enable_writes") is False
+        assert adapter._config.get("enable_writes") is not True
     assert prepared["adapters"][-1]["enabled"] is False
     gmail = prepared["adapters"][0]["config"]
     assert gmail["initial_backfill_max_messages"] == 0
@@ -378,6 +378,26 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
                     )
 
                 client.portal.call(ingest)
+            observed = {
+                event_type: client.portal.call(_events, runtime, event_type)
+                for event_type in (
+                    "messaging.received",
+                    "calendar.event_added",
+                    "list_item.added",
+                )
+            }
+            for rows in observed.values():
+                assert len(rows) == 1
+                client.portal.call(
+                    runtime.wait_for_subscriber,
+                    "source-policy-v2:shadow",
+                    rows[0]["event_id"],
+                )
+            client.portal.call(
+                runtime.wait_for_subscriber,
+                "pipeline:pipeline:noise_filtering",
+                observed["messaging.received"][0]["event_id"],
+            )
             # Read surfaces after production event consumers settle, not merely
             # after successful connector construction.
             for _attempt in range(200):

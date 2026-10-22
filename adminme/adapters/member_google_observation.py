@@ -26,7 +26,7 @@ SOURCES = {
     "calendaring-google-calendar": "adapter:google_calendar",
     "tasks-google-tasks": "adapter:google_tasks",
 }
-READ_CONTROLS: dict[str, Any] = {"read_only": True, "enable_writes": False}
+READ_CONTROLS: dict[str, Any] = {"read_only": True}
 MAIL_CONTROLS: dict[str, Any] = {
     "initial_backfill_days": 0,
     "initial_backfill_max_messages": 0,
@@ -84,7 +84,10 @@ def readonly_config(entry: dict[str, Any]) -> dict[str, Any]:
     config = copy.deepcopy(entry.get("config") or {})
     config.update(READ_CONTROLS, permission_scope=[SCOPES[kind]])
     if kind == "messaging-gmail-api":
+        config["enable_writes"] = False
         config.update(copy.deepcopy(MAIL_CONTROLS))
+    else:
+        config.pop("enable_writes", None)
     return config
 
 
@@ -129,7 +132,7 @@ def selected_entries(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
             or config.get("ownership_attested") is not True
             or config.get("binding_provenance") != "oauth-subject"
             or not isinstance(config.get("oauth_credentials_ref"), str)
-            or not config["oauth_credentials_ref"].startswith(("keychain://", "op://"))
+            or not config["oauth_credentials_ref"].startswith("keychain://")
             or "disposable_test_acquisition" in config
             or config.get("b03_google_tasks_create") is not None
             or binding_digest(entry) != selection.binding_sha256

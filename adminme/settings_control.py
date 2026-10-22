@@ -966,7 +966,7 @@ class SettingsControlStore:
         state = self.read()
         self._expect_revision(state, expected_revision)
         if (member_id, source_id) in self._manual_google_sources and (
-            mode != "manual" or language_enabled or candidate_kinds
+            mode != "manual" or language_enabled
         ):
             raise ValueError("This Google connection permits manual intake only")
         normalized = validate_policy_override(
@@ -1006,7 +1006,6 @@ class SettingsControlStore:
                 **effective_policy(source_id),
                 "mode": "manual",
                 "language_enabled": False,
-                "candidate_kinds": [],
                 "locked": True,
             }
         current = state or self.read()
