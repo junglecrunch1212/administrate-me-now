@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 357,
-    "technical_event_types": 286,
+    "technical_event_schemas": 360,
+    "technical_event_types": 287,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -10239,6 +10239,112 @@
     },
     {
       "additional_properties": false,
+      "event_type": "cos.channels.activated",
+      "family": "governance",
+      "properties": {
+        "acquisition_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Acquisition Sha256",
+          "type": "string"
+        },
+        "activation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Activation Id",
+          "type": "string"
+        },
+        "allowlist_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Allowlist Event Id",
+          "type": "string"
+        },
+        "allowlist_revision": {
+          "minimum": 1,
+          "title": "Allowlist Revision",
+          "type": "integer"
+        },
+        "backup_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Backup Sha256",
+          "type": "string"
+        },
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/SenderProof"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "title": "Channels",
+          "type": "array"
+        },
+        "contract": {
+          "const": "cos-channel-operation-v1",
+          "default": "cos-channel-operation-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "enabled_at": {
+          "title": "Enabled At",
+          "type": "string"
+        },
+        "observation_window_started_at": {
+          "title": "Observation Window Started At",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 240,
+          "pattern": "^operator:.+",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "owner_authorization_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Owner Authorization Sha256",
+          "type": "string"
+        },
+        "rehearsal_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rehearsal Sha256",
+          "type": "string"
+        },
+        "release_commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Release Commit",
+          "type": "string"
+        },
+        "self_reply_bindings": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Self Reply Bindings",
+          "type": "array"
+        },
+        "suppressed_backlog_released": {
+          "const": false,
+          "default": false,
+          "title": "Suppressed Backlog Released",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "activation_id",
+        "release_commit",
+        "enabled_at",
+        "acquisition_sha256",
+        "allowlist_event_id",
+        "allowlist_revision",
+        "channels",
+        "backup_sha256",
+        "rehearsal_sha256",
+        "owner_authorization_sha256",
+        "operator_principal_id",
+        "observation_window_started_at"
+      ],
+      "schema_version": 2
+    },
+    {
+      "additional_properties": false,
       "event_type": "cos.channels.deactivated",
       "family": "governance",
       "properties": {
@@ -12816,6 +12922,65 @@
     },
     {
       "additional_properties": false,
+      "event_type": "cos.reply.openclaw_authorized",
+      "family": "external_write",
+      "properties": {
+        "approval_event_id": {
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "authorization_method": {
+          "const": "standing_self_reply",
+          "default": "standing_self_reply",
+          "title": "Authorization Method",
+          "type": "string"
+        },
+        "authorized_at": {
+          "title": "Authorized At",
+          "type": "string"
+        },
+        "automatic_retry_allowed": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry Allowed",
+          "type": "boolean"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "self_reply_binding": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Self Reply Binding",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "title": "Source Message Event Id",
+          "type": "string"
+        },
+        "standing_authorization_event_id": {
+          "title": "Standing Authorization Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "approval_event_id",
+        "standing_authorization_event_id",
+        "source_message_event_id",
+        "self_reply_binding",
+        "content_fingerprint",
+        "authorized_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "cos.response.approved",
       "family": "external_write",
       "properties": {
@@ -12908,6 +13073,154 @@
         "expires_at"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.response.approved",
+      "family": "external_write",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "string"
+        },
+        "authorization_method": {
+          "default": "exact",
+          "enum": [
+            "exact",
+            "standing_self_reply"
+          ],
+          "title": "Authorization Method",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "channel": {
+          "enum": [
+            "email",
+            "imessage"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-plain-text-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_account_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "recipient": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Recipient",
+          "type": "string"
+        },
+        "reply_index": {
+          "default": 0,
+          "maximum": 15,
+          "minimum": 0,
+          "title": "Reply Index",
+          "type": "integer"
+        },
+        "self_reply_binding": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Reply Binding"
+        },
+        "service_channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Service Channel Id",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Message Event Id"
+        },
+        "standing_authorization_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Standing Authorization Event Id"
+        },
+        "subject": {
+          "maxLength": 300,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "member_id",
+        "channel",
+        "service_channel_id",
+        "provider_account_id",
+        "recipient",
+        "subject",
+        "body",
+        "content_fingerprint",
+        "policy_event_id",
+        "policy_revision",
+        "approved_at",
+        "expires_at"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,

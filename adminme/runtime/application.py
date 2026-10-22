@@ -3922,7 +3922,10 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(automation_router)
     app.include_router(ingest_router)
     app.include_router(openclaw_router)
+    from adminme.products.openclaw.cos_self_replies import router as self_reply_router
+
     app.include_router(cos_response_router)
+    app.include_router(self_reply_router)
     app.include_router(member_router)
     app.include_router(member_cos_router)
     app.include_router(system_router)

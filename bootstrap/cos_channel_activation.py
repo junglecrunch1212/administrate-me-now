@@ -38,9 +38,11 @@ from adminme.cos_channel_operation import (
     DEACTIVATED_EVENT,
     RECEIPT_FILENAME,
     CosChannelActivation,
+    CosChannelActivationV2,
     SenderProof,
     aware_time,
     live_authorization,
+    parse_activation,
 )
 from adminme.cos_response_policy import (
     POLICY_EVENT_TYPE,
@@ -89,8 +91,51 @@ class ActivationRequest(BaseModel):
     operator_principal_id: str = Field(pattern=r"^operator:.+", max_length=240)
     owner_member_id: str = Field(min_length=1, max_length=240)
     recipient_entries: list[dict[str, str]] | None = None
+    allow_owner_self_replies: bool | None = None
     prepared_openclaw_config: dict[str, Any] | None = None
     cos_imsg_guard_config: dict[str, Any] | None = None
+
+
+def owner_self_reply_bindings(
+    request: ActivationRequest,
+    prepared: dict[str, Any],
+    recipients: list[dict[str, str]],
+    previous_bindings: list[str],
+    *,
+    enable_live: bool,
+) -> list[str]:
+    """Retain an existing dual grant, explicitly opt in, or explicitly revoke.
+
+    Defaults never turn a recipient ceiling into a standing grant. Routine
+    reactivation retains only matching prior host/domain grants for this owner.
+    """
+    from adminme.cos_self_replies import self_reply_binding
+
+    if not enable_live and request.allow_owner_self_replies:
+        raise CoSActivationError("standing replies require live guarded iMessage")
+    bindings = set()
+    owner_bindings = set()
+    for actor, member in prepared.get("openclaw_actor_identities", {}).items():
+        parts = actor.split("|")
+        if len(parts) != 3 or parts[0] != "imessage":
+            continue
+        if not any(
+            row == {"member_id": member, "channel": "imessage", "address": parts[2]}
+            for row in recipients
+        ):
+            continue
+        binding = self_reply_binding(member, parts[1], parts[2])
+        if member == request.owner_member_id:
+            owner_bindings.add(binding)
+            if request.allow_owner_self_replies is False:
+                continue
+            if request.allow_owner_self_replies is True:
+                bindings.add(binding)
+        if binding in previous_bindings:
+            bindings.add(binding)
+    if request.allow_owner_self_replies and not bindings.intersection(owner_bindings):
+        raise CoSActivationError("owner has no exact allowlisted private reply binding")
+    return sorted(bindings)
 
 
 class EnterObservationRequest(BaseModel):
@@ -490,7 +535,7 @@ class CoSChannelActivator:
                 )
             readiness = _json(self.config_dir / "deployment-readiness.json")
             prior_window = readiness.get("provider_effect_window") or {}
-            receipt = CosChannelActivation.model_validate(
+            receipt = parse_activation(
                 _json(self.config_dir / RECEIPT_FILENAME)["activation"]
             )
             if (
@@ -938,8 +983,11 @@ class CoSChannelActivator:
                 type=ACTIVATED_EVENT if activation is not None else DEACTIVATED_EVENT,
                 schema_version=(
                     2
-                    if activation is None
-                    and deactivate_reason == "deployment_observation"
+                    if isinstance(activation, CosChannelActivationV2)
+                    or (
+                        activation is None
+                        and deactivate_reason == "deployment_observation"
+                    )
                     else 1
                 ),
                 occurred_at=now,
@@ -1109,6 +1157,40 @@ class CoSChannelActivator:
                 raise CoSActivationError(
                     "unselected Messages configuration cannot change"
                 )
+            # The owner separately authorizes their own exact private endpoints.
+            # Host approval and domain activation retain independent copies.
+            reply_bindings: list[str] = []
+            if prepared_openclaw is not None:
+                plugin_config = prepared_openclaw["plugins"]["entries"][
+                    "administrateme"
+                ].setdefault("config", {})
+                previous_bindings: list[str] = []
+                try:
+                    prior = parse_activation(
+                        _json(self.config_dir / RECEIPT_FILENAME)["activation"]
+                    )
+                    host_bindings = plugin_config.get("standingSelfReplyBindings", [])
+                    previous_bindings = [
+                        value
+                        for value in getattr(prior, "self_reply_bindings", [])
+                        if value in host_bindings
+                    ]
+                except (OSError, KeyError, TypeError, ValueError):
+                    pass
+                reply_bindings = owner_self_reply_bindings(
+                    request,
+                    prepared,
+                    recipients,
+                    previous_bindings,
+                    enable_live=enable_live,
+                )
+                plugin_config.pop("standingSelfReplyBindings", None)
+                if reply_bindings:
+                    plugin_config["standingSelfReplyBindings"] = reply_bindings
+            elif request.allow_owner_self_replies:
+                raise CoSActivationError(
+                    "standing replies require live guarded iMessage"
+                )
             proof_channels = {proof.channel for proof in request.sender_proofs}
             expected = {"email"} | (
                 {"imessage"} if policy.imessage_channel_id else set()
@@ -1234,7 +1316,8 @@ class CoSChannelActivator:
                     )
                 if enable_live:
                     now = datetime.now(timezone.utc).isoformat()
-                    activation = CosChannelActivation(
+                    activation = CosChannelActivationV2(
+                        self_reply_bindings=sorted(reply_bindings),
                         activation_id=activation_id,
                         release_commit=commit,
                         enabled_at=now,
