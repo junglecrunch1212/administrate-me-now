@@ -133,12 +133,25 @@ def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None
         ([("D", PROSE)], True, "documentation"),
         ([("M", HELPER)], True, "bridge-helper"),
         ([("A", "bootstrap/member_bridge_component.py")], True, "bridge-helper"),
+        (
+            [("A", "bootstrap/member_bridge_permission_controller.py")],
+            True,
+            "bridge-helper",
+        ),
+        (
+            [("M", "bootstrap/member_bridge_permission_controller.py")],
+            False,
+            "system-wide",
+        ),
         ([("M", "scripts/release_scope.py")], True, "bridge-helper"),
         ([("M", HELPER), ("M", PROSE)], True, "bridge-helper"),
         ([("M", HELPER)], False, "system-wide"),
         ([("M", PROSE)], False, "system-wide"),
         ([("D", HELPER)], True, "system-wide"),
         ([("T", HELPER)], True, "system-wide"),
+        ([("M", "adminme/bridge_enrollment.py")], True, "system-wide"),
+        ([("M", "adminme/products/bridge/routers/ingest.py")], True, "system-wide"),
+        ([("M", "adminme/bridge_history.py")], True, "system-wide"),
         ([("M", "adminme/bridge_enrollment.py")], True, "system-wide"),
         ([("M", "bridge/adminme_bridge/enrollment_helper.py")], True, "system-wide"),
         ([("M", "bootstrap/bridge_enrollment.py")], True, "system-wide"),
@@ -387,6 +400,11 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
     for path in (
         "test_member_bridge_helper_app.py",
         "test_member_bridge_helper_diagnostics.py",
+        "test_member_bridge_permission_controller.py",
+        "test_member_bridge_permission_recovery.py",
+        "test_member_bridge_progress_synchronization.py",
+        "test_cos_member_bridge_acquisition.py",
+        "test_member_bridge_historical_attribution.py",
         "test_member_bridge_component.py",
         "test_self_service_member_bridge_enrollment.py",
         "test_bridge_readiness_transition.py",
@@ -406,7 +424,52 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
             "and not test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback"
             in commands
         )
+        assert (
+            "and not test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation"
+            in commands
+        )
     assert job["steps"][-1]["id"] == "validated"
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_bootstrap_type_checks_include_the_imported_bridge_sources(
+    filename: str,
+) -> None:
+    checks = []
+    for job in _workflow(filename)["jobs"].values():
+        for step in job["steps"]:
+            for line in step.get("run", "").splitlines():
+                if "poetry run mypy" not in line:
+                    continue
+                tokens = shlex.split(line, comments=True)
+                if "bootstrap" in tokens:
+                    checks.append(tokens)
+    assert checks
+    assert all("bridge/adminme_bridge" in tokens for tokens in checks)
+    if filename == "macos-bootstrap.yml":
+        steps = _workflow(filename)["jobs"]["bridge-development"]["steps"]
+        names = [step.get("name") for step in steps]
+        assert names.index("Validate helper bootstrap type boundary") < names.index(
+            "Validate native helper and enrollment composition"
+        )
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_bridge_development_includes_strict_readiness_composition(
+    filename: str,
+) -> None:
+    steps = _workflow(filename)["jobs"]["bridge-development"]["steps"]
+    commands = "\n".join(step.get("run", "") for step in steps)
+    for boundary in (
+        "tests/integration/test_runtime_application.py",
+        "tests/acceptance/test_cos_self_replies.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_historical_attribution.py",
+    ):
+        assert boundary in commands
+    assert "--runxfail" in commands
 
 
 def test_packaged_installation_requires_all_real_platform_cases() -> None:

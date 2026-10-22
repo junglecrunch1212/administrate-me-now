@@ -58,15 +58,79 @@ elif screen == "review.applescript":
         raise SystemExit(1)
 """,
     )
-    # Replace only the unavailable native UI boundary in the generated fixture;
-    # the shipped helper has no environment variable or arbitrary UI override.
+    controller = resources / "member_bridge_permission_controller.py"
+    controller.write_text(
+        """import json
+import os
+import sys
+
+def validate_result(value, *, operation, exit_code):
+    outcomes = {"ready": 0, "blocked": 2, "cancelled": 0, "unknown": 3}
+    if not isinstance(value, dict) or set(value) != {"outcome", "operation"}:
+        raise ValueError("invalid fixture result")
+    if value["operation"] != operation or outcomes.get(value["outcome"]) != exit_code:
+        raise ValueError("invalid fixture outcome")
+    return value
+
+if __name__ == "__main__":
+    operation = sys.argv[sys.argv.index("--operation") + 1]
+    assert sys.argv[sys.argv.index("--expected-central-commit") + 1] == "c" * 40
+    assert sys.argv[sys.argv.index("--expected-runtime-commit") + 1] == "a" * 40
+    outcome = os.environ.get("FIXTURE_OUTCOME", "success")
+    print("fixture-private-post-preview-output", file=sys.stderr)
+    if outcome == "permission_invalid":
+        print(json.dumps({"secret": "fixture-private-one-time-code"}))
+        raise SystemExit(0)
+    if outcome == "permission_duplicate":
+        print('{"outcome":"ready","outcome":"ready","operation":' + json.dumps(operation) + '}')
+        raise SystemExit(0)
+    if outcome == "permission_wrong_exit":
+        print(json.dumps({"outcome": "blocked", "operation": operation}))
+        raise SystemExit(0)
+    if outcome == "permission_large":
+        print("x" * 8193)
+        raise SystemExit(0)
+    if outcome == "permission_crash":
+        raise SystemExit(57)
+    selected = {"permission_blocked": "blocked", "permission_cancelled": "cancelled", "permission_unknown": "unknown"}.get(outcome, "ready")
+    print(json.dumps({"outcome": selected, "operation": operation}))
+    raise SystemExit({"ready": 0, "blocked": 2, "cancelled": 0, "unknown": 3}[selected])
+""",
+        encoding="utf-8",
+    )
+    controller.chmod(0o600)
+    # Replace only unavailable native UI in this generated hosted fixture. The
+    # shipped launcher has no environment variable or arbitrary UI override.
     script = (
-        _helper_launcher(COMMIT, "b" * 64, component_commit=COMPONENT_COMMIT)
+        _helper_launcher(
+            COMMIT,
+            "b" * 64,
+            component_commit=COMPONENT_COMMIT,
+            permission_controller_sha256=hashlib.sha256(
+                controller.read_bytes()
+            ).hexdigest(),
+        )
         .decode()
         .replace("/usr/bin/osascript", f'"{native_ui}"')
     )
     launcher_path = resources / "bridge-helper-launcher.sh"
     _executable(launcher_path, script)
+    release = (
+        home / "Library/Application Support/AdministrateMe Bridge/app/releases" / COMMIT
+    )
+    binary = release / ".venv/bin/python"
+    binary.parent.mkdir(parents=True)
+    _executable(
+        binary,
+        f"#!{sys.executable}\n"
+        + "import os, sys\n"
+        + "assert os.getcwd() == os.environ['ADMINME_REPOSITORY_ROOT']\n"
+        + "if sys.argv[1:3] == ['-m', 'bootstrap.cli']:\n"
+        + "    assert sys.argv[3] == 'bridge-uninstall'\n"
+        + "    print('fixture-private-post-preview-output', file=sys.stderr)\n"
+        + "    raise SystemExit(57 if os.environ.get('FIXTURE_OUTCOME') == 'uninstall_fail' else 0)\n"
+        + f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n",
+    )
     _executable(
         resources / "install-member-bridge.sh",
         """#!/bin/bash
@@ -74,6 +138,7 @@ set -Eeuo pipefail
 preview=false
 for argument in "$@"; do
   [[ "$argument" != "--preview-only" ]] || preview=true
+  [[ "$argument" != "--complete-wizard" ]] || exit 98
 done
 if [[ "${FIXTURE_OUTCOME:-}" == "native_setup_fail" ]]; then
   printf 'release_preparation\\nnative_build_setup\\n' >&3
@@ -215,37 +280,36 @@ def test_manage_uses_same_private_terminal_diagnostics_and_cleans_temporary_file
 ) -> None:
     _, environment, _ = launcher
     environment["FIXTURE_MANAGE_ACTION"] = action
-    release = (
-        Path(environment["HOME"])
-        / "Library/Application Support/AdministrateMe Bridge/app/releases"
-        / COMMIT
+    permission = action == "Continue Enrollment"
+    outcome = (
+        ("permission_blocked" if permission else "uninstall_fail")
+        if fails
+        else "manage"
     )
-    binary = release / ".venv/bin/python"
-    binary.parent.mkdir(parents=True)
-    _executable(
-        binary,
-        "#!/bin/bash\n"
-        '[[ "$PWD" == "$ADMINME_REPOSITORY_ROOT" ]] || exit 99\n'
-        'printf "fixture-private-post-preview-output\\n" >&2\n'
-        + ("exit 57\n" if fails else "exit 0\n"),
-    )
-    completed, attempts = _run(launcher, outcome="manage", manage=True)
-    assert completed.returncode == (57 if fails else 0)
+    completed, attempts = _run(launcher, outcome=outcome, manage=True)
+    assert completed.returncode == ((2 if permission else 57) if fails else 0)
     assert len(attempts) == 1
     receipt = json.loads((attempts[0] / "receipt.json").read_text())
     assert receipt["phase"] == (
-        "continue_enrollment" if action == "Continue Enrollment" else "uninstall"
+        ("permission_setup" if fails else "complete") if permission else "uninstall"
     )
-    assert receipt["operation"] == (
-        "continue" if action == "Continue Enrollment" else "uninstall"
+    assert receipt["operation"] == ("continue" if permission else "uninstall")
+    assert receipt["outcome"] == (
+        ("blocked" if permission else "failed") if fails else "succeeded"
     )
-    assert receipt["outcome"] == ("failed" if fails else "succeeded")
     assert (attempts[0] / "dependency-install.log").read_bytes() == b""
 
 
 def test_manage_missing_release_records_failure_without_attempting_installation(
     launcher: tuple[Path, dict[str, str], Path],
 ) -> None:
+    binary = (
+        Path(launcher[1]["HOME"])
+        / "Library/Application Support/AdministrateMe Bridge/app/releases"
+        / COMMIT
+        / ".venv/bin/python"
+    )
+    binary.unlink()
     completed, attempts = _run(launcher, outcome="manage", manage=True)
     assert completed.returncode == 1
     receipt = json.loads((attempts[0] / "receipt.json").read_text())
@@ -275,6 +339,150 @@ def test_unsafe_diagnostic_parent_cannot_redirect_writes(
     assert not attempts
     assert list(outside.iterdir()) == []
     assert not (parent / "Setup").exists()
+
+
+@pytest.mark.parametrize("manage", [False, True])
+@pytest.mark.parametrize(
+    ("outcome", "expected_exit", "retained"),
+    [
+        ("permission_blocked", 2, True),
+        ("permission_cancelled", 0, True),
+        ("permission_unknown", 3, True),
+        ("permission_invalid", 1, False),
+        ("permission_large", 1, False),
+        ("permission_duplicate", 1, False),
+        ("permission_wrong_exit", 1, False),
+        ("permission_crash", 1, False),
+    ],
+)
+def test_permission_result_never_reports_false_completion_or_retains_raw_output(
+    launcher: tuple[Path, dict[str, str], Path],
+    manage: bool,
+    outcome: str,
+    expected_exit: int,
+    retained: bool,
+) -> None:
+    completed, attempts = _run(launcher, outcome=outcome, manage=manage)
+    assert completed.returncode == expected_exit
+    attempt = attempts[0]
+    result = attempt / "permission-result.json"
+    assert result.exists() is retained
+    if retained:
+        assert json.loads(result.read_text())["operation"] == (
+            "continue" if manage else "initial"
+        )
+        assert stat.S_IMODE(result.stat().st_mode) == 0o600
+    for path in attempt.iterdir():
+        text = path.read_text()
+        assert CODE not in text and POST_PREVIEW not in text
+    ui = [
+        json.loads(line)
+        for line in (Path(launcher[1]["HOME"]) / "ui.jsonl").read_text().splitlines()
+    ]
+    assert not any(item["screen"] == "complete.applescript" for item in ui)
+    assert any(
+        item["screen"]
+        == ("permission-stopped.applescript" if retained else "failed.applescript")
+        for item in ui
+    )
+
+
+@pytest.mark.parametrize("manage", [False, True])
+@pytest.mark.parametrize(
+    ("number", "code", "accepted"),
+    [
+        (-1743, "native_permission_denied", True),
+        (-128, "native_cancelled", True),
+        (-1712, "native_timeout", True),
+        (-32768, "native_command_failed", True),
+        (32767, "native_command_failed", True),
+        (-32769, "native_command_failed", False),
+        (32768, "native_command_failed", False),
+        (True, "native_command_failed", False),
+        (False, "native_command_failed", False),
+        (-1743.0, "native_permission_denied", False),
+        ("-1743", "native_permission_denied", False),
+        (None, "native_command_failed", False),
+        (CODE, "native_command_failed", False),
+        (-1743, "source_probe_failed", False),
+    ],
+)
+def test_launcher_retains_only_native_numbers_validated_by_production_controller(
+    launcher: tuple[Path, dict[str, str], Path],
+    manage: bool,
+    number: object,
+    code: str,
+    accepted: bool,
+) -> None:
+    executable, environment, _ = launcher
+    controller = executable.parent / "member_bridge_permission_controller.py"
+    old_hash = hashlib.sha256(controller.read_bytes()).hexdigest()
+    operation = "continue" if manage else "initial"
+    result = {
+        "contract": "administrateme-bridge-permission-result-v1",
+        "operation": operation,
+        "outcome": "blocked",
+        "capabilities": [
+            {
+                "capability_id": "apple_notes",
+                "status": "blocked",
+                "stage": "probe",
+                "code": code,
+                "native_error_number": number,
+            }
+        ],
+        "content_exposed": False,
+        "provider_effects": False,
+    }
+    # This fixture replaces only result production. Validation is the real
+    # candidate controller's strict contract, invoked by the shipped launcher.
+    controller.write_text(
+        "import runpy\n"
+        + f"validate_result = runpy.run_path({str(REPO_ROOT / 'bootstrap/member_bridge_permission_controller.py')!r})['validate_result']\n"
+        + "if __name__ == '__main__':\n"
+        + f"    print({json.dumps(result)!r})\n"
+        + "    raise SystemExit(2)\n"
+    )
+    new_hash = hashlib.sha256(controller.read_bytes()).hexdigest()
+    executable.write_text(executable.read_text().replace(old_hash, new_hash))
+    completed, attempts = _run(launcher, outcome="success", manage=manage)
+    assert completed.returncode == (2 if accepted else 1)
+    retained = attempts[0] / "permission-result.json"
+    assert retained.exists() is accepted
+    if accepted:
+        assert json.loads(retained.read_text()) == result
+        assert stat.S_IMODE(retained.stat().st_mode) == 0o600
+    for path in attempts[0].iterdir():
+        assert CODE not in path.read_text()
+        assert POST_PREVIEW not in path.read_text()
+    ui = [
+        json.loads(line)
+        for line in (Path(environment["HOME"]) / "ui.jsonl").read_text().splitlines()
+    ]
+    assert not any(item["screen"] == "complete.applescript" for item in ui)
+
+
+@pytest.mark.parametrize("manage", [False, True])
+@pytest.mark.parametrize("defect", ["bytes", "symlink", "missing"])
+def test_permission_controller_identity_is_checked_before_execution(
+    launcher: tuple[Path, dict[str, str], Path],
+    manage: bool,
+    defect: str,
+) -> None:
+    controller = launcher[0].parent / "member_bridge_permission_controller.py"
+    if defect == "bytes":
+        controller.write_text("raise SystemExit('tampered controller executed')\n")
+    elif defect == "symlink":
+        target = controller.with_name("outside-controller.py")
+        controller.rename(target)
+        controller.symlink_to(target)
+    else:
+        controller.unlink()
+    completed, attempts = _run(launcher, outcome="success", manage=manage)
+    assert completed.returncode != 0
+    assert not (attempts[0] / "permission-result.json").exists()
+    assert "tampered controller executed" not in completed.stdout + completed.stderr
+    assert json.loads((attempts[0] / "receipt.json").read_text())["outcome"] == "failed"
 
 
 @dataclass

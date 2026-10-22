@@ -105,11 +105,16 @@ jobs:
             --junitxml="$RUNNER_TEMP/helper-component.xml" \
             tests/unit/bootstrap/test_member_bridge_helper_app.py \
             tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
+            tests/unit/bootstrap/test_member_bridge_permission_controller.py \
             tests/unit/bootstrap/test_member_bridge_component.py \
             tests/unit/bootstrap/test_bridge_enrollment.py \
             tests/unit/test_bridge_release_identity.py \
             tests/unit/test_ci_release_gates.py \
             tests/acceptance/test_self_service_member_bridge_enrollment.py \
+            tests/acceptance/test_member_bridge_permission_recovery.py \
+            tests/acceptance/test_member_bridge_progress_synchronization.py \
+            tests/acceptance/test_cos_member_bridge_acquisition.py \
+            tests/acceptance/test_member_bridge_historical_attribution.py \
             tests/acceptance/test_bridge_readiness_transition.py
           python - "$RUNNER_TEMP/helper-component.xml" <<'CHECK'
           import sys
@@ -122,7 +127,7 @@ jobs:
         run: |
           poetry run ruff check .
           poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
-          poetry run mypy bootstrap scripts/release_scope.py
+          poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py
           bash scripts/verify_invariants.sh
           poetry check --lock
           poetry -C bridge check --lock
@@ -174,6 +179,9 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      - name: Validate helper bootstrap type boundary
+        run: poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py --no-error-summary
+
       # Collect all selected lifecycle failures within the existing job bound.
       - name: Validate native helper and enrollment composition
         run: >-
@@ -181,11 +189,16 @@ jobs:
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
+          tests/unit/bootstrap/test_member_bridge_permission_controller.py
+          tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_release_identity.py
+          tests/unit/test_bridge_authorization.py
           tests/unit/test_ci_release_gates.py
           tests/acceptance/test_self_service_member_bridge_enrollment.py
+          tests/acceptance/test_member_bridge_permission_recovery.py
+          tests/acceptance/test_member_bridge_progress_synchronization.py
           tests/acceptance/test_member_bridge_knowledge_vertical_slice.py
           tests/acceptance/test_cos_member_bridge_acquisition.py
           tests/acceptance/test_member_bridge_historical_attribution.py
@@ -199,6 +212,11 @@ jobs:
           tests/unit/test_cos_member_bridge_acquisition_policy.py
           tests/unit/test_pipeline_pack_loader.py
           tests/unit/test_pack_loader.py
+          tests/integration/test_runtime_application.py
+          tests/acceptance/test_cos_self_replies.py
+          tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
+          tests/unit/test_source_assurance.py
 
       - name: Validate enrollment browser behavior
         env:
@@ -321,7 +339,9 @@ jobs:
     runs-on: macos-15
     # The complete rehearsal exceeded 90 minutes after all Python tests passed.
     # This is CI capacity only; runtime settlement/recovery deadlines are fixed.
-    timeout-minutes: 120
+    # Full Python and acceptance passed before the former two-hour deadline
+    # interrupted the final browser pass. Preserve all stages and a finite bound.
+    timeout-minutes: 180
     env:
       ADMINME_TEST_MODE: "1"
       PYTHONPATH: bridge
@@ -553,7 +573,7 @@ jobs:
       - name: Static checks and secret-safe tree
         run: |
           poetry run ruff check bootstrap tests/unit/bootstrap tests/acceptance/test_macos_bootstrap_operations.py
-          poetry run mypy bootstrap --no-error-summary
+          poetry run mypy bootstrap bridge/adminme_bridge --no-error-summary
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git diff --check "origin/${{ github.base_ref }}...HEAD"
           fi
