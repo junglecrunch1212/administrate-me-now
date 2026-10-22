@@ -346,7 +346,8 @@ def inspect_helper_component(
         reviewed_overlay: dict[str, dict[str, str] | None] = {}
         reviewed_probe: dict[str, dict[str, str] | None] = {}
         if compatibility_contract == PERMISSION_RECOVERY_COMPATIBILITY:
-            # This is a mixed central/helper release, never a smaller CI scope.
+            # This compatibility rule preserves retained edge bytes; the separate
+            # release selector decides the required central/helper CI scope.
             # The public runtime fingerprint remains conservative. Only these
             # versioned central protocol implementation paths may differ; the
             # delivered archive still contains the exact retained bytes.
