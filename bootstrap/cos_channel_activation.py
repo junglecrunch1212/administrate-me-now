@@ -30,6 +30,7 @@ from adminme.adapters.cos_channel_acquisition import (
     restrict_cos_adapter_config,
 )
 from adminme.adapters.member_google_connections import (
+    Access,
     connection_config,
     policy_from_config as google_policy_from_config,
     selected_entries,
@@ -243,7 +244,7 @@ def _sha(payload: bytes) -> str:
 def prepare_configuration(
     previous: dict[str, Any], requested: dict[str, Any], *, enable_live: bool
 ) -> dict[str, Any]:
-    """Preserve history and admit only the CoS and exact Google read selections."""
+    """Preserve history and admit only the CoS and exact Google connection selections."""
 
     retained = DisposableTestAcquisition.parse(previous.get(TEST_POLICY_KEY))
     if requested.get(TEST_POLICY_KEY) != previous.get(TEST_POLICY_KEY):
@@ -283,7 +284,7 @@ def prepare_configuration(
     result = restrict_cos_adapter_config(requested)
     selected_google = selected_entries(result)
     google_policy = google_policy_from_config(result)
-    google_access = (
+    google_access: dict[str, Access] = (
         {row.adapter_id: row.access for row in google_policy.selections}
         if google_policy
         else {}

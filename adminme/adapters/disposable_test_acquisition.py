@@ -126,9 +126,8 @@ def restrict_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         policy_from_config as google_policy,
     )
 
-    google_policy(
-        value
-    )  # Reject an orphaned observation grant, even without a test policy.
+    # Reject an orphaned connection grant, even without a test policy.
+    google_policy(value)
     if COS_CONFIG_KEY in value:
         return restrict_cos_adapter_config(value)
     policy = policy_from_adapter_config(value)
