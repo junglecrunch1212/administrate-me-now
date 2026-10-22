@@ -349,8 +349,8 @@ def test_complete_reviewed_cos_overlay_preserves_exact_retained_archive(
     tmp_path: Path,
 ) -> None:
     repository, retained, candidate = _cos_overlay_repository(tmp_path)
-    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 23
-    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 4
+    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 24
+    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 5
     assert all(is_runtime_input(path) for path in PERMISSION_RECOVERY_COS_OVERLAY)
     assert runtime_interface_fingerprint(
         repository, candidate
@@ -432,7 +432,14 @@ def test_reviewed_cos_overlay_rejects_unknown_bytes_in_every_source_pair(
 
 
 @pytest.mark.parametrize(
-    "path", ["adminme/cos_channel_operation.py", "adminme/cos_self_replies.py"]
+    "path",
+    [
+        "adminme/cos_channel_operation.py",
+        "adminme/cos_self_replies.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/cos_reply_hooks.py",
+        "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
+    ],
 )
 @pytest.mark.parametrize("defect", ["missing", "mode", "old_coordinate"])
 def test_reviewed_cos_overlay_rejects_partial_group_and_candidate_mode_drift(
