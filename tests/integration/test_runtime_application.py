@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.envelope import EventEnvelope
@@ -35,6 +36,7 @@ from adminme.runtime.application import (
     create_application,
 )
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
+from adminme.source_assurance import audit_source_assurance
 from adminme.source_assessment_recovery import latest_source_assessment
 from adminme.source_assessment_recovery import (
     SourceAssessmentRecoveryBatch,
@@ -238,6 +240,27 @@ def _report_strict_openclaw(
     assert response.status_code == 200, response.text
 
 
+def _wait_for_settled_source_assurance(client: TestClient) -> Response:
+    """Wait for the real startup audit revision without weakening readiness."""
+
+    deadline = time.monotonic() + 5.0
+    while True:
+        response = client.get("/api/system/ready")
+        freshness = response.json()["capabilities"]["policy:source-assurance"][
+            "details"
+        ]["freshness"]
+        assert freshness["refresh_error_type"] is None, response.text
+        if (
+            freshness["revision_current"] is True
+            and freshness["refresh_in_progress"] is False
+        ):
+            return response
+        assert time.monotonic() < deadline, (
+            f"source-assurance revision did not settle within 5 seconds: {response.text}"
+        )
+        client.portal.call(asyncio.sleep, 0.01)
+
+
 @pytest.mark.parametrize("window_age_days", [0, 400])
 def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
     tmp_path: Path, window_age_days: int
@@ -252,7 +275,7 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
     app = create_application(runtime_settings)
     with TestClient(app) as client:
         _report_strict_openclaw(client)
-        ready = client.get("/api/system/ready")
+        ready = _wait_for_settled_source_assurance(client)
         assert ready.status_code == 200, ready.text
         diagnostics = ready.json()
         assert diagnostics["ready"] is True
@@ -324,7 +347,7 @@ def test_strict_readiness_reports_owner_requested_device_check_coverage(
     app = create_application(runtime_settings)
     with TestClient(app) as client:
         _report_strict_openclaw(client)
-        ready = client.get("/api/system/ready")
+        ready = _wait_for_settled_source_assurance(client)
         assert ready.status_code == (200 if skip_device_check else 503), ready.text
         dimension = ready.json()["deployment_readiness"]["dimensions"][
             "identity_acceptance"
@@ -554,7 +577,7 @@ def test_attested_bridge_provider_is_ready_but_never_centrally_constructed(
         assert runtime.adapters is not None
         assert runtime.adapters._managed == {}  # noqa: SLF001
         _report_strict_openclaw(client)
-        readiness = client.get("/api/system/ready")
+        readiness = _wait_for_settled_source_assurance(client)
         assert readiness.status_code == 200, readiness.text
         bridge_dimension = readiness.json()["deployment_readiness"]["dimensions"][
             "bridges"
@@ -664,8 +687,11 @@ def test_missing_backup_blocks_activation_but_preserves_safe_reads(
         )
 
 
+@pytest.mark.parametrize("delay_source_assurance_refresh", [False, True])
 def test_two_principals_have_distinct_ingress_agents_and_sessions(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    delay_source_assurance_refresh: bool,
 ) -> None:
     base = _strict_settings(tmp_path)
     members = frozenset({"member-a", "member-b"})
@@ -724,11 +750,48 @@ def test_two_principals_have_distinct_ingress_agents_and_sessions(
             },
         },
     )
+    refresh_release = asyncio.Event()
+    if delay_source_assurance_refresh:
+        audit_calls = 0
+
+        async def delayed_audit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            nonlocal audit_calls
+            audit_calls += 1
+            if audit_calls > 1:
+                await refresh_release.wait()
+            return await audit_source_assurance(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", delayed_audit
+        )
     app = create_application(settings)
     with TestClient(app) as client:
-        _report_strict_openclaw(client, members=members)
-        ready = client.get("/api/system/ready")
+        try:
+            _report_strict_openclaw(client, members=members)
+            if delay_source_assurance_refresh:
+                pending = client.get("/api/system/ready")
+                assert pending.status_code == 503, pending.text
+                diagnostics = pending.json()
+                assert diagnostics["deployment_readiness"]["blocking_dimensions"] == [
+                    "observation_effects"
+                ]
+                freshness = diagnostics["capabilities"]["policy:source-assurance"][
+                    "details"
+                ]["freshness"]
+                assert freshness["revision_current"] is False
+                assert freshness["refresh_in_progress"] is True
+                assert freshness["settled_revision"] is False
+                assert freshness["refresh_error_type"] is None
+        finally:
+            client.portal.call(refresh_release.set)
+        ready = _wait_for_settled_source_assurance(client)
         assert ready.status_code == 200, ready.text
+        assert (
+            ready.json()["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["settled_revision"]
+            is True
+        )
         for identity in ("member-a.ts.net", "member-b.ts.net"):
             response = client.get(
                 "/api/member/v1/surfaces/settings",

@@ -1435,6 +1435,23 @@ class BridgeEnrollmentCoordinator:
         states[pack] = (
             "not_attested" if policy.requires_capability_attestation else "not_required"
         )
+        # Configuring one source must not revoke already attested siblings.
+        # Keep the aggregate identical to authorization_from_record and the
+        # attestation operation while this source awaits its own evidence.
+        provider_states = [
+            states.get(value)
+            for value in configured
+            if BRIDGE_PACK_POLICIES[value].requires_capability_attestation
+        ]
+        global_state = (
+            "not_required"
+            if not provider_states
+            else "attested"
+            if all(value == "attested" for value in provider_states)
+            else "partial"
+            if any(value == "attested" for value in provider_states)
+            else "not_attested"
+        )
         record.update(
             {
                 "configured_packs": configured,
@@ -1450,7 +1467,7 @@ class BridgeEnrollmentCoordinator:
                 ],
                 "pack_config": normalized,
                 "pack_capability_states": states,
-                "provider_capability_state": "not_attested",
+                "provider_capability_state": global_state,
             }
         )
         self._save_index(
