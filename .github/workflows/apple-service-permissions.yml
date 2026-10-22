@@ -42,11 +42,15 @@ jobs:
           tests/acceptance/test_apple_service_revocation.py
           tests/acceptance/test_member_apple_approval.py
           tests/acceptance/test_member_cos_approval.py
+          tests/acceptance/test_cos_member_bridge_acquisition.py
+          tests/acceptance/test_apple_messages_governed_reply.py
+          tests/unit/products/bridge/test_ingest_router.py
           tests/unit/test_apple_service_permission_contract.py
           tests/unit/test_apple_native_permission_boundary.py
           tests/unit/test_apple_notes_commands.py
           tests/unit/test_openclaw_approvals.py
           tests/unit/bootstrap/test_member_bridge_runtime_repair.py
+          tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_apple_service_write_upgrade_safety.py
           tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
           tests/unit/test_capability_catalog.py

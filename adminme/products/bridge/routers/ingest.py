@@ -2227,10 +2227,13 @@ async def pending_commands(
         apple_grant = None
         apple_authorization_denied = False
         if payload.get("provider") in APPLE_SERVICE_PROVIDERS and (
-            acquisition_read_only
-            or payload.get("provider") == "apple_notes"
-            or (payload.get("payload") or {}).get("apple_service_permission")
+            payload.get("provider") == "apple_notes"
+            or "apple_service_permission" in (payload.get("payload") or {})
         ):
+            # Unmarked retained Calendar/Reminders commands still pass the
+            # original scope checks below and receive a read-only suppressed
+            # terminal. Marker-bearing commands, even malformed ones, must not
+            # acquire that no-effect result: the edge may hold an attempt.
             runtime = getattr(request.app.state, "runtime", None)
             if runtime is None:
                 continue
