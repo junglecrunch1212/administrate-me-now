@@ -1281,11 +1281,19 @@ def test_actual_recovery_junit_gate_rejects_missing_or_partial_evidence(
     assert (result.returncode == 0) is (defect == "none")
 
 
-def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies():
+@pytest.mark.parametrize(
+    "runtime_path",
+    [
+        "bootstrap/member_bridge_runtime_repair.py",
+        "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+        "packs/adapters/reminders/apple-eventkit/adapter.py",
+    ],
+)
+def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies(
+    runtime_path,
+):
     changes = [
-        ("A", "bootstrap/member_bridge_runtime_repair.py"),
-        ("M", "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py"),
-        ("M", "packs/adapters/reminders/apple-eventkit/adapter.py"),
+        ("M", runtime_path),
         ("A", "tests/unit/adapters/reminders/test_eventkit_selected_sources.py"),
         (
             "M",
@@ -1309,6 +1317,8 @@ def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies():
         "adminme/events/log.py",
         "bridge/poetry.lock",
         "adminme/bridge_authorization.py",
+        "adminme/events/schemas/lists.py",
+        "bridge/adminme_bridge/adapters/sinks.py",
         "tests/unreviewed.py",
         "bootstrap/arbitrary.py",
     ):
@@ -1326,6 +1336,24 @@ def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies():
             changes,
             interfaces_equal=False,
             path_modes={**modes, changes[0][1]: {"120000"}},
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+    assert (
+        choose_scope(
+            [("D", runtime_path), *changes[1:]],
+            interfaces_equal=False,
+            path_modes=modes,
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+    assert (
+        choose_scope(
+            changes[1:],
+            interfaces_equal=False,
+            path_modes=modes,
             bridge_runtime_interfaces_equal=True,
         )
         == "system-wide"
