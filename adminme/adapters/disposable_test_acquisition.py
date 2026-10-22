@@ -122,7 +122,7 @@ def restrict_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         restrict_cos_adapter_config,
     )
 
-    from adminme.adapters.member_google_observation import (
+    from adminme.adapters.member_google_connections import (
         policy_from_config as google_policy,
     )
 

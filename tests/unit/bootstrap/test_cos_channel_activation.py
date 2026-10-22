@@ -751,14 +751,15 @@ def test_legacy_observation_compatibility_never_widens_other_inputs(
 
 
 @pytest.mark.parametrize("outcome", ["accepted", "wrong_owner", "settlement_failure"])
-def test_google_observation_activation_checks_owner_before_live_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+@pytest.mark.parametrize("read_write", [False, True])
+def test_google_connection_activation_checks_owner_before_live_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, read_write: bool
 ) -> None:
-    from adminme.adapters.member_google_observation import CONFIG_KEY, binding_digest
-    from tests.acceptance.test_member_google_observation import google_configuration
+    from adminme.adapters.member_google_connections import CONFIG_KEY, binding_digest
+    from tests.acceptance.test_member_google_connections import google_configuration
 
     controller, request, original = _controller(tmp_path, monkeypatch)
-    google = google_configuration(tmp_path / "google-source")
+    google = google_configuration(tmp_path / "google-source", read_write=read_write)
     # Reuse the operation's enrolled service entry; add only existing member
     # records to both predecessor and request, as a real retained deployment has.
     original["adapters"] = [
@@ -781,7 +782,10 @@ def test_google_observation_activation_checks_owner_before_live_changes(
     requested[CONFIG_KEY] = google[CONFIG_KEY]
     for selection in requested[CONFIG_KEY]["selections"]:
         selection["binding_sha256"] = binding_digest(
-            next(e for e in requested["adapters"] if e["id"] == selection["adapter_id"])
+            next(
+                e for e in requested["adapters"] if e["id"] == selection["adapter_id"]
+            ),
+            access=selection["access"],
         )
         if outcome == "wrong_owner":
             selection["owner_authorization_sha256"] = "f" * 64
@@ -817,7 +821,9 @@ def test_google_observation_activation_checks_owner_before_live_changes(
             e for e in installed["adapters"] if e["config"].get("member_id") == MEMBER_A
         ]
         assert len(selected) == 3 and all(e["enabled"] for e in selected)
-        assert all(e["config"]["read_only"] is True for e in selected)
+        for entry in selected:
+            writable = read_write and entry["kind"] != "messaging-gmail-api"
+            assert entry["config"]["read_only"] is not writable
         assert installed["adapters"][-1]["enabled"] is False
 
 

@@ -27,7 +27,7 @@ from adminme.adapters.cos_channel_acquisition import (
     member_bridge_capability_ceiling,
     policy_from_config as cos_policy_from_config,
 )
-from adminme.adapters.member_google_observation import selected_source_entry
+from adminme.adapters.member_google_connections import selected_source_entry
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     authorization_from_record,
@@ -257,7 +257,7 @@ class SettingsControlStore:
     def __init__(
         self, path: Path, *, adapter_config: dict[str, Any] | None = None
     ) -> None:
-        from adminme.adapters.member_google_observation import (
+        from adminme.adapters.member_google_connections import (
             manual_sources,
             selected_entries,
         )
@@ -1895,7 +1895,7 @@ def compose_source_policy_v2_sources(
 ) -> list[dict[str, Any]]:
     """Union configured, retained and catalog sources without inventing access."""
 
-    from adminme.adapters.member_google_observation import selected_entries
+    from adminme.adapters.member_google_connections import selected_entries
 
     connections = {row["id"]: row for row in compose_connections(runtime, member_id)}
     observed_google = selected_entries(runtime.settings.adapter_config)
@@ -2289,12 +2289,13 @@ def compose_source_policy_v2_sources(
         )
         source["acquisition"] = {
             "state": "paused" if setup in {"paused", "disabled"} else "active",
-            "coverage": "selected_read_only_sources",
+            "coverage": "selected_google_sources",
             "freshness": "current" if connection.get("last_sync_at") else "unknown",
             "provider_capability": "available" if setup == "connected" else "unknown",
             "mailbox_coverage_complete": False,
             "automated_candidate_extraction": False,
-            "provider_writes": False,
+            "provider_writes": selected["config"]["read_only"] is False,
+            "writes_require_existing_governance": True,
             "historical_expansion": False,
         }
     if test_policy is not None:

@@ -135,8 +135,7 @@ def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         or not config["trusted_sender_routes"]
     ):
         raise ValueError("CoS Gmail requires reviewed member sender routes")
-    from adminme.adapters.member_google_observation import (
-        readonly_config,
+    from adminme.adapters.member_google_connections import (
         selected_entries,
     )
 
@@ -145,7 +144,7 @@ def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             raise ValueError("CoS acquisition adapter inventory is malformed")
         if item.get("id") in member_sources:
-            item["config"] = readonly_config(item)
+            item["config"] = member_sources[item["id"]]["config"]
         elif item is not entry:
             item["enabled"] = False
     # A member's explicit connection pause wins. Settings cannot enable a

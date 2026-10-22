@@ -229,12 +229,12 @@ def test_readonly_google_diagnostics_preserve_independent_cos_authority(
     inputs = _inputs()
     inputs.update(
         cos_acquisition_configured=True,
-        member_google_readonly_source_count=selected_count,
+        member_google_source_count=selected_count,
     )
     result = evaluate_deployment_readiness(**inputs)
     evidence = result["dimensions"]["cos_channel_operation"]["evidence"]
     assert evidence["personal_channel_polling"] is (selected_count > 0)
-    assert evidence["member_google_readonly_source_count"] == selected_count
+    assert evidence["member_google_source_count"] == selected_count
     assert evidence["live_authorized"] is False
     inputs["observation_active"] = False
     assert (

@@ -19,11 +19,12 @@ import pytest
 from adminme.adapters.cos_channel_acquisition import policy_from_config as cos_policy
 from adminme.adapters.disposable_test_acquisition import restrict_adapter_config
 from adminme.adapters.loader import load_builtin_adapters
-from adminme.adapters.member_google_observation import (
+from adminme.adapters.member_google_connections import (
     CONFIG_KEY,
     SCOPES,
+    WRITE_SCOPES,
     SOURCES,
-    GoogleObservationPolicy,
+    GoogleConnectionPolicy,
     binding_digest,
     validate_authorized_change,
 )
@@ -47,7 +48,7 @@ from tests.acceptance.test_forwarded_channel_intake import (
 PERSONAL_ACCOUNT = "personal-fixture@example.invalid"
 
 
-def google_configuration(path: Path) -> dict[str, Any]:
+def google_configuration(path: Path, *, read_write: bool = False) -> dict[str, Any]:
     config = _configuration(path)
     personal = config["adapters"][0]
     personal["kind"] = "messaging-gmail-api"
@@ -85,13 +86,23 @@ def google_configuration(path: Path) -> dict[str, Any]:
             "config": {"member_id": MEMBER_B},
         }
     )
-    config[CONFIG_KEY] = GoogleObservationPolicy(
+    config[CONFIG_KEY] = GoogleConnectionPolicy(
         selections=[
             {
                 "adapter_id": entry["id"],
                 "member_id": MEMBER_A,
                 "provider_account_id": PERSONAL_ACCOUNT,
-                "binding_sha256": binding_digest(entry),
+                "access": (
+                    "read_write"
+                    if read_write and entry["kind"] in WRITE_SCOPES
+                    else "read_only"
+                ),
+                "binding_sha256": binding_digest(
+                    entry,
+                    access="read_write"
+                    if read_write and entry["kind"] in WRITE_SCOPES
+                    else "read_only",
+                ),
                 "owner_authorization_sha256": "e" * 64,
             }
             for entry in config["adapters"]
@@ -101,10 +112,12 @@ def google_configuration(path: Path) -> dict[str, Any]:
     return config
 
 
-def test_exact_reads_are_idempotent_and_preserve_cos_and_retained_selection(
+@pytest.mark.parametrize("read_write", [False, True])
+def test_exact_connections_are_idempotent_and_preserve_cos_and_retained_selection(
     tmp_path: Path,
+    read_write: bool,
 ) -> None:
-    requested = google_configuration(tmp_path)
+    requested = google_configuration(tmp_path, read_write=read_write)
     before = copy.deepcopy(requested)
     previous = copy.deepcopy(requested)
     previous.pop(CONFIG_KEY)
@@ -125,9 +138,11 @@ def test_exact_reads_are_idempotent_and_preserve_cos_and_retained_selection(
     )
     assert len(adapters) == 4
     for adapter in adapters:
-        assert adapter._scopes == [SCOPES[adapter.name]]
+        writable = read_write and adapter.name in WRITE_SCOPES
+        scope = WRITE_SCOPES[adapter.name] if writable else SCOPES[adapter.name]
+        assert adapter._scopes == [scope]
         if adapter.name != "messaging-gmail-api":
-            assert adapter.write_capabilities == []
+            assert bool(adapter.write_capabilities) is writable
         assert adapter._config.get("enable_writes") is not True
     assert prepared["adapters"][-1]["enabled"] is False
     gmail = prepared["adapters"][0]["config"]
@@ -154,6 +169,52 @@ def test_changed_binding_cannot_reuse_observation_authority(
     config["adapters"][0]["config"][field] = value
     with pytest.raises(ValueError, match="binding mismatch"):
         restrict_adapter_config(config)
+
+
+@pytest.mark.parametrize("kind", list(SCOPES))
+def test_access_cannot_widen_under_a_read_only_binding(
+    tmp_path: Path, kind: str
+) -> None:
+    config = google_configuration(tmp_path)
+    entry = next(row for row in config["adapters"] if row["kind"] == kind)
+    selection = next(
+        row
+        for row in config[CONFIG_KEY]["selections"]
+        if row["adapter_id"] == entry["id"]
+    )
+    selection["access"] = "read_write"
+    message = (
+        "must remain read-only" if kind == "messaging-gmail-api" else "binding mismatch"
+    )
+    with pytest.raises(ValueError, match=message):
+        restrict_adapter_config(config)
+
+
+def test_permission_changes_require_the_owning_members_operation(
+    tmp_path: Path,
+) -> None:
+    previous = google_configuration(tmp_path)
+    requested = google_configuration(tmp_path, read_write=True)
+    for owner, receipt in [(MEMBER_B, "e" * 64), (MEMBER_A, "f" * 64)]:
+        with pytest.raises(ValueError, match="another member|exact authorization"):
+            validate_authorized_change(
+                previous,
+                requested,
+                owner_member_id=owner,
+                owner_authorization_sha256=receipt,
+            )
+    validate_authorized_change(
+        previous,
+        requested,
+        owner_member_id=MEMBER_A,
+        owner_authorization_sha256="e" * 64,
+    )
+    # Revocation and disablement remain effective after retaining write-capable config.
+    requested.pop(CONFIG_KEY)
+    disabled = restrict_adapter_config(requested)
+    assert not any(
+        row["enabled"] for row in disabled["adapters"] if row["config"].get("member_id")
+    )
 
 
 def test_authority_is_member_specific_and_orphaned_grants_fail_closed(
@@ -348,10 +409,11 @@ class ReadOnlyGoogle:
         }
 
 
+@pytest.mark.parametrize("read_write", [False, True])
 def test_production_reads_project_private_facts_without_candidates_across_restart(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_write: bool
 ) -> None:
-    config = google_configuration(tmp_path)
+    config = google_configuration(tmp_path, read_write=read_write)
     adapters = load_builtin_adapters(config, repository_root=ROOT)
     calls: list[tuple[str, list[str]]] = []
     for adapter in adapters:
@@ -361,7 +423,10 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
         def service(
             _credentials: Any, scopes: list[str], subject: str
         ) -> ReadOnlyGoogle:
-            assert len(scopes) == 1 and scopes[0] in SCOPES.values()
+            assert len(scopes) == 1 and scopes[0] in {
+                *SCOPES.values(),
+                *WRITE_SCOPES.values(),
+            }
             calls.append((subject, scopes))
             return ReadOnlyGoogle(subject)
 
@@ -523,9 +588,12 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
                 "/api/member/v1/surfaces/settings", headers=MEMBER_HEADERS
             ).json()["control"]
             assert len(control["connections"]) == 3
-            assert all(
-                row["permissions"]["write"] == [] for row in control["connections"]
-            )
+            for row in control["connections"]:
+                writable = read_write and row["id"] in {
+                    "fixture-personal-calendar",
+                    "fixture-personal-tasks",
+                }
+                assert bool(row["permissions"]["write"]) is writable
             sources = control["source_policy_v2"]["sources"]
             selected = [
                 s
@@ -536,14 +604,21 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             ]
             assert len(selected) >= 3
             assert all(
-                s["acquisition"]["coverage"] == "selected_read_only_sources"
+                s["acquisition"]["coverage"] == "selected_google_sources"
                 for s in selected
             )
             assert all(s["policy"]["triage_mode"] == "manual_only" for s in selected)
+            for source in selected:
+                writable = read_write and source["adapter_instance_id"] in {
+                    "fixture-personal-calendar",
+                    "fixture-personal-tasks",
+                }
+                assert source["acquisition"]["provider_writes"] is writable
+                assert source["acquisition"]["writes_require_existing_governance"]
     assert len(calls) == 8
 
 
-def test_packaged_google_observation_without_git_metadata(tmp_path: Path) -> None:
+def test_packaged_google_connections_without_git_metadata(tmp_path: Path) -> None:
     """Run the real composition scenario from an installed-style source tree."""
     packaged = tmp_path / "release"
     shutil.copytree(
@@ -572,7 +647,7 @@ def test_packaged_google_observation_without_git_metadata(tmp_path: Path) -> Non
             "no:cacheprovider",
             "--runxfail",
             "-q",
-            "tests/acceptance/test_member_google_observation.py::test_production_reads_project_private_facts_without_candidates_across_restart",
+            "tests/acceptance/test_member_google_connections.py::test_production_reads_project_private_facts_without_candidates_across_restart",
         ],
         cwd=packaged,
         env=environment,

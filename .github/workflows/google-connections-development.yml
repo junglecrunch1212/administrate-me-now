@@ -1,0 +1,73 @@
+name: Google connections development
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, converted_to_draft]
+    paths:
+      - 'adminme/adapters/member_google_connections.py'
+      - 'adminme/adapters/cos_channel_acquisition.py'
+      - 'adminme/adapters/disposable_test_acquisition.py'
+      - 'adminme/settings_control.py'
+      - 'adminme/runtime/application.py'
+      - 'adminme/deployment_readiness.py'
+      - 'bootstrap/cos_channel_activation.py'
+      - 'bootstrap/versions.json'
+      - 'tests/acceptance/test_member_google_connections.py'
+      - 'tests/unit/bootstrap/test_cos_channel_activation.py'
+      - '.github/workflows/google-connections-development.yml'
+permissions:
+  contents: read
+jobs:
+  focused:
+    if: github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_ADDOPTS: '-o tmp_path_retention_policy=failed'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - name: Install locked development environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+      # Development evidence only. Protected final release gates stay unchanged.
+      - name: Validate Google permissions, private intake and guarded recovery
+        run: >-
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra
+          --basetemp="${RUNNER_TEMP}/google-connections-tests"
+          tests/acceptance/test_member_google_connections.py
+          tests/acceptance/test_cos_channel_acquisition.py
+          tests/acceptance/test_forwarded_channel_intake.py
+          tests/acceptance/test_b03_google_tasks_create_production.py
+          tests/integration/test_service_owned_google_sources.py
+          tests/integration/test_adapter_google_calendar_supervisor.py
+          tests/integration/test_adapter_google_tasks_supervisor.py
+          tests/integration/test_gmail_observation_receipts.py
+          tests/unit/adapters/calendaring/test_google_calendar.py
+          tests/unit/adapters/tasks/test_google_tasks.py
+          tests/unit/test_governance.py
+          tests/unit/test_google_tasks_execution.py
+          tests/unit/test_cos_channel_operation.py
+          tests/unit/bootstrap/test_cos_channel_activation.py
+      - name: Validate Google changes statically
+        if: '!cancelled()'
+        run: |
+          poetry run ruff check adminme bootstrap tests/acceptance/test_member_google_connections.py tests/unit/bootstrap/test_cos_channel_activation.py
+          poetry run ruff format --check adminme bootstrap tests/acceptance/test_member_google_connections.py tests/unit/bootstrap/test_cos_channel_activation.py
+          git diff --check

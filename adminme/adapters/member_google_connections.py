@@ -1,8 +1,8 @@
-"""Exact, separately authorized personal Google reads beside CoS intake.
+"""Exact, separately authorized personal Google connections beside CoS intake.
 
-This ceiling grants neither provider writes nor candidate extraction. It is
-published only by the guarded configuration operation, never by connection
-resume or by retaining the old disposable sample.
+Gmail stays read-only. Calendar and Tasks may retain explicitly authorized
+read/write access under existing write governance. Automatic candidate extraction
+is disabled. The guarded configuration operation publishes each selection.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-CONFIG_KEY = "member_google_observation"
-CONTRACT = "member-google-readonly-observation-v1"
+CONFIG_KEY = "member_google_connections"
+CONTRACT = "member-google-connections-v1"
 SCOPES = {
     "messaging-gmail-api": "https://www.googleapis.com/auth/gmail.readonly",
     "calendaring-google-calendar": "https://www.googleapis.com/auth/calendar.readonly",
@@ -26,7 +26,12 @@ SOURCES = {
     "calendaring-google-calendar": "adapter:google_calendar",
     "tasks-google-tasks": "adapter:google_tasks",
 }
-READ_CONTROLS: dict[str, Any] = {"read_only": True}
+Access = Literal["read_only", "read_write"]
+WRITE_SCOPES = {
+    kind: scope.removesuffix(".readonly")
+    for kind, scope in SCOPES.items()
+    if kind != "messaging-gmail-api"
+}
 MAIL_CONTROLS: dict[str, Any] = {
     "initial_backfill_days": 0,
     "initial_backfill_max_messages": 0,
@@ -37,52 +42,58 @@ MAIL_CONTROLS: dict[str, Any] = {
 }
 
 
-class GoogleObservationSelection(BaseModel):
+class GoogleConnectionSelection(BaseModel):
     model_config = {"extra": "forbid", "strict": True, "frozen": True}
 
     adapter_id: str = Field(min_length=1, max_length=240)
     member_id: str = Field(min_length=1, max_length=240)
     provider_account_id: str = Field(min_length=1, max_length=500)
+    access: Access = "read_only"
     binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     owner_authorization_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class GoogleObservationPolicy(BaseModel):
+class GoogleConnectionPolicy(BaseModel):
     model_config = {"extra": "forbid", "strict": True, "frozen": True}
 
-    contract: Literal["member-google-readonly-observation-v1"] = (
-        "member-google-readonly-observation-v1"
-    )
-    selections: list[GoogleObservationSelection] = Field(max_length=30)
-    provider_writes: Literal[False] = False
+    contract: Literal["member-google-connections-v1"] = "member-google-connections-v1"
+    selections: list[GoogleConnectionSelection] = Field(max_length=30)
+    writes_require_existing_governance: Literal[True] = True
     automated_candidate_extraction: Literal[False] = False
     historical_expansion: Literal[False] = False
 
     @model_validator(mode="after")
-    def unique_adapters(self) -> GoogleObservationPolicy:
+    def unique_adapters(self) -> GoogleConnectionPolicy:
         if len({row.adapter_id for row in self.selections}) != len(self.selections):
-            raise ValueError("Google observation selections must be unique")
+            raise ValueError("Google connection selections must be unique")
         return self
 
 
-def policy_from_config(value: dict[str, Any]) -> GoogleObservationPolicy | None:
+def policy_from_config(value: dict[str, Any]) -> GoogleConnectionPolicy | None:
     if CONFIG_KEY not in value:
         return None
     if "cos_channel_acquisition" not in value:
         raise ValueError(
-            "member Google observation requires the CoS acquisition ceiling"
+            "member Google connection requires the CoS acquisition ceiling"
         )
-    return GoogleObservationPolicy.model_validate(value[CONFIG_KEY])
+    return GoogleConnectionPolicy.model_validate(value[CONFIG_KEY])
 
 
-def readonly_config(entry: dict[str, Any]) -> dict[str, Any]:
+def connection_config(
+    entry: dict[str, Any], *, access: Access = "read_only"
+) -> dict[str, Any]:
     kind = str(entry.get("kind") or "").removeprefix("adapter:")
     if kind not in SCOPES:
         raise ValueError(
-            "member Google observation only supports reviewed Google reads"
+            "member Google connection only supports reviewed Google connections"
         )
+    if access not in {"read_only", "read_write"}:
+        raise ValueError("unsupported Google connection access")
+    if access == "read_write" and kind not in WRITE_SCOPES:
+        raise ValueError("personal Gmail connections must remain read-only")
+    scope = WRITE_SCOPES[kind] if access == "read_write" else SCOPES[kind]
     config = copy.deepcopy(entry.get("config") or {})
-    config.update(READ_CONTROLS, permission_scope=[SCOPES[kind]])
+    config.update(read_only=access == "read_only", permission_scope=[scope])
     if kind == "messaging-gmail-api":
         config["enable_writes"] = False
         config.update(copy.deepcopy(MAIL_CONTROLS))
@@ -91,16 +102,16 @@ def readonly_config(entry: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def binding_digest(entry: dict[str, Any]) -> str:
-    """Bind every provider/config coordinate after the enforced narrowing.
+def binding_digest(entry: dict[str, Any], *, access: Access = "read_only") -> str:
+    """Bind every provider/config coordinate and the selected access.
 
-    Pause/resume is deliberately outside this digest. Narrowing is idempotent,
+    Pause/resume is deliberately outside this digest. Normalization is idempotent,
     so both the requested and installed configurations have the same binding.
     """
     document = {
         "id": entry.get("id"),
         "kind": str(entry.get("kind") or "").removeprefix("adapter:"),
-        "config": readonly_config(entry),
+        "config": connection_config(entry, access=access),
     }
     return hashlib.sha256(
         json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
@@ -119,7 +130,7 @@ def selected_entries(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
             if isinstance(row, dict) and row.get("id") == selection.adapter_id
         ]
         if len(matches) != 1:
-            raise ValueError("Google observation requires one exact existing adapter")
+            raise ValueError("Google connection requires one exact existing adapter")
         entry = matches[0]
         config = entry.get("config") or {}
         if (
@@ -135,12 +146,16 @@ def selected_entries(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
             or not config["oauth_credentials_ref"].startswith("keychain://")
             or "disposable_test_acquisition" in config
             or config.get("b03_google_tasks_create") is not None
-            or binding_digest(entry) != selection.binding_sha256
+            or binding_digest(entry, access=selection.access)
+            != selection.binding_sha256
         ):
             raise ValueError(
-                "Google observation owner/account/configuration binding mismatch"
+                "Google connection owner/account/configuration binding mismatch"
             )
-        result[selection.adapter_id] = entry
+        result[selection.adapter_id] = {
+            **copy.deepcopy(entry),
+            "config": connection_config(entry, access=selection.access),
+        }
     return result
 
 
@@ -205,12 +220,12 @@ def validate_authorized_change(
             continue
         if prior is not None and prior.member_id != owner_member_id:
             raise ValueError(
-                "cannot change another member's Google observation selection"
+                "cannot change another member's Google connection selection"
             )
         if current is not None and (
             current.member_id != owner_member_id
             or current.owner_authorization_sha256 != owner_authorization_sha256
         ):
             raise ValueError(
-                "Google observation requires this member's exact authorization"
+                "Google connection requires this member's exact authorization"
             )

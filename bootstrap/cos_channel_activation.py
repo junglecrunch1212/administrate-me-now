@@ -29,8 +29,9 @@ from adminme.adapters.cos_channel_acquisition import (
     policy_from_config,
     restrict_cos_adapter_config,
 )
-from adminme.adapters.member_google_observation import (
-    readonly_config,
+from adminme.adapters.member_google_connections import (
+    connection_config,
+    policy_from_config as google_policy_from_config,
     selected_entries,
     validate_authorized_change,
 )
@@ -281,6 +282,12 @@ def prepare_configuration(
         )
     result = restrict_cos_adapter_config(requested)
     selected_google = selected_entries(result)
+    google_policy = google_policy_from_config(result)
+    google_access = (
+        {row.adapter_id: row.access for row in google_policy.selections}
+        if google_policy
+        else {}
+    )
     for entry in result["adapters"]:
         config = entry.get("config") or {}
         if entry.get("id") == policy.gmail_adapter_id:
@@ -297,12 +304,14 @@ def prepare_configuration(
                 for item in previous["adapters"]
                 if item.get("id") == entry.get("id")
             )
-            # New read authority is separately checked against this operation's
-            # exact authorizing member. Narrow capabilities without replacing
+            # Connection access is separately checked against this operation's
+            # exact authorizing member. Preserve capabilities without replacing
             # enrolled account credentials, source selections or cursor IDs.
             selected = entry.get("id") in selected_google
             expected_config = (
-                readonly_config(before) if selected else before.get("config")
+                connection_config(before, access=google_access[entry["id"]])
+                if selected
+                else before.get("config")
             )
             if not selected:
                 entry["enabled"] = False
