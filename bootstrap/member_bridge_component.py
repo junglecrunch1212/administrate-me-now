@@ -4,6 +4,8 @@ Unknown tracked paths are runtime inputs. Exclusions are deliberately narrow:
 the helper's packaging implementation, test/CI inputs, and non-executable
 governing prose directly under docs/refactor plus AGENTS.md. Package READMEs,
 locks, configuration, interface code and other documents remain runtime inputs.
+An explicit versioned mixed-release contract may retain an older exact archive
+while the central protocol route differs; it never changes that CI fingerprint.
 """
 
 from __future__ import annotations
@@ -24,11 +26,17 @@ from bootstrap.source_identity import (
 
 
 HELPER_RUNTIME_COMPATIBILITY_CONTRACT = "administrateme-helper-runtime-compatibility-v1"
+PERMISSION_RECOVERY_COMPATIBILITY = "bridge-permission-recovery-v1"
+PERMISSION_RECOVERY_PROTOCOL = "administrateme-bridge-permission-recovery-v1"
+PERMISSION_RECOVERY_CENTRAL_PATHS = frozenset(
+    {"adminme/products/bridge/routers/ingest.py"}
+)
 HELPER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/install-member-bridge.sh",
         "bootstrap/member_bridge_helper_app.py",
         "bootstrap/member_bridge_component.py",
+        "bootstrap/member_bridge_permission_controller.py",
     }
 )
 NON_RUNTIME_PATHS = frozenset({"scripts/release_scope.py"})
@@ -101,14 +109,22 @@ class HelperComponentInputs:
 
 
 def inspect_helper_component(
-    repository: Path, component_commit: str, runtime_commit: str
+    repository: Path,
+    component_commit: str,
+    runtime_commit: str,
+    *,
+    compatibility_contract: str | None = None,
 ) -> HelperComponentInputs:
     """Verify one clean source coordinate and its unchanged retained runtime.
 
-    This proves local source integrity, not GitHub approval. Deployment still
-    requires the protected-main operational release procedure.
+    The default requires complete runtime-input equality. The explicit recovery
+    contract permits only its fixed central protocol deltas and retains all edge
+    inputs. This proves source integrity, not GitHub approval or live protocol
+    support; those require protected delivery and authenticated negotiation.
     """
 
+    if compatibility_contract not in {None, PERMISSION_RECOVERY_COMPATIBILITY}:
+        raise RuntimeError("unsupported retained runtime compatibility contract")
     if reviewed_candidate_commit(repository) != component_commit:
         raise RuntimeError("helper component source does not match the clean checkout")
     component_entries, _ = load_git_tree(repository, component_commit)
@@ -124,7 +140,55 @@ def inspect_helper_component(
         runtime_inventory = _inventory(runtime_source, runtime_entries)
         component_fingerprint = _fingerprint(component_inventory)
         runtime_fingerprint = _fingerprint(runtime_inventory)
-        if component_fingerprint != runtime_fingerprint:
+        central_differences: list[dict[str, object]] = []
+        retained_edge_fingerprint: str | None = None
+        if compatibility_contract == PERMISSION_RECOVERY_COMPATIBILITY:
+            # This is a mixed central/helper release, never a smaller CI scope.
+            # The public runtime fingerprint remains conservative. Only these
+            # versioned central protocol implementation paths may differ; the
+            # delivered archive still contains the exact retained bytes.
+            for path in sorted(component_inventory.keys() | runtime_inventory.keys()):
+                candidate = component_inventory.get(path)
+                retained = runtime_inventory.get(path)
+                if candidate == retained or not any(
+                    is_runtime_input(path, mode=entry["mode"])
+                    for entry in (candidate, retained)
+                    if entry is not None
+                ):
+                    continue
+                if (
+                    path not in PERMISSION_RECOVERY_CENTRAL_PATHS
+                    or candidate is None
+                    or retained is None
+                    or candidate["mode"] != "100644"
+                    or retained["mode"] != "100644"
+                ):
+                    raise RuntimeError(
+                        "retained edge compatibility changes unsupported runtime inputs"
+                    )
+                central_differences.append(
+                    {
+                        "path": path,
+                        "retained": retained,
+                        "central_candidate": candidate,
+                    }
+                )
+            retained_edge_fingerprint = _fingerprint(
+                {
+                    path: entry
+                    for path, entry in runtime_inventory.items()
+                    if path not in PERMISSION_RECOVERY_CENTRAL_PATHS
+                }
+            )
+            if retained_edge_fingerprint != _fingerprint(
+                {
+                    path: entry
+                    for path, entry in component_inventory.items()
+                    if path not in PERMISSION_RECOVERY_CENTRAL_PATHS
+                }
+            ):
+                raise RuntimeError("retained edge inputs differ")
+        elif component_fingerprint != runtime_fingerprint:
             raise RuntimeError("helper component changes retained runtime inputs")
         if not HELPER_COMPONENT_PATHS.issubset(component_inventory):
             raise RuntimeError("helper component source is incomplete")
@@ -177,8 +241,24 @@ def inspect_helper_component(
             "excluded_non_runtime_prose_paths": sorted(NON_RUNTIME_PROSE_PATHS),
             "excluded_non_runtime_prose_directory": NON_RUNTIME_PROSE_DIRECTORY,
             "excluded_non_runtime_prose_rule": "direct-child-markdown-mode-100644",
-            "runtime_inputs_unchanged": True,
+            "runtime_inputs_unchanged": component_fingerprint == runtime_fingerprint,
         }
+        if compatibility_contract == PERMISSION_RECOVERY_COMPATIBILITY:
+            compatibility.update(
+                {
+                    "contract": "administrateme-helper-retained-edge-compatibility-v1",
+                    "compatibility_mode": compatibility_contract,
+                    "required_central_protocol": PERMISSION_RECOVERY_PROTOCOL,
+                    "required_central_release_commit": component_commit,
+                    "central_candidate_runtime_input_sha256": component_fingerprint,
+                    "retained_edge_input_sha256": retained_edge_fingerprint,
+                    "retained_edge_inputs_unchanged": True,
+                    "allowed_central_difference_paths": sorted(
+                        PERMISSION_RECOVERY_CENTRAL_PATHS
+                    ),
+                    "central_differences": central_differences,
+                }
+            )
     if reviewed_candidate_commit(repository) != component_commit:
         raise RuntimeError("helper component source changed during inspection")
     return HelperComponentInputs(compatibility, sources, payloads, runtime_inventory)
@@ -244,6 +324,9 @@ def verify_runtime_archive(
 __all__ = [
     "HELPER_COMPONENT_PATHS",
     "HELPER_RUNTIME_COMPATIBILITY_CONTRACT",
+    "PERMISSION_RECOVERY_COMPATIBILITY",
+    "PERMISSION_RECOVERY_PROTOCOL",
+    "PERMISSION_RECOVERY_CENTRAL_PATHS",
     "NON_RUNTIME_PATHS",
     "NON_RUNTIME_PREFIXES",
     "NON_RUNTIME_PROSE_DIRECTORY",

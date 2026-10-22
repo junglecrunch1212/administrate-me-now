@@ -17,6 +17,9 @@ from bootstrap import member_bridge_helper_app
 from bootstrap.member_bridge_component import (
     HELPER_COMPONENT_PATHS,
     HELPER_RUNTIME_COMPATIBILITY_CONTRACT,
+    PERMISSION_RECOVERY_CENTRAL_PATHS,
+    PERMISSION_RECOVERY_COMPATIBILITY,
+    PERMISSION_RECOVERY_PROTOCOL,
     inspect_helper_component,
     is_runtime_input,
     runtime_interface_fingerprint,
@@ -62,6 +65,8 @@ def _repository(directory: Path) -> tuple[Path, str]:
         shutil.copy2(ROOT / relative, destination)
     for relative, content in {
         "adminme/runtime.py": "VALUE = 'retained'\n",
+        "adminme/products/bridge/routers/ingest.py": "CENTRAL_PROTOCOL = 'retained'\n",
+        "adminme/bridge_history.py": "CENTRAL_HISTORY = 'retained'\n",
         "README.md": "Retained package metadata\n",
         "bridge/README.md": "Retained bridge metadata\n",
         "poetry.lock": "locked central dependencies\n",
@@ -184,7 +189,12 @@ def test_explicit_non_runtime_prose_and_test_inputs_do_not_change_interface(
 
 
 @pytest.mark.parametrize(
-    "relative", ["adminme/runtime.py", "bootstrap/install-member-bridge.sh"]
+    "relative",
+    [
+        "adminme/runtime.py",
+        "bootstrap/install-member-bridge.sh",
+        "bootstrap/member_bridge_permission_controller.py",
+    ],
 )
 @pytest.mark.parametrize("hidden", [False, True])
 def test_dirty_and_assume_unchanged_checkout_bytes_fail_closed(
@@ -369,6 +379,17 @@ def test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback(
     assert (resources / "install-member-bridge.sh").read_bytes() == (
         repository / "bootstrap/install-member-bridge.sh"
     ).read_bytes()
+    controller = resources / "member_bridge_permission_controller.py"
+    assert (
+        controller.read_bytes()
+        == (
+            repository / "bootstrap/member_bridge_permission_controller.py"
+        ).read_bytes()
+    )
+    assert (
+        manifest["permission_controller_sha256"]
+        == hashlib.sha256(controller.read_bytes()).hexdigest()
+    )
     assert manifest["installer_sha256"] != old_build.installer_sha256
     launcher = (resources / "bridge-helper-launcher.sh").read_text()
     assert f"EXPECTED_COMMIT={runtime}\n" in launcher
@@ -393,4 +414,218 @@ def test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback(
             expected_commit=component,
             runtime_commit=runtime,
             expected_runtime_archive_sha256="0" * 64,
+        )
+
+
+def test_new_controller_is_exact_component_path_without_widening_runtime_exclusions(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _repository(tmp_path)
+    controller = repository / "bootstrap/member_bridge_permission_controller.py"
+    controller.unlink()
+    retained = _commit(repository)
+    shutil.copy2(ROOT / "bootstrap/member_bridge_permission_controller.py", controller)
+    component = _commit(repository)
+    inputs = inspect_helper_component(repository, component, retained)
+    assert inputs.compatibility["runtime_inputs_unchanged"] is True
+    assert (
+        "bootstrap/member_bridge_permission_controller.py"
+        not in inputs.runtime_inventory
+    )
+    assert (
+        inputs.component_payloads["bootstrap/member_bridge_permission_controller.py"]
+        == controller.read_bytes()
+    )
+    assert not is_runtime_input("bootstrap/member_bridge_permission_controller.py")
+    for shared in (
+        "bootstrap/member_bridge.py",
+        "bootstrap/member_bridge_permissions.py",
+        "bridge/adminme_bridge/enrollment.py",
+        "bridge/adminme_bridge/enrollment_ui.py",
+        "bridge/adminme_bridge/permissions.py",
+    ):
+        assert is_runtime_input(shared)
+
+
+@pytest.mark.parametrize("central_path", sorted(PERMISSION_RECOVERY_CENTRAL_PATHS))
+def test_explicit_retained_edge_contract_preserves_strict_default_and_ci_fingerprint(
+    tmp_path: Path,
+    central_path: str,
+) -> None:
+    repository, retained = _repository(tmp_path)
+    original = (repository / central_path).read_bytes()
+    (repository / central_path).write_bytes(
+        original + b"# Versioned central recovery protocol.\n"
+    )
+    component = _commit(repository)
+    assert is_runtime_input(central_path)
+    assert runtime_interface_fingerprint(
+        repository, retained
+    ) != runtime_interface_fingerprint(repository, component)
+    with pytest.raises(RuntimeError, match="changes retained runtime inputs"):
+        inspect_helper_component(repository, component, retained)
+    inspected = inspect_helper_component(
+        repository,
+        component,
+        retained,
+        compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+    )
+    contract = inspected.compatibility
+    assert contract["runtime_inputs_unchanged"] is False
+    assert contract["retained_edge_inputs_unchanged"] is True
+    assert contract["required_central_protocol"] == PERMISSION_RECOVERY_PROTOCOL
+    assert contract["required_central_release_commit"] == component
+    assert contract["runtime_commit"] == retained
+    assert contract["helper_component_commit"] == component
+    assert contract["allowed_central_difference_paths"] == sorted(
+        PERMISSION_RECOVERY_CENTRAL_PATHS
+    )
+    assert contract["central_differences"] == [
+        {
+            "path": central_path,
+            "retained": {
+                "mode": "100644",
+                "sha256": hashlib.sha256(original).hexdigest(),
+            },
+            "central_candidate": {
+                "mode": "100644",
+                "sha256": hashlib.sha256(
+                    (repository / central_path).read_bytes()
+                ).hexdigest(),
+            },
+        }
+    ]
+    archive = tmp_path / "retained-edge.tar"
+    _archive(repository, retained, archive)
+    verify_runtime_archive(archive, inspected.runtime_inventory)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/bridge_enrollment.py",
+        "adminme/bridge_history.py",
+        "adminme/settings_control.py",
+        "adminme/products/bridge/routers/other.py",
+        "adminme/events/log.py",
+        "adminme/lib/governance.py",
+        "bootstrap/bridge_enrollment.py",
+        "bridge/adminme_bridge/enrollment_helper.py",
+        "bridge/adminme_bridge/enrollment_ui.py",
+        "bridge/adminme_bridge/ingest_client.py",
+        "bootstrap/runtime-manifest.json",
+        "bridge/poetry.lock",
+        "poetry.lock",
+        "README.md",
+        "unknown-runtime.py",
+    ],
+)
+def test_retained_edge_opt_in_does_not_exempt_other_central_edge_identity_or_dependency_inputs(
+    tmp_path: Path,
+    relative: str,
+) -> None:
+    repository, retained = _repository(tmp_path)
+    changed = repository / relative
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    changed.write_text("different protected runtime input\n")
+    component = _commit(repository)
+    with pytest.raises(RuntimeError, match="unsupported runtime inputs"):
+        inspect_helper_component(
+            repository,
+            component,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+@pytest.mark.parametrize("defect", ["delete", "executable", "add"])
+def test_retained_edge_contract_rejects_central_path_presence_or_mode_change(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    repository, retained = _repository(tmp_path)
+    route = repository / "adminme/products/bridge/routers/ingest.py"
+    if defect == "delete":
+        route.unlink()
+    elif defect == "executable":
+        route.chmod(0o755)
+    else:
+        route.unlink()
+        retained = _commit(repository)
+        route.write_text("new central path\n")
+    component = _commit(repository)
+    with pytest.raises(RuntimeError, match="unsupported runtime inputs"):
+        inspect_helper_component(
+            repository,
+            component,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+
+
+def test_unknown_retained_edge_contract_fails_closed(tmp_path: Path) -> None:
+    repository, retained = _repository(tmp_path)
+    with pytest.raises(
+        RuntimeError, match="unsupported retained runtime compatibility"
+    ):
+        inspect_helper_component(
+            repository, retained, retained, compatibility_contract="unreviewed-contract"
+        )
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="sealed mixed packaging requires hosted macOS"
+)
+def test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation(
+    tmp_path: Path,
+) -> None:
+    repository, retained = _repository(tmp_path)
+    archive = tmp_path / "paired.tar"
+    archive_sha = _archive(repository, retained, archive)
+    route = repository / "adminme/products/bridge/routers/ingest.py"
+    route.write_bytes(route.read_bytes() + b"# Supported new central protocol.\n")
+    component = _commit(repository)
+    with pytest.raises(RuntimeError, match="changes retained runtime inputs"):
+        build_member_bridge_helper_app(
+            tmp_path / "Rejected.app",
+            root=repository,
+            expected_commit=component,
+            runtime_commit=retained,
+            expected_runtime_archive_sha256=archive_sha,
+        )
+    with pytest.raises(RuntimeError, match="previously verified archive SHA-256"):
+        build_member_bridge_helper_app(
+            tmp_path / "Missing Proof.app",
+            root=repository,
+            expected_commit=component,
+            runtime_commit=retained,
+            runtime_compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+        )
+    app = tmp_path / "Mixed Helper.app"
+    build_member_bridge_helper_app(
+        app,
+        root=repository,
+        expected_commit=component,
+        runtime_commit=retained,
+        expected_runtime_archive_sha256=archive_sha,
+        runtime_compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
+    )
+    manifest = json.loads((app / "Contents/Resources/helper-manifest.json").read_text())
+    assert (app / manifest["release_archive_path"]).read_bytes() == archive.read_bytes()
+    assert manifest["release_commit"] == manifest["runtime_commit"] == retained
+    assert manifest["required_central_release_commit"] == component
+    assert manifest["required_central_protocol"] == PERMISSION_RECOVERY_PROTOCOL
+    assert manifest["runtime_compatibility"]["runtime_archive_sha256"] == archive_sha
+    assert manifest["runtime_compatibility"]["runtime_inputs_unchanged"] is False
+    launcher = (app / "Contents/Resources/bridge-helper-launcher.sh").read_text()
+    assert '--expected-central-commit "$HELPER_COMPONENT_COMMIT"' in launcher
+    assert '--expected-runtime-commit "$EXPECTED_COMMIT"' in launcher
+    with pytest.raises(RuntimeError, match="verified SHA-256"):
+        build_member_bridge_helper_app(
+            tmp_path / "Wrong Proof.app",
+            root=repository,
+            expected_commit=component,
+            runtime_commit=retained,
+            expected_runtime_archive_sha256="0" * 64,
+            runtime_compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
         )

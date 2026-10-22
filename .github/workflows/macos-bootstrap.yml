@@ -105,11 +105,16 @@ jobs:
             --junitxml="$RUNNER_TEMP/helper-component.xml" \
             tests/unit/bootstrap/test_member_bridge_helper_app.py \
             tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
+            tests/unit/bootstrap/test_member_bridge_permission_controller.py \
             tests/unit/bootstrap/test_member_bridge_component.py \
             tests/unit/bootstrap/test_bridge_enrollment.py \
             tests/unit/test_bridge_release_identity.py \
             tests/unit/test_ci_release_gates.py \
             tests/acceptance/test_self_service_member_bridge_enrollment.py \
+            tests/acceptance/test_member_bridge_permission_recovery.py \
+            tests/acceptance/test_member_bridge_progress_synchronization.py \
+            tests/acceptance/test_cos_member_bridge_acquisition.py \
+            tests/acceptance/test_member_bridge_historical_attribution.py \
             tests/acceptance/test_bridge_readiness_transition.py
           python - "$RUNNER_TEMP/helper-component.xml" <<'CHECK'
           import sys
@@ -181,11 +186,15 @@ jobs:
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
+          tests/unit/bootstrap/test_member_bridge_permission_controller.py
+          tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_release_identity.py
           tests/unit/test_ci_release_gates.py
           tests/acceptance/test_self_service_member_bridge_enrollment.py
+          tests/acceptance/test_member_bridge_permission_recovery.py
+          tests/acceptance/test_member_bridge_progress_synchronization.py
           tests/acceptance/test_member_bridge_knowledge_vertical_slice.py
           tests/acceptance/test_cos_member_bridge_acquisition.py
           tests/acceptance/test_member_bridge_historical_attribution.py

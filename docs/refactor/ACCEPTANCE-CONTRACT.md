@@ -69,6 +69,25 @@ zero-unintended-effect requirements. All scopes preserve ownership, encryption,
 append-only history, recipient restrictions, independent approvals, credentials
 and audited effects; rollback cannot undo a disclosure or send.
 
+The CO027 permission-controller component extends the helper scope only when the
+central and retained bridge runtime inputs remain unchanged and its explicit
+interface contract matches. Its selected gate includes signed permission retry,
+production source admission, historical ownership and readiness, uncertainty and
+revocation, plus the actual packaged native entrypoint. Native ABI/denied-access
+smoke, synthetic granted-access composition and final member-owned permission
+and daemon settlement are separate evidence categories. A UI permission toggle
+or helper exit code alone cannot establish usable bridge observation.
+
+Concurrent permission recovery changes central signed progress, source admission
+and settlement evidence consumed by the unchanged historical auditor. Its explicit retained-edge packaging
+compatibility does not reduce that central release to a helper-only scope. Keep
+the protected system validation and guarded central deployment for these shared
+boundaries. Focused development must first prove observation during startup and
+remaining native prompts, stale refusal before any nonce/index/event effect,
+single and batch ingest serialized with revocation, and unknown-result refusal.
+The actual paired edge archive and its permissions remain unchanged; the new
+controller must negotiate the authenticated central protocol before any action.
+
 Readiness-before-release amendment (2026-10-21), **MODERNIZE** under the
 owner's standing instruction: finish a bounded production-workflow impact map
 in the existing PR/task before draft-to-ready. Map each affected contract to a

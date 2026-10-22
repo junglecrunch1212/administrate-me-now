@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import plistlib
 import stat
 import subprocess
@@ -45,6 +46,13 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
 
     info = plistlib.loads((destination / "Contents" / "Info.plist").read_bytes())
     assert info["CFBundleIdentifier"] == BUNDLE_IDENTIFIER
+    for purpose in (
+        "NSCalendarsFullAccessUsageDescription",
+        "NSRemindersFullAccessUsageDescription",
+        "NSAppleEventsUsageDescription",
+    ):
+        assert "setup" in info[purpose]
+        assert "changes" in info[purpose]
     assert info["CFBundleDocumentTypes"][0]["CFBundleTypeExtensions"] == [
         "adminmebridge"
     ]
@@ -58,8 +66,14 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
     assert "--expected-commit" in launcher
     assert "--release-archive" in launcher
     assert "--release-sha256" in launcher
-    assert "--complete-wizard" in launcher
-    assert "bridge-complete" in launcher
+    assert "--complete-wizard" not in launcher
+    assert "bridge-complete" not in launcher
+    assert "--operation" in launcher
+    assert '--expected-central-commit "$HELPER_COMPONENT_COMMIT"' in launcher
+    assert '--expected-runtime-commit "$EXPECTED_COMMIT"' in launcher
+    assert "run_permissions initial" in launcher
+    assert "run_permissions continue" in launcher
+    assert "verify_permission_controller" in launcher
     assert "bridge-uninstall" in launcher
     assert "TRANSFER_CODE" in launcher
     assert "unset TRANSFER_CODE" in launcher
@@ -82,10 +96,27 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
     assert manifest["contract"] == HELPER_APP_CONTRACT
     assert manifest["release_commit"] == commit == result.release_commit
     assert manifest["runtime_commit"] == commit
+    assert manifest["required_central_release_commit"] == commit
+    assert (
+        manifest["required_central_protocol"]
+        == "administrateme-bridge-permission-recovery-v1"
+    )
     assert (
         manifest["helper_component_commit"] == commit == result.helper_component_commit
     )
     assert manifest["runtime_compatibility"]["runtime_inputs_unchanged"] is True
+    controller = destination / manifest["permission_controller_path"]
+    assert (
+        controller.read_bytes()
+        == (REPO_ROOT / "bootstrap/member_bridge_permission_controller.py").read_bytes()
+    )
+    assert (
+        manifest["permission_controller_sha256"]
+        == hashlib.sha256(controller.read_bytes()).hexdigest()
+        == result.permission_controller_sha256
+    )
+    assert manifest["permission_controller_sha256"] in launcher
+    assert stat.S_IMODE(controller.stat().st_mode) == 0o600
     assert len(manifest["installer_sha256"]) == 64
     assert len(manifest["release_archive_sha256"]) == 64
     assert result.release_archive_sha256 == manifest["release_archive_sha256"]
@@ -104,6 +135,8 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
         "dependency_log_limit_bytes": 262144,
         "retains_enrollment_output": False,
         "retains_transfer_code": False,
+        "permission_result_limit_bytes": 8192,
+        "retains_validated_permission_result_only": True,
     }
     failure_dialog = (
         destination / "Contents" / "Resources" / "failed.applescript"
@@ -142,7 +175,11 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
 
     # Confirm that both final document metadata and embedded installer content
     # participate in the seal, rather than merely checking the droplet binary.
-    for sealed_path in (destination / "Contents" / "Info.plist", launcher_path):
+    for sealed_path in (
+        destination / "Contents" / "Info.plist",
+        launcher_path,
+        controller,
+    ):
         original = sealed_path.read_bytes()
         sealed_path.write_bytes(original + b"\n")
         changed = subprocess.run(

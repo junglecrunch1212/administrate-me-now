@@ -133,6 +133,16 @@ def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None
         ([("D", PROSE)], True, "documentation"),
         ([("M", HELPER)], True, "bridge-helper"),
         ([("A", "bootstrap/member_bridge_component.py")], True, "bridge-helper"),
+        (
+            [("A", "bootstrap/member_bridge_permission_controller.py")],
+            True,
+            "bridge-helper",
+        ),
+        (
+            [("M", "bootstrap/member_bridge_permission_controller.py")],
+            False,
+            "system-wide",
+        ),
         ([("M", "scripts/release_scope.py")], True, "bridge-helper"),
         ([("M", HELPER), ("M", PROSE)], True, "bridge-helper"),
         ([("M", HELPER)], False, "system-wide"),
@@ -140,6 +150,8 @@ def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None
         ([("D", HELPER)], True, "system-wide"),
         ([("T", HELPER)], True, "system-wide"),
         ([("M", "adminme/bridge_enrollment.py")], True, "system-wide"),
+        ([("M", "adminme/products/bridge/routers/ingest.py")], True, "system-wide"),
+        ([("M", "adminme/bridge_history.py")], True, "system-wide"),
         ([("M", "bridge/adminme_bridge/enrollment_helper.py")], True, "system-wide"),
         ([("M", "bootstrap/bridge_enrollment.py")], True, "system-wide"),
         ([("M", "bootstrap/upgrade.py")], True, "system-wide"),
@@ -387,6 +399,11 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
     for path in (
         "test_member_bridge_helper_app.py",
         "test_member_bridge_helper_diagnostics.py",
+        "test_member_bridge_permission_controller.py",
+        "test_member_bridge_permission_recovery.py",
+        "test_member_bridge_progress_synchronization.py",
+        "test_cos_member_bridge_acquisition.py",
+        "test_member_bridge_historical_attribution.py",
         "test_member_bridge_component.py",
         "test_self_service_member_bridge_enrollment.py",
         "test_bridge_readiness_transition.py",
@@ -404,6 +421,10 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
         assert "-k 'not test_builds_reviewed_document_helper" in commands
         assert (
             "and not test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback"
+            in commands
+        )
+        assert (
+            "and not test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation"
             in commands
         )
     assert job["steps"][-1]["id"] == "validated"

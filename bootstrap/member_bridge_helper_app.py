@@ -23,6 +23,8 @@ from bootstrap import contracts, member_bridge_component, source_identity
 from bootstrap.contracts import atomic_write, repository_root
 from bootstrap.member_bridge_component import (
     HelperComponentInputs,
+    PERMISSION_RECOVERY_COMPATIBILITY,
+    PERMISSION_RECOVERY_PROTOCOL,
     inspect_helper_component,
     verify_runtime_archive,
 )
@@ -37,7 +39,11 @@ BUNDLE_IDENTIFIER = "com.administrateme.member-bridge-helper"
 
 
 def _helper_launcher(
-    commit: str, archive_sha256: str, *, component_commit: str | None = None
+    commit: str,
+    archive_sha256: str,
+    *,
+    permission_controller_sha256: str,
+    component_commit: str | None = None,
 ) -> bytes:
     """Render the sealed launcher; no runtime diagnostic or UI override exists."""
 
@@ -46,6 +52,7 @@ def _helper_launcher(
         not re.fullmatch(r"[0-9a-f]{40}", commit)
         or not re.fullmatch(r"[0-9a-f]{40}", component_commit)
         or not re.fullmatch(r"[0-9a-f]{64}", archive_sha256)
+        or not re.fullmatch(r"[0-9a-f]{64}", permission_controller_sha256)
     ):
         raise ValueError("helper launcher requires exact source coordinates")
     template = r"""#!/bin/bash
@@ -57,6 +64,8 @@ PACKAGE="${1:-}"
 CONTENTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RESOURCES="$CONTENTS_DIR/Resources"
 INSTALLER="$RESOURCES/install-member-bridge.sh"
+PERMISSION_CONTROLLER="$RESOURCES/member_bridge_permission_controller.py"
+PERMISSION_CONTROLLER_SHA256=@CONTROLLER_SHA256@
 RELEASE_ARCHIVE="$RESOURCES/administrateme-reviewed-release.tar"
 EXPECTED_COMMIT=@COMMIT@
 HELPER_COMPONENT_COMMIT=@COMPONENT_COMMIT@
@@ -65,6 +74,7 @@ BRIDGE_ROOT="$HOME/Library/Application Support/AdministrateMe Bridge"
 CODE_FILE=""
 PREVIEW_FILE=""
 LOG_FILE=""
+PERMISSION_RESULT_FILE=""
 ATTEMPT_DIR=""
 PHASE="diagnostics_setup"
 OPERATION="enroll"
@@ -75,6 +85,7 @@ remove_temporary_files() {
   [[ -z "$CODE_FILE" ]] || rm -f "$CODE_FILE"
   [[ -z "$PREVIEW_FILE" ]] || rm -f "$PREVIEW_FILE"
   [[ -z "$LOG_FILE" ]] || rm -f "$LOG_FILE"
+  [[ -z "$PERMISSION_RESULT_FILE" ]] || rm -f "$PERMISSION_RESULT_FILE"
   return 0
 }
 
@@ -112,7 +123,7 @@ trap finish EXIT
 fail_closed() {
   local exit_code="${1:-1}"
   OUTCOME="failed"
-  read_phase
+  [[ "$PHASE" == "permission_setup" ]] || read_phase
   remove_temporary_files
   write_receipt "$exit_code" || true
   /usr/bin/osascript "$RESOURCES/failed.applescript" "$PHASE" >/dev/null 2>&1 || true
@@ -145,6 +156,70 @@ write_receipt 0
 CODE_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-code.XXXXXX")"
 PREVIEW_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-preview.XXXXXX")"
 LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-helper.XXXXXX")"
+PERMISSION_RESULT_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-permissions.XXXXXX")"
+
+prepare_retained_runtime() {
+  release_root="$BRIDGE_ROOT/app/releases/$EXPECTED_COMMIT"
+  release_python="$release_root/.venv/bin/python"
+  [[ -d "$release_root" && ! -L "$release_root" && -x "$release_python" ]] || fail_closed
+  export ADMINME_REPOSITORY_ROOT="$release_root"
+  export ADMINME_REVIEWED_COMMIT="$EXPECTED_COMMIT"
+  cd "$release_root"
+}
+
+verify_permission_controller() {
+  local actual_hash
+  [[ -f "$PERMISSION_CONTROLLER" && ! -L "$PERMISSION_CONTROLLER" && -O "$PERMISSION_CONTROLLER" ]] || return 1
+  actual_hash="$(/usr/bin/shasum -a 256 "$PERMISSION_CONTROLLER")" || return 1
+  [[ "${actual_hash%% *}" == "$PERMISSION_CONTROLLER_SHA256" ]]
+}
+
+run_permissions() {
+  local operation="$1" controller_exit=0 result_outcome
+  PHASE="permission_setup"
+  verify_permission_controller || fail_closed
+  "$release_python" -I "$PERMISSION_CONTROLLER" --runtime-root "$release_root" --expected-runtime-commit "$EXPECTED_COMMIT" --expected-central-commit "$HELPER_COMPONENT_COMMIT" --bridge-root "$BRIDGE_ROOT" --operation "$operation" >"$PERMISSION_RESULT_FILE" 2>"$LOG_FILE" || controller_exit="$?"
+  # The exact sealed controller validates its bounded, content-free result.
+  # Neither exception text nor unvalidated controller output is retained.
+  verify_permission_controller || fail_closed
+  if result_outcome="$("$release_python" -I - "$PERMISSION_CONTROLLER" "$PERMISSION_RESULT_FILE" "$operation" "$controller_exit" "$ATTEMPT_DIR/permission-result.json" 2>"$LOG_FILE" <<'PY_RESULT'
+import json
+from pathlib import Path
+import runpy
+import sys
+
+controller, result_path, operation, exit_code, destination = sys.argv[1:]
+with Path(result_path).open("rb") as stream:
+    raw = stream.read(8193)
+if len(raw) > 8192:
+    raise ValueError("oversized permission result")
+def unique_fields(pairs):
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("duplicate permission result fields")
+    return result
+
+validator = runpy.run_path(controller)["validate_result"]
+result = validator(json.loads(raw, object_pairs_hook=unique_fields), operation=operation, exit_code=int(exit_code))
+with Path(destination).open("x", encoding="utf-8") as stream:
+    stream.write(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
+print(result["outcome"])
+PY_RESULT
+  )"; then :; else
+    fail_closed 1
+  fi
+  remove_temporary_files
+  case "$result_outcome" in
+    ready) [[ "$controller_exit" == 0 ]] || fail_closed; PHASE="complete"; OUTCOME="succeeded"; write_receipt 0; /usr/bin/osascript "$RESOURCES/complete.applescript" >/dev/null || true; exit 0 ;;
+    cancelled) OUTCOME="cancelled" ;;
+    blocked) OUTCOME="blocked" ;;
+    unknown) OUTCOME="unknown" ;;
+    *) OUTCOME="failed" ;;
+  esac
+  write_receipt "$controller_exit" || true
+  /usr/bin/osascript "$RESOURCES/permission-stopped.applescript" "$result_outcome" >/dev/null 2>&1 || true
+  exit "$controller_exit"
+}
 
 if [[ "$PACKAGE" == "--manage" ]]; then
   OPERATION="manage"
@@ -153,18 +228,13 @@ if [[ "$PACKAGE" == "--manage" ]]; then
     OUTCOME="cancelled"
     exit 0
   fi
-  release_root="$BRIDGE_ROOT/app/releases/$EXPECTED_COMMIT"
-  release_python="$release_root/.venv/bin/python"
-  [[ -d "$release_root" && ! -L "$release_root" && -x "$release_python" ]] || fail_closed
-  export ADMINME_REPOSITORY_ROOT="$release_root"
-  export ADMINME_REVIEWED_COMMIT="$EXPECTED_COMMIT"
-  cd "$release_root"
+  prepare_retained_runtime
   case "$action" in
-    "Continue Enrollment") OPERATION="continue"; PHASE="continue_enrollment"; command="bridge-complete" ;;
-    "Uninstall Locally") OPERATION="uninstall"; PHASE="uninstall"; command="bridge-uninstall" ;;
+    "Continue Enrollment") OPERATION="continue"; run_permissions continue ;;
+    "Uninstall Locally") OPERATION="uninstall"; PHASE="uninstall" ;;
     *) OUTCOME="cancelled"; exit 0 ;;
   esac
-  if "$release_python" -m bootstrap.cli "$command" --bridge-root "$BRIDGE_ROOT" >"$LOG_FILE" 2>&1; then
+  if "$release_python" -m bootstrap.cli bridge-uninstall --bridge-root "$BRIDGE_ROOT" >"$LOG_FILE" 2>&1; then
     OUTCOME="succeeded"
     exit 0
   else
@@ -172,6 +242,8 @@ if [[ "$PACKAGE" == "--manage" ]]; then
   fi
 fi
 
+PHASE="helper_integrity"
+verify_permission_controller || fail_closed
 PHASE="handoff_selection"
 [[ -n "$PACKAGE" && "$PACKAGE" == *.adminmebridge && -f "$PACKAGE" && ! -L "$PACKAGE" ]] || fail_closed
 PHASE="transfer_code"
@@ -192,19 +264,17 @@ if /usr/bin/osascript "$RESOURCES/review.applescript" "$PREVIEW_FILE" >/dev/null
   OUTCOME="cancelled"
   exit 0
 fi
-if ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --complete-wizard --transfer-code-file "$CODE_FILE" "$PACKAGE" >"$LOG_FILE" 2>&1 3>"$ATTEMPT_DIR/phases" 4<>"$ATTEMPT_DIR/dependency-install.log"; then :; else
+if ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --transfer-code-file "$CODE_FILE" "$PACKAGE" >"$LOG_FILE" 2>&1 3>"$ATTEMPT_DIR/phases" 4<>"$ATTEMPT_DIR/dependency-install.log"; then :; else
   fail_closed "$?"
 fi
-PHASE="complete"
-OUTCOME="succeeded"
-remove_temporary_files
-write_receipt 0
-/usr/bin/osascript "$RESOURCES/complete.applescript" >/dev/null || true
+prepare_retained_runtime
+run_permissions initial
 """
     return (
         template.replace("@COMMIT@", shlex.quote(commit))
         .replace("@COMPONENT_COMMIT@", shlex.quote(component_commit))
         .replace("@ARCHIVE_SHA256@", shlex.quote(archive_sha256))
+        .replace("@CONTROLLER_SHA256@", shlex.quote(permission_controller_sha256))
         .encode("utf-8")
     )
 
@@ -216,6 +286,7 @@ class HelperAppBuild:
     release_commit: str
     helper_component_commit: str
     installer_sha256: str
+    permission_controller_sha256: str
     release_archive_sha256: str
     document_extension: str
     provider_effects: bool = False
@@ -254,6 +325,7 @@ def build_member_bridge_helper_app(
     expected_commit: str | None = None,
     runtime_commit: str | None = None,
     expected_runtime_archive_sha256: str | None = None,
+    runtime_compatibility_contract: str | None = None,
 ) -> HelperAppBuild:
     """Create a fail-closed `.app` bundle without replacing an existing app."""
 
@@ -272,7 +344,12 @@ def build_member_bridge_helper_app(
         raise RuntimeError(
             "a distinct runtime requires its previously verified archive SHA-256"
         )
-    inputs = inspect_helper_component(release_root, component_commit, commit)
+    inputs = inspect_helper_component(
+        release_root,
+        component_commit,
+        commit,
+        compatibility_contract=runtime_compatibility_contract,
+    )
     _verify_loaded_build_sources(inputs)
 
     app = destination.expanduser().resolve()
@@ -336,6 +413,21 @@ end run
             "CFBundleVersion": "1",
             "LSMinimumSystemVersion": "15.0",
             "NSHighResolutionCapable": True,
+            "NSCalendarsFullAccessUsageDescription": (
+                "Connect the calendars you select for read-only AdministrateMe "
+                "bridge setup. macOS grants broader calendar access; this setup "
+                "does not authorize calendar changes."
+            ),
+            "NSRemindersFullAccessUsageDescription": (
+                "Connect the reminder lists you select for read-only "
+                "AdministrateMe bridge setup. macOS grants broader reminder "
+                "access; this setup does not authorize reminder changes."
+            ),
+            "NSAppleEventsUsageDescription": (
+                "Connect the Notes service you select and open permission settings "
+                "during AdministrateMe bridge setup. No provider changes are "
+                "authorized by this setup."
+            ),
             "NSSupportsAutomaticTermination": False,
         }
     )
@@ -352,6 +444,15 @@ end run
         inputs.component_payloads["bootstrap/install-member-bridge.sh"],
     )
     os.chmod(bundled_installer, 0o700)
+    permission_controller = resources / "member_bridge_permission_controller.py"
+    atomic_write(
+        permission_controller,
+        inputs.component_payloads["bootstrap/member_bridge_permission_controller.py"],
+    )
+    os.chmod(permission_controller, 0o600)
+    permission_controller_sha256 = hashlib.sha256(
+        permission_controller.read_bytes()
+    ).hexdigest()
     release_archive = resources / "administrateme-reviewed-release.tar"
     archived = subprocess.run(
         [
@@ -409,6 +510,19 @@ end run
 end run
 """
     complete_script = b"""display dialog "The reviewed bridge enrollment flow finished. AdministrateMe Settings shows each source independently while observations settle. No provider write was authorized." buttons {"OK"} default button "OK" with title "Bridge Enrollment Complete"\n"""
+    permission_stopped_script = b"""on run argv
+  set outcome to item 1 of argv
+  set explanation to "Enrollment has not completed. Review the source statuses in AdministrateMe Settings before continuing."
+  if outcome is "blocked" then
+    set explanation to "One or more selected sources still need attention. Review their statuses in AdministrateMe Settings, repair the reported permission or source selection, then open this helper and choose Continue Enrollment."
+  else if outcome is "cancelled" then
+    set explanation to "Enrollment was cancelled before all selected sources finished. Earlier accepted steps are retained. Review the source statuses before using Continue Enrollment."
+  else if outcome is "unknown" then
+    set explanation to "The final enrollment result could not be confirmed. Review the current request in AdministrateMe Settings before continuing; do not create another request for this attempt."
+  end if
+  display dialog explanation & return & return & "No provider write was authorized." buttons {"OK"} default button "OK" with icon caution with title "Bridge Enrollment Needs Attention"
+end run
+"""
     manage_script = b"""set answer to display dialog "Continue selected local permission steps, or uninstall bridge-owned files from this Mac. Revoke the bridge in AdministrateMe Settings to stop central ingestion." buttons {"Cancel", "Uninstall Locally", "Continue Enrollment"} default button "Continue Enrollment" cancel button "Cancel" with title "Manage AdministrateMe Bridge"\nreturn button returned of answer\n"""
     for name, value in (
         ("secure-code.applescript", secure_code_script),
@@ -416,12 +530,16 @@ end run
         ("failed.applescript", failed_script),
         ("complete.applescript", complete_script),
         ("manage.applescript", manage_script),
+        ("permission-stopped.applescript", permission_stopped_script),
     ):
         atomic_write(resources / name, value)
 
     installer_sha256 = hashlib.sha256(bundled_installer.read_bytes()).hexdigest()
     launcher = _helper_launcher(
-        commit, release_archive_sha256, component_commit=component_commit
+        commit,
+        release_archive_sha256,
+        component_commit=component_commit,
+        permission_controller_sha256=permission_controller_sha256,
     )
     executable = resources / "bridge-helper-launcher.sh"
     atomic_write(executable, launcher)
@@ -434,9 +552,16 @@ end run
         "runtime_commit": commit,
         "helper_component_commit": component_commit,
         "helper_component_sources": inputs.component_sources,
-        "runtime_compatibility": inputs.compatibility,
+        "runtime_compatibility": {
+            **inputs.compatibility,
+            "runtime_archive_sha256": release_archive_sha256,
+        },
+        "required_central_protocol": PERMISSION_RECOVERY_PROTOCOL,
+        "required_central_release_commit": component_commit,
         "installer_path": "Contents/Resources/install-member-bridge.sh",
         "installer_sha256": installer_sha256,
+        "permission_controller_path": "Contents/Resources/member_bridge_permission_controller.py",
+        "permission_controller_sha256": permission_controller_sha256,
         "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
         "release_archive_path": "Contents/Resources/administrateme-reviewed-release.tar",
         "release_archive_sha256": release_archive_sha256,
@@ -455,13 +580,20 @@ end run
             "dependency_log_limit_bytes": 262144,
             "retains_enrollment_output": False,
             "retains_transfer_code": False,
+            "permission_result_limit_bytes": 8192,
+            "retains_validated_permission_result_only": True,
         },
     }
     atomic_write(
         resources / "helper-manifest.json",
         (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
-    final_inputs = inspect_helper_component(release_root, component_commit, commit)
+    final_inputs = inspect_helper_component(
+        release_root,
+        component_commit,
+        commit,
+        compatibility_contract=runtime_compatibility_contract,
+    )
     _verify_loaded_build_sources(final_inputs)
     if final_inputs != inputs:
         raise RuntimeError("helper component inputs changed during packaging")
@@ -487,6 +619,7 @@ end run
         release_commit=commit,
         helper_component_commit=component_commit,
         installer_sha256=installer_sha256,
+        permission_controller_sha256=permission_controller_sha256,
         release_archive_sha256=release_archive_sha256,
         document_extension="adminmebridge",
     )
@@ -498,12 +631,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-commit", required=True)
     parser.add_argument("--runtime-commit")
     parser.add_argument("--expected-runtime-archive-sha256")
+    parser.add_argument(
+        "--runtime-compatibility-contract",
+        choices=(PERMISSION_RECOVERY_COMPATIBILITY,),
+    )
     args = parser.parse_args(argv)
     result = build_member_bridge_helper_app(
         args.destination,
         expected_commit=args.expected_commit,
         runtime_commit=args.runtime_commit,
         expected_runtime_archive_sha256=args.expected_runtime_archive_sha256,
+        runtime_compatibility_contract=args.runtime_compatibility_contract,
     )
     print(json.dumps(result.__dict__, indent=2, sort_keys=True))
     return 0
