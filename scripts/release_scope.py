@@ -178,7 +178,13 @@ def choose_scope(
             for status, path in changes
         )
         and any(
-            path == "bootstrap/member_bridge_runtime_repair.py" for _, path in changes
+            path
+            in {
+                "bootstrap/member_bridge_runtime_repair.py",
+                "packs/adapters/reminders/apple-eventkit/adapter.py",
+                "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+            }
+            for _, path in changes
         )
     ):
         return "bridge-runtime"

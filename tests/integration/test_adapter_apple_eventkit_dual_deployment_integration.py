@@ -46,8 +46,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -481,21 +482,91 @@ def test_apple_eventkit_bridge_connector_pack_module_exports_wrapper() -> None:
     assert AppleEventKitBridgeAdapter.family == "reminders"
 
 
+@pytest.mark.parametrize(
+    "alarm_kind",
+    [
+        "none",
+        "absolute",
+        "absolute_with_offset",
+        "absolute_string",
+        "absolute_null",
+        "relative",
+        "location",
+    ],
+)
 async def test_selected_reminders_acquire_and_reach_ingest_without_other_lists(
-    central_rig: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    central_rig: dict[str, Any], monkeypatch: pytest.MonkeyPatch, alarm_kind: str
 ) -> None:
     """Real wrapper/adapter/ingest: an unselected list cannot abort selected items."""
     adapter_class = wrapper_mod._load_central_adapter_class()
+    shim = sys.modules[adapter_class.__module__]._shim_mod
     queried_lists: list[str] = []
-    selected_item = SimpleNamespace(
+    absolute_at = datetime(
+        2026,
+        5,
+        21,
+        9,
+        15,
+        30,
+        123456,
+        tzinfo=timezone(timedelta(hours=5, minutes=30)),
+    )
+    native_alarms: list[Any] = []
+    if alarm_kind in {"absolute", "absolute_with_offset"}:
+        native_alarms = [
+            SimpleNamespace(
+                absoluteDate=(
+                    SimpleNamespace(
+                        timeIntervalSince1970=lambda: absolute_at.timestamp()
+                    )
+                    if alarm_kind == "absolute"
+                    else absolute_at
+                )
+            )
+        ]
+    elif alarm_kind == "relative":
+        native_alarms = [SimpleNamespace(relativeOffset=-900)]
+    elif alarm_kind == "location":
+        native_alarms = [
+            SimpleNamespace(
+                structuredLocation=SimpleNamespace(
+                    title="Fixture location",
+                    geoLocation=SimpleNamespace(
+                        coordinate=SimpleNamespace(latitude=0.0, longitude=0.0)
+                    ),
+                    radius=125.0,
+                ),
+                proximity=1,
+            )
+        ]
+    native_item = SimpleNamespace(
         calendarItemIdentifier="selected-item",
-        list_identifier="test-list",
+        calendar=SimpleNamespace(calendarIdentifier="test-list"),
         title="Selected reminder",
         notes=None,
         priority=0,
-        completed=False,
-        last_modified_at=datetime(2026, 5, 20, 12, tzinfo=timezone.utc),
+        isCompleted=True,
+        completionDate=datetime(2026, 5, 20, 12, tzinfo=timezone.utc),
+        lastModifiedDate=datetime(2026, 5, 20, 12, tzinfo=timezone.utc),
+        alarms=native_alarms,
     )
+    # Convert the same NSDate/relative/location shapes used by the real native
+    # shim, then carry that record through the production HTTP JSON boundary.
+    selected_item = shim.PyObjCEventStore.__new__(shim.PyObjCEventStore)._record(
+        native_item
+    )
+    if alarm_kind in {"absolute_string", "absolute_null"}:
+        selected_item.alarms = [
+            {
+                "kind": "absolute",
+                "absolute_at": absolute_at.isoformat()
+                if alarm_kind == "absolute_string"
+                else None,
+                "relative_offset_seconds": None,
+                "location": None,
+                "proximity": "none",
+            }
+        ]
 
     class Unselected:
         calendarIdentifier = "unselected-list"
@@ -591,6 +662,20 @@ async def test_selected_reminders_acquire_and_reach_ingest_without_other_lists(
             for row in content
         )
         assert content[-1]["payload"]["item_external_id"] == "selected-item"
+        assert content[-1]["payload"]["completed"] is True
+        assert content[-1]["payload"]["completion_at"] == "2026-05-20T12:00:00Z"
+        stored_alarms = content[-1]["payload"]["alarms"]
+        if alarm_kind in {"absolute", "absolute_with_offset"}:
+            assert len(stored_alarms) == 1
+            assert stored_alarms[0]["kind"] == "absolute"
+            stored_at = datetime.fromisoformat(
+                stored_alarms[0]["absolute_at"].replace("Z", "+00:00")
+            )
+            assert stored_at == absolute_at
+            assert stored_at.microsecond == 123456
+            assert isinstance(selected_item.alarms[0]["absolute_at"], datetime)
+        else:
+            assert stored_alarms == selected_item.alarms
         assert queried_lists == ["test-list", "test-list"]
         assert not any(row["type"] == "adapter.error" for row in rows)
 

@@ -1420,6 +1420,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 parts = url.removeprefix("adminme://").split("/", 1)
                 if len(parts) == 2 and parts[0] in {"task", "commitment"}:
                     linked_kind, linked_id = parts
+            # EventKit records retain native datetime values. The bridge
+            # transport sends JSON, so normalize the nested absolute alarm
+            # timestamp without mutating the record or losing its precision.
+            alarms = [dict(alarm) for alarm in getattr(reminder, "alarms", None) or []]
+            for alarm in alarms:
+                if isinstance(alarm.get("absolute_at"), datetime):
+                    alarm["absolute_at"] = alarm["absolute_at"].isoformat()
             rich_payload: dict[str, Any] = {
                 "member_id": member_id,
                 "provider": "apple_reminders",
@@ -1438,7 +1445,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 "completion_at": _maybe_iso(completion_date),
                 "start": start_components,
                 "due": due_components,
-                "alarms": list(getattr(reminder, "alarms", None) or []),
+                "alarms": alarms,
                 "recurrence_rules": list(
                     getattr(reminder, "recurrence_rules", None) or []
                 ),
