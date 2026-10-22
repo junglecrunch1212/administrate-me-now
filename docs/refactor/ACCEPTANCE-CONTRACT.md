@@ -112,10 +112,13 @@ This policy-only redraft changes no workflow, selector, runtime or updater.
 `scripts/release_scope.py` currently recognizes only `documentation`,
 `bridge-helper` and `system-wide`; most other code and some prose paths still
 fall back to full validation. Current draft results also do not satisfy release
-gates. The stable `deterministic-consistency` and `credential-free-rehearsal`
-protected jobs and the central updater's existing backup, settlement, Doctor
-and synthetic-proof prerequisites continue to execute. Do not claim these
-limitations were removed by editing prose or bypass them operationally.
+gates. Inspect actual GitHub protection rather than assuming every aggregate
+is mandatory: on 2026-10-22, `deterministic-consistency` is the required status;
+`credential-free-rehearsal` is not a required merge status. Required platform
+coverage still follows the affected contract. Preserve useful unrequired runs,
+but do not wait for an unrelated aggregate once required and affected checks
+pass. The central updater's existing backup, settlement, Doctor and synthetic-
+proof prerequisites remain enforced. Prose does not remove executable controls.
 
 Bring narrower selection, genuine evidence reuse and bounded updater checks
 into protected PRs with focused positive and negative gate/contract tests.

@@ -138,9 +138,11 @@ selected scope in hosted CI or an authorized disposable lab.
 The intended default is scoped validation for ordinary reversible changes.
 Current `scripts/release_scope.py` implements only `documentation`,
 `bridge-helper` and `system-wide`; most other code still falls back to the full
-workers. The protected `deterministic-consistency` and
-`credential-free-rehearsal` checks remain required until the implementation is
-updated. Do not report that this policy alone made those releases faster.
+workers. Inspect current GitHub protection to identify required statuses;
+workflow names and older prose do not create additional merge gates. On
+2026-10-22, the required status is `deterministic-consistency`. Relevant platform
+checks still follow the affected contract, but an unrelated unrequired aggregate
+need not delay release. Do not report that this policy alone changes CI.
 
 Implement narrower gates through ordinary protected PRs with focused positive
 and negative selection tests. Each selected required check must actually pass;
