@@ -46,6 +46,14 @@ reversible failures tolerable; rollback is included in the release's deployment
 authorization. Provider enrollment, permissions and write enablement still need
 explicit authority, which may already be present in the owner's request.
 
+Shape each request into the smallest complete usable outcome before choosing
+work: diagnose existing authentication/configuration first, preserve requested
+capabilities, test the failing production boundary and verify the actual result.
+Reuse existing authorization; ask only for a real missing decision or permission.
+A known in-scope blocker calls for implementation, not another offer to help.
+Record a failed release and its recovery briefly in the same task. Completing
+one outcome does not make later user-added work a reason to reopen it.
+
 This is a policy redraft, not a CI or updater implementation. Existing protected
 checks and automated updater prerequisites still execute. The selector has only
 documentation, bridge-helper and system-wide scopes, and the central updater

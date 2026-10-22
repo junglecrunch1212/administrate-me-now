@@ -27,6 +27,10 @@ historical. Unchanged permission/privacy/recovery contracts do not require
 fresh sweeps for every fix. Runtime protections remain enforced. This policy
 redraft does not implement additional CI scopes or shorten the current updater;
 those implementation gaps are recorded in the acceptance contract.
+Task shaping now starts with the smallest complete user outcome, diagnosis
+before rebuilding, reuse of existing authorization, proof of the actual result,
+and a concise failure/recovery record. The acceptance contract gives Google,
+CoS reply and forwarded-intake/bridge examples without new reporting gates.
 
 ## 2026-09-03 G11 governed Apple Messages reply candidate
 

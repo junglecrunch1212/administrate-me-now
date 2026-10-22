@@ -19,11 +19,57 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 - Candidate tests run only in hosted CI or an authorized disposable lab. Deploy to the household only after protected merge and owner authorization. Observing a scoped release and rolling it back on regression is an intended delivery step; arbitrary candidate experiments and installed-release edits remain prohibited.
 - For member dashboard inspection and browser acceptance, follow `docs/refactor/MEMBER-DEVICE-TESTING.md`. The browser must run on the authorized member device; the central Host's identity and principal view-as are not substitutes. Test the control and result-return paths before claiming remote acceptance.
 
+## Shape tasks around usable outcomes
+
+Turn a natural-language request into the smallest complete user outcome in one
+to three sentences: preserve the requested capabilities, name the visible proof
+of success and the recovery path. State reasonable assumptions and proceed;
+this is a short working plan, not another form or approval gate.
+
+- Diagnose before rebuilding. For a broken connection, inspect authentication,
+  granted scope, enabled policy, acquisition and visible data using supported
+  read-only diagnostics. Prefer an existing reconnect/configuration operation
+  when it achieves the request. Introduce code only for an established defect
+  or missing capability; explain that boundary before expanding the work.
+- Use permission already given. A request to reconnect a named account authorizes
+  its supported reconnection within the requested scope; it does not require a
+  second permission just to choose that narrow path. Preserve authorized read
+  and write capabilities. Ask only for unresolved account/scope choices,
+  unavoidable OAuth/device consent, or an operation not yet authorized. If new
+  code/deployment authority is unclear, prepare a concrete bounded repair and
+  ask once for the remaining authority, including its recovery. A diagnostic
+  question alone is not deployment or send authorization.
+- Verify the user's outcome: authenticated sync and visible permitted data for
+  connections; a real authorized response path for replies; resumed acquisition
+  for a bridge. Login success, a saved setting, passing CI or generic health is
+  not proof of those outcomes. Test the actual failing production boundary in
+  isolation before the next authorized attempt. Do not send test messages or
+  perform provider writes without permission.
+- Keep independent work independent. Identify a concrete shared interface or
+  deployment conflict before making one task wait for another. Prepare code and
+  checks concurrently, serialize conflicting live mutations, and reuse unchanged
+  component evidence. Do not modify another task's component to clear unrelated
+  CI. Read progress as needed; messaging another chat still needs authorization.
+- Fix necessary in-scope blockers instead of ending with an offer to do so.
+  Preserve the full requested result when slicing work; do not silently reduce
+  it to read-only access or a code-only deliverable. Close each completed outcome
+  clearly. Later user-added work becomes the current bounded outcome without
+  reopening completed milestones or requiring a new chat.
+
 ## Deployment safety
 
 A deployment operates on an immutable merge commit from protected `main`, using the supported updater or component installer, a known-working predecessor, compatible retained state, and a concrete rollback command. Keep the existing observation and external-write controls. Reuse valid backup/recovery evidence under its existing freshness and compatibility rules; require new restore testing when the change affects persistence or recovery. Do not manufacture a central deployment for an independently installable component.
 
 After activation, check liveness/readiness and the changed user outcome within a bounded observation window. Check actual member rendering when UI behavior changed. Roll back promptly on a new runtime or workflow regression, verify predecessor health, then fix and retest the affected path in isolation. Rollback of that release is included in deployment authorization. Full Doctor, whole-household isolation sweeps and recovery rehearsals are not universal policy prerequisites for each narrow change; run them when the change or a concrete failure makes them relevant.
+
+Record the candidate/configuration identity, expected versus observed result,
+a redacted error or existing log reference, and recovery outcome in the same
+PR/task. Capture only what is needed and do not delay recovery for a report.
+If the original fault remains without a new regression, the repair is incomplete;
+returning to an already-broken predecessor cannot establish success. Preserve
+the healthiest supported state and use the failure to target the next fix.
+Prepare artifacts and checks before starting short-lived handoffs or asking for
+manual device consent; honor actual expiry without repeatedly wasting its window.
 
 Existing automated updater safeguards remain enforced until changed and tested through a protected PR. Prose does not implement a shorter updater path or authorize bypassing its checks. Identify any such coupling once as an implementation gap instead of inventing repeated manual validation around it.
 
@@ -101,7 +147,9 @@ and negative selection tests. Each selected required check must actually pass;
 missing, failed, cancelled, stale or unexpectedly skipped evidence cannot
 become success. Keep branch protection and truthful results. A broad fallback
 caused solely by a missing scoped path is a CI limitation to fix, not a reason
-to demand extra manual suites. Policy-only edits need static checks.
+to demand extra manual suites. When legitimate scoped-gate work is within the
+authorized repair, implement and test it instead of merely offering it. Preserve useful running checks and other
+tasks' ownership. Policy-only edits need static checks.
 
 ## Definition of done
 

@@ -45,6 +45,35 @@ every result. Reuse genuine results, not an unverified cache entry. Parallelize
 independent checks, preserve useful running work and avoid duplicate runs.
 Candidate behavior tests stay in hosted CI or an authorized disposable lab.
 
+## Outcome-driven selection examples
+
+These examples shape work; they add no mandatory task template. Diagnose the
+installed behavior first, state the smallest complete outcome briefly, and use
+the owner's existing authorization. Only a missing decision or actual authority
+boundary needs a question. Prepare the concrete repair and unavoidable manual
+steps before asking. Do not treat unrelated cleanup as a release dependency.
+
+| Request | First useful outcome and focused proof | Keep outside the critical path |
+|---|---|---|
+| Restore existing Google connections; Gmail read-only with extraction off | Verify whether authentication already works, then distinguish runtime acquisition policy from OAuth failure. Restore the selected account's requested Calendar/Tasks capabilities and Gmail restriction. Cover policy admission, member/account isolation, extraction suppression and unchanged write governance; verify actual sync and member-visible data. | Apple helper work, repeated sign-in for valid credentials, changing other accounts or disabling CoS as a shortcut. |
+| Repair missing CoS replies | Trace receipt, generation, actual pinned Gateway hook registration/configuration and terminal delivery. Test standing-grant activation, revocation and recipient/privacy enforcement through that real boundary. Verify a fresh authorized exchange after deployment; distinguish provider acceptance from observed delivery. | Treating healthy services or an internally generated answer as a delivered reply; unrelated whole-application regressions. |
+| Replace automatic obligation intake with member-forwarded intake | Ship the requested forwarding/extraction/Triage path with ownership, dedupe and disabled automatic mining verified. Close that outcome when usable. If bridge setup is later requested, its separate outcome is resumed authorized acquisition for each selected service through the packaged helper and real service manager. | Reopening completed intake work for later setup requests, repeated permission prompts before the artifact is ready, or requiring fresh enrollment when supported recovery preserves it. |
+
+Check the exact failure boundary early: a hook-registration refusal needs the
+real pinned host contract; failed first startup needs packaged service-start
+and recovery tests. Running thousands of unrelated tests cannot substitute for
+that missing scenario. A passing focused scenario plus its affected safeguards
+can be the final scope evidence when the protected gate implements that scope.
+
+Release coupling must follow actual dependencies. Historical compatibility
+fixtures must read their pinned historical inputs; current-package smoke tests
+must read the candidate. Tests should not compare changing checkout bytes to
+unrelated historical hashes. Maintain exact artifact integrity, and bind
+compatibility to the relevant protocol/runtime contract. Changes to that
+binding need focused compatibility tests, not an exemption to force a pass.
+Until the supported contract changes, honor existing pins and serialize only
+the incompatible deployment steps; do not duplicate another task's release.
+
 ## Deployment and recovery
 
 With owner authorization, deploy the immutable protected-main artifact using
@@ -61,8 +90,13 @@ member acceptance under the member-device procedure. On a new runtime or
 workflow regression, roll back promptly and check predecessor health. That
 rollback is included in the deployment authorization. Diagnose in isolation,
 add the failing-path regression and any coverage its cause warrants, fix, then
-redeploy within the owner's authorized scope. Do not continue debugging a
-broken installed release or turn the household into a candidate experiment.
+redeploy within the owner's authorized scope. Record the candidate/configuration,
+expected and observed outcome, redacted error or log reference, and rollback
+result in the existing task. Do not delay recovery to assemble evidence. If the
+original fault remains but no new regression occurred, report an incomplete
+repair and preserve the healthiest supported state; rollback to an already
+broken predecessor is not success. Do not continue debugging by editing an
+installed release or turn the household into a candidate experiment.
 
 Permission, ownership, encryption, append-only history, credentials, recipient
 restrictions, independent sending approvals and audited effects remain enforced.
