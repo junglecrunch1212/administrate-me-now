@@ -17,6 +17,7 @@ from bootstrap.member_bridge_helper_app import _helper_launcher
 
 
 COMMIT = "a" * 40
+COMPONENT_COMMIT = "c" * 40
 CODE = "fixture-private-one-time-code"
 POST_PREVIEW = "fixture-private-post-preview-output"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -60,7 +61,7 @@ elif screen == "review.applescript":
     # Replace only the unavailable native UI boundary in the generated fixture;
     # the shipped helper has no environment variable or arbitrary UI override.
     script = (
-        _helper_launcher(COMMIT, "b" * 64)
+        _helper_launcher(COMMIT, "b" * 64, component_commit=COMPONENT_COMMIT)
         .decode()
         .replace("/usr/bin/osascript", f'"{native_ui}"')
     )
@@ -164,6 +165,7 @@ def test_launcher_records_phase_without_retaining_enrollment_material(
     assert receipt["exit_code"] == exit_code
     assert receipt["outcome"] == status
     assert receipt["release_commit"] == COMMIT
+    assert receipt["helper_component_commit"] == COMPONENT_COMMIT
     assert receipt["operation"] == "enroll"
     assert receipt["dependency_log_limit_bytes"] == 262144
     assert (attempt / "dependency-install.log").read_text() == (

@@ -24,6 +24,8 @@ import pytest
 
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from bootstrap.source_identity import write_source_marker
+from bootstrap.member_bridge_component import runtime_interface_fingerprint
+from bootstrap.member_bridge_helper_app import build_member_bridge_helper_app
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -321,13 +323,89 @@ def test_real_clean_and_interrupted_member_install_preview(
         env=env,
         log=artifact_dir / "candidate.log",
     ).stdout.strip()
-    archive = workspace / "reviewed source.tar"
+    candidate_commit = commit
+    candidate_archive = workspace / "candidate source.tar"
     _run(
         [
             "/usr/bin/git",
             "--no-replace-objects",
             "-C",
             str(ROOT),
+            "archive",
+            "--format=tar",
+            f"--output={candidate_archive}",
+            candidate_commit,
+        ],
+        cwd=workspace,
+        env=env,
+        log=artifact_dir / "candidate-archive.log",
+    )
+    # Isolated compatibility fixture: A retains exactly the candidate runtime
+    # bytes, with an older helper-only comment. B restores the exact candidate
+    # installer. Real install/preview must bind A while executing installer B.
+    # Build the actual sealed mixed component and use its bundled installer and
+    # archive, crossing the packager/installer/production-preview boundaries.
+    fixture_repository = workspace / "component compatibility repository"
+    fixture_repository.mkdir(mode=0o700)
+    with tarfile.open(candidate_archive) as package_archive:
+        package_archive.extractall(fixture_repository, filter="data")
+    installer = fixture_repository / "bootstrap/install-member-bridge.sh"
+    candidate_installer = installer.read_bytes()
+    installer.write_bytes(
+        candidate_installer + b"\n# Synthetic retained helper revision.\n"
+    )
+    git_steps = [
+        ["init", "-b", "fixture"],
+        ["config", "user.name", "Component fixture"],
+        ["config", "user.email", "component-fixture@example.invalid"],
+        ["add", "--force", "--all"],
+        ["commit", "-m", "Synthetic retained runtime with older helper"],
+    ]
+    for index, arguments in enumerate(git_steps):
+        _run(
+            ["/usr/bin/git", "-C", str(fixture_repository), *arguments],
+            cwd=workspace,
+            env=env,
+            log=artifact_dir / f"component-fixture-{index}.log",
+        )
+    commit = _run(
+        ["/usr/bin/git", "-C", str(fixture_repository), "rev-parse", "HEAD"],
+        cwd=workspace,
+        env=env,
+        log=artifact_dir / "retained-runtime-commit.log",
+    ).stdout.strip()
+    installer.write_bytes(candidate_installer)
+    for index, arguments in enumerate(
+        [
+            ["add", "--", "bootstrap/install-member-bridge.sh"],
+            ["commit", "-m", "Exact candidate helper with retained runtime"],
+        ]
+    ):
+        _run(
+            ["/usr/bin/git", "-C", str(fixture_repository), *arguments],
+            cwd=workspace,
+            env=env,
+            log=artifact_dir / f"component-helper-{index}.log",
+        )
+    component_commit = _run(
+        ["/usr/bin/git", "-C", str(fixture_repository), "rev-parse", "HEAD"],
+        cwd=workspace,
+        env=env,
+        log=artifact_dir / "helper-component-commit.log",
+    ).stdout.strip()
+    assert commit != component_commit != candidate_commit
+    runtime_fingerprint = runtime_interface_fingerprint(fixture_repository, commit)
+    assert runtime_fingerprint == runtime_interface_fingerprint(
+        fixture_repository, component_commit
+    )
+    assert runtime_fingerprint == runtime_interface_fingerprint(ROOT, candidate_commit)
+    archive = workspace / "retained runtime.tar"
+    _run(
+        [
+            "/usr/bin/git",
+            "--no-replace-objects",
+            "-C",
+            str(fixture_repository),
             "archive",
             "--format=tar",
             f"--output={archive}",
@@ -337,24 +415,76 @@ def test_real_clean_and_interrupted_member_install_preview(
         env=env,
         log=artifact_dir / "archive.log",
     )
-    source = workspace / "packaged helper source"
+    source = workspace / "packaged retained runtime"
     source.mkdir(mode=0o700)
     with tarfile.open(archive) as package_archive:
         package_archive.extractall(source, filter="data")
     write_source_marker(source, commit)
     assert not (source / ".git").exists()
+    archive_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    helper_app = workspace / "Current Bridge Helper.app"
+    built = build_member_bridge_helper_app(
+        helper_app,
+        root=fixture_repository,
+        expected_commit=component_commit,
+        runtime_commit=commit,
+        expected_runtime_archive_sha256=archive_sha256,
+    )
+    manifest = json.loads(
+        (helper_app / "Contents/Resources/helper-manifest.json").read_text()
+    )
+    bundled_installer = helper_app / manifest["installer_path"]
+    bundled_archive = helper_app / manifest["release_archive_path"]
+    assert (
+        built.helper_component_commit
+        == manifest["helper_component_commit"]
+        == component_commit
+    )
+    assert (
+        built.release_commit
+        == manifest["release_commit"]
+        == manifest["runtime_commit"]
+        == commit
+    )
+    assert (
+        manifest["runtime_compatibility"]["runtime_input_sha256"] == runtime_fingerprint
+    )
+    assert manifest["runtime_compatibility"]["runtime_inputs_unchanged"] is True
+    assert (
+        built.release_archive_sha256
+        == manifest["release_archive_sha256"]
+        == archive_sha256
+    )
+    assert bundled_archive.read_bytes() == archive.read_bytes()
+    assert bundled_installer.read_bytes() == candidate_installer
+    assert (
+        manifest["installer_sha256"] == hashlib.sha256(candidate_installer).hexdigest()
+    )
+    assert (
+        source / "bootstrap/install-member-bridge.sh"
+    ).read_bytes() != candidate_installer
+    assert not (helper_app / ".git").exists()
+    _run(
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(helper_app)],
+        cwd=workspace,
+        env=env,
+        log=artifact_dir / "sealed-helper-verification.log",
+    )
+    (artifact_dir / "sealed-helper-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
     package, code = _handoff(source, workspace, commit)
     command = [
         "/bin/bash",
-        str(source / "bootstrap/install-member-bridge.sh"),
+        str(bundled_installer),
         "--expected-commit",
         commit,
         "--bridge-root",
         str(bridge_root),
         "--release-archive",
-        str(archive),
+        str(bundled_archive),
         "--release-sha256",
-        hashlib.sha256(archive.read_bytes()).hexdigest(),
+        archive_sha256,
         "--preview-only",
         "--transfer-code-file",
         str(code),
@@ -468,6 +598,13 @@ def test_real_clean_and_interrupted_member_install_preview(
         json.dumps(
             {
                 "release_commit": commit,
+                "candidate_source_commit": candidate_commit,
+                "synthetic_helper_component_commit": component_commit,
+                "runtime_input_sha256": runtime_fingerprint,
+                "installer_sha256": hashlib.sha256(candidate_installer).hexdigest(),
+                "mixed_component_and_retained_runtime": True,
+                "sealed_combined_package": True,
+                "runtime_archive_sha256": archive_sha256,
                 "python_distribution": distribution,
                 "python_version": version,
                 "homebrew_formula_version": formula_version,

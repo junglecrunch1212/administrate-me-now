@@ -14,22 +14,60 @@ bridge authorization/ingest, runtime composition, and a focused enrollment
 browser slice. Select or expand those jobs for subsequent changes according to
 behavior and risk. A failed iteration must reproduce and fix the concrete
 cause, batch related corrections, and pass the relevant regressions before
-another full release run; return the PR to draft before publishing those
+another final release run; return the PR to draft before publishing those
 development commits. Development evidence is not release evidence.
 
-The ordinary draft-to-ready PR transition triggers the complete existing Linux
-and macOS release validation. The stable `deterministic-consistency` and
-`credential-free-rehearsal` jobs always run and explicitly fail for a draft;
-they cannot become successful through a skipped release job or a targeted pass.
-There is no staged label, separate review artifact, or prescribed approval
-phrase. Both full suites and all applicable protected checks must pass at the
-final candidate revision; missing, cancelled, skipped, stale, or partial results
-cannot approve release. A manual macOS workflow dispatch also runs the full
-suite. Every full-stage requirement below remains in force. Unchanged running
-full checks are preserved, and a prior revision's pass never attests a successor.
+Risk-based release amendment (2026-10-21), **SUPERSEDE** for the earlier blanket
+full-Linux-and-macOS requirement under the owner's standing instruction:
+
+- Documentation and non-executable changes require relevant document/static
+  checks, without an application release or behavioral suite.
+- A bounded reversible component can release after final scoped validation of
+  its behavior, dependencies/interfaces, privacy/security contract and realistic
+  installation/use on its affected platform. A bridge-helper SDK, installer or
+  diagnostics fix normally uses this scope, including actual packaged install,
+  integrity, interrupted recovery, secret cleanup and compatibility with the
+  deployed enrollment interface.
+- Shared composition, storage/schema/migration, cross-member authority,
+  external-write governance and broadly shared dependencies require expanded
+  coverage. Run full-system validation when effects are system-wide or cannot
+  be credibly bounded; document the concrete reason. A sensitive localized fix
+  still needs its full affected security/data contract. A filename or new commit
+  alone does not justify unrelated suites.
+
+The ordinary draft-to-ready transition requests final validation for the
+selected scope. Stable `deterministic-consistency` and
+`credential-free-rehearsal` protected names remain mandatory aggregates. They
+derive scope from the actual fixed Git inputs and require explicit success of
+every selected worker; missing, failed, cancelled, skipped, stale or partial
+required results fail. Draft development results cannot approve release. No
+label, status forgery, protection bypass, separate review artifact or additional
+owner approval selects a lighter scope. Selection and gate changes require
+focused positive and negative tests. Unknown or unbounded inputs conservatively
+select system-wide validation. Existing full workers retain the full contract
+below when that scope is selected.
+
+Evidence binds the tested component/artifact, relevant toolchain, lockfiles,
+dependencies and interface versions. Unchanged evidence can be reused only
+when those inputs demonstrably match; changed behavior and new interactions
+need fresh checks. An unrelated documentation commit does not invalidate all
+evidence. Preserve useful running checks; retire an unnecessary broad run only
+after a legitimate scoped gate exists and its required evidence passes.
 Independent jobs may run in parallel; caches remain keyed to relevant locked
-inputs, and no test-result cache is accepted as validation. Report targeted and
-complete results separately, including concrete failures and gaps.
+inputs, and no test-result cache is accepted as validation. Report development,
+scoped release and full-system results distinctly, with failures and gaps.
+
+Deploy only immutable protected-main artifacts through the applicable supported
+procedure. Retain a known-working predecessor and concrete rollback. A compatible
+helper component preserves the existing central runtime and enrollment identity;
+it does not require a central maintenance, backup or redeployment cycle for
+unchanged behavior. Verify backup/restore compatibility before changing
+persistent state and perform bounded component health/use checks after install,
+rolling back on regression. Central runtime deployment retains the full guarded
+updater, encrypted backup, observation, settlement, Doctor, isolation and
+zero-unintended-effect requirements. All scopes preserve ownership, encryption,
+append-only history, recipient restrictions, independent approvals, credentials
+and audited effects; rollback cannot undo a disclosure or send.
 
 Readiness-before-release amendment (2026-10-21), **MODERNIZE** under the
 owner's standing instruction: finish a bounded production-workflow impact map
@@ -40,13 +78,13 @@ restart/revocation and upgrade/restore/rollback where affected. Justify excluded
 subsystems. Use installed-release composition with retained configuration and
 events, disabled/revoked sources, and relevant recovery paths, not merely a
 successful setup response. A late defect requires checking its finite equivalent
-paths and batching corrections before focused validation and another full run.
+paths and batching corrections before focused validation and another final run.
 
 Supported read-only diagnostics must establish discoverable deployment/device
 prerequisites before readiness promises or maintenance. Candidate experiments
 remain isolated. Resolve known blockers, actionable review and focused failures
-before declaring a settled candidate or launching full suites. Distinguish
-focused pass, full pass, deployment and verified usability; list outstanding
+before declaring a settled candidate or requesting its final scope checks. Distinguish
+development pass, scoped/full release pass, deployment and verified usability; list outstanding
 dependencies separately from test duration. Record late defects and new coverage
 in the same PR. No extra approval ceremony, separate tracking task, invented
 behavioral test or new release cycle is required solely for policy prose, and
@@ -101,8 +139,11 @@ closed. Manual source policies must produce no mined obligation candidates.
 Require accurate Settings source readiness, restart/replay isolation, and
 central plus edge read-only enforcement while independent CoS replies are live.
 Suppressed commands retain terminal audit with zero provider calls. Targeted
-Linux/macOS development checks include these dependencies; both complete
-protected release checks and guarded immutable deployment remain mandatory.
+Linux/macOS development checks include these dependencies. Changes to this
+cross-member runtime contract require expanded validation under the scope
+policy above; every applicable protected check and guarded immutable central
+deployment requirement remains mandatory. Unchanged acquisition behavior is
+not reimplemented by a compatible helper-only component release.
 
 The same process proof must cover historical source attribution and deployment
 readiness after enrollment. Historical attribution follows immutable enrollment,
@@ -650,7 +691,7 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | AC-18 | `tests/acceptance/test_gate7_household_experience.py` and console harness `test:gate7` | Ten adult surfaces, three modes, Today Day Brief/Carousel/What Now controls, deterministic Comms focus/account/thread controls, deterministic Reminders activation/account/list controls, ordered Routine complete/skip progression, other typed actions, responsive/reduced-motion captures, chat/degraded states, and private/promoted/archived quest states pass without browser errors. |
 | AC-19 | Runtime loopback validation, bridge authorization/enrollment tests, Gate 7 direct-route abuse tests, and listener/config scan in the release report | Gateway stays on pinned loopback, portal and bridge authorization maps are independently revocable, member self identity and owner scope are bound, spoofed/cross-owner requests fail, and legacy listeners are absent. |
 | AC-20 | `tests/acceptance/test_release_candidate_hardening.py`, runtime shutdown tests, projection-affinity tests, and backup/restore tests | A real v1 encrypted file migrates through v4, including the source-assurance covering index; old facts survive, wrong keys and mutation fail, repeated/concurrent/cancelled shutdown is safe, startup unwinds on the owner worker, and a committed append survives forced exit. The guardian holds a shared activity lease across extraction, handoff, and replay, and every active worker holds its own shared lease. After proving and reaping worker terminality, the guardian must acquire the exclusive form before deleting plaintext; stale cleanup likewise requires exclusive. Controller-pipe EOF during the handoff, a hung extraction, or a hung replay makes the guardian terminate and reap the worker before removing payload. Guardian death leaves the live worker's lease in force, and ordered stale cleanup removes and fsyncs payload before control evidence, including across an interrupted cleanup. |
-| AC-21 | Protected `main`; one pull request from current `main`; targeted draft development checks followed by complete `deterministic-consistency` and `credential-free-rehearsal` at the final candidate revision; all applicable protected checks; ordinary review-thread resolution; guarded updater, encrypted backup, rollback, full Doctor/settlement, privacy/isolation, authenticated read-only browser acceptance, and zero-provider-effect checks | Development uses one branch and one pull request, with the ordinary draft-to-ready transition triggering both complete release suites. Targeted success cannot approve release, and missing, skipped, stale, or partial full results are not a pass. Both full Linux and macOS validation and the branch-protection-required GitHub checks must pass before merge; the owner may approve merge in ordinary language. Direct push, force-push, history rewrite, protection bypass, and hosted access to live credentials remain forbidden. This preserves configured branch protection without relying on it as a substitute for the complete macOS gate. Deployment is separately requested and accepts only an immutable commit from protected `main`. Observation mode, backup verification, automatic rollback, Doctor, isolation, browser acceptance, and zero unintended provider effects remain mandatory. Runtime/dependency migration, Keychain/permission change, provider enrollment/write enablement, and unrelated repair require separate explicit authorization. |
+| AC-21 | Protected `main`; one pull request from current `main`; targeted draft checks followed by final scope validation through `deterministic-consistency` and `credential-free-rehearsal`; tested scope/gate selection; ordinary review-thread resolution; immutable supported deployment with scope-appropriate health and rollback | The actual bounded change selects documentation, component or system-wide coverage under the risk-based amendment above. Stable protected aggregates require every selected worker's explicit passing evidence and reject missing, failed, cancelled, skipped, stale or incomplete results. Development success alone cannot approve release; final scoped component checks can. Unknown or unbounded effects require the complete suites. Evidence binds relevant source, artifact, toolchain, locks, dependencies and interfaces; useful unchanged evidence remains reusable. The owner may approve merge in ordinary language. Direct push, force-push, history rewrite, protection bypass and hosted access to live credentials remain forbidden. Separately authorized deployment accepts immutable protected-main artifacts. Central changes retain observation, encrypted backup, guarded updater, rollback, settlement/full Doctor, isolation, authenticated browser acceptance and zero unintended effects. A supported compatible component follows its bounded install/health/rollback contract without an unrelated central maintenance cycle. Runtime/dependency migration, Keychain/permission change, provider enrollment/write enablement and unrelated repair retain their explicit-authorization requirements. |
 | AC-22 | `scripts/acceptance/architecture-negative-checks.sh` | No direct model SDK, manual pipeline/adapter bus publish, hardcoded tenant path/identity, direct projection write, executable/raw-log temporary view, or registered projection count other than fifteen. |
 | AC-23 | Gate 7 acceptance, `tests/unit/test_member_chat_gate7.py`, and OpenClaw checks | Adult chat is cancellable and bounded; sessions/transcripts/results cannot cross; ordinary chat emits no domain event; explicit proposals are private and guarded; temporary lenses are data-only, private, review-promoted, expirable, and non-contaminating. |
 | AC-24 | `tests/acceptance/test_triage_vertical_slice.py`, commitment acceptance, OpenClaw checks, and member browser checks | Derived candidates appear only in Triage; raw facts bypass it; no canonical record or provider write exists before confirmation; enrichment/routing is scope-filtered and bound to the published target contract; confirm/dismiss are idempotent and audited; confirmation returns the exact destination; a Task becomes visible under the same ID in Reminders/Today/Scoreboard without creating a provider item or Calendar event; legacy Inbox aliases are non-navigational compatibility only. |
@@ -752,9 +793,9 @@ project duplicate work. Parallel dismissal and confirmation cases remain
 terminal without reopened replacements, with zero canonical truth or provider
 effect.
 
-## Aggregate release command
+## Full-system aggregate release command
 
-On the supported macOS checkout:
+For system-wide release scope, on the supported macOS checkout:
 
 ```bash
 bash scripts/acceptance/release-candidate.sh
@@ -775,4 +816,6 @@ runtime and pinned OpenClaw versions, command, exit status, duration/counts,
 unexpected skips/xfails, credential-free fixture boundary, coverage,
 performance, retained artifact hashes, and redacted failures. Human visual and
 live-provider review supplement but never replace authorization or behavior
-tests.
+tests. A component report additionally names its selected scope, runtime/interface
+compatibility bindings, retained predecessor and supported rollback. Separate
+development, final scope validation, deployment and actual-use evidence.

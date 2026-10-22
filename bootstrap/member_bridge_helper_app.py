@@ -18,18 +18,34 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import bootstrap
+from bootstrap import contracts, member_bridge_component, source_identity
 from bootstrap.contracts import atomic_write, repository_root
+from bootstrap.member_bridge_component import (
+    HelperComponentInputs,
+    inspect_helper_component,
+    verify_runtime_archive,
+)
+from bootstrap.source_identity import (
+    reviewed_candidate_commit,
+    sanitized_git_environment,
+)
 
 
 HELPER_APP_CONTRACT = "administrateme-member-bridge-helper-app-v1"
 BUNDLE_IDENTIFIER = "com.administrateme.member-bridge-helper"
 
 
-def _helper_launcher(commit: str, archive_sha256: str) -> bytes:
+def _helper_launcher(
+    commit: str, archive_sha256: str, *, component_commit: str | None = None
+) -> bytes:
     """Render the sealed launcher; no runtime diagnostic or UI override exists."""
 
-    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(
-        r"[0-9a-f]{64}", archive_sha256
+    component_commit = component_commit or commit
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}", commit)
+        or not re.fullmatch(r"[0-9a-f]{40}", component_commit)
+        or not re.fullmatch(r"[0-9a-f]{64}", archive_sha256)
     ):
         raise ValueError("helper launcher requires exact source coordinates")
     template = r"""#!/bin/bash
@@ -43,6 +59,7 @@ RESOURCES="$CONTENTS_DIR/Resources"
 INSTALLER="$RESOURCES/install-member-bridge.sh"
 RELEASE_ARCHIVE="$RESOURCES/administrateme-reviewed-release.tar"
 EXPECTED_COMMIT=@COMMIT@
+HELPER_COMPONENT_COMMIT=@COMPONENT_COMMIT@
 RELEASE_ARCHIVE_SHA256=@ARCHIVE_SHA256@
 BRIDGE_ROOT="$HOME/Library/Application Support/AdministrateMe Bridge"
 CODE_FILE=""
@@ -74,8 +91,8 @@ write_receipt() {
   local exit_code="$1" receipt_temp
   [[ -n "$ATTEMPT_DIR" && -d "$ATTEMPT_DIR" && ! -L "$ATTEMPT_DIR" && -O "$ATTEMPT_DIR" ]] || return 0
   receipt_temp="$(mktemp "$ATTEMPT_DIR/.receipt.XXXXXX")" || return 1
-  printf '{"contract":"administrateme-bridge-setup-diagnostic-v1","release_commit":"%s","operation":"%s","phase":"%s","outcome":"%s","exit_code":%s,"started_at":"%s","updated_at":"%s","dependency_log_limit_bytes":262144}\n' \
-    "$EXPECTED_COMMIT" "$OPERATION" "$PHASE" "$OUTCOME" "$exit_code" "$STARTED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$receipt_temp"
+  printf '{"contract":"administrateme-bridge-setup-diagnostic-v1","release_commit":"%s","helper_component_commit":"%s","operation":"%s","phase":"%s","outcome":"%s","exit_code":%s,"started_at":"%s","updated_at":"%s","dependency_log_limit_bytes":262144}\n' \
+    "$EXPECTED_COMMIT" "$HELPER_COMPONENT_COMMIT" "$OPERATION" "$PHASE" "$OUTCOME" "$exit_code" "$STARTED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$receipt_temp"
   mv -f "$receipt_temp" "$ATTEMPT_DIR/receipt.json"
 }
 
@@ -186,6 +203,7 @@ write_receipt 0
 """
     return (
         template.replace("@COMMIT@", shlex.quote(commit))
+        .replace("@COMPONENT_COMMIT@", shlex.quote(component_commit))
         .replace("@ARCHIVE_SHA256@", shlex.quote(archive_sha256))
         .encode("utf-8")
     )
@@ -196,23 +214,37 @@ class HelperAppBuild:
     path: str
     bundle_identifier: str
     release_commit: str
+    helper_component_commit: str
     installer_sha256: str
     release_archive_sha256: str
     document_extension: str
     provider_effects: bool = False
 
 
-def _git_commit(root: Path) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    value = completed.stdout.strip()
-    if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", value):
-        raise RuntimeError("the helper app requires a reviewed Git commit")
-    return value
+def _verify_loaded_build_sources(inputs: HelperComponentInputs) -> None:
+    # A clean Git index can hide assume-unchanged files. Imported code can also
+    # come from another checkout, so verify its bytes against the fixed objects.
+    for path, loaded_file in (
+        ("bootstrap/__init__.py", bootstrap.__file__),
+        ("bootstrap/member_bridge_helper_app.py", __file__),
+        ("bootstrap/member_bridge_component.py", member_bridge_component.__file__),
+        ("bootstrap/contracts.py", contracts.__file__),
+        ("bootstrap/source_identity.py", source_identity.__file__),
+    ):
+        if loaded_file is None:
+            raise RuntimeError("loaded helper build code has no fixed source")
+        source = Path(loaded_file)
+        coordinate = (
+            inputs.component_sources.get(path) or inputs.runtime_inventory[path]
+        )
+        if (
+            source.is_symlink()
+            or source.read_bytes() != inputs.component_payloads[path]
+            or bool(source.stat().st_mode & 0o111) != (coordinate["mode"] == "100755")
+        ):
+            raise RuntimeError(
+                "loaded helper build code differs from its component commit"
+            )
 
 
 def build_member_bridge_helper_app(
@@ -220,19 +252,37 @@ def build_member_bridge_helper_app(
     *,
     root: Path | None = None,
     expected_commit: str | None = None,
+    runtime_commit: str | None = None,
+    expected_runtime_archive_sha256: str | None = None,
 ) -> HelperAppBuild:
     """Create a fail-closed `.app` bundle without replacing an existing app."""
 
     release_root = (root or repository_root()).resolve()
-    commit = expected_commit or _git_commit(release_root)
-    if not re.fullmatch(r"[0-9a-f]{40}", commit) or commit != _git_commit(release_root):
-        raise RuntimeError("helper app release commit does not match the checkout")
-    installer = release_root / "bootstrap" / "install-member-bridge.sh"
-    if not installer.is_file() or installer.is_symlink():
-        raise RuntimeError("reviewed member-bridge installer is unavailable")
+    component_commit = expected_commit or reviewed_candidate_commit(release_root)
+    if not re.fullmatch(r"[0-9a-f]{40}", component_commit):
+        raise RuntimeError("helper component requires an exact source commit")
+    commit = runtime_commit or component_commit
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError("helper runtime requires an exact retained commit")
+    if expected_runtime_archive_sha256 is not None and not re.fullmatch(
+        r"[0-9a-f]{64}", expected_runtime_archive_sha256
+    ):
+        raise RuntimeError("retained runtime archive requires an exact SHA-256")
+    if commit != component_commit and expected_runtime_archive_sha256 is None:
+        raise RuntimeError(
+            "a distinct runtime requires its previously verified archive SHA-256"
+        )
+    inputs = inspect_helper_component(release_root, component_commit, commit)
+    _verify_loaded_build_sources(inputs)
 
     app = destination.expanduser().resolve()
-    if app.suffix != ".app" or app == Path("/") or app.exists() or app.is_symlink():
+    if (
+        app.suffix != ".app"
+        or app == Path("/")
+        or app.exists()
+        or app.is_symlink()
+        or app.is_relative_to(release_root)
+    ):
         raise RuntimeError("choose a new, narrow .app destination")
     compiler = Path("/usr/bin/osacompile")
     if not compiler.is_file():
@@ -297,12 +347,18 @@ end run
         resources / "handler-source.applescript", handler_source.encode("utf-8")
     )
     bundled_installer = resources / "install-member-bridge.sh"
-    atomic_write(bundled_installer, installer.read_bytes())
+    atomic_write(
+        bundled_installer,
+        inputs.component_payloads["bootstrap/install-member-bridge.sh"],
+    )
     os.chmod(bundled_installer, 0o700)
     release_archive = resources / "administrateme-reviewed-release.tar"
     archived = subprocess.run(
         [
-            "git",
+            "/usr/bin/git",
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=false",
             "-C",
             str(release_root),
             "archive",
@@ -313,10 +369,21 @@ end run
         check=False,
         capture_output=True,
         text=True,
+        env=sanitized_git_environment(),
+        timeout=120,
     )
     if archived.returncode:
         raise RuntimeError("the exact reviewed release could not be archived")
     os.chmod(release_archive, 0o600)
+    verify_runtime_archive(release_archive, inputs.runtime_inventory)
+    release_archive_sha256 = hashlib.sha256(release_archive.read_bytes()).hexdigest()
+    if (
+        expected_runtime_archive_sha256 is not None
+        and release_archive_sha256 != expected_runtime_archive_sha256
+    ):
+        raise RuntimeError(
+            "retained runtime archive does not match its verified SHA-256"
+        )
 
     secure_code_script = b"""set response to display dialog "Paste the one-time code copied by AdministrateMe Settings. The code stays hidden and is never placed in a URL or command argument." default answer "" hidden answer true buttons {"Cancel", "Continue"} default button "Continue" cancel button "Cancel" with title "AdministrateMe Bridge Helper"\nreturn text returned of response\n"""
     review_script = b"""on run argv\n  set summaryFile to POSIX file (item 1 of argv)\n  set summaryText to read summaryFile\n  display dialog summaryText & return & return & "The helper will verify Tailscale, ask macOS - not the helper - for each selected permission, and start no connector until central attestation." buttons {"Cancel", "Accept on this Mac"} default button "Accept on this Mac" cancel button "Cancel" with title "Review Bridge Enrollment"\nend run\n"""
@@ -353,8 +420,9 @@ end run
         atomic_write(resources / name, value)
 
     installer_sha256 = hashlib.sha256(bundled_installer.read_bytes()).hexdigest()
-    release_archive_sha256 = hashlib.sha256(release_archive.read_bytes()).hexdigest()
-    launcher = _helper_launcher(commit, release_archive_sha256)
+    launcher = _helper_launcher(
+        commit, release_archive_sha256, component_commit=component_commit
+    )
     executable = resources / "bridge-helper-launcher.sh"
     atomic_write(executable, launcher)
     os.chmod(executable, 0o700)
@@ -363,8 +431,13 @@ end run
         "contract": HELPER_APP_CONTRACT,
         "bundle_identifier": BUNDLE_IDENTIFIER,
         "release_commit": commit,
+        "runtime_commit": commit,
+        "helper_component_commit": component_commit,
+        "helper_component_sources": inputs.component_sources,
+        "runtime_compatibility": inputs.compatibility,
         "installer_path": "Contents/Resources/install-member-bridge.sh",
         "installer_sha256": installer_sha256,
+        "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
         "release_archive_path": "Contents/Resources/administrateme-reviewed-release.tar",
         "release_archive_sha256": release_archive_sha256,
         "document_extension": "adminmebridge",
@@ -388,6 +461,10 @@ end run
         resources / "helper-manifest.json",
         (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
+    final_inputs = inspect_helper_component(release_root, component_commit, commit)
+    _verify_loaded_build_sources(final_inputs)
+    if final_inputs != inputs:
+        raise RuntimeError("helper component inputs changed during packaging")
     # osacompile seals the initial droplet before we add the reviewed resources
     # and document metadata. Seal the completed bundle, then verify it before
     # returning a distributable helper. This local ad-hoc signature makes no
@@ -408,6 +485,7 @@ end run
         path=str(app),
         bundle_identifier=BUNDLE_IDENTIFIER,
         release_commit=commit,
+        helper_component_commit=component_commit,
         installer_sha256=installer_sha256,
         release_archive_sha256=release_archive_sha256,
         document_extension="adminmebridge",
@@ -418,9 +496,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="build-member-bridge-helper-app")
     parser.add_argument("destination", type=Path)
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument("--runtime-commit")
+    parser.add_argument("--expected-runtime-archive-sha256")
     args = parser.parse_args(argv)
     result = build_member_bridge_helper_app(
-        args.destination, expected_commit=args.expected_commit
+        args.destination,
+        expected_commit=args.expected_commit,
+        runtime_commit=args.runtime_commit,
+        expected_runtime_archive_sha256=args.expected_runtime_archive_sha256,
     )
     print(json.dumps(result.__dict__, indent=2, sort_keys=True))
     return 0

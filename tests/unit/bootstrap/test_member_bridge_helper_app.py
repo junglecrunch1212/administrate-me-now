@@ -81,6 +81,11 @@ def test_builds_reviewed_document_helper_without_secret_or_remote_execution(
     )
     assert manifest["contract"] == HELPER_APP_CONTRACT
     assert manifest["release_commit"] == commit == result.release_commit
+    assert manifest["runtime_commit"] == commit
+    assert (
+        manifest["helper_component_commit"] == commit == result.helper_component_commit
+    )
+    assert manifest["runtime_compatibility"]["runtime_inputs_unchanged"] is True
     assert len(manifest["installer_sha256"]) == 64
     assert len(manifest["release_archive_sha256"]) == 64
     assert result.release_archive_sha256 == manifest["release_archive_sha256"]
