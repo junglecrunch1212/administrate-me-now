@@ -118,8 +118,14 @@ jobs:
         with:
           python-version: "3.14.8"
 
+      - name: Install locked test harness
+        run: |
+          python -m pip install "poetry==2.4.1"
+          poetry sync --with dev --no-interaction
+
       - name: Record isolated member installation platform
         run: |
+          sudo xcode-select --switch /Library/Developer/CommandLineTools
           uname -m
           sw_vers
           python --version
@@ -127,15 +133,19 @@ jobs:
           xcrun --find clang
           xcrun --sdk macosx --show-sdk-path
 
-      - name: Install locked test harness
+      - name: Prepare isolated Homebrew bridge interpreter
+        id: homebrew-python
         run: |
-          python -m pip install "poetry==2.4.1"
-          poetry sync --with dev --no-interaction
+          brew install python@3.14
+          bridge_python="$(brew --prefix python@3.14)/bin/python3.14"
+          "$bridge_python" --version
+          printf 'python-path=%s\n' "$bridge_python" >> "$GITHUB_OUTPUT"
 
       - name: Validate packaged member installation and partial recovery
         env:
           ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME: "1"
           ADMINME_BRIDGE_INSTALLER_PYTHON: ${{ steps.bridge-python.outputs.python-path }}
+          ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON: ${{ steps.homebrew-python.outputs.python-path }}
           ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR: ${{ runner.temp }}/adminme-packaged-bridge-evidence
         run: |
           poetry run pytest -p no:cacheprovider --runxfail -q -ra \

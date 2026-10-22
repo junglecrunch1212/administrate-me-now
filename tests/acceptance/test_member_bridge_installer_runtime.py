@@ -1,9 +1,10 @@
 """Hosted-only proof of the member's real, Git-free dependency installation.
 
 The ordinary suite collects but skips this network/native-toolchain check. Its
-explicit macOS job must opt in and reject skipped results. Host enrollment
-prerequisites are synthetic; Python, Poetry, locked dependencies, the archived
-installer and the production preview process are real. No Apple data, central
+explicit macOS job must opt in and reject skipped results. FileVault/Tailscale
+enrollment prerequisites are synthetic; Python, Poetry, locked dependencies,
+the archived installer and the production preview process are real. Both
+setup-python and real Homebrew runtimes must pass. No Apple data, central
 runtime, Keychain, launchd or member identity is used.
 """
 
@@ -111,11 +112,18 @@ def _handoff(source: Path, directory: Path, commit: str) -> tuple[Path, Path]:
     return package, code_file
 
 
-def test_real_clean_and_interrupted_member_install_preview(tmp_path: Path) -> None:
+@pytest.mark.parametrize("distribution", ["setup-python", "homebrew"])
+def test_real_clean_and_interrupted_member_install_preview(
+    tmp_path: Path, distribution: str
+) -> None:
     assert os.environ.get("GITHUB_ACTIONS") == "true", "hosted CI only"
     assert sys.platform == "darwin", "native macOS dependency build required"
     assert os.uname().machine == "arm64", "native Apple silicon required"
-    python = Path(os.environ["ADMINME_BRIDGE_INSTALLER_PYTHON"]).resolve()
+    interpreter_variable = {
+        "setup-python": "ADMINME_BRIDGE_INSTALLER_PYTHON",
+        "homebrew": "ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON",
+    }[distribution]
+    python = Path(os.environ[interpreter_variable]).resolve()
     assert python.is_file()
     # This interpreter is selected by the explicit CI job, independently of the
     # existing development environment that executes pytest.
@@ -126,7 +134,9 @@ def test_real_clean_and_interrupted_member_install_preview(tmp_path: Path) -> No
         check=True,
     ).stdout.strip()
     assert version == "3.14.8"
-    artifact_dir = Path(os.environ["ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR"])
+    artifact_dir = (
+        Path(os.environ["ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR"]) / distribution
+    )
     assert artifact_dir.is_absolute()
     artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     workspace = tmp_path / "member installation fixture"
@@ -138,24 +148,31 @@ def test_real_clean_and_interrupted_member_install_preview(tmp_path: Path) -> No
     temporary.mkdir(mode=0o700)
     shims = workspace / "host boundary shims"
     shims.mkdir(mode=0o700)
-    python_prefix = workspace / "selected Python"
-    (python_prefix / "bin").mkdir(mode=0o700, parents=True)
-    (python_prefix / "bin/python3.14").symlink_to(python)
     _shim(shims, "fdesetup", "echo 'FileVault is On.'")
     _shim(shims, "tailscale", '[ "$*" = "status --json" ]; printf "{}\\n"')
-    _shim(
-        shims,
-        "brew",
-        'case "$*" in\n'
-        "  'list --versions python@3.14') echo 'python@3.14 3.14.8' ;;\n"
-        f"  '--prefix python@3.14') printf '%s\\n' {shlex.quote(str(python_prefix))} ;;\n"
-        "  *) exit 71 ;;\nesac",
-    )
+    if distribution == "setup-python":
+        python_prefix = workspace / "selected Python"
+        (python_prefix / "bin").mkdir(mode=0o700, parents=True)
+        (python_prefix / "bin/python3.14").symlink_to(python)
+        _shim(
+            shims,
+            "brew",
+            'case "$*" in\n'
+            "  'list --versions python@3.14') echo 'python@3.14 3.14.8' ;;\n"
+            f"  '--prefix python@3.14') printf '%s\\n' {shlex.quote(str(python_prefix))} ;;\n"
+            "  *) exit 71 ;;\nesac",
+        )
+    else:
+        assert Path("/opt/homebrew/bin/brew").is_file()
     # Do not inherit a test-mode switch, developer venv, import path, package
     # index override, global Poetry environment, SDK override or central root.
     env = {
         "HOME": str(home),
-        "PATH": f"{shims}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": (
+            f"{shims}:"
+            + ("/opt/homebrew/bin:" if distribution == "homebrew" else "")
+            + "/usr/bin:/bin:/usr/sbin:/sbin"
+        ),
         "TMPDIR": str(temporary) + "/",
         "LANG": "en_US.UTF-8",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -164,7 +181,28 @@ def test_real_clean_and_interrupted_member_install_preview(tmp_path: Path) -> No
         "PIP_CACHE_DIR": str(workspace / "pip cache"),
         "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         "POETRY_CACHE_DIR": str(workspace / "poetry cache"),
+        "HOMEBREW_NO_AUTO_UPDATE": "1",
+        "HOMEBREW_NO_ANALYTICS": "1",
+        "HOMEBREW_NO_INSTALL_CLEANUP": "1",
     }
+    formula_version = None
+    if distribution == "homebrew":
+        # Exercise the real package-manager lookup used on a member Mac. The
+        # explicit CI setup installs the formula; no substitute reports success.
+        formula_version = _run(
+            ["/opt/homebrew/bin/brew", "list", "--versions", "python@3.14"],
+            cwd=workspace,
+            env=env,
+            log=artifact_dir / "homebrew-python-version.log",
+        ).stdout.strip()
+        assert formula_version.startswith("python@3.14 3.14.8")
+        formula_prefix = _run(
+            ["/opt/homebrew/bin/brew", "--prefix", "python@3.14"],
+            cwd=workspace,
+            env=env,
+            log=artifact_dir / "homebrew-python-prefix.log",
+        ).stdout.strip()
+        assert (Path(formula_prefix) / "bin/python3.14").resolve() == python
     _run(
         ["/usr/bin/xcrun", "clang", "--version"],
         cwd=workspace,
@@ -329,9 +367,12 @@ def test_real_clean_and_interrupted_member_install_preview(tmp_path: Path) -> No
         json.dumps(
             {
                 "release_commit": commit,
+                "python_distribution": distribution,
                 "python_version": version,
+                "homebrew_formula_version": formula_version,
                 "architecture": os.uname().machine,
-                "host_boundaries_shimmed": ["FileVault", "Tailscale", "Homebrew"],
+                "host_boundaries_shimmed": ["FileVault", "Tailscale"]
+                + (["Homebrew"] if distribution == "setup-python" else []),
                 "production_preview": True,
                 "git_free_release": True,
                 "provider_access": False,

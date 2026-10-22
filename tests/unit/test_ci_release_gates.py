@@ -169,6 +169,9 @@ def test_packaged_installation_cannot_skip_or_reuse_harness_environment() -> Non
     assert install["env"]["ADMINME_BRIDGE_INSTALLER_PYTHON"] == (
         "${{ steps.bridge-python.outputs.python-path }}"
     )
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON"] == (
+        "${{ steps.homebrew-python.outputs.python-path }}"
+    )
     assert "tests/acceptance/test_member_bridge_installer_runtime.py" in install["run"]
     assert "suites) > 0" in install["run"]
     assert '("skipped", "failures", "errors")' in install["run"]
