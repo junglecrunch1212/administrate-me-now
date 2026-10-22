@@ -750,9 +750,9 @@ def test_legacy_observation_compatibility_never_widens_other_inputs(
         _observation_control_bytes(controller.config_dir, path.name)
 
 
-@pytest.mark.parametrize("wrong_owner", [False, True])
+@pytest.mark.parametrize("outcome", ["accepted", "wrong_owner", "settlement_failure"])
 def test_google_observation_activation_checks_owner_before_live_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_owner: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
     from adminme.adapters.member_google_observation import CONFIG_KEY, binding_digest
     from tests.acceptance.test_member_google_observation import google_configuration
@@ -783,14 +783,31 @@ def test_google_observation_activation_checks_owner_before_live_changes(
         selection["binding_sha256"] = binding_digest(
             next(e for e in requested["adapters"] if e["id"] == selection["adapter_id"])
         )
-        if wrong_owner:
+        if outcome == "wrong_owner":
             selection["owner_authorization_sha256"] = "f" * 64
     changed = request.model_copy(update={"adapter_config": requested})
     before = (controller.config_dir / "adapters.json").read_bytes()
-    if wrong_owner:
+    if outcome == "wrong_owner":
         with pytest.raises(CoSActivationError, match="exact authorization"):
             controller.activate(changed, enable_live=False)
         assert (controller.config_dir / "adapters.json").read_bytes() == before
+        assert not controller.journal_path.exists()
+    elif outcome == "settlement_failure":
+        attempts = 0
+
+        def settle(_release: Path) -> dict[str, Any]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise CoSActivationError("selected source failed its handshake")
+            return {"status": "healthy"}
+
+        monkeypatch.setattr(controller, "_settle", settle)
+        with pytest.raises(CoSActivationError, match="handshake"):
+            controller.activate(changed, enable_live=False)
+        restored = json.loads((controller.config_dir / "adapters.json").read_text())
+        assert restored == json.loads(before)
+        assert CONFIG_KEY not in restored
         assert not controller.journal_path.exists()
     else:
         controller.activate(changed, enable_live=False)

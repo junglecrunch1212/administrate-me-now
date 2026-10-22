@@ -7,6 +7,9 @@ import base64
 import copy
 from dataclasses import replace
 from pathlib import Path
+import os
+import shutil
+import subprocess
 import sys
 from typing import Any
 
@@ -27,6 +30,7 @@ from adminme.adapters.member_google_observation import (
 from adminme.runtime.application import create_application
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.settings_control import SettingsControlStore
+from adminme.source_policy import policy_for_preset, source_coordinate_for_event
 from bootstrap.cos_channel_activation import prepare_configuration
 from tests.acceptance.test_cos_channel_acquisition import _configuration
 from tests.acceptance.test_forwarded_channel_intake import (
@@ -176,6 +180,15 @@ def test_authority_is_member_specific_and_orphaned_grants_fail_closed(
             owner_member_id=MEMBER_B,
             owner_authorization_sha256="e" * 64,
         )
+    paused = copy.deepcopy(config)
+    paused["adapters"][0]["enabled"] = False
+    with pytest.raises(ValueError, match="another member"):
+        validate_authorized_change(
+            paused,
+            config,
+            owner_member_id=MEMBER_B,
+            owner_authorization_sha256="e" * 64,
+        )
     orphan = copy.deepcopy(config)
     orphan.pop("cos_channel_acquisition")
     with pytest.raises(ValueError, match="requires the CoS"):
@@ -230,6 +243,64 @@ def test_legacy_preferences_cannot_reenable_extraction_and_pause_survives_restar
         effective = store.effective_adapter_config(config)
         assert effective["adapters"][0]["enabled"] is False
         assert effective["adapters"][2]["enabled"] is True
+
+
+@pytest.mark.parametrize(
+    "kind,event_type",
+    [
+        ("messaging-gmail-api", "messaging.received"),
+        ("calendaring-google-calendar", "calendar.event_added"),
+        ("tasks-google-tasks", "list_item.added"),
+    ],
+)
+def test_retained_exact_attention_preferences_remain_manual(
+    tmp_path: Path, kind: str, event_type: str
+) -> None:
+    config = google_configuration(tmp_path)
+    entry = next(e for e in config["adapters"] if e["kind"] == kind)
+    path = tmp_path / "attention.json"
+    prior = SettingsControlStore(path)
+    coordinate = source_coordinate_for_event(
+        {
+            "type": event_type,
+            "tenant_id": "fixture-tenant",
+            "owner_scope": f"private:{MEMBER_A}",
+            "source_adapter": kind,
+            "source_account_id": PERSONAL_ACCOUNT,
+            "payload": {"member_id": MEMBER_A},
+        }
+    )
+    for index, instance in enumerate((kind, entry["id"]), 1):
+        exact = coordinate.model_copy(update={"adapter_instance_id": instance})
+        prior.apply_source_policy_v2_event(
+            {
+                "owner_principal_id": MEMBER_A,
+                "coordinate": exact.model_dump(),
+                "policy_key": exact.key,
+                "revision": index,
+                "action": "set",
+                "policy": policy_for_preset("balanced").model_dump(),
+            }
+        )
+    for _restart in range(2):
+        current = SettingsControlStore(path, adapter_config=config)
+        for instance in (kind, entry["id"]):
+            exact = coordinate.model_copy(update={"adapter_instance_id": instance})
+            effective = current.effective_source_policy_v2(MEMBER_A, exact)
+            assert effective["policy"]["triage_mode"] == "manual_only"
+            assert effective["policy"]["attention_mode"] == "manual"
+            assert effective["origin"] == "exact_override"
+        for changes in (
+            {"provider_account_id": "other@example.invalid"},
+            {"adapter_instance_id": "another-instance"},
+        ):
+            other = coordinate.model_copy(update=changes)
+            assert (
+                current.effective_source_policy_v2(MEMBER_A, other)["policy"][
+                    "triage_mode"
+                ]
+                != "manual_only"
+            )
 
 
 class ReadOnlyGoogle:
@@ -398,6 +469,15 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
                 "pipeline:pipeline:noise_filtering",
                 observed["messaging.received"][0]["event_id"],
             )
+            audits = client.portal.call(
+                _events, runtime, "source.policy_v2.shadow_evaluated"
+            )
+            assert {a["payload"]["source_event_id"] for a in audits} >= {
+                rows[0]["event_id"] for rows in observed.values()
+            }
+            assert all(
+                a["payload"]["policy"]["triage_mode"] == "manual_only" for a in audits
+            )
             # Read surfaces after production event consumers settle, not merely
             # after successful connector construction.
             for _attempt in range(200):
@@ -440,7 +520,9 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             selected = [
                 s
                 for s in sources
-                if s.get("adapter_instance_id", "").startswith("fixture-personal-")
+                if str(s.get("adapter_instance_id") or "").startswith(
+                    "fixture-personal-"
+                )
             ]
             assert len(selected) >= 3
             assert all(
@@ -449,3 +531,43 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             )
             assert all(s["policy"]["triage_mode"] == "manual_only" for s in selected)
     assert len(calls) == 8
+
+
+def test_packaged_google_observation_without_git_metadata(tmp_path: Path) -> None:
+    """Run the real composition scenario from an installed-style source tree."""
+    packaged = tmp_path / "release"
+    shutil.copytree(
+        ROOT,
+        packaged,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".venv",
+            "node_modules",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+        ),
+    )
+    assert not (packaged / ".git").exists()
+    environment = dict(
+        os.environ, PYTHONPATH=str(packaged / "bridge"), PYTHONDONTWRITEBYTECODE="1"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "--runxfail",
+            "-q",
+            "tests/acceptance/test_member_google_observation.py::test_production_reads_project_private_facts_without_candidates_across_restart",
+        ],
+        cwd=packaged,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

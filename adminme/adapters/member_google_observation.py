@@ -152,6 +152,31 @@ def manual_sources(value: dict[str, Any]) -> frozenset[tuple[str, str]]:
     )
 
 
+def selected_source_entry(
+    entries: dict[str, dict[str, Any]],
+    *,
+    owner_id: str,
+    account_id: str,
+    adapter_id: str,
+    kind: str,
+) -> dict[str, Any] | None:
+    """Match configured coordinates and existing Google pack event provenance.
+
+    Current Google envelopes name the pack, not its configured instance. Bind
+    that legacy form to one exact selected owner/account/kind without treating
+    an unrelated explicit instance id as an alias.
+    """
+    matches = [
+        entry
+        for entry in entries.values()
+        if entry["config"]["member_id"] == owner_id
+        and entry["config"]["provider_account_id"] == account_id
+        and entry["kind"].removeprefix("adapter:") == kind
+        and adapter_id in {entry["id"], kind}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def validate_authorized_change(
     previous: dict[str, Any],
     requested: dict[str, Any],
@@ -165,9 +190,18 @@ def validate_authorized_change(
     old = {row.adapter_id: row for row in before.selections} if before else {}
     new = {row.adapter_id: row for row in after.selections} if after else {}
     selected_entries(requested)
+    previous_entries = {
+        entry.get("id"): entry for entry in previous.get("adapters", [])
+    }
+    requested_entries = {
+        entry.get("id"): entry for entry in requested.get("adapters", [])
+    }
     for adapter_id in old.keys() | new.keys():
         prior, current = old.get(adapter_id), new.get(adapter_id)
-        if prior == current:
+        enabled_changed = (
+            previous_entries.get(adapter_id, {}).get("enabled") is not False
+        ) != (requested_entries.get(adapter_id, {}).get("enabled") is not False)
+        if prior == current and not enabled_changed:
             continue
         if prior is not None and prior.member_id != owner_member_id:
             raise ValueError(

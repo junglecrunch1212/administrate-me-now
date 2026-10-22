@@ -27,6 +27,7 @@ from adminme.adapters.cos_channel_acquisition import (
     member_bridge_capability_ceiling,
     policy_from_config as cos_policy_from_config,
 )
+from adminme.adapters.member_google_observation import selected_source_entry
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     authorization_from_record,
@@ -1372,16 +1373,20 @@ class SettingsControlStore:
             migration_state = (
                 "migration_needed" if migration is not None else "not_required"
             )
-        selected = self._google_observation_entries.get(coordinate.adapter_instance_id)
-        if selected is not None and (
-            selected["config"]["member_id"] == owner_principal_id
-            and selected["config"]["provider_account_id"]
-            == coordinate.provider_account_id
-        ):
+        selected = selected_source_entry(
+            self._google_observation_entries,
+            owner_id=owner_principal_id,
+            account_id=coordinate.provider_account_id,
+            adapter_id=coordinate.adapter_instance_id,
+            kind=coordinate.adapter_kind,
+        )
+        if selected is not None:
             policy = policy.model_copy(
                 update={"attention_mode": "manual", "triage_mode": "manual_only"}
             )
-            origin = "member_google_readonly_observation"
+            # This exact deployment-authorized override uses the existing audit
+            # contract; retained event schemas remain replay-compatible.
+            origin = "exact_override"
         return {
             "policy": policy.model_dump(mode="json"),
             "policy_key": coordinate.key,
@@ -2260,11 +2265,20 @@ def compose_source_policy_v2_sources(
             # An older observation outside the current sealed container
             # selection remains history, never current acquisition evidence.
             source["connection_state"] = "disconnected"
+    observed_google_keys: set[str] = set()
     for source in sources:
-        adapter_id = source.get("adapter_instance_id")
-        if adapter_id not in observed_google:
+        coordinate = source.get("coordinate") or {}
+        selected = selected_source_entry(
+            observed_google,
+            owner_id=str(coordinate.get("owner_principal_id") or ""),
+            account_id=str(coordinate.get("provider_account_id") or ""),
+            adapter_id=str(coordinate.get("adapter_instance_id") or ""),
+            kind=str(coordinate.get("adapter_kind") or ""),
+        )
+        if selected is None:
             continue
-        connection = connections.get(adapter_id, {})
+        observed_google_keys.add(source["policy_key"])
+        connection = connections.get(selected["id"], {})
         setup = connection.get("setup")
         source["connection_state"] = (
             "connected"
@@ -2286,7 +2300,7 @@ def compose_source_policy_v2_sources(
     if test_policy is not None:
         for source in sources:
             if (
-                source.get("adapter_instance_id") in observed_google
+                source.get("policy_key") in observed_google_keys
                 or source.get("direct_authenticated_intent")
                 or source.get("policy_key") in admitted_bridge_keys
             ):
