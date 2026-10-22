@@ -46,6 +46,7 @@ jobs:
           tests/unit/test_cos_channel_operation.py
           tests/unit/test_cos_response_assurance.py
           tests/unit/test_historical_attribution.py
+          tests/unit/test_lifecycle_catalog.py
           tests/unit/bootstrap/test_cos_channel_activation.py
           tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
       - name: Validate native hook, guard and configuration contracts
@@ -58,8 +59,11 @@ jobs:
         run: |
           poetry run ruff check .
           poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run python scripts/generate_event_lifecycle_catalog.py --check
           poetry run mypy adminme bridge/adminme_bridge bootstrap
+          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
           bash scripts/verify_invariants.sh
+          poetry check --lock
           git diff --check
   pinned-renderer:
     if: github.event.pull_request.draft
