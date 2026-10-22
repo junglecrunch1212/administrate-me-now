@@ -2487,8 +2487,6 @@ async def authorize_apple_command(
     runtime = getattr(request.app.state, "runtime", None)
     if authorization is None or authorization.member_id != member_id or runtime is None:
         raise HTTPException(403, "Apple bridge authority is unavailable")
-    if runtime._observation_active:
-        raise HTTPException(409, "Observation mode suppresses Apple writes")
     event_log = getattr(request.app.state, "event_log", None)
     if event_log is None:
         raise HTTPException(503, "Apple command history is unavailable")
@@ -2520,7 +2518,8 @@ async def authorize_apple_command(
         await runtime.settings_control.replay_apple_service_permission_events(
             event_log, tenant_id=runtime.settings.instance.tenant_id
         )
-        if runtime._observation_active:
+        observation = getattr(runtime, "observation", None)
+        if observation is None or await observation.is_active():
             raise HTTPException(409, "Observation mode suppresses Apple writes")
         try:
             proof = command_proof(runtime, member_id, command)

@@ -243,7 +243,11 @@ def test_private_service_permissions_enable_reconcile_revoke_and_replay(
         # Foreign tenant receipts cannot change this instance's permission cache.
         from adminme.events.envelope import EventEnvelope
 
-        foreign = copy.deepcopy(receipts[0])
+        foreign = {
+            key: copy.deepcopy(value)
+            for key, value in receipts[0].items()
+            if key in EventEnvelope.model_fields
+        }
         foreign.update(
             event_id="",
             recorded_at="",

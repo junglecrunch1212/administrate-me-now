@@ -95,6 +95,30 @@ def test_durable_revocation_denies_fresh_proof_and_accepts_original_terminal(
         config = load_config(helper.paths.config_path).model_copy(
             update={"cursor_db_path": str(tmp_path / "terminal-ledger.db")}
         )
+        proof_url = f"/api/bridge/commands/{command['command_id']}/apple-authorization"
+        proof_body = {
+            "event_id": command["event_id"],
+            "configuration_sha256": digest(config.pack_config),
+        }
+        # The persisted observation toggle is authoritative in both directions;
+        # the startup summary cache may lag behind an operator's change.
+        client.portal.call(
+            runtime.observation.enable,
+            "operator:fixture:revocation",
+            "Credential-free observation boundary regression",
+        )
+        runtime._observation_active = False
+        suppressed = client.post(proof_url, headers=headers, json=proof_body)
+        assert suppressed.status_code == 409, suppressed.text
+        assert suppressed.json()["detail"] == "Observation mode suppresses Apple writes"
+        client.portal.call(
+            runtime.observation.disable,
+            "operator:fixture:revocation",
+            "Credential-free observation boundary regression",
+        )
+        runtime._observation_active = True
+        permitted = client.post(proof_url, headers=headers, json=proof_body)
+        assert permitted.status_code == 200, permitted.text
 
         def interrupted(*_args, **_kwargs):
             raise RuntimeError("fixture cache interruption")
@@ -121,15 +145,9 @@ def test_durable_revocation_denies_fresh_proof_and_accepts_original_terminal(
             ]["enabled"]
             is True
         )
-        proof = client.post(
-            f"/api/bridge/commands/{command['command_id']}/apple-authorization",
-            headers=headers,
-            json={
-                "event_id": command["event_id"],
-                "configuration_sha256": digest(config.pack_config),
-            },
-        )
+        proof = client.post(proof_url, headers=headers, json=proof_body)
         assert proof.status_code == 409, proof.text
+        assert proof.json()["detail"] != "Observation mode suppresses Apple writes"
         assert (
             runtime.settings_control.read()["apple_service_permissions"][MEMBER_A][
                 "apple_notes"
