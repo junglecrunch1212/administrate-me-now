@@ -107,6 +107,7 @@ jobs:
             tests/unit/bootstrap/test_member_bridge_helper_app.py \
             tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
             tests/unit/bootstrap/test_member_bridge_permission_controller.py \
+            tests/unit/bootstrap/test_member_bridge_launch.py \
             tests/unit/bootstrap/test_member_bridge_component.py \
             tests/unit/bootstrap/test_bridge_enrollment.py \
             tests/unit/test_bridge_release_identity.py \
@@ -233,8 +234,10 @@ jobs:
           printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
   bridge-development:
     needs: [release-scope]
-    name: Targeted bridge development (Linux)
-    if: ${{ github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide' }}
+    name: Bridge enrollment validation (Linux)
+    if: ${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -261,15 +264,19 @@ jobs:
           poetry sync --with dev --no-interaction
 
       # Select by affected behavior, including real application composition;
-      # this is development evidence, never a reduced release gate.
+      # drafts provide development evidence; the bounded enrollment scope
+      # requires this complete contract before its final aggregate can pass.
       # Collect every selected failure so a shared fixture cannot hide an
       # independent lifecycle defect; the job deadline still bounds execution.
       - name: Validate bridge enrollment and installed-release identity
         run: >-
           poetry run pytest -p no:cacheprovider --runxfail -q -ra
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
+          --junitxml="${RUNNER_TEMP}/bridge-enrollment.xml"
+          -k 'not test_builds_reviewed_document_helper_without_secret_or_remote_execution and not test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback and not test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation'
           tests/acceptance/test_self_service_member_bridge_enrollment.py
           tests/acceptance/test_member_bridge_permission_recovery.py
+          tests/acceptance/test_apple_messages_bridge_ingestion.py
           tests/acceptance/test_member_bridge_progress_synchronization.py
           tests/acceptance/test_member_bridge_knowledge_vertical_slice.py
           tests/acceptance/test_cos_member_bridge_acquisition.py
@@ -287,6 +294,7 @@ jobs:
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_member_bridge_permission_controller.py
+          tests/unit/bootstrap/test_member_bridge_launch.py
           tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_authorization.py
@@ -306,8 +314,9 @@ jobs:
       - name: Validate bridge package
         run: |
           poetry -C bridge sync --with dev --no-interaction
-          poetry -C bridge run pytest -p no:cacheprovider -q -ra --maxfail=5 \
-            --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
+          poetry -C bridge run pytest -p no:cacheprovider --runxfail -q -ra --maxfail=5 \
+            --basetemp="${RUNNER_TEMP}/adminme-bridge-package" \
+            --junitxml="${RUNNER_TEMP}/bridge-package.xml"
           poetry -C bridge run ruff check adminme_bridge tests
           poetry -C bridge run mypy adminme_bridge
 
@@ -323,6 +332,39 @@ jobs:
           git diff --check "origin/${{ github.base_ref }}...HEAD"
           git diff --check
           test -z "$(git status --porcelain)"
+
+      - name: Require complete bridge enrollment evidence
+        run: |
+          python - "${RUNNER_TEMP}/bridge-enrollment.xml" "${RUNNER_TEMP}/bridge-package.xml" <<'PY_CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          for path in sys.argv[1:]:
+              root = ET.parse(path).getroot()
+              suites = list(root.iter("testsuite"))
+              assert suites and all(all(k in s.attrib and s.attrib[k].isdigit() for k in ("tests", "skipped", "failures", "errors")) for s in suites)
+              tests = sum(int(s.attrib["tests"]) for s in suites)
+              assert tests > 0 and len(list(root.iter("testcase"))) == tests
+              assert all(int(s.attrib[k]) == 0 for s in suites for k in ("skipped", "failures", "errors"))
+              assert not any(list(root.iter(k)) for k in ("skipped", "failure", "error"))
+          PY_CHECK
+
+      - name: Retain bridge enrollment evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bridge-enrollment-linux
+          path: |
+            ${{ runner.temp }}/bridge-enrollment.xml
+            ${{ runner.temp }}/bridge-package.xml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
 
   # Preserve every system-wide release stage; the stable aggregate below selects it.
   system-consistency:
@@ -627,7 +669,7 @@ jobs:
 
   deterministic-consistency:
     name: deterministic-consistency
-    needs: [release-scope, documentation-validation, bridge-helper-validation, google-connections-validation, system-consistency]
+    needs: [release-scope, documentation-validation, bridge-helper-validation, bridge-development, google-connections-validation, system-consistency]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

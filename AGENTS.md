@@ -128,6 +128,15 @@ this household with bounded validation and recoverable changes:
   those inputs demonstrably match. Changed behavior and new interactions need
   fresh checks; unrelated prose alone does not invalidate all prior evidence.
 
+A localized bridge ingress/helper recovery may use the `bridge-enrollment`
+release contract in `docs/refactor/ACCEPTANCE-CONTRACT.md`. This requires an
+immutable unchanged fingerprint for every other runtime input and the complete
+bridge admission, ownership/history, lifecycle/readiness, native installation
+and no-write contract on Linux/macOS. Shared storage, schemas, authorization
+policy, composition, dependencies or unbounded changes still require expanded
+system validation. Keep the stable protected aggregate checks and guarded
+central deployment; a focused development pass alone cannot approve release.
+
 ## Readiness before release validation
 
 Owner-directed policy (2026-10-21): before declaring a behavioral candidate

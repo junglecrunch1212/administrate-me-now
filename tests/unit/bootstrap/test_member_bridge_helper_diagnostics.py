@@ -99,6 +99,9 @@ if __name__ == "__main__":
         encoding="utf-8",
     )
     controller.chmod(0o600)
+    launch_controller = resources / "member_bridge_launch.py"
+    launch_controller.write_text("# inert hosted launch fixture\n")
+    launch_controller.chmod(0o600)
     # Replace only unavailable native UI in this generated hosted fixture. The
     # shipped launcher has no environment variable or arbitrary UI override.
     script = (
@@ -106,6 +109,9 @@ if __name__ == "__main__":
             COMMIT,
             "b" * 64,
             component_commit=COMPONENT_COMMIT,
+            launch_controller_sha256=hashlib.sha256(
+                launch_controller.read_bytes()
+            ).hexdigest(),
             permission_controller_sha256=hashlib.sha256(
                 controller.read_bytes()
             ).hexdigest(),
@@ -464,12 +470,16 @@ def test_launcher_retains_only_native_numbers_validated_by_production_controller
 
 @pytest.mark.parametrize("manage", [False, True])
 @pytest.mark.parametrize("defect", ["bytes", "symlink", "missing"])
+@pytest.mark.parametrize(
+    "resource", ["member_bridge_permission_controller.py", "member_bridge_launch.py"]
+)
 def test_permission_controller_identity_is_checked_before_execution(
     launcher: tuple[Path, dict[str, str], Path],
     manage: bool,
     defect: str,
+    resource: str,
 ) -> None:
-    controller = launcher[0].parent / "member_bridge_permission_controller.py"
+    controller = launcher[0].parent / resource
     if defect == "bytes":
         controller.write_text("raise SystemExit('tampered controller executed')\n")
     elif defect == "symlink":

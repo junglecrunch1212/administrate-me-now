@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from bootstrap.source_identity import load_git_tree
+from bootstrap.source_identity import GitTreeEntry, load_git_tree
 from bootstrap.member_bridge_component import (
     HELPER_COMPONENT_PATHS,
     NON_RUNTIME_PROSE_DIRECTORY,
@@ -40,10 +40,13 @@ HELPER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_member_bridge_helper_app.py",
         "tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py",
         "tests/unit/bootstrap/test_member_bridge_permission_controller.py",
+        "tests/unit/bootstrap/test_member_bridge_launch.py",
+        "tests/acceptance/test_member_bridge_launch_runtime.py",
         "tests/acceptance/test_member_bridge_installer_runtime.py",
         "tests/acceptance/test_member_bridge_permission_recovery.py",
     }
 )
+ENROLLMENT_INGEST_PATH = "adminme/products/bridge/routers/ingest.py"
 GOOGLE_MODULE = "adminme/adapters/member_google_connections.py"
 GOOGLE_WIRING = "scripts/google_connection_wiring.json"
 GOOGLE_SHARED_PATHS = frozenset(
@@ -65,7 +68,13 @@ GOOGLE_TEST_PATHS = frozenset(
     }
 )
 SCOPES = frozenset(
-    {"documentation", "bridge-helper", "google-connections", "system-wide"}
+    {
+        "documentation",
+        "bridge-helper",
+        "bridge-enrollment",
+        "google-connections",
+        "system-wide",
+    }
 )
 CONTRACT = "administrateme-component-release-v1"
 
@@ -114,6 +123,7 @@ def choose_scope(
     *,
     interfaces_equal: bool,
     path_modes: dict[str, set[str]],
+    enrollment_interfaces_equal: bool = False,
     google_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
@@ -147,7 +157,44 @@ def choose_scope(
         for status, path in changes
     ):
         return "bridge-helper"
+    if (
+        enrollment_interfaces_equal
+        and ("M", ENROLLMENT_INGEST_PATH) in changes
+        and all(
+            path_modes.get(path)
+            == {"100755" if path == "bootstrap/install-member-bridge.sh" else "100644"}
+            for _status, path in changes
+        )
+        and all(
+            (status == "M" and path == ENROLLMENT_INGEST_PATH)
+            or (status in {"A", "M"} and (path in allowed or _prose(path)))
+            for status, path in changes
+        )
+    ):
+        return "bridge-enrollment"
     return "system-wide"
+
+
+def _enrollment_interface_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # Hash immutable Git blob IDs and modes, never a caller's supplied path
+    # list or a mutable checkout. Unknown tracked paths remain runtime inputs.
+    # Shared coordinator/history/schema/auth/storage/lock/runtime/dependency
+    # bytes are deliberately outside this single-route component boundary.
+    # Unrelated test/CI blobs are also fixed so an exact-parent test merge
+    # cannot introduce unreviewed paths absent from the head diff.
+    allowed = set(HELPER_COMPONENT_PATHS) | POLICY_PATHS | HELPER_TEST_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if entry.path != ENROLLMENT_INGEST_PATH
+        and (
+            is_runtime_input(entry.path, mode=entry.mode)
+            or (entry.path not in allowed and not _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
 
 
 def google_dependency_fingerprint(repository: Path, revision: str) -> str:
@@ -231,8 +278,15 @@ def select_scope(
         ):
             raise ValueError("unsafe or unsupported diff entry")
     path_modes: dict[str, set[str]] = {}
+    enrollment_fingerprints: dict[str, str] = {}
+    enrollment_route_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
+        enrollment_fingerprints[revision] = _enrollment_interface_fingerprint(entries)
+        enrollment_route_present[revision] = any(
+            entry.path == ENROLLMENT_INGEST_PATH and entry.mode == "100644"
+            for entry in entries
+        )
         for entry in entries:
             path_modes.setdefault(entry.path, set()).add(entry.mode)
     base_fingerprint = runtime_interface_fingerprint(repository, base)
@@ -242,6 +296,10 @@ def select_scope(
         changes,
         interfaces_equal=base_fingerprint == head_fingerprint == checkout_fingerprint,
         path_modes=path_modes,
+        enrollment_interfaces_equal=(
+            all(enrollment_route_present.values())
+            and len(set(enrollment_fingerprints.values())) == 1
+        ),
         google_interfaces_equal=len(
             {
                 google_dependency_fingerprint(repository, revision)
@@ -258,6 +316,7 @@ def select_scope(
         "head_sha": head,
         "checkout_sha": checkout,
         "interface_sha256": checkout_fingerprint,
+        "enrollment_interface_sha256": enrollment_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -268,13 +327,18 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
     selected = {
         "documentation": "documentation-validation",
         "bridge-helper": "bridge-helper-validation",
+        "bridge-enrollment": "bridge-development",
         "google-connections": "google-connections-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",
     }[scope]
     workers: tuple[str, ...] = ("release-scope", selected)
-    if platform == "macos" and scope in {"bridge-helper", "system-wide"}:
+    if platform == "macos" and scope in {
+        "bridge-helper",
+        "bridge-enrollment",
+        "system-wide",
+    }:
         workers += ("bridge-installed-runtime",)
     return workers
 

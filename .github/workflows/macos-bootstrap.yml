@@ -106,6 +106,7 @@ jobs:
             tests/unit/bootstrap/test_member_bridge_helper_app.py \
             tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py \
             tests/unit/bootstrap/test_member_bridge_permission_controller.py \
+            tests/unit/bootstrap/test_member_bridge_launch.py \
             tests/unit/bootstrap/test_member_bridge_component.py \
             tests/unit/bootstrap/test_bridge_enrollment.py \
             tests/unit/test_bridge_release_identity.py \
@@ -232,8 +233,10 @@ jobs:
           printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
   bridge-development:
     needs: [release-scope]
-    name: Targeted bridge development (macOS)
-    if: ${{ github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide' }}
+    name: Bridge enrollment validation (macOS)
+    if: ${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
     runs-on: macos-15
     timeout-minutes: 35
     env:
@@ -270,17 +273,23 @@ jobs:
         run: >-
           poetry run pytest -p no:cacheprovider --runxfail -q -ra
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
+          --junitxml="${RUNNER_TEMP}/bridge-enrollment.xml"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
           tests/unit/bootstrap/test_member_bridge_permission_controller.py
+          tests/unit/bootstrap/test_member_bridge_launch.py
           tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_bridge_enrollment.py
           tests/unit/bootstrap/test_source_identity.py
           tests/unit/test_bridge_release_identity.py
           tests/unit/test_bridge_authorization.py
+          tests/unit/products/bridge
+          tests/integration/test_bridge_ingest_roundtrip.py
+          tests/integration/test_bridge_state_mirror_onramp.py
           tests/unit/test_ci_release_gates.py
           tests/acceptance/test_self_service_member_bridge_enrollment.py
           tests/acceptance/test_member_bridge_permission_recovery.py
+          tests/acceptance/test_apple_messages_bridge_ingestion.py
           tests/acceptance/test_member_bridge_progress_synchronization.py
           tests/acceptance/test_member_bridge_knowledge_vertical_slice.py
           tests/acceptance/test_cos_member_bridge_acquisition.py
@@ -300,6 +309,25 @@ jobs:
           tests/unit/bootstrap/test_cos_channel_activation.py
           tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
           tests/unit/test_source_assurance.py
+
+      - name: Validate bridge package
+        run: |
+          poetry -C bridge sync --with dev --no-interaction
+          poetry -C bridge run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="${RUNNER_TEMP}/adminme-bridge-package" \
+            --junitxml="${RUNNER_TEMP}/bridge-package.xml"
+          poetry -C bridge run ruff check adminme_bridge tests
+          poetry -C bridge run mypy adminme_bridge
+
+      - name: Validate architecture, style, types, and privacy
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check adminme bootstrap bridge packs scripts tests tools
+          poetry run mypy adminme bridge/adminme_bridge bootstrap
+          poetry run pyright adminme bridge/adminme_bridge bootstrap packs
+          bash scripts/verify_invariants.sh
+          poetry check --lock
+          poetry -C bridge check --lock
 
       - name: Validate enrollment browser behavior
         env:
@@ -328,11 +356,44 @@ jobs:
           git diff --check
           test -z "$(git status --porcelain)"
 
+      - name: Require complete bridge enrollment evidence
+        run: |
+          python - "${RUNNER_TEMP}/bridge-enrollment.xml" "${RUNNER_TEMP}/bridge-package.xml" <<'PY_CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          for path in sys.argv[1:]:
+              root = ET.parse(path).getroot()
+              suites = list(root.iter("testsuite"))
+              assert suites and all(all(k in s.attrib and s.attrib[k].isdigit() for k in ("tests", "skipped", "failures", "errors")) for s in suites)
+              tests = sum(int(s.attrib["tests"]) for s in suites)
+              assert tests > 0 and len(list(root.iter("testcase"))) == tests
+              assert all(int(s.attrib[k]) == 0 for s in suites for k in ("skipped", "failures", "errors"))
+              assert not any(list(root.iter(k)) for k in ("skipped", "failure", "error"))
+          PY_CHECK
+
+      - name: Retain bridge enrollment evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bridge-enrollment-macos
+          path: |
+            ${{ runner.temp }}/bridge-enrollment.xml
+            ${{ runner.temp }}/bridge-package.xml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+
   # Exercise the packaged installer on the current supported member platform,
   # with fresh tooling and dependency caches rather than the harness's venv.
   bridge-installed-runtime:
     needs: [release-scope]
-    if: ${{ contains(fromJSON('["bridge-helper","system-wide"]'), needs.release-scope.outputs.scope) }}
+    if: ${{ contains(fromJSON('["bridge-helper","bridge-enrollment","system-wide"]'), needs.release-scope.outputs.scope) }}
     outputs:
       validated_sha: ${{ steps.validated.outputs.sha }}
     name: Packaged member bridge installation
@@ -396,6 +457,23 @@ jobs:
           assert all(int(s.get(k, "0")) == 0 for s in suites for k in ("skipped", "failures", "errors"))
           PY
 
+      - name: Validate sealed launch lifecycle against real macOS launchd
+        env:
+          ADMINME_RUN_BRIDGE_LAUNCH_RUNTIME: "1"
+          ADMINME_BRIDGE_LAUNCH_ARTIFACT_DIR: ${{ runner.temp }}/adminme-packaged-bridge-evidence/launchd
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="${RUNNER_TEMP}/adminme-bridge-launch" \
+            --junitxml="${RUNNER_TEMP}/adminme-bridge-launch.xml" \
+            tests/acceptance/test_member_bridge_launch_runtime.py
+          python - "${RUNNER_TEMP}/adminme-bridge-launch.xml" <<'PY_CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          suites = list(ET.parse(sys.argv[1]).getroot().iter("testsuite"))
+          assert sum(int(s.get("tests", "0")) for s in suites) == 2
+          assert all(int(s.get(k, "0")) == 0 for s in suites for k in ("skipped", "failures", "errors"))
+          PY_CHECK
+
       - name: Retain isolated installation result
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -403,6 +481,7 @@ jobs:
           name: packaged-member-bridge-installation
           path: |
             ${{ runner.temp }}/adminme-packaged-bridge.xml
+            ${{ runner.temp }}/adminme-bridge-launch.xml
             ${{ runner.temp }}/adminme-packaged-bridge-evidence
           if-no-files-found: error
           retention-days: 7
@@ -675,7 +754,7 @@ jobs:
 
   credential-free-rehearsal:
     name: credential-free-rehearsal
-    needs: [release-scope, documentation-validation, bridge-helper-validation, google-connections-validation, system-rehearsal, bridge-installed-runtime]
+    needs: [release-scope, documentation-validation, bridge-helper-validation, bridge-development, google-connections-validation, system-rehearsal, bridge-installed-runtime]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

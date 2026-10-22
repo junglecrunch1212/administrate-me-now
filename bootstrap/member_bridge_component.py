@@ -52,10 +52,24 @@ PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256 = (
 )
 # Closed reviewed central overlay. The retained edge never receives these bytes.
 # Every path/presence/mode/hash must match as one coherent group before reuse.
-PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = "cos-standing-replies-457-hooks-458-v1"
+PERMISSION_RECOVERY_COS_OVERLAY_CONTRACT = (
+    "cos-standing-replies-457-hooks-458-google-455-v1"
+)
 PERMISSION_RECOVERY_COS_RETAINED_COMMIT = "043ac68915b185be4ada771f6893a4d69c3f994b"
-PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "6035a997614b52f537bb9ce91d24d01464d878a2"
+PERMISSION_RECOVERY_COS_CENTRAL_COMMIT = "1d0f9ba325c98975789128d72d6cf2d0807d09d3"
 PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
+    "adminme/adapters/cos_channel_acquisition.py": (
+        "1ea0988b4cb4fb3c3f99cd1642a749b692b90dca864bfb15f6e64f42c344108d",
+        "55196a1db1e7f686327bf95bb26b2ea3d83d57fbf4813070bb7923ad6c17a7d6",
+    ),
+    "adminme/adapters/disposable_test_acquisition.py": (
+        "82105990af1474da9982f40b994908ddcabbb8ef0509094ce5a440b151f35d4e",
+        "5cfefbfea8f286bd37d63819cc4b82a46b1faa417b3752cc0b3fb4d26fb6ad17",
+    ),
+    "adminme/adapters/member_google_connections.py": (
+        None,
+        "ecb5e65b665c20a04a0abb9ca098e24c1791064e4df6fd3eff2abb123e57ca77",
+    ),
     "adminme/cos_channel_operation.py": (
         "dad867bca64ff6f294d8079fa98f33d6fe55f0c3c86ee9a6d312ed45c4180266",
         "bd7ca21ee320f289731a13bba6662b345f6c1d75382855d504987c643a395288",
@@ -67,6 +81,10 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     "adminme/cos_self_replies.py": (
         None,
         "c667b67bbb91ae7f4670d342fddf19099ad93a6651cf34db9d1c7739a90b2a3e",
+    ),
+    "adminme/deployment_readiness.py": (
+        "47c89f18bf8ec5151d75ca4e1dcdd997ed2abff921ece653a64e050f3f3fb6be",
+        "56c417310c9c7cc0fb4ac59a338b34b8c2f30e0f52cb959cf0ffc26fed40de94",
     ),
     "adminme/events/schemas/cos_channels.py": (
         "da0dd6e94e5192ed55dd678a0e9104bced5e464e37f18d4695410cf11802e832",
@@ -94,7 +112,11 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
     "adminme/runtime/application.py": (
         "eda3671a4cfdbda08a565ce521ab2afa13878d1198ca00378780e7b74a016422",
-        "f66d009de9158221d7e4551f219a1208e69af936e851c381bcd89d47fd8cb9e1",
+        "9f49f8d5a7887e4df558a599387071e606810f612bde73ff6cfdbd160d9bc0e4",
+    ),
+    "adminme/settings_control.py": (
+        "e94a39e18901d14a9543adf235bd3f63329382b905f7f05b9771333b84b8fe89",
+        "a4cbc093143322dc9b76be8e80b75f12148967178ed87420f49e30591ecf3c26",
     ),
     "adminme/source_assurance.py": (
         "0592edb883f25d8d6e6d116cdd5707331351c3c4e32677f93a1aa05b3216ee6d",
@@ -102,7 +124,7 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
     "bootstrap/cos_channel_activation.py": (
         "e686393e3baf0b444ed74cf1fbd0eee72c1e906e32d00a997031b5e19557d796",
-        "6f66ecc10df1dbfb6551a3a1548be93a1657220cff1a19a54e91643d4c3046b5",
+        "a920fc0c333b4d44ea39b221d04d8ccf49d6187be9ec33a5bd3ea457654d209f",
     ),
     "bootstrap/cos_reply_hooks.py": (
         None,
@@ -111,6 +133,10 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
     "bootstrap/openclaw_tools.py": (
         "4ede4ef79721ad0ab2076c3d394b11ced3e91f9c23b602e47a88a57e990eb4dc",
         "8181443acb595849cfefa7dd0c7bab4c9f61477cfb110a4b8d5cd67de6d12812",
+    ),
+    "bootstrap/versions.json": (
+        "83e7ffde6606b1ef514a0bb9fb5e65eac740bf1bcc82b6e5a6dfab785f7dad43",
+        "d03630c1324b23383a3253fa64744d998717083b55453e6fd9011f7b95a7845a",
     ),
     "docs/refactor/evidence/event-lifecycle-catalog.json": (
         "b32ea2a138a21ffd08fc8e647de25847fc3c9e19821e8b76d8c44fa63e953434",
@@ -152,14 +178,18 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
         None,
         "20a32bb7e6f59d58a2ca4313504df0bf7196826241d46f41ba84b2b71914e926",
     ),
+    "scripts/google_connection_wiring.json": (
+        None,
+        "355df9d1ee236083a6f315c7d722a28944d2862c0f6a972f64b3e9c10cbfb448",
+    ),
 }
-
 HELPER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/install-member-bridge.sh",
         "bootstrap/member_bridge_helper_app.py",
         "bootstrap/member_bridge_component.py",
         "bootstrap/member_bridge_permission_controller.py",
+        "bootstrap/member_bridge_launch.py",
     }
 )
 NON_RUNTIME_PATHS = frozenset({"scripts/release_scope.py"})
@@ -349,7 +379,8 @@ def inspect_helper_component(
         reviewed_overlay: dict[str, dict[str, str] | None] = {}
         reviewed_probe: dict[str, dict[str, str] | None] = {}
         if compatibility_contract == PERMISSION_RECOVERY_COMPATIBILITY:
-            # This is a mixed central/helper release, never a smaller CI scope.
+            # This compatibility rule preserves retained edge bytes; the separate
+            # release selector decides the required central/helper CI scope.
             # The public runtime fingerprint remains conservative. Only these
             # versioned central protocol implementation paths may differ; the
             # delivered archive still contains the exact retained bytes.
