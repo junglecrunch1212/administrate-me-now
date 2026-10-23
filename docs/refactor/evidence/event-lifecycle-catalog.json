@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 377,
-    "technical_event_types": 299,
+    "technical_event_schemas": 379,
+    "technical_event_types": 300,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -4325,6 +4325,69 @@
         "provider_account_id"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "adapter.authenticated",
+      "family": "adapter_runtime",
+      "properties": {
+        "adapter_family": {
+          "const": "reminders",
+          "title": "Adapter Family",
+          "type": "string"
+        },
+        "adapter_name": {
+          "const": "reminders-cos-apple-eventkit",
+          "title": "Adapter Name",
+          "type": "string"
+        },
+        "authenticated_at": {
+          "minLength": 1,
+          "title": "Authenticated At",
+          "type": "string"
+        },
+        "authorization_kind": {
+          "const": "os-permission",
+          "title": "Authorization Kind",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "device_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Device Identity Sha256",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "const": "eventkit.reminders.read",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Scopes",
+          "type": "array"
+        },
+        "source_ownership_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Ownership Evidence Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_name",
+        "adapter_family",
+        "authorization_kind",
+        "authenticated_at",
+        "configuration_sha256",
+        "device_identity_sha256",
+        "source_ownership_evidence_sha256",
+        "scopes"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,
@@ -16224,6 +16287,168 @@
         "rationale_codes",
         "proposed_at",
         "review_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.disclosure_recorded",
+      "family": "finance",
+      "properties": {
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "book_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Book Id"
+        },
+        "calculator_id": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calculator Id"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "head_publication_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Head Publication Id"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "session",
+            "run"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "model_version": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Version"
+        },
+        "publication_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Id"
+        },
+        "result_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Sha256"
+        },
+        "run_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Sha256"
+        },
+        "session_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Session Sha256",
+          "type": "string"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "maximum": 6,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        }
+      },
+      "required": [
+        "kind",
+        "member_id",
+        "session_sha256",
+        "authority_sha256",
+        "issued_at"
       ],
       "schema_version": 1
     },

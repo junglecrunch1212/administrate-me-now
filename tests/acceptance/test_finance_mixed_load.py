@@ -50,10 +50,10 @@ def _settings(root: Path):
             member_roles={FIXTURE_MEMBER_ID: "principal"},
             openclaw_enabled=True,
             openclaw_shared_secret=SECRET,
+            member_chat_enabled_members=frozenset({FIXTURE_MEMBER_ID}),
         ),
         finance_publications_enabled=True,
         finance_model_members=frozenset({FIXTURE_MEMBER_ID}),
-        member_chat_enabled_members=frozenset({FIXTURE_MEMBER_ID}),
     )
 
 
