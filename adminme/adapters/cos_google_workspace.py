@@ -103,7 +103,7 @@ def selected_entries(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
     owner = cos_policy(value)
     assert owner is not None
     entries = value.get("adapters", [])
-    gmail = next(
+    gmail: dict[str, Any] = next(
         (row for row in entries if row.get("id") == owner.gmail_adapter_id), {}
     )
     gmail_reference = (gmail.get("config") or {}).get("oauth_credentials_ref")

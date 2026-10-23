@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
 
@@ -115,6 +115,9 @@ def enroll(
         return url, state
 
     flow.authorization_url = authorization_url  # type: ignore[method-assign]
+    authorization_options: dict[str, Any] = (
+        {"include_granted_scopes": "false"} if purpose != "gmail-read-send" else {}
+    )
     try:
         credentials = flow.run_local_server(
             host="127.0.0.1",
@@ -126,11 +129,7 @@ def enroll(
             open_browser=False,
             access_type="offline",
             prompt="consent",
-            **(
-                {"include_granted_scopes": "false"}
-                if purpose != "gmail-read-send"
-                else {}
-            ),
+            **authorization_options,
         )
     finally:
         authorization_url_file.unlink(missing_ok=True)
