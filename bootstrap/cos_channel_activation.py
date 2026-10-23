@@ -29,6 +29,10 @@ from adminme.adapters.cos_channel_acquisition import (
     policy_from_config,
     restrict_cos_adapter_config,
 )
+from adminme.adapters.cos_apple_reminders import (
+    selected_entries as selected_reminders_entries,
+    validate_authorized_change as validate_reminders_change,
+)
 from adminme.adapters.cos_google_workspace import (
     selected_entries as selected_workspace_entries,
     validate_authorized_change as validate_workspace_change,
@@ -361,8 +365,12 @@ def prepare_configuration(
         raise CoSActivationError(
             "the CoS overlay does not preserve the original selection"
         )
-    selected_workspace = selected_workspace_entries(requested)
-    prior_workspace = selected_workspace_entries(previous)
+    selected_workspace = selected_workspace_entries(
+        requested
+    ) | selected_reminders_entries(requested)
+    prior_workspace = selected_workspace_entries(previous) | selected_reminders_entries(
+        previous
+    )
     original_ids = [
         entry.get("id")
         for entry in previous.get("adapters", [])
@@ -384,7 +392,7 @@ def prepare_configuration(
         or not (set(requested_ids) - set(original_ids)) <= selected_workspace.keys()
     ):
         raise CoSActivationError(
-            "channel activation can add only exact CoS Google sources and cannot remove records"
+            "channel activation can add only exact CoS workspace sources and cannot remove records"
         )
     result = restrict_cos_adapter_config(requested)
     selected_google = selected_entries(result)
@@ -413,7 +421,7 @@ def prepare_configuration(
                     "kind"
                 ):
                     raise CoSActivationError(
-                        "cannot repurpose an existing adapter as a CoS Google source"
+                        "cannot repurpose an existing adapter as a CoS workspace source"
                     )
         else:
             before = next(
@@ -2006,6 +2014,11 @@ class CoSChannelActivator:
                     owner_authorization_sha256=request.owner_authorization_sha256,
                 )
                 validate_workspace_change(
+                    original,
+                    request.adapter_config,
+                    owner_authorization_sha256=request.owner_authorization_sha256,
+                )
+                validate_reminders_change(
                     original,
                     request.adapter_config,
                     owner_authorization_sha256=request.owner_authorization_sha256,

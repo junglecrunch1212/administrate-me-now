@@ -3862,7 +3862,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 372,
+    "technical_event_schemas": 373,
     "technical_event_types": 294,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -4325,6 +4325,69 @@
         "provider_account_id"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "adapter.authenticated",
+      "family": "adapter_runtime",
+      "properties": {
+        "adapter_family": {
+          "const": "reminders",
+          "title": "Adapter Family",
+          "type": "string"
+        },
+        "adapter_name": {
+          "const": "reminders-cos-apple-eventkit",
+          "title": "Adapter Name",
+          "type": "string"
+        },
+        "authenticated_at": {
+          "minLength": 1,
+          "title": "Authenticated At",
+          "type": "string"
+        },
+        "authorization_kind": {
+          "const": "os-permission",
+          "title": "Authorization Kind",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "device_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Device Identity Sha256",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "const": "eventkit.reminders.read",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Scopes",
+          "type": "array"
+        },
+        "source_ownership_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Ownership Evidence Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_name",
+        "adapter_family",
+        "authorization_kind",
+        "authenticated_at",
+        "configuration_sha256",
+        "device_identity_sha256",
+        "source_ownership_evidence_sha256",
+        "scopes"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,
