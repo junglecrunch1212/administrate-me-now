@@ -608,7 +608,6 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             assert len(control["connections"]) == 3
             for row in control["connections"]:
                 writable = read_write and row["id"] in {
-                    "fixture-personal-gmail",
                     "fixture-personal-calendar",
                     "fixture-personal-tasks",
                 }

@@ -200,9 +200,7 @@ class Environment:
             self.settings,
             adapter_config=json.loads(self.committer.index_path.read_bytes()),
         )
-        with TestClient(
-            create_application(settings), raise_server_exceptions=False
-        ) as client:
+        with TestClient(create_application(settings)) as client:
             yield client
 
     def handoffs(self, runtime: Any) -> GoogleHandoffs:
@@ -723,12 +721,9 @@ def test_synced_schedule_is_private_context_only_with_delegation_and_read_off_wi
             == "Private scheduled appointment"
         )
         assert context.json()["facts"][0]["outside_disclosure_authorized"] is False
-        assert (
-            client.get(BASE, headers=OTHER_HEADERS).json()["accounts"][0][
-                "cos_context_access"
-            ]
-            is True
-        )
+        connections = client.get(BASE, headers=OTHER_HEADERS)
+        assert connections.status_code == 200, connections.text
+        assert connections.json()["accounts"][0]["cos_context_access"] is True
         own_surface = client.get(
             "/api/member/v1/surfaces/calendar?date=2031-01-02", headers=OTHER_HEADERS
         )
@@ -836,3 +831,38 @@ def test_second_account_keeps_first_account_revision_and_running_instances(
         assert runtime.adapters._managed[first_calendar_id].adapter is first_adapter
         assert len(client.get(BASE, headers=OTHER_HEADERS).json()["accounts"]) == 2
         assert len(env.committer.calls) == len(env.oauth.exchanged) == 2
+
+
+@pytest.mark.parametrize("access", ["read", "write"])
+def test_gmail_permission_display_requires_selected_writes_and_loaded_adapter(
+    env: Environment, access: str
+) -> None:
+    with env.client() as client:
+        account = connected(
+            client,
+            request_body(services=services(gmail=access, calendar="off")),
+        )
+        runtime = client.app.state.runtime
+        gmail_id = owned_accounts(runtime.settings.adapter_config, MEMBER_B)[
+            account["id"]
+        ]["rows"]["gmail"]["id"]
+        client.portal.call(wait_running, runtime, {gmail_id})
+
+        def displayed_permissions() -> list[str]:
+            response = client.get(
+                "/api/member/v1/surfaces/settings", headers=OTHER_HEADERS
+            )
+            assert response.status_code == 200, response.text
+            return next(
+                row["permissions"]["write"]
+                for row in response.json()["control"]["connections"]
+                if row["id"] == gmail_id
+            )
+
+        assert displayed_permissions() == (
+            ["reply", "send", "mark read", "archive"] if access == "write" else []
+        )
+        client.portal.call(runtime.adapters.stop_instances, {gmail_id})
+        # A saved consent alone is not an executable adapter capability.
+        assert displayed_permissions() == []
+        assert client.portal.call(_events, runtime, "external.sent") == []

@@ -334,14 +334,17 @@ async def connections(request: Request, session: SessionDep) -> dict[str, Any]:
             resolve_service_delegation,
             ServiceDelegationResolutionError,
         )
-        from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+        from adminme.service_identities import (
+            COS_AUTOMATION_OPERATOR_ID,
+            COS_SERVICE_PRINCIPAL_ID,
+        )
 
         try:
             context = resolve_service_delegation(
                 runtime.projections.connection("parties"),
                 tenant_id=session.tenant_id,
                 service_principal_id=COS_SERVICE_PRINCIPAL_ID,
-                operator_principal_id=session.auth_member_id,
+                operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
                 context_scope="member_private",
                 context_member_id=session.auth_member_id,
                 owner_party_id=None,
