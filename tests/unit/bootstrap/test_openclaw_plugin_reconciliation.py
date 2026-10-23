@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
+import jsonschema
 import pytest
 
 from adminme.openclaw_topology import member_agent_id
@@ -523,6 +524,12 @@ def _destructive_plugin_cli(
             if "--runtime" in command and failure == "runtime":
                 result = 1
         elif command[1:3] == ["config", "validate"]:
+            jsonschema.validate(
+                entries["administrateme"].get("config", {}),
+                json.loads((plugin / "openclaw.plugin.json").read_bytes())[
+                    "configSchema"
+                ],
+            )
             if validate is not None:
                 validate(config)
             result = int(failure == "validate")

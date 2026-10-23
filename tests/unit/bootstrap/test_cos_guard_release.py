@@ -271,11 +271,30 @@ def test_real_plugin_replacement_keeps_reverse_guard_preparation_available(
         _destructive_plugin_cli,
     )
 
+    from adminme.service_identities import DEFAULT_SERVICE_IDENTITY_CONFIG
+
     manager, value, adapters = _fixture(tmp_path, monkeypatch)
+    # The guard-only fixture omits the service inventory. This composition also
+    # runs topology validation, so use a complete synthetic enrolled identity.
+    identities = copy.deepcopy(DEFAULT_SERVICE_IDENTITY_CONFIG)
+    identities["channels"][0].update(adapters["service_identities"]["channels"][0])
+    identities["channels"][0].update(
+        channel_id="fixture-cos-imessage-channel", state="observation"
+    )
+    adapters["service_identities"] = identities
+    atomic_write(
+        manager.paths.instance_dir / "config/adapters.json",
+        json.dumps(adapters).encode(),
+    )
     source, target = Path(value["predecessor_path"]), Path(value["target_path"])
     _destructive_plugin_cli(manager.paths, target, monkeypatch)
-    reconcile_member_topology(manager.paths)
     gateway_path = manager.paths.instance_dir / COORDINATES["gateway"]
+    gateway = json.loads(gateway_path.read_bytes())
+    config = gateway["plugins"]["entries"]["administrateme"]["config"]
+    config.pop("existing_preference")  # Guard-only fixture's untyped sentinel.
+    config["baseUrl"] = "http://127.0.0.1:3330"
+    atomic_write(gateway_path, json.dumps(gateway).encode())
+    reconcile_member_topology(manager.paths)
     before = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
         "administrateme"
     ]

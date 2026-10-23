@@ -1527,6 +1527,15 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     reconcile_member_topology(paths)
     gateway_path = paths.instance_dir / COORDINATES["gateway"]
     guard_path = paths.instance_dir / COORDINATES["guard"]
+    # This composition crosses the updater's immutable-file guard as well as
+    # activation. Bind that real verifier to an inert synthetic provider file.
+    guard = json.loads(guard_path.read_bytes())
+    provider = Path(guard["cli_path"])
+    atomic_write(provider, b"nonexecutable synthetic provider")
+    pin = hashlib.sha256(provider.read_bytes()).hexdigest()
+    monkeypatch.setattr("bootstrap.cos_imessage.BINARY_SHA256", pin)
+    guard["cli_sha256"] = pin
+    _write(guard_path, guard)
     before = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
         "administrateme"
     ]
