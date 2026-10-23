@@ -137,7 +137,7 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
     },
     {
       name: SERVICE_PRIVATE_TOOL_NAMES[3],
-      description: "Read bounded canonical task and commitment facts within current standing service grants, retaining source and authority references. Access does not authorize disclosure.",
+      description: "Read bounded task/commitment facts, current calendar/contact facts, and mail/note/file metadata within standing service grants. Source policy applies; provider bodies and attachments are not returned. Retain source references; access does not authorize disclosure.",
       parameters: Type.Object({
         source_event_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 20 })),
         after_event_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),

@@ -20,6 +20,62 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import ServiceRequestContext
 from adminme.source_policy import source_coordinate_for_event
 
+CALENDAR_FIELDS = frozenset(
+    {
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "calendar_external_id",
+        "calendar_name",
+        "external_event_id",
+        "provider_revision",
+        "status",
+        "summary",
+        "location",
+        "start",
+        "end",
+        "start_time_zone",
+        "end_time_zone",
+        "all_day",
+        "availability",
+        "visibility",
+    }
+)
+NOTE_FIELDS = frozenset(
+    {
+        "knowledge_id",
+        "member_id",
+        "title",
+        "source_kind",
+        "source_type",
+        "source_external_id",
+        "account_external_id",
+        "folder_external_id",
+        "captured_at",
+        "provider_modified_at",
+        "provider_revision",
+        "locked",
+    }
+)
+MESSAGE_FIELDS = frozenset(
+    {
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "native_message_id",
+        "thread_id",
+        "source_channel",
+        "from_identifier",
+        "to_identifier",
+        "subject",
+        "received_at",
+        "sent_at",
+        "message_state",
+        "delivery_status",
+        "native_revision",
+    }
+)
 FACT_FIELDS = {
     "task.created": frozenset(
         {
@@ -38,6 +94,43 @@ FACT_FIELDS = {
     ),
     "commitment.confirmed": frozenset(
         {"commitment_id", "confirmed_by_member_id", "confirmed_at", "note"}
+    ),
+    "calendar.event_added": CALENDAR_FIELDS,
+    "calendar.event_updated": CALENDAR_FIELDS,
+    "contact.record.observed": frozenset(
+        {
+            "contact_record_id",
+            "member_id",
+            "provider",
+            "provider_account_id",
+            "container_external_id",
+            "external_id",
+            "provider_revision",
+            "kind",
+            "display_name",
+            "given_name",
+            "family_name",
+            "nickname",
+            "organization_name",
+            "job_title",
+            "identifiers",
+            "observed_at",
+        }
+    ),
+    "member_knowledge.note_added": NOTE_FIELDS,
+    "member_knowledge.note_updated": NOTE_FIELDS,
+    "member_knowledge.note_corrected": NOTE_FIELDS,
+    "messaging.received": MESSAGE_FIELDS,
+    "messaging.sent": MESSAGE_FIELDS,
+    "artifact.received": frozenset(
+        {
+            "source",
+            "external_artifact_id",
+            "mime_type",
+            "size_bytes",
+            "filename",
+            "received_at",
+        }
     ),
 }
 
@@ -88,37 +181,33 @@ def _context_for(
     return matches[0] if len(matches) == 1 else None
 
 
-def _policy_allows(runtime: Any, owner_id: str, policy_key: str) -> bool:
-    state = runtime.settings_control.read()
-    record = (state.get("source_policies_v2") or {}).get(owner_id, {}).get(policy_key)
-    return not record or (record.get("policy") or {}).get("context_mode") not in {
-        "none",
-        "metadata_only",
-    }
-
-
-def fact_for(
+def _source_authority(
     runtime: Any,
     session: ServiceSession,
     event: dict[str, Any],
     contexts: list[ServiceRequestContext],
 ) -> dict[str, Any] | None:
-    fields = FACT_FIELDS.get(event["type"])
-    # Service-derived records must retain their complete source chain through
-    # private-state reads; they cannot be reintroduced as unqualified originals.
-    if fields is None or (
-        event["type"] == "task.created" and event["schema_version"] >= 4
-    ):
-        return None
     context = _context_for(event, session, contexts)
-    coordinate = source_coordinate_for_event(
-        event, provider_bindings=runtime.settings.provider_bindings
-    )
-    if context is None or not _policy_allows(
-        runtime, coordinate.owner_principal_id, coordinate.key
-    ):
+    if context is None:
         return None
-    authority = {
+    try:
+        coordinate = source_coordinate_for_event(
+            event, provider_bindings=runtime.settings.provider_bindings
+        )
+    except ValueError:
+        return None
+    effective = runtime.settings_control.effective_source_policy_v2(
+        coordinate.owner_principal_id, coordinate
+    )
+    # This standing-context tool has no trusted explicit-demand receipt. Even
+    # the more permissive snippet mode returns only the typed fields below.
+    # Do not turn a model-supplied flag into permission to read provider bodies.
+    if effective["policy"]["context_mode"] not in {
+        "typed_facts",
+        "typed_facts_safe_snippet",
+    }:
+        return None
+    return {
         "source_event_id": event["event_id"],
         "authority_grant_id": context.authority_grant_id,
         "context_scope": context.context_scope,
@@ -134,16 +223,130 @@ def fact_for(
         "source_audience": list(context.audience),
         "restriction": "internal_processing_only",
     }
+
+
+def _current_source(runtime: Any, event: dict[str, Any]) -> bool:
+    """Select current observations without treating projections as new facts.
+
+    The returned payload still comes from the original encrypted event. A
+    missing/lagging row is withheld; updates, deletions and retractions cannot
+    resurrect an old source snapshot through an explicit event reference.
+    """
+    kind = event["type"]
+    if kind.startswith("calendar."):
+        if event["schema_version"] < 2:
+            # v1 updates are patches rather than complete calendar snapshots.
+            return False
+        projection, table, predicate = "calendars", "calendar_events", "last_event_id=?"
+    elif kind == "contact.record.observed":
+        projection, table, predicate = (
+            "parties",
+            "contact_records",
+            "last_event_id=? AND deleted_at IS NULL",
+        )
+    elif kind.startswith("member_knowledge."):
+        projection, table, predicate = (
+            "member_knowledge",
+            "member_knowledge",
+            "last_event_id=? AND locked=0",
+        )
+    elif kind.startswith("messaging."):
+        # Classification and local read/unread changes also advance last_event_id.
+        # The last accepted source revision remains in the native provenance list.
+        projection, table, predicate = (
+            "interactions",
+            "interactions",
+            "json_extract(raw_event_ids, '$[#-1]')=? AND message_state<>'retracted'",
+        )
+    else:
+        return True
+    return (
+        runtime.projections.connection(projection)
+        .execute(
+            f"SELECT 1 FROM {table} WHERE tenant_id=? AND owner_scope=? "
+            f"AND visibility_scope=? AND {predicate} LIMIT 1",
+            (
+                event["tenant_id"],
+                event["owner_scope"],
+                event["visibility_scope"],
+                event["event_id"],
+            ),
+        )
+        .fetchone()
+        is not None
+    )
+
+
+def _bounded_fact(
+    payload: dict[str, Any], fields: frozenset[str]
+) -> tuple[dict[str, Any], bool]:
+    fact: dict[str, Any] = {}
+    truncated = False
+    for key in sorted(fields & payload.keys()):
+        value = payload[key]
+        if isinstance(value, str):
+            fact[key] = value[:2000]
+            truncated |= len(value) > 2000
+        elif value is None or isinstance(value, (bool, int, float)):
+            fact[key] = value
+        elif key == "identifiers" and isinstance(value, list):
+            identifiers = []
+            for identifier in value[:20]:
+                selected, shortened = _bounded_fact(
+                    identifier,
+                    frozenset({"kind", "value", "label", "primary", "verified"}),
+                )
+                identifiers.append(selected)
+                truncated |= shortened
+            fact[key] = identifiers
+            truncated |= len(value) > 20
+    return fact, truncated
+
+
+def fact_for(
+    runtime: Any,
+    session: ServiceSession,
+    event: dict[str, Any],
+    contexts: list[ServiceRequestContext],
+) -> dict[str, Any] | None:
+    fields = FACT_FIELDS.get(event["type"])
+    # Service-derived records must retain their complete source chain through
+    # private-state reads; they cannot be reintroduced as unqualified originals.
+    if fields is None or (
+        event["type"] == "task.created" and event["schema_version"] >= 4
+    ):
+        return None
+    authority = _source_authority(runtime, session, event, contexts)
+    if authority is None or not _current_source(runtime, event):
+        return None
+    fact, truncated = _bounded_fact(event["payload"], fields)
     return {
         "event_id": event["event_id"],
         "event_type": event["type"],
         "occurred_at": event["occurred_at"],
         "authority": authority,
-        "fact": {
-            key: value for key, value in event["payload"].items() if key in fields
-        },
+        "fact": fact,
+        "fact_truncated": truncated,
+        "provider_body_included": False,
         "outside_disclosure_authorized": False,
     }
+
+
+async def validate_context_cursor(
+    runtime: Any,
+    session: ServiceSession,
+    contexts: list[ServiceRequestContext],
+    event_id: str,
+) -> None:
+    # A cursor identifies a scan position, not content authority. It may name a
+    # since-deleted observation or a policy-filtered source in an allowed scope.
+    event = await runtime.event_log.get(event_id)
+    if (
+        event is None
+        or event["type"] not in FACT_FIELDS
+        or _context_for(event, session, contexts) is None
+    ):
+        raise HTTPException(404, "authorized context cursor not found")
 
 
 async def source_facts(
@@ -160,7 +363,7 @@ async def source_facts(
     return facts
 
 
-def work_authorized(
+async def work_authorized(
     runtime: Any, session: ServiceSession, work: dict[str, Any]
 ) -> bool:
     """Revocation stops use of derived records without erasing retained history."""
@@ -169,25 +372,22 @@ def work_authorized(
         sources = json.loads(work.get("source_authorities_json") or "[]")
     contexts = active_contexts(runtime, session) if sources else []
     for source in sources:
-        matches = [
-            context
-            for context in contexts
-            if context.authority_grant_id == source["authority_grant_id"]
-            and source["source_owner_scope"] in context.allowed_scopes
-            and source["source_visibility_scope"] in context.allowed_scopes
-            and tuple(source["source_audience"]) == context.audience
-        ]
-        if len(matches) != 1 or not _policy_allows(
-            runtime, source["source_policy_owner_id"], source["source_policy_key"]
-        ):
+        event = await runtime.event_log.get(source["source_event_id"])
+        # Historical notes retain their original evidence even if a source was
+        # updated. Current grants and inherited policy still govern every reuse.
+        # This also supports typed internal intents that are not discovery facts.
+        authority = (
+            _source_authority(runtime, session, event, contexts) if event else None
+        )
+        if authority != source:
             return False
     return True
 
 
-def work_view(
+async def work_view(
     runtime: Any, session: ServiceSession, work: dict[str, Any]
 ) -> dict[str, Any]:
-    if not work_authorized(runtime, session, work):
+    if not await work_authorized(runtime, session, work):
         raise HTTPException(404, "CoS work authority is no longer available")
     work = dict(work)
     work["source_authorities"] = json.loads(work.pop("source_authorities_json", "[]"))
