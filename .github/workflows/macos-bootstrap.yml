@@ -451,7 +451,7 @@ jobs:
   bridge-development:
     needs: [release-scope]
     name: Bridge enrollment validation (macOS)
-    if: ${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}
+    if: ${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || needs.release-scope.outputs.scope == 'bridge-setup' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}
     outputs:
       validated_sha: ${{ steps.validated.outputs.sha }}
     runs-on: macos-15
@@ -493,6 +493,8 @@ jobs:
           --junitxml="${RUNNER_TEMP}/bridge-enrollment.xml"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
           tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py
+          tests/unit/bootstrap/test_member_bridge_mac_preparation.py
+          tests/unit/test_bridge_helper_distribution.py
           tests/unit/bootstrap/test_member_bridge_permission_controller.py
           tests/unit/bootstrap/test_member_bridge_launch.py
           tests/unit/bootstrap/test_member_bridge_component.py
@@ -616,7 +618,7 @@ jobs:
   # with fresh tooling and dependency caches rather than the harness's venv.
   bridge-installed-runtime:
     needs: [release-scope]
-    if: ${{ contains(fromJSON('["bridge-helper","bridge-enrollment","bridge-runtime","system-wide"]'), needs.release-scope.outputs.scope) }}
+    if: ${{ contains(fromJSON('["bridge-helper","bridge-enrollment","bridge-runtime","bridge-setup","system-wide"]'), needs.release-scope.outputs.scope) }}
     outputs:
       validated_sha: ${{ steps.validated.outputs.sha }}
     name: Packaged member bridge installation

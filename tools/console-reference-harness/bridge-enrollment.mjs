@@ -16,12 +16,27 @@ export async function auditBridgeEnrollment({ page, otherPage, stalePage, baseUr
   const countPost = (request) => { if (new URL(request.url()).pathname === endpoint && request.method() === "POST") posts += 1; };
   page.on("request", countPost);
   await gotoBridges();
+  const preparationTarget = await page.locator(".bridge-prepared-confirmation").boundingBox();
+  record("Mac preparation confirmation has a usable pointer target", preparationTarget && preparationTarget.width >= 24 && preparationTarget.height >= 24, preparationTarget);
   const versions = await page.locator("link[href*='/member-assets/member.css'], script[src*='/member-assets/member.js']").evaluateAll((nodes) => nodes.map((node) => new URL(node.href || node.src).searchParams.get("v")));
   record("Bridge browser exercises source-bound production assets", versions.length === 2 && versions.every((version) => version === sourceVersion));
+  record("Pairing is disabled until software preparation is confirmed", await page.getByRole("button", { name: "Prepare enrollment", exact: true }).isDisabled());
+  await page.locator('input[name="mac_prepared"]').check();
+  record("Verified helper is available without starting enrollment", !await page.getByRole("button", { name: "Download Mac helper", exact: true }).isDisabled() && posts === 0);
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download Mac helper", exact: true }).click();
+  const helperDownload = await downloadPromise;
+  record("Settings downloads the verified program separately from pairing", helperDownload.suggestedFilename() === "AdministrateMe-Bridge-Helper.zip" && posts === 0);
+  await page.route("**/api/member/v1/settings/bridges/helper/download", (route) => route.fulfill({ status: 200, contentType: "application/zip", body: "damaged fixture archive" }));
+  await page.getByRole("button", { name: "Download Mac helper", exact: true }).click();
+  await page.locator(".bridge-mac-preparation [role=status]").filter({ hasText: "failed verification" }).waitFor();
+  record("Damaged helper download is rejected before saving or pairing", posts === 0 && (await page.locator(".bridge-mac-preparation [role=status]").textContent()).includes("was not saved"));
+  await page.unroute("**/api/member/v1/settings/bridges/helper/download");
   const before = await readSettings();
   record("Bridge fixture starts with no enrollment", before.control.bridge_wizard.current === null);
   await stalePage.goto(`${baseUrl}/member/settings?section=bridges`, { waitUntil: "networkidle" });
   await stalePage.getByRole("button", { name: "Prepare enrollment", exact: true }).waitFor();
+  await stalePage.locator('input[name="mac_prepared"]').check();
   const armed = await page.request.post(`${baseUrl}/__gate7/bridge-preparation?unavailable=true`);
   record("Bridge production preparation failure is armed in the disposable fixture", armed.ok());
   await page.locator('.bridge-form input[value="apple_notes"]').check();
@@ -46,12 +61,20 @@ export async function auditBridgeEnrollment({ page, otherPage, stalePage, baseUr
   const staleResponse = await staleResponsePromise;
   const staleError = await staleResponse.json();
   await stalePage.locator(".bridge-enrollment-failure").waitFor();
-  record("A definitive stale Settings refusal refreshes without an unknown-request lock", staleResponse.status() === 409 && staleError.detail.error === "enrollment_not_started" && staleError.detail.request_recorded === false && staleError.detail.request_id === staleResponse.request().postDataJSON().request_id && await stalePage.locator(".bridge-enrollment-pending").count() === 0 && !await stalePage.getByRole("button", { name: "Prepare enrollment", exact: true }).isDisabled() && await stalePage.evaluate((id) => sessionStorage.getItem(`administrateme:bridge-enrollment-pending:${id}`) === null, memberId), staleError);
+  record("A definitive stale Settings refusal refreshes without an unknown-request lock", staleResponse.status() === 409 && staleError.detail.error === "enrollment_not_started" && staleError.detail.request_recorded === false && staleError.detail.request_id === staleResponse.request().postDataJSON().request_id && await stalePage.locator(".bridge-enrollment-pending").count() === 0 && await stalePage.getByRole("button", { name: "Prepare enrollment", exact: true }).isDisabled() && await stalePage.evaluate((id) => sessionStorage.getItem(`administrateme:bridge-enrollment-pending:${id}`) === null, memberId), staleError);
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
     await page.reload({ waitUntil: "networkidle" });
     await page.locator(".bridge-enrollment-failure").waitFor();
     record(`Recorded failure remains useful after reload at ${width}`, (await page.locator(".bridge-enrollment-failure").textContent()).includes("A reviewed release commit is required") && posts === 1);
+    const permissionBounds = await page.locator(".bridge-finish-setup").evaluate((section) => {
+      const bounds = section.getBoundingClientRect();
+      return [...section.querySelectorAll("a")].map((link) => {
+        const rect = link.getBoundingClientRect();
+        return { visible: rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom, height: rect.height, fits: link.scrollWidth <= link.clientWidth && link.scrollHeight <= link.clientHeight };
+      });
+    });
+    record(`Final permission links fit without clipping at ${width}`, permissionBounds.length === 2 && permissionBounds.every((item) => item.visible && item.height >= 24 && item.fits), permissionBounds);
     await auditAccessibility(page, `Bridge enrollment failure ${width}`);
     await screenshot(page, `bridge-enrollment-failed-${width}.png`);
   }
@@ -61,6 +84,7 @@ export async function auditBridgeEnrollment({ page, otherPage, stalePage, baseUr
 
   const restored = await page.request.post(`${baseUrl}/__gate7/bridge-preparation?unavailable=false`);
   record("Bridge fixture restores the real preparation implementation", restored.ok());
+  await page.locator('input[name="mac_prepared"]').check();
   let delayedBody = null;
   const loseResponse = async (route) => {
     if (route.request().method() !== "POST") { await route.continue(); return; }
