@@ -137,6 +137,7 @@ from adminme.products.capture.main import router as capture_router
 from adminme.products.comms.main import router as comms_router
 from adminme.products.core.main import router as core_router
 from adminme.products.member.main import router as member_router
+from adminme.products.member.bridge_setup import router as member_bridge_setup_router
 from adminme.products.member.cos import router as member_cos_router
 from adminme.products.member.apple_service_settings import (
     router as apple_service_settings_router,
@@ -3948,6 +3949,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(self_reply_router)
     app.include_router(reminder_router)
     app.include_router(member_router)
+    app.include_router(member_bridge_setup_router)
     app.include_router(member_cos_router)
     app.include_router(apple_service_settings_router)
     app.include_router(apple_notes_commands_router)

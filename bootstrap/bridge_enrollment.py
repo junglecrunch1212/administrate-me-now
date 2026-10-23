@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import yaml
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from adminme.tailscale_local import tailscale_executable
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
     configuration_from_record,
@@ -996,7 +997,7 @@ class MemberBridgeInstaller:
         if self.test_mode:
             return "fixture@example.invalid", "fixture-bridge-node"
         completed = subprocess.run(
-            ["tailscale", "status", "--json"],
+            [tailscale_executable(), "status", "--json"],
             check=False,
             capture_output=True,
             text=True,

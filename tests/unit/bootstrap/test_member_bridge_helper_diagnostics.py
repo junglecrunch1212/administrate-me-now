@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from bootstrap.member_bridge_helper_app import _helper_launcher
+from bootstrap.member_bridge_helper_app import _helper_launcher, _mac_prerequisites
 
 
 COMMIT = "a" * 40
@@ -119,6 +119,12 @@ if __name__ == "__main__":
         .decode()
         .replace("/usr/bin/osascript", f'"{native_ui}"')
     )
+    prerequisite = b"#!/bin/bash\nexit 0\n"
+    _executable(resources / "prepare-mac.sh", prerequisite.decode())
+    script = script.replace(
+        hashlib.sha256(_mac_prerequisites()).hexdigest(),
+        hashlib.sha256(prerequisite).hexdigest(),
+    )
     launcher_path = resources / "bridge-helper-launcher.sh"
     _executable(launcher_path, script)
     release = (
@@ -126,6 +132,9 @@ if __name__ == "__main__":
     )
     binary = release / ".venv/bin/python"
     binary.parent.mkdir(parents=True)
+    (binary.parent.parent / ".administrateme-bridge-installed-commit").write_text(
+        COMMIT
+    )
     _executable(
         binary,
         f"#!{sys.executable}\n"
@@ -843,3 +852,48 @@ def test_completed_install_does_not_require_or_change_native_build_configuration
     assert runtime["DEVELOPER_DIR"] == "unavailable-explicit-developer"
     if diagnostics:
         assert "native_build_setup" not in fixture.phases.read_text()
+
+
+def test_first_run_prepares_before_asking_for_a_secret(launcher) -> None:
+    executable, environment, _ = launcher
+    environment["FIXTURE_MANAGE_ACTION"] = "Prepare This Mac"
+    completed, attempts = _run(launcher, outcome="success", manage=True)
+    assert completed.returncode == 0
+    receipt = json.loads((attempts[0] / "receipt.json").read_text())
+    assert receipt["phase"] == "prepared"
+    assert receipt["operation"] == "prepare"
+    ui = (Path(environment["HOME"]) / "ui.jsonl").read_text()
+    assert "prepared.applescript" in ui
+    assert "secure-code.applescript" not in ui
+    assert "complete.applescript" not in ui
+
+
+def test_early_handoff_finishes_preparation_without_using_code(launcher) -> None:
+    home = Path(launcher[1]["HOME"])
+    receipt = (
+        home
+        / "Library/Application Support/AdministrateMe Bridge/app/releases"
+        / COMMIT
+        / ".venv/.administrateme-bridge-installed-commit"
+    )
+    receipt.unlink()
+    completed, attempts = _run(launcher, outcome="success")
+    assert completed.returncode == 0
+    assert json.loads((attempts[0] / "receipt.json").read_text())["phase"] == "prepared"
+    ui = (home / "ui.jsonl").read_text()
+    assert "secure-code.applescript" not in ui
+    assert "prepared.applescript" in ui
+
+
+def test_first_preparation_failure_is_resumable_without_pairing(launcher) -> None:
+    launcher[1]["FIXTURE_MANAGE_ACTION"] = "Prepare This Mac"
+    failed, first = _run(launcher, outcome="dependency_fail", manage=True)
+    assert failed.returncode == 23
+    succeeded, attempts = _run(launcher, outcome="success", manage=True)
+    assert succeeded.returncode == 0
+    assert len(attempts) == 2
+    assert json.loads((first[0] / "receipt.json").read_text())["outcome"] == "failed"
+    assert (
+        "secure-code.applescript"
+        not in (Path(launcher[1]["HOME"]) / "ui.jsonl").read_text()
+    )

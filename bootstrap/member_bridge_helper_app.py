@@ -82,6 +82,8 @@ PERMISSION_RESULT_FILE=""
 ATTEMPT_DIR=""
 PHASE="diagnostics_setup"
 OPERATION="enroll"
+PREREQUISITES="$RESOURCES/prepare-mac.sh"
+PREREQUISITES_SHA256=@PREREQUISITES_SHA256@
 OUTCOME="running"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -162,6 +164,27 @@ PREVIEW_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-preview.XXXXXX")"
 LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-helper.XXXXXX")"
 PERMISSION_RESULT_FILE="$(mktemp "${TMPDIR:-/tmp}/administrateme-bridge-permissions.XXXXXX")"
 
+prepare_mac() {
+  OPERATION="prepare"
+  PHASE="mac_prerequisites"
+  [[ -f "$PREREQUISITES" && ! -L "$PREREQUISITES" && -O "$PREREQUISITES" ]] || fail_closed
+  local prerequisite_digest
+  prerequisite_digest="$(/usr/bin/shasum -a 256 "$PREREQUISITES")" || fail_closed
+  [[ "${prerequisite_digest%% *}" == "$PREREQUISITES_SHA256" ]] || fail_closed
+  if "$PREREQUISITES" >"$LOG_FILE" 2>&1; then :; else
+    OUTCOME="blocked"
+    write_receipt 2
+    exit 2
+  fi
+  /usr/bin/osascript -e 'display notification "Installing the bridge software. This can take several minutes. Keep this Mac awake; no pairing code is needed yet." with title "Preparing AdministrateMe"' >/dev/null 2>&1 || true
+  if ADMINME_BRIDGE_DIAGNOSTICS_FD=3 "$INSTALLER" --expected-commit "$EXPECTED_COMMIT" --release-archive "$RELEASE_ARCHIVE" --release-sha256 "$RELEASE_ARCHIVE_SHA256" --prepare-runtime-only >"$LOG_FILE" 2>&1 3>"$ATTEMPT_DIR/phases" 4<>"$ATTEMPT_DIR/dependency-install.log"; then :; else
+    fail_closed "$?"
+  fi
+  PHASE="prepared"
+  OUTCOME="succeeded"
+  write_receipt 0
+}
+
 prepare_retained_runtime() {
   release_root="$BRIDGE_ROOT/app/releases/$EXPECTED_COMMIT"
   release_python="$release_root/.venv/bin/python"
@@ -235,6 +258,11 @@ if [[ "$PACKAGE" == "--manage" ]]; then
     OUTCOME="cancelled"
     exit 0
   fi
+  if [[ "$action" == "Prepare This Mac" ]]; then
+    prepare_mac
+    /usr/bin/osascript "$RESOURCES/prepared.applescript" >/dev/null || true
+    exit 0
+  fi
   prepare_retained_runtime
   case "$action" in
     "Continue Enrollment") OPERATION="continue"; run_permissions continue ;;
@@ -253,6 +281,14 @@ PHASE="helper_integrity"
 verify_permission_controller || fail_closed
 PHASE="handoff_selection"
 [[ -n "$PACKAGE" && "$PACKAGE" == *.adminmebridge && -f "$PACKAGE" && ! -L "$PACKAGE" ]] || fail_closed
+# Installation precedes the secret prompt. If dependencies are absent, finish
+# preparation and ask for a fresh Settings handoff instead of spending its TTL.
+receipt="$BRIDGE_ROOT/app/releases/$EXPECTED_COMMIT/.venv/.administrateme-bridge-installed-commit"
+if [[ ! -f "$receipt" || -L "$receipt" || "$(<"$receipt")" != "$EXPECTED_COMMIT" ]]; then
+  prepare_mac
+  /usr/bin/osascript "$RESOURCES/prepared.applescript" >/dev/null || true
+  exit 0
+fi
 PHASE="transfer_code"
 if TRANSFER_CODE="$(/usr/bin/osascript "$RESOURCES/secure-code.applescript")"; then :; else
   OUTCOME="cancelled"
@@ -279,12 +315,74 @@ run_permissions initial
 """
     return (
         template.replace("@COMMIT@", shlex.quote(commit))
+        .replace(
+            "@PREREQUISITES_SHA256@", hashlib.sha256(_mac_prerequisites()).hexdigest()
+        )
         .replace("@COMPONENT_COMMIT@", shlex.quote(component_commit))
         .replace("@ARCHIVE_SHA256@", shlex.quote(archive_sha256))
         .replace("@CONTROLLER_SHA256@", shlex.quote(permission_controller_sha256))
         .replace("@LAUNCH_CONTROLLER_SHA256@", shlex.quote(launch_controller_sha256))
         .encode("utf-8")
     )
+
+
+def _mac_prerequisites() -> bytes:
+    """Native first-run preparation; never handles credentials or TCC approvals."""
+    return rb"""#!/bin/bash
+set -Eeuo pipefail
+umask 077
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+notice() {
+  /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+  display dialog (item 1 of argv) buttons {"OK"} default button "OK" with title "Prepare This Mac"
+end run
+APPLESCRIPT
+}
+[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 && "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ]] || {
+  notice "This helper requires an Apple-silicon Mac running macOS 15 or later. No enrollment has started."; exit 2;
+}
+[[ "$(id -u)" -ne 0 ]] || { notice "Open this app in your own Mac account, not as root."; exit 2; }
+if [[ "$(fdesetup status 2>/dev/null || true)" != *"On"* ]]; then
+  notice "Turn on FileVault in the Settings window that opens. Keep its recovery key safe. When encryption is enabled, reopen this helper and choose Prepare This Mac. No pairing code is needed yet."
+  /usr/bin/open 'x-apple.systempreferences:com.apple.preference.security?FileVault'
+  exit 2
+fi
+if ! /usr/bin/xcrun --sdk macosx --show-sdk-path >/dev/null 2>&1; then
+  notice "Apple developer tools are needed to install the bridge. Approve Apple's installation prompt, wait for it to finish, then reopen this helper and choose Prepare This Mac."
+  /usr/bin/xcode-select --install >/dev/null 2>&1 || true
+  exit 2
+fi
+if ! command -v brew >/dev/null 2>&1; then
+  notice "The bridge needs Homebrew to install its Python runtime. The helper will download and verify Homebrew's official installer, then open macOS Installer. Approve that installer, then reopen this helper and choose Prepare This Mac."
+  staging="$(mktemp -d "${TMPDIR:-/tmp}/administrateme-homebrew.XXXXXX")"
+  trap 'rm -rf "$staging"' EXIT
+  package="$staging/Homebrew.pkg"
+  if ! /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --max-time 300 'https://github.com/Homebrew/brew/releases/download/7.0.10/Homebrew.pkg' -o "$package"; then
+    notice "The Homebrew download did not finish. Check the network and choose Prepare This Mac again. No enrollment has started."; exit 2
+  fi
+  digest="$(/usr/bin/shasum -a 256 "$package")"
+  if [[ "${digest%% *}" != ae13b8b0ac910730d3e982a9e7518288d17fd0ad272e42f412027e8ab4555575 ]] || ! /usr/sbin/pkgutil --check-signature "$package" >/dev/null 2>&1 || ! /usr/sbin/spctl --assess --type install "$package" >/dev/null 2>&1; then
+    notice "The Homebrew installer could not be verified. Nothing was installed. Return to AdministrateMe Settings for help."; exit 2
+  fi
+  /usr/bin/open -W "$package"
+  command -v brew >/dev/null 2>&1 || { notice "Homebrew installation is not complete. Choose Prepare This Mac after it finishes."; exit 2; }
+fi
+tailscale_bin="$(command -v tailscale || true)"
+if [[ -z "$tailscale_bin" && -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]]; then
+  tailscale_bin=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+fi
+if [[ -z "$tailscale_bin" ]]; then
+  notice "Install Tailscale from the official page that opens and sign in with your own household member account. Then reopen this helper and choose Prepare This Mac."
+  /usr/bin/open 'https://tailscale.com/download/mac'
+  exit 2
+fi
+if ! "$tailscale_bin" status >/dev/null 2>&1; then
+  notice "Open Tailscale and connect using your own member account, then choose Prepare This Mac again."
+  /usr/bin/open -a Tailscale || true
+  exit 2
+fi
+"""
 
 
 @dataclass(frozen=True)
@@ -382,13 +480,17 @@ on open enrollmentFiles
   set launcherPath to helperLauncher()
   repeat with enrollmentFile in enrollmentFiles
     set packagePath to POSIX path of enrollmentFile
-    do shell script quoted form of launcherPath & space & quoted form of packagePath
+    with timeout of 3600 seconds
+      do shell script quoted form of launcherPath & space & quoted form of packagePath
+    end timeout
   end repeat
 end open
 
 on run
   set launcherPath to helperLauncher()
-  do shell script quoted form of launcherPath & " --manage"
+  with timeout of 3600 seconds
+    do shell script quoted form of launcherPath & " --manage"
+  end timeout
 end run
 """
     compiled = subprocess.run(
@@ -527,7 +629,7 @@ end run
   display dialog explanation & return & return & "No provider write was authorized." buttons {"OK"} default button "OK" with icon caution with title "Bridge Enrollment Stopped"
 end run
 """
-    complete_script = b"""display dialog "The reviewed bridge enrollment flow finished. AdministrateMe Settings shows each source independently while observations settle. No provider write was authorized." buttons {"OK"} default button "OK" with title "Bridge Enrollment Complete"\n"""
+    complete_script = b"""display dialog "Your selected sources are connected. Return to Settings to check each last successful sync, then choose writing permissions under Apple service permissions and review My CoS permissions. Empty calendars or lists can be healthy. No provider write was authorized by enrollment." buttons {"OK"} default button "OK" with title "Bridge Enrollment Complete"\n"""
     permission_stopped_script = b"""on run argv
   set outcome to item 1 of argv
   set explanation to "Enrollment has not completed. Review the source statuses in AdministrateMe Settings before continuing."
@@ -541,13 +643,21 @@ end run
   display dialog explanation & return & return & "No provider write was authorized." buttons {"OK"} default button "OK" with icon caution with title "Bridge Enrollment Needs Attention"
 end run
 """
-    manage_script = b"""set answer to display dialog "Continue selected local permission steps, or uninstall bridge-owned files from this Mac. Revoke the bridge in AdministrateMe Settings to stop central ingestion." buttons {"Cancel", "Uninstall Locally", "Continue Enrollment"} default button "Continue Enrollment" cancel button "Cancel" with title "Manage AdministrateMe Bridge"\nreturn button returned of answer\n"""
+    manage_script = b"""set choices to {"Prepare This Mac", "Continue Enrollment", "Uninstall Locally"}
+set answer to choose from list choices with title "AdministrateMe Bridge" with prompt "New Mac: choose Prepare This Mac before creating a pairing code in Settings. Existing enrollment: Continue Enrollment retains your accepted steps." default items {"Prepare This Mac"} OK button name "Continue" cancel button name "Cancel"
+if answer is false then error number -128
+return item 1 of answer
+"""
+    prepared_script = b"""display dialog "This Mac is prepared. Return to AdministrateMe Settings on this Mac, confirm preparation, then create and download a fresh secure handoff. Open that file with this helper and paste its one-time code. Installation granted no Apple data access and started no bridge. If you already downloaded a handoff, check its expiry in Settings before continuing." buttons {"OK"} default button "OK" with title "Mac Preparation Complete"\n"""
+    atomic_write(resources / "prepare-mac.sh", _mac_prerequisites())
+    os.chmod(resources / "prepare-mac.sh", 0o700)
     for name, value in (
         ("secure-code.applescript", secure_code_script),
         ("review.applescript", review_script),
         ("failed.applescript", failed_script),
         ("complete.applescript", complete_script),
         ("manage.applescript", manage_script),
+        ("prepared.applescript", prepared_script),
         ("permission-stopped.applescript", permission_stopped_script),
     ):
         atomic_write(resources / name, value)
@@ -595,6 +705,8 @@ end run
         "remote_shell": False,
         "arbitrary_central_code": False,
         "tcc_dialog_automation": False,
+        "prepare_before_pairing": True,
+        "prerequisites_sha256": hashlib.sha256(_mac_prerequisites()).hexdigest(),
         "setup_diagnostics": {
             "contract": "administrateme-bridge-setup-diagnostic-v1",
             "private_terminal_receipts": True,

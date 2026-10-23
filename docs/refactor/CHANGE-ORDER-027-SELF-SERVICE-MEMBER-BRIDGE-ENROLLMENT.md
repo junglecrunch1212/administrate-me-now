@@ -70,6 +70,50 @@ central code, install an updater or remote shell, or start a connector merely
 because transport paired. The legacy unsigned bootstrap package remains
 accepted only by the established legacy path.
 
+
+### First-run delivery (MODERNIZE, 2026-10-23)
+
+Authenticated Settings provides the reviewed helper for the **exact active
+central release**, separately from a member's short-lived handoff. The supported
+publisher is `python -m bootstrap.member_bridge_distribution --repository
+<CLEAN_PROTECTED_MAIN_CHECKOUT> --instance-dir <INSTANCE_DIR> --expected-commit
+<MERGE_SHA>`. Prepare this immutable artifact before activating that central
+release. It lives outside installed releases and encrypted state under the
+instance parent's `app/bridge-helper-downloads/<MERGE_SHA>` directory. Keep the
+predecessor artifact for rollback. Publication cannot enroll a member or grant
+Apple access. Missing, unsafe, oversized, mismatched or damaged artifacts return
+an actionable refusal; neither server nor browser substitutes another release.
+
+The member downloads and opens the helper, chooses **Prepare This Mac**, and
+completes native prerequisite prompts before creating a pairing request. The
+helper checks the supported Apple-silicon/macOS version, FileVault, developer
+SDK, Tailscale app/identity availability and storage, then installs its reviewed
+runtime. Homebrew's official 7.0.10 macOS package is downloaded over HTTPS and
+checked against its pinned SHA-256 and macOS signature assessment before opening
+Installer. The native installation and account consent remain the member's.
+See [Homebrew's installer documentation](https://docs.brew.sh/Installation.html).
+The helper can use Tailscale's ordinary application executable; a terminal
+shortcut is not required. A blocked prerequisite explains its own next step and
+can resume without a pairing code. Installation does not start a daemon.
+
+Settings asks the member to confirm **Mac Preparation Complete**, then creates
+the existing fresh 30-minute handoff. This checkbox is a workflow aid, not
+permission or device attestation. Opening a handoff before preparation finishes
+preparation without reading its secret and directs the member back to Settings.
+The existing local consent, exact identity, expiry, source selection, replay,
+unknown-result and write guards still decide enrollment. Completion points to
+source-specific sync status, Apple write permissions and private CoS permissions.
+Selecting reading during enrollment grants no writing and does not turn on the
+system-wide observation switch. An empty selected calendar is valid; members
+must select their actual desired Apple or Google-backed calendar in EventKit.
+
+Recovery: interrupted preparation retains diagnostic receipts and retries the
+same immutable runtime; interrupted pairing retains the existing request and
+accepted source steps. Revoke or repair through Settings, never silently create
+a replacement after an unknown response. A bad central delivery is rolled back
+through the guarded updater to its known-working predecessor; its matching
+helper remains available. No provider writes are part of preparation/acceptance.
+
 Installation failures must remain diagnosable after a native dialog exits.
 The helper records a private, content-free phase and terminal exit receipt;
 dependency preparation retains a bounded private log before transfer-package

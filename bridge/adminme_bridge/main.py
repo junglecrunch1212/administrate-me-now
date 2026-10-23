@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from adminme.tailscale_local import tailscale_executable
 from adminme.events.envelope import EventEnvelope
 from adminme.apple_service_permissions import (
     PROVIDERS as APPLE_SERVICE_PROVIDERS,
@@ -854,7 +855,7 @@ def _local_device_identity(config: BridgeConfig, config_path: Path) -> str:
         ):
             return ""
         status = subprocess.run(
-            ["tailscale", "status", "--json"],
+            [tailscale_executable(), "status", "--json"],
             check=False,
             capture_output=True,
             text=True,
