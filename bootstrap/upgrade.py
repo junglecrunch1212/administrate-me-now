@@ -2650,13 +2650,25 @@ class UpgradeManager:
                 root=candidate,
                 test_mode=self.test_mode,
             )
-            backup_result = backup_manager.create(backup_path)
+            reused = (
+                backup_manager.reuse_recovery_evidence(
+                    pending=pending, candidate=candidate
+                )
+                if "recovery_inputs" in pending
+                else None
+            )
+            if reused is None:
+                backup_result = backup_manager.create(backup_path)
+            else:
+                backup_result, rehearsal, reused_receipt_path = reused
+                backup_path = Path(backup_result["path"])
             backup_sha256 = self._hash_private_file(backup_path)
             fresh_backup = {
                 "path": str(backup_path),
                 "artifact_sha256": backup_sha256,
                 "manifest_sha256": backup_result["manifest_sha256"],
                 "encrypted": backup_result["encrypted"] is True,
+                "reused": reused is not None,
                 "rehearsal_receipt_path": None,
                 "rehearsal_receipt_sha256": None,
                 "content_exposed": False,
@@ -2673,11 +2685,15 @@ class UpgradeManager:
                 journal,
                 "backup_rehearsing",
             )
-            rehearsal = backup_manager.rehearse(
-                backup_path,
-                candidate=candidate,
-                receipt=receipt_path,
-            )
+            if reused is None:
+                rehearsal = backup_manager.rehearse(
+                    backup_path,
+                    candidate=candidate,
+                    receipt=receipt_path,
+                )
+            else:
+                receipt_path = reused_receipt_path
+            assert rehearsal is not None
             receipt_sha256 = self._hash_private_file(
                 receipt_path,
                 maximum_size=16 * 1024 * 1024,
@@ -3050,6 +3066,7 @@ class UpgradeManager:
             "status": "upgraded",
             "commit": commit,
             "backup": backup_result["path"],
+            "recovery_evidence_reused": journal["fresh_backup"].get("reused", False),
             "fresh_backup_sha256": journal["fresh_backup"]["artifact_sha256"],
             "fresh_rehearsal_receipt_sha256": journal["fresh_backup"][
                 "rehearsal_receipt_sha256"

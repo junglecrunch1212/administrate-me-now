@@ -1195,3 +1195,33 @@ def test_post_publication_drift_leaves_only_an_unselected_immutable_artifact(
     assert stat.S_IMODE(residue.stat().st_mode) == 0o600
     assert (active.read_bytes(), active.stat().st_ino) == active_before
     assert not (paths.app_dir / "readiness" / "candidate-pending.json").exists()
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["/outside/file", "../file", "nested/../file", "", "nested//file", "nested\\file"],
+)
+def test_pending_recovery_inputs_reject_unsafe_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    paths, candidate, commit, receipt, artifact, htr10, confirmations, observed = (
+        _arguments(tmp_path, monkeypatch)
+    )
+    value, _ = build_pending_attestation(
+        paths,
+        candidate=candidate,
+        expected_candidate_commit=commit,
+        rehearsal_receipt=receipt,
+        backup_artifact=artifact,
+        htr10_review=htr10,
+        confirmations=confirmations,
+        observed_at=observed,
+        now=NOW,
+    )
+    assert value["recovery_inputs"] == {
+        "receipt": receipt.name,
+        "backup": artifact.name,
+    }
+    value["recovery_inputs"]["receipt"] = relative
+    with pytest.raises(CandidateReadinessError, match="recovery input path"):
+        validate_pending_attestation(value, now=NOW)

@@ -607,10 +607,20 @@ controller caches remain isolated. Secret values stay out of arguments,
 environment variables, files, and logs; no Keychain item or ACL is changed.
 
 Inside that lock the updater revalidates the explicit pending artifact, then
-creates a mode-0600 activation journal before backup quiescence. It creates and
-rehearses one exact fresh encrypted artifact, proves the retained predecessor's
-source, prepared runtime, OpenClaw, and LaunchAgent rollback coordinates, and
-revalidates the pending binding again before selector authority exists.
+creates a mode-0600 activation journal before backup quiescence. New pending
+receipts include private relative coordinates for their existing recovery proof.
+The updater may reuse that authenticated backup and rehearsal only when the
+candidate, deployment binding, original freshness window, key binding and full
+state inventory still match. It compares all state file paths, sizes and bytes,
+then repeats the comparison after quiescence; changed, missing, unsafe or legacy
+evidence takes the ordinary fresh backup/rehearsal path. No timestamp is renewed.
+This preserves current state coverage instead of treating an unchanged event
+watermark alone as sufficient. The journal/result records whether evidence was
+reused; the legacy `fresh_*` digest fields identify the validated artifact in
+either case. The updater still proves the retained predecessor's source, runtime,
+OpenClaw and LaunchAgent rollback coordinates and revalidates the pending binding
+before selector authority exists. Reuse does not authorize restoration or a
+state replacement, and all existing recovery and post-switch checks still run.
 Immediately before the first selector mutation it consumes the completed
 preparation record, which can never grant retry authority again.
 

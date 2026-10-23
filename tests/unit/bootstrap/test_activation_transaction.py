@@ -1141,9 +1141,11 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
     assert selector_order == ["llm_tool", "runtime_binding"]
 
 
+@pytest.mark.parametrize("reuse", [False, True])
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    reuse: bool,
 ) -> None:
     paths = _paths(tmp_path)
     stub_uninitialized_intake(monkeypatch, paths)
@@ -1239,9 +1241,30 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         },
     )
 
+    if reuse:
+        pending["recovery_inputs"] = {
+            "backup": "cached.ambackup",
+            "receipt": "cached.json",
+        }
+
     class FakeBackupManager:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             pass
+
+        def reuse_recovery_evidence(
+            self, **_kwargs: Any
+        ) -> tuple[dict[str, Any], dict[str, Any], Path]:
+            # Prepare a stand-in for already validated evidence, then clear its
+            # creation actions: activation must only reuse it before selectors.
+            backup = self.create(paths.backup_dir / "cached.ambackup")
+            receipt = paths.backup_dir / "cached.json"
+            rehearsal = self.rehearse(
+                Path(backup["path"]), candidate=candidate, receipt=receipt
+            )
+            events.remove("action:backup")
+            events.remove("action:rehearsal")
+            events.append("action:reuse")
+            return backup, rehearsal, receipt
 
         def create(self, target: Path) -> dict[str, Any]:
             events.append("action:backup")
@@ -1319,11 +1342,21 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
 
     assert result["status"] == "upgraded"
     assert result["pending_attestation_id"] == PENDING_ID
-    assert events.index("phase:backup_creating") < events.index("action:backup")
-    assert events.index("phase:backup_rehearsing") < events.index("action:rehearsal")
-    assert events.index("action:rehearsal") < events.index(
-        "phase:selector_mutation_authorized"
-    )
+    assert result["recovery_evidence_reused"] is reuse
+    if reuse:
+        assert "action:backup" not in events and "action:rehearsal" not in events
+        assert events.index("phase:backup_creating") < events.index("action:reuse")
+        assert events.index("action:reuse") < events.index(
+            "phase:selector_mutation_authorized"
+        )
+    else:
+        assert events.index("phase:backup_creating") < events.index("action:backup")
+        assert events.index("phase:backup_rehearsing") < events.index(
+            "action:rehearsal"
+        )
+        assert events.index("action:rehearsal") < events.index(
+            "phase:selector_mutation_authorized"
+        )
     assert events.index("phase:openclaw_selecting") < events.index("action:openclaw")
     assert events.index("phase:plugin_selecting") < events.index("action:plugin")
     assert events.index("phase:llm_tool_selecting") < events.index("action:llm")
