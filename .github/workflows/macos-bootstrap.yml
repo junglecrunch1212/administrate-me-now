@@ -362,7 +362,7 @@ jobs:
   google-connections-validation:
     name: Google connections release (macos)
     needs: [release-scope]
-    if: ${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' }}
+    if: ${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' || needs.release-scope.outputs.scope == 'cos-apple-reminders' }}
     runs-on: macos-15
     timeout-minutes: 20
     env:
@@ -394,6 +394,16 @@ jobs:
             --basetemp="$RUNNER_TEMP/google-connections-tests" \
             --junitxml="$RUNNER_TEMP/google-connections.xml" \
             tests/unit/bootstrap/test_cos_google_workspace.py \
+            tests/unit/bootstrap/test_cos_apple_reminders.py \
+            tests/acceptance/test_cos_apple_reminders_context.py \
+            tests/acceptance/test_cos_service_planning_context.py \
+            tests/acceptance/test_cos_service_working_context.py \
+            tests/acceptance/test_cos_service_private_work.py \
+            tests/integration/test_lists_projection_runner.py \
+            tests/unit/test_capability_catalog.py \
+            tests/unit/events/test_adapter_schemas.py \
+            tests/unit/events/schemas/test_lists_schemas.py \
+            packs/adapters/reminders/apple-eventkit/tests \
             tests/unit/bootstrap/test_google_oauth.py \
             tests/adapters/test_credentials.py \
             tests/unit/test_provider_bindings.py \

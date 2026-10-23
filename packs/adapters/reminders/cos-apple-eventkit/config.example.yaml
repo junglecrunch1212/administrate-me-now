@@ -1,0 +1,21 @@
+{
+  "selection": {
+    "adapter_id": "fixture-cos-reminders",
+    "source_id": "fixture-native-source",
+    "list_id": "fixture-native-list",
+    "source_kind": "local",
+    "device_identity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "os_uid": 501,
+    "source_ownership_evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "owner_authorization_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "provider_account_id": "provider-account:1e5965317b3459e77c6123e468626394f1c2868d39824a273f7dfab744edb8c9",
+  "service_principal_id": "service-principal:chief-of-staff",
+  "workspace": "service",
+  "binding_provenance": "service-device-authorization",
+  "ownership_attested": true,
+  "permission_scope": [
+    "eventkit.reminders.read"
+  ],
+  "read_only": true
+}

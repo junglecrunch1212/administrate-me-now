@@ -124,14 +124,14 @@ DATE_FIELDS = frozenset(
     }
 )
 SELF_PLANNING_VERSIONS = {
-    "calendar.event_added": ("google_calendar", 3),
-    "calendar.event_updated": ("google_calendar", 3),
-    "list.created": ("google_tasks", 2),
-    "list.updated": ("google_tasks", 2),
-    "list_item.added": ("google_tasks", 4),
-    "list_item.updated": ("google_tasks", 4),
-    "list_item.completed": ("google_tasks", 4),
-    "list_item.uncompleted": ("google_tasks", 4),
+    "calendar.event_added": frozenset({("google_calendar", 3)}),
+    "calendar.event_updated": frozenset({("google_calendar", 3)}),
+    "list.created": frozenset({("google_tasks", 2), ("apple_reminders", 2)}),
+    "list.updated": frozenset({("google_tasks", 2), ("apple_reminders", 2)}),
+    "list_item.added": frozenset({("google_tasks", 4), ("apple_reminders", 4)}),
+    "list_item.updated": frozenset({("google_tasks", 4), ("apple_reminders", 4)}),
+    "list_item.completed": frozenset({("google_tasks", 4), ("apple_reminders", 4)}),
+    "list_item.uncompleted": frozenset({("google_tasks", 4), ("apple_reminders", 4)}),
 }
 SELF_PLANNING_METADATA = frozenset(
     {
@@ -306,8 +306,12 @@ def _self_mail(event: dict[str, Any], session: ServiceSession) -> bool:
 def _self_planning(event: dict[str, Any], session: ServiceSession) -> bool:
     p = event["payload"]
     return (
-        SELF_PLANNING_VERSIONS.get(event["type"])
-        == (p.get("provider"), event["schema_version"])
+        (p.get("provider"), event["schema_version"])
+        in SELF_PLANNING_VERSIONS.get(event["type"], frozenset())
+        and (
+            p.get("provider") != "apple_reminders"
+            or event["source_adapter"] == "reminders-cos-apple-eventkit"
+        )
         and event["tenant_id"] == session.tenant_id
         and event["owner_scope"] == session.private_scope
         and event["visibility_scope"] == session.private_scope

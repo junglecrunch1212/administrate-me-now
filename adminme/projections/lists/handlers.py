@@ -480,7 +480,11 @@ def apply_service_list_pointer(
     }
     if (
         envelope["schema_version"] != versions.get(kind)
-        or p.get("provider") != "google_tasks"
+        or p.get("provider") not in {"google_tasks", "apple_reminders"}
+        or (
+            p.get("provider") == "apple_reminders"
+            and envelope["source_adapter"] != "reminders-cos-apple-eventkit"
+        )
         or p.get("member_id") is not None
         or p.get("workspace") != "service"
         or envelope["owner_scope"] != scope

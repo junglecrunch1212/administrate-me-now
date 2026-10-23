@@ -272,3 +272,26 @@ def test_self_service_catalog_unverified_and_view_as_do_not_claim_authority(
     assert item["effective"]["read_available"] is False
     assert item["effective"]["execute_available"] is False
     assert item["administrateme_authority"]["provider_permission_event_id"] is None
+
+
+def test_cos_reminders_catalog_is_service_owned_read_only_and_local() -> None:
+    catalog = load_catalog(REPO_ROOT)
+    source = next(
+        item
+        for item in catalog["items"]
+        if item["capability_id"] == "adapter.reminders-cos-apple-eventkit"
+    )
+    assert source["owner_kinds"] == ["service_principal"]
+    assert source["runtime_location"] == "central"
+    assert source["implementation_present"] is True
+    assert source["verbs"] == {
+        "read": "supported",
+        "observe": "supported",
+        "draft": "unsupported",
+        "prepare": "unsupported",
+        "hold": "unsupported",
+        "execute": "unsupported",
+    }
+    assert source["prerequisites"] == ["member_consent", "local_permission"]
+    assert source["prerequisite_classes"]["partner_service"] == "not_required"
+    assert source["terminal_result_support"] is False

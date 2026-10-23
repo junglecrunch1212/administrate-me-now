@@ -327,6 +327,12 @@ _ARTIFACT_OUTCOMES: dict[str, dict[str, Any]] = {
         "outcome": "Observe member-owned reminder lists through a separately enrolled bridge.",
         "sensitivity": ["normal", "sensitive"],
     },
+    "reminders-cos-apple-eventkit": {
+        "category": "planning",
+        "label": "CoS Apple Reminders",
+        "outcome": "Observe one reviewed CoS-owned reminder list on the authorized work computer without provider writes.",
+        "sensitivity": ["normal", "sensitive"],
+    },
     "tasks-google-tasks": {
         "category": "planning",
         "label": "Google Tasks",
@@ -559,7 +565,9 @@ def _central_definitions(repository_root: Path) -> list[dict[str, Any]]:
                 "verbs": verbs,
                 "provider_options": [artifact_id],
                 "prerequisites": (
-                    [
+                    ["member_consent", "local_permission"]
+                    if artifact_id == "reminders-cos-apple-eventkit"
+                    else [
                         "local_helper",
                         "member_bridge",
                         "member_consent",
