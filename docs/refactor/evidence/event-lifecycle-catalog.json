@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 370,
-    "technical_event_types": 292,
+    "technical_event_schemas": 372,
+    "technical_event_types": 294,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -34059,6 +34059,136 @@
         "entries",
         "changed_by_member_id",
         "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.google_connection_authorized",
+      "family": "settings",
+      "properties": {
+        "account_id": {
+          "pattern": "^google-[0-9a-f]{24}$",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "automated_candidate_extraction": {
+          "const": false,
+          "default": false,
+          "title": "Automated Candidate Extraction",
+          "type": "boolean"
+        },
+        "changed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "request_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "services": {
+          "$ref": "#/$defs/ServiceSelection"
+        },
+        "sharing_changed": {
+          "const": false,
+          "default": false,
+          "title": "Sharing Changed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "member_id",
+        "changed_by_member_id",
+        "account_id",
+        "request_id",
+        "services",
+        "configuration_sha256"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.google_connection_completed",
+      "family": "settings",
+      "properties": {
+        "account_id": {
+          "pattern": "^google-[0-9a-f]{24}$",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "automated_candidate_extraction": {
+          "const": false,
+          "default": false,
+          "title": "Automated Candidate Extraction",
+          "type": "boolean"
+        },
+        "changed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "request_id": {
+          "maxLength": 36,
+          "minLength": 36,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "services": {
+          "$ref": "#/$defs/ServiceSelection"
+        },
+        "sharing_changed": {
+          "const": false,
+          "default": false,
+          "title": "Sharing Changed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "member_id",
+        "changed_by_member_id",
+        "account_id",
+        "request_id",
+        "services",
+        "configuration_sha256"
       ],
       "schema_version": 1
     },

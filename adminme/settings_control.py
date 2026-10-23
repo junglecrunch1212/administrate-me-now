@@ -257,12 +257,16 @@ class SettingsControlStore:
     def __init__(
         self, path: Path, *, adapter_config: dict[str, Any] | None = None
     ) -> None:
+
+        self.path = Path(path)
+        self.rebind_google_config(adapter_config or {})
+
+    def rebind_google_config(self, adapter_config: dict[str, Any]) -> None:
         from adminme.adapters.member_google_connections import (
             manual_sources,
             selected_entries,
         )
 
-        self.path = Path(path)
         self._manual_google_sources = manual_sources(adapter_config or {})
         self._google_observation_entries = selected_entries(adapter_config or {})
 
@@ -1448,6 +1452,8 @@ class SettingsControlStore:
             policy = policy.model_copy(
                 update={"attention_mode": "manual", "triage_mode": "manual_only"}
             )
+            if selected.get("enabled") is False:
+                policy = policy.model_copy(update={"context_mode": "none"})
             # This exact deployment-authorized override uses the existing audit
             # contract; retained event schemas remain replay-compatible.
             origin = "exact_override"

@@ -36,6 +36,9 @@ class SourcePolicyShadowEvaluator:
         self._current_policy_fn = current_policy_fn
         self._provider_bindings = provider_bindings
 
+    def rebind_provider_bindings(self, bindings: tuple[Any, ...]) -> None:
+        self._provider_bindings = bindings
+
     async def handle(self, event: dict[str, Any]) -> None:
         source_event_id = str(event.get("event_id") or "")
         if not source_event_id:

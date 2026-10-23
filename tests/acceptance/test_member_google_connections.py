@@ -138,12 +138,26 @@ def test_exact_connections_are_idempotent_and_preserve_cos_and_retained_selectio
     )
     assert len(adapters) == 4
     for adapter in adapters:
-        writable = read_write and adapter.name in WRITE_SCOPES
-        scope = WRITE_SCOPES[adapter.name] if writable else SCOPES[adapter.name]
-        assert adapter._scopes == [scope]
-        if adapter.name != "messaging-gmail-api":
+        writable = (
+            read_write
+            and adapter._config.get("member_id") == MEMBER_A
+            and adapter.name in WRITE_SCOPES
+        )
+        if adapter.name == "messaging-gmail-api":
+            assert adapter._scopes == (
+                [
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "https://www.googleapis.com/auth/gmail.send",
+                ]
+                if writable
+                else [SCOPES[adapter.name]]
+            )
+            assert adapter._config.get("enable_writes") is writable
+        else:
+            scope = WRITE_SCOPES[adapter.name] if writable else SCOPES[adapter.name]
+            assert adapter._scopes == [scope]
             assert bool(adapter.write_capabilities) is writable
-        assert adapter._config.get("enable_writes") is not True
+            assert adapter._config.get("enable_writes") is not True
     assert prepared["adapters"][-1]["enabled"] is False
     gmail = prepared["adapters"][0]["config"]
     assert gmail["initial_backfill_max_messages"] == 0
@@ -183,10 +197,7 @@ def test_access_cannot_widen_under_a_read_only_binding(
         if row["adapter_id"] == entry["id"]
     )
     selection["access"] = "read_write"
-    message = (
-        "must remain read-only" if kind == "messaging-gmail-api" else "binding mismatch"
-    )
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="binding mismatch"):
         restrict_adapter_config(config)
 
 
@@ -423,10 +434,17 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
         def service(
             _credentials: Any, scopes: list[str], subject: str
         ) -> ReadOnlyGoogle:
-            assert len(scopes) == 1 and scopes[0] in {
-                *SCOPES.values(),
-                *WRITE_SCOPES.values(),
-            }
+            assert (
+                len(scopes) == 1
+                and scopes[0]
+                in {
+                    *SCOPES.values(),
+                    *WRITE_SCOPES.values(),
+                }
+            ) or scopes == [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+            ]
             calls.append((subject, scopes))
             return ReadOnlyGoogle(subject)
 
@@ -590,6 +608,7 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             assert len(control["connections"]) == 3
             for row in control["connections"]:
                 writable = read_write and row["id"] in {
+                    "fixture-personal-gmail",
                     "fixture-personal-calendar",
                     "fixture-personal-tasks",
                 }
@@ -610,6 +629,7 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             assert all(s["policy"]["triage_mode"] == "manual_only" for s in selected)
             for source in selected:
                 writable = read_write and source["adapter_instance_id"] in {
+                    "fixture-personal-gmail",
                     "fixture-personal-calendar",
                     "fixture-personal-tasks",
                 }

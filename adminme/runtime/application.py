@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -191,6 +191,8 @@ class RuntimeSettings:
     bridge_index_committer: BridgeIndexCommitter | None = field(
         default=None, repr=False
     )
+    google_config_committer: Any = field(default=None, repr=False)
+    google_oauth: Any = field(default=None, repr=False)
     adapter_config: dict[str, Any] = field(
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
@@ -701,6 +703,8 @@ class RuntimeSettings:
         household_mapping: dict[str, Any] | None = None,
         bridge_enrollments: dict[str, dict[str, Any]] | None = None,
         bridge_index_committer: BridgeIndexCommitter | None = None,
+        google_config_committer: Any = None,
+        google_oauth: Any = None,
         deterministic_openclaw_fixture: bool = False,
         member_roles: dict[str, str] | None = None,
         fixture_member_id: str | None = None,
@@ -734,6 +738,8 @@ class RuntimeSettings:
                 key: dict(value) for key, value in (bridge_enrollments or {}).items()
             },
             bridge_index_committer=bridge_index_committer,
+            google_config_committer=google_config_committer,
+            google_oauth=google_oauth,
             deterministic_openclaw_fixture=deterministic_openclaw_fixture,
             member_roles=dict(member_roles or {}),
             fixture_member_id=fixture_member_id,
@@ -3195,6 +3201,54 @@ class AdministrateMeRuntime:
             return {"name": product, "state": "blocked", "reason": "not registered"}
         return record.public()
 
+    def validate_google_config(self, config: dict[str, Any]) -> RuntimeSettings:
+        candidate = replace(self.settings, adapter_config=config)
+        # Construct reviewed adapters before publication, without starting or
+        # contacting them. The selected instances alone are restarted below.
+        list(
+            load_builtin_adapters(
+                self.settings_control.effective_adapter_config(config),
+                repository_root=candidate.repository_root,
+                member_roles=candidate.member_roles,
+                household_mapping=candidate.household_mapping,
+                service_principal_ids={
+                    row.service_principal_id for row in candidate.service_principals
+                },
+                service_principal_provider_authorizations={},
+                validate_bindings=candidate.deployment_evidence_required,
+            )
+        )
+        return candidate
+
+    async def apply_google_config(
+        self, config: dict[str, Any], evidence: dict[str, Any], affected: set[str]
+    ) -> None:
+        # Publish permission/binding caches before the first new adapter event.
+        # A provider outage cannot restore a revoked permission or old grant.
+        self.settings = replace(self.settings, adapter_config=config)
+        self.settings_control.rebind_google_config(config)
+        self.bridge_enrollment.adapter_config = config
+        if self.source_policy_shadow is not None:
+            self.source_policy_shadow.rebind_provider_bindings(
+                self.settings.provider_bindings
+            )
+        if self.reconciliation_admission is not None:
+            self.reconciliation_admission.rebind_provider_bindings(
+                self.settings.provider_bindings
+            )
+        self._bridge_index_committed(evidence)
+        self._source_assurance_cache = None
+        if self.adapters is None:
+            raise RuntimeError("adapter supervisor is unavailable")
+        try:
+            await self.adapters.reconcile(
+                self.settings_control.effective_adapter_config(config),
+                affected_instance_ids=affected,
+            )
+        except Exception:
+            await self.adapters.stop_instances(affected)
+            raise
+
     def _bridge_index_committed(self, evidence: dict[str, Any]) -> None:
         # This callback runs synchronously only after both durable publications.
         self.settings.deployment_evidence.clear()
@@ -3233,8 +3287,11 @@ class AdministrateMeRuntime:
         )
         host_topology = self.settings.host_topology
         committer = self.settings.bridge_index_committer
-        if self.bridge_enrollment.index_commit_failed or (
-            committer is not None and committer.pending
+        google_committer = self.settings.google_config_committer
+        if (
+            (google_committer is not None and google_committer.pending)
+            or self.bridge_enrollment.index_commit_failed
+            or (committer is not None and committer.pending)
         ):
             host_topology = {**host_topology, "deployment_binding": {}}
         google_source_ids = selected_google_entries(self.settings.adapter_config)
@@ -3969,6 +4026,11 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(member_router)
     app.include_router(member_bridge_setup_router)
     app.include_router(member_cos_router)
+    from adminme.products.member.google_connections import (
+        router as google_connections_router,
+    )
+
+    app.include_router(google_connections_router)
     app.include_router(apple_service_settings_router)
     app.include_router(apple_notes_commands_router)
     app.include_router(system_router)

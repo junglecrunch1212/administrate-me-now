@@ -148,6 +148,9 @@ def _decode(value: Any, *, absent: bool = False) -> bytes | None:
 
 
 class BridgeReadinessTransition:
+    # The Google adapter transition reuses this exact publication/recovery core.
+    contract = CONTRACT
+
     def __init__(self, paths: DeploymentPaths, encryption_key: bytes) -> None:
         if len(encryption_key) != 32:
             raise BridgeReadinessTransitionError("instance key is invalid")
@@ -157,7 +160,7 @@ class BridgeReadinessTransition:
             paths.instance_dir / "config" / "deployment-readiness.json"
         )
         self.journal_path = paths.app_dir / "bridge-readiness-transition.json"
-        self._key = hmac.digest(encryption_key, CONTRACT.encode("ascii"), "sha256")
+        self._key = hmac.digest(encryption_key, self.contract.encode("ascii"), "sha256")
 
     @property
     def pending(self) -> bool:
@@ -378,7 +381,10 @@ class BridgeReadinessTransition:
     def _verify_document(
         self, document: dict[str, Any]
     ) -> tuple[bytes | None, bytes, bytes, bytes]:
-        if set(document) != _DOCUMENT_FIELDS or document.get("contract") != CONTRACT:
+        if (
+            set(document) != _DOCUMENT_FIELDS
+            or document.get("contract") != self.contract
+        ):
             raise BridgeReadinessTransitionError(
                 "transaction journal schema is invalid"
             )
@@ -424,7 +430,7 @@ class BridgeReadinessTransition:
             raise BridgeReadinessTransitionError(
                 "transaction changes physical readiness evidence"
             )
-        if authority["operation"] == "prepare":
+        if authority.get("operation") == "prepare":
             new = _json_no_duplicates(next_payload, label="next bridge index")[
                 authority["identity"]
             ]
@@ -525,7 +531,7 @@ class BridgeReadinessTransition:
             ] = next_snapshot.configuration_fingerprint
             next_readiness = _canonical(evidence) + b"\n"
             document = {
-                "contract": CONTRACT,
+                "contract": self.contract,
                 "authority": dict(authority),
                 "previous_index": _encode(previous_payload),
                 "next_index": _encode(next_payload),
