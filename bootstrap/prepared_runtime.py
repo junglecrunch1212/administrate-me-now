@@ -29,6 +29,8 @@ def _coordinate(value: os.stat_result) -> tuple[int, ...]:
         value.st_ino,
         value.st_mode,
         value.st_nlink,
+        value.st_uid,
+        value.st_gid,
         value.st_size,
         value.st_mtime_ns,
         value.st_ctime_ns,
@@ -97,7 +99,7 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                         interpreter = os.fstat(fd)
                         if (
                             not stat.S_ISREG(interpreter.st_mode)
-                            or interpreter.st_mode & 0o022
+                            or interpreter.st_mode & 0o002
                         ):
                             raise PreparedRuntimeError("prepared interpreter is unsafe")
                         interpreters[resolved] = _coordinate(interpreter)
@@ -113,8 +115,19 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                             raise PreparedRuntimeError(
                                 "prepared interpreter changed during read"
                             )
+                        # The pinned system tool can be administered by its
+                        # owning group. Bind its permissions and ownership as
+                        # well as bytes instead of imposing release-local modes.
                         record(
-                            [path, "interpreter", str(resolved), content.hexdigest()]
+                            [
+                                path,
+                                "interpreter",
+                                str(resolved),
+                                stat.S_IMODE(interpreter.st_mode),
+                                interpreter.st_uid,
+                                interpreter.st_gid,
+                                content.hexdigest(),
+                            ]
                         )
                     finally:
                         os.close(fd)
