@@ -7,7 +7,12 @@
     "device_identity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "os_uid": 501,
     "source_ownership_evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "owner_authorization_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    "owner_authorization_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "native_helper": {
+      "app_path": "/fixture/CoSReminders.app",
+      "artifact_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "bundle_identifier": "com.administrateme.cos-reminders-helper"
+    }
   },
   "provider_account_id": "provider-account:1e5965317b3459e77c6123e468626394f1c2868d39824a273f7dfab744edb8c9",
   "service_principal_id": "service-principal:chief-of-staff",

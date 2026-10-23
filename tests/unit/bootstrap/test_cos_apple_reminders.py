@@ -42,6 +42,11 @@ from tests.acceptance.test_forwarded_channel_intake import MEMBER_A, ROOT
 def _selection() -> CoSRemindersSelection:
     return CoSRemindersSelection.model_validate(
         {
+            "native_helper": {
+                "app_path": "/fixture/CoSReminders.app",
+                "artifact_sha256": "d" * 64,
+                "bundle_identifier": "com.administrateme.cos-reminders-helper",
+            },
             "adapter_id": "fixture-cos-reminders",
             "source_id": "fixture-source",
             "list_id": "fixture-list",
@@ -620,12 +625,17 @@ def test_preparation_cli_requests_consent_only_when_explicit_and_keeps_output_pr
     calls = []
     monkeypatch.setattr(setup, "local_device_identity", lambda: ("a" * 64, 501))
     monkeypatch.setattr(
-        setup, "request_reminders_permission", lambda: calls.append("consent")
+        setup,
+        "invoke",
+        lambda binding, operation, payload, **kwargs: calls.append("consent"),
     )
     monkeypatch.setattr(
         setup,
         "read_back",
-        lambda selection: {"selected_list_verified": True, "provider_write_count": 0},
+        lambda selection, **kwargs: {
+            "selected_list_verified": True,
+            "provider_write_count": 0,
+        },
     )
     argv = [
         "setup",
