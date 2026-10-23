@@ -121,9 +121,9 @@ def _standing_valid(
                 if scheduled
                 else (approved_at - submitted).total_seconds() <= 3600
             )
+            and str(source["event_id"]) < str(approved["event_id"])
             and str(activation["event_id"])
-            < str(source["event_id"])
-            < str(approved["event_id"])
+            < str(approved["event_id"] if scheduled else source["event_id"])
         )
     except (KeyError, TypeError, ValueError):
         return False

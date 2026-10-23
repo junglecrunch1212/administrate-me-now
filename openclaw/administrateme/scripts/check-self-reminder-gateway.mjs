@@ -94,17 +94,24 @@ try {
   await symlink(source, path.join(plugin, "node_modules/openclaw"), "dir");
   await symlink(path.join(repository, "openclaw/administrateme/node_modules/typebox"), path.join(plugin, "node_modules/typebox"), "dir");
   await writeFile(path.join(plugin, "package.json"), JSON.stringify({ name: "@administrateme/reminder-gateway-probe", type: "module", version: "1.0.0", openclaw: { extensions: ["./index.mjs"] } }));
-  await writeFile(path.join(plugin, "openclaw.plugin.json"), JSON.stringify({ id: "administrateme", activation: { onStartup: true }, configSchema: { type: "object", additionalProperties: false, properties: {} } }));
+  await writeFile(path.join(plugin, "openclaw.plugin.json"), JSON.stringify({ id: "administrateme", activation: { onStartup: true }, contracts: { tools: ["administrateme_self_reminder", "administrateme_self_reminder_fire", "administrateme_probe_schedule"] }, configSchema: { type: "object", additionalProperties: false, properties: {} } }));
   await writeFile(configPath, JSON.stringify({ gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false }, reload: { mode: "off" } },
     agents: { defaults: { workspace: path.join(state, "workspace"), heartbeat: { every: "0m" } }, list: [{ id: agent, tools: { allow: ["administrateme"] } }] },
     plugins: { allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true } } },
     channels: {}, cron: { enabled: true, triggers: { enabled: true } }, browser: { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") } }), { mode: 0o600 });
   let request = await start();
-  await request("cron.add", { name: "Synthetic reminder creator", agentId: agent, enabled: true, deleteAfterRun: true,
+  const created = await request("cron.add", { name: "Synthetic reminder creator", agentId: agent, enabled: true, deleteAfterRun: false,
     schedule: { kind: "at", at: new Date(Date.now() + 3_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", delivery: { mode: "none" }, failureAlert: false,
     payload: { kind: "script", toolsAllow: ["administrateme_probe_schedule", "administrateme_self_reminder_fire"], toolBudget: 1, timeoutSeconds: 45,
       script: "const r = await tools.call('administrateme_probe_schedule', {}); if(r?.result?.details?.status !== 'scheduled') throw new Error('Schedule unconfirmed'); json({scheduled:true});" } });
-  const registered = await until(saved, "agent-scoped production timer RPC");
+  const creatorId = (created.job ?? created).id;
+  const registered = await until(async () => {
+    const row = await saved();
+    if (row?.confirmed) return row;
+    const creator = await request("cron.get", { id: creatorId });
+    if (creator?.state?.lastRunStatus === "error") throw new Error(`Synthetic timer creation failed: ${creator.state.lastError}`);
+    return false;
+  }, "agent-scoped production timer RPC");
   assert.equal(registered.callback_count, 0);
   const timer = await request("cron.get", { id: registered.job_id });
   assert.equal(timer.enabled, true);

@@ -1,5 +1,6 @@
 """Production reminder intent, restart, exact timer, guarded send and revocation."""
 
+import copy
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 import pytest
 
+from adminme.cos_response_assurance import AUDIT_TYPES, cos_provider_effect_counts
+from adminme.events.envelope import EventEnvelope
 from adminme.historical_attribution import _cos_response_owner_matches
 from adminme.openclaw_topology import member_agent_id
 from adminme.runtime.application import create_application
@@ -73,13 +76,18 @@ def advance(monkeypatch: pytest.MonkeyPatch, when: datetime) -> None:
         monkeypatch.setattr(f"adminme.products.openclaw.{name}.datetime", Clock)
 
 
-@pytest.mark.parametrize("terminal_status", ["sent", "unknown"])
+@pytest.mark.parametrize(
+    "terminal_status,reactivate", [("sent", False), ("sent", True), ("unknown", False)]
+)
 def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_status: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_status: str,
+    reactivate: bool,
 ) -> None:
     settings = _settings(tmp_path)
     with TestClient(create_application(settings)) as client:
-        _activate(client, monkeypatch)
+        authority = _activate(client, monkeypatch)
         enable(client)
         request, callback, due = prepare(client)
         repeated = client.post(BASE + "/prepare", headers=AUTH, json=request)
@@ -89,6 +97,22 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
         )
     advance(monkeypatch, due + timedelta(seconds=1))
     with TestClient(create_application(settings)) as client:
+        if reactivate:
+            # A routine restart/deployment may renew the channel grant. Keep
+            # the original request authority and validate the current send grant.
+            runtime = client.app.state.runtime
+            grant = copy.deepcopy(
+                client.portal.call(runtime.event_log.get, authority["event_id"])
+            )
+            grant.pop("event_id")
+            grant.pop("recorded_at")
+            renewed_at = due - timedelta(seconds=1)
+            grant["event_at_ms"] = int(renewed_at.timestamp() * 1000)
+            grant["occurred_at"] = renewed_at.isoformat()
+            grant["payload"]["enabled_at"] = renewed_at.isoformat()
+            authority["event_id"] = client.portal.call(
+                runtime.events.write, EventEnvelope(**grant)
+            )
         # The original inbound transient reply window has expired.
         ordinary = client.post(
             ENDPOINT + "/self-reply",
@@ -125,6 +149,24 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
         if terminal_status == "sent":
             assurance = client.portal.call(_provider_assurance, runtime)
             assert assurance["state"] == "healthy", assurance
+            history = client.portal.call(_events, runtime, sorted(AUDIT_TYPES))
+            for missing in ("cos.reply.reminder_requested", "cos.reply.reminder_bound"):
+                incomplete = [event for event in history if event["type"] != missing]
+                assert (
+                    cos_provider_effect_counts(incomplete)[
+                        "approval_correlation_missing"
+                    ]
+                    > 0
+                )
+            changed = copy.deepcopy(history)
+            next(
+                event
+                for event in changed
+                if event["type"] == "cos.reply.reminder_requested"
+            )["payload"]["body"] = "Unrequested replacement."
+            assert (
+                cos_provider_effect_counts(changed)["approval_correlation_missing"] > 0
+            )
     with TestClient(create_application(settings)) as client:
         repeated = client.post(BASE + "/fire", headers=AUTH, json=callback)
         assert repeated.status_code == 200, repeated.text

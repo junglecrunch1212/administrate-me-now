@@ -57,8 +57,11 @@ def _enabled(runtime: Any, binding: str) -> None:
         entry = json.loads(path.read_text("utf-8"))["plugins"]["entries"][
             "administrateme"
         ]
-        enabled = entry.get("enabled") is True and binding in entry["config"].get(
-            "scheduledSelfReminderBindings", []
+        bindings = entry["config"].get("scheduledSelfReminderBindings", [])
+        enabled = (
+            entry.get("enabled") is True
+            and isinstance(bindings, list)
+            and binding in bindings
         )
     except (OSError, KeyError, TypeError, ValueError):
         enabled = False

@@ -127,9 +127,17 @@ print(json.dumps([enabled, entry["hooks"]]))
     message_id: incoming.messageId, session_key: incoming.sessionKey}, incoming.runId, Promise.resolve("receipt-fixture"), incoming.content);
   const requestHook = admitted.state.registry.typedHooks.find((row) => row.hookName === "before_agent_reply").handler;
   const reminderContext = {runId: "reminder-run", agentId: agent, sessionKey: incoming.sessionKey};
-  await requestHook({cleanedBody: incoming.content}, reminderContext);
-  assert.equal(bindReminderTool(runtime, reminderContext, "reminder-call"), true);
-  assert.equal((await takeReminderInput(runtime, "reminder-call", reminderContext)).source_message_event_id, "receipt-fixture");
+  const { buildReplyPromptEnvelope } = await jiti.import(path.join(sourceRoot, "src/auto-reply/reply/prompt-prelude.ts"));
+  const envelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: incoming.content,
+    hasUserBody: true, inboundUserContext: "", isBareSessionReset: false, startupAction: "new",
+    systemEventBlocks: ["Synthetic host status context"] });
+  for (const cleanedBody of [incoming.content, envelope.queuedBody]) {
+    await requestHook({cleanedBody}, reminderContext);
+    assert.equal(bindReminderTool(runtime, reminderContext, "reminder-call"), true);
+    assert.equal((await takeReminderInput(runtime, "reminder-call", reminderContext)).source_message_event_id, "receipt-fixture");
+  }
+  await requestHook({cleanedBody: `${incoming.content}\n\nA different current request.`}, reminderContext);
+  assert.equal(bindReminderTool(runtime, reminderContext, "reminder-call"), false);
   // This protected transport metadata is preserved by the pinned Codex user
   // snapshot. Its reasoning mirrors are assistant rows without a phase tag.
   await handler({success: true, runId: "agent-generated", messages: [

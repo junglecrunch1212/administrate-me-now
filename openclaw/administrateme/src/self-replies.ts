@@ -139,7 +139,11 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
     const matches = inbox && [...inbox.values()].filter((input) =>
       input.provenance.session_key === context.sessionKey && input.provenance.agent_id === context.agentId &&
       (!input.runId || input.runId === context.runId) && Date.now() - input.capturedAt <= 3_600_000 &&
-      input.text.trim() === event.cleanedBody.trim());
+      // The pinned host may prepend status/media context separated by a blank
+      // line. The exact current private text must remain the complete suffix;
+      // a mention elsewhere in history or a retrieved result is insufficient.
+      (input.text.trim() === event.cleanedBody.trim() ||
+       event.cleanedBody.trim().endsWith(`\n\n${input.text.trim()}`)));
     const input = matches?.length === 1 ? matches[0] : undefined;
     turns.delete(context.runId);
     if (input && context.agentId === input.provenance.agent_id && turns.size < 100) turns.set(context.runId, input);
