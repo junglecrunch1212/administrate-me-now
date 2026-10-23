@@ -1079,6 +1079,21 @@ class CoSChannelActivator:
             raise CoSActivationError("maintenance predecessor authority changed")
         gateway = controls["gateway"]
         if not restoring:
+            if gateway is not None:
+                native_hook = (
+                    gateway.get("plugins", {})
+                    .get("entries", {})
+                    .get("administrateme", {})
+                    .get("hooks", {})
+                    .get("allowConversationAccess")
+                )
+                scheduler = gateway.get("cron", {}).get("triggers", {}).get("enabled")
+                if (plan.self_reply_bindings and native_hook is not True) or (
+                    plan.self_reminder_bindings and scheduler is not True
+                ):
+                    raise CoSActivationError(
+                        "maintenance cannot re-enable a disabled native hook or scheduler"
+                    )
             # A recipient revocation can leave old host/domain binding hashes
             # behind. Discover an unrestorable grant before entering maintenance.
             assert plan.sender_proofs is not None
@@ -1226,12 +1241,21 @@ class CoSChannelActivator:
                     "maintenance gateway routing or configuration drifted"
                 )
             if gateway is not None:
-                config = (
+                entry = (
                     gateway.get("plugins", {})
                     .get("entries", {})
                     .get("administrateme", {})
-                    .get("config", {})
                 )
+                hooks = entry.get("hooks", {})
+                if (
+                    plan.self_reply_bindings
+                    and "allowConversationAccess" in hooks
+                    and hooks["allowConversationAccess"] is not True
+                ):
+                    raise CoSActivationError(
+                        "maintenance cannot override an explicit native hook denial"
+                    )
+                config = entry.get("config", {})
                 for key, previous in (
                     ("standingSelfReplyBindings", plan.self_reply_bindings),
                     ("scheduledSelfReminderBindings", plan.self_reminder_bindings),

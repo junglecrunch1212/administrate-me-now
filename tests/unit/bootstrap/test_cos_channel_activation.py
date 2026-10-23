@@ -1234,6 +1234,7 @@ def test_maintenance_rejects_changed_plan_before_pausing(
         "candidate",
         "native_hook",
         "native_grant",
+        "native_denial",
         "updater_history",
     ],
 )
@@ -1261,11 +1262,11 @@ def test_restoration_refuses_drift_or_new_authority_without_mutation(
         guard = json.loads(path.read_text())
         guard["db_path"] = "/fixture/different-messages.db"
         _write(path, guard)
-    elif mutation in {"native_hook", "native_grant"}:
+    elif mutation in {"native_hook", "native_grant", "native_denial"}:
         path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
         gateway = json.loads(path.read_text())
         entry = gateway["plugins"]["entries"]["administrateme"]
-        if mutation == "native_hook":
+        if mutation in {"native_hook", "native_denial"}:
             entry["hooks"]["allowConversationAccess"] = False
         else:
             entry["config"].pop("standingSelfReplyBindings")
@@ -1273,7 +1274,8 @@ def test_restoration_refuses_drift_or_new_authority_without_mutation(
         # A native-only revocation can update normal readiness too; it must
         # still differ from the immutable post-updater fingerprint.
         drifted = {**plan.deployment_snapshot, "configuration_fingerprint": "8" * 64}
-        monkeypatch.setattr(controller, "_bound_snapshot", lambda _commit: drifted)
+        if mutation != "native_denial":
+            monkeypatch.setattr(controller, "_bound_snapshot", lambda _commit: drifted)
     elif mutation == "updater_history":
         from bootstrap.activation_transaction import ActivationJournalError
 
@@ -1444,3 +1446,24 @@ def test_maintenance_gateway_fingerprint_bounds_release_metadata_only() -> None:
     assert _maintenance_gateway_fingerprint(selected, target) == fingerprint
     selected["models"]["retained"] = "changed"
     assert _maintenance_gateway_fingerprint(selected, target) != fingerprint
+
+
+@pytest.mark.parametrize("disabled", ["native_hook", "scheduler"])
+def test_maintenance_does_not_turn_disabled_native_controls_into_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, disabled: str
+) -> None:
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+    gateway = json.loads(path.read_text())
+    if disabled == "native_hook":
+        gateway["plugins"]["entries"]["administrateme"]["hooks"][
+            "allowConversationAccess"
+        ] = False
+    else:
+        gateway["cron"]["triggers"]["enabled"] = False
+    _write(path, gateway)
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="cannot re-enable"):
+        _prepare_maintenance(controller, request)
+    assert controller.services.stops == stops
+    assert json.loads(path.read_text()) == gateway
