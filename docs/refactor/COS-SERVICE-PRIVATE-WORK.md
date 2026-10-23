@@ -77,7 +77,19 @@ Descriptions and reason codes are concise operational records, not hidden
 reasoning. Due/follow-up dates explicitly return `timer_registered: false`.
 
 The supported installer prepares the isolated service workspace and exact
-tool allowlist. The supported operator entry is:
+tool allowlist. Its declared `AGENTS.md` and established CoS `IDENTITY.md` form
+one immutable content-addressed profile. Native OpenClaw recognizes the existing
+identity instead of creating a first-run `BOOTSTRAP.md` birth sequence. Missing,
+symlinked or changed declared files fail preparation; legacy artifacts still
+select their original instruction-only workspace. Prior directories and private
+records remain intact. This **MODERNIZE** repair leaves member profiles and
+global onboarding settings unchanged. The native Gateway check verifies the
+actual model prompt has the established identity and no onboarding instructions
+on the first run and after restart. Browser tools remain outside this service
+allowlist; future browser provisioning must carry the standing identity guidance
+and private intended-identity inventory before use.
+
+The supported operator entry is:
 
 ```sh
 openclaw gateway call administrateme.service.run --params '{"message":"Review authorized work and retain a coordination note","request_id":"coordination-review-001"}' --json

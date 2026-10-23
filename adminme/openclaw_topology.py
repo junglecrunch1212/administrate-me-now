@@ -79,18 +79,47 @@ def service_workspace_path(
     service_principal_id: str,
     *,
     instructions: bytes | None = None,
+    identity: bytes | None = None,
 ) -> Path:
-    """Service-private files never inherit a member workspace or its overlays."""
+    """Address the reviewed profile; empty identity preserves legacy releases."""
 
-    digest = hashlib.sha256(
+    instructions = (
         SERVICE_PRIVATE_INSTRUCTIONS.encode() if instructions is None else instructions
-    ).hexdigest()
+    )
+    identity = SERVICE_PRIVATE_IDENTITY.encode() if identity is None else identity
+    material = instructions
+    if identity:
+        material = (
+            b"administrateme-service-profile-v1\0"
+            + len(instructions).to_bytes(8, "big")
+            + instructions
+            + len(identity).to_bytes(8, "big")
+            + identity
+        )
+    digest = hashlib.sha256(material).hexdigest()
     return (
         openclaw_root
         / "service-workspaces"
         / service_agent_id(service_principal_id)
         / digest
     )
+
+
+SERVICE_PRIVATE_IDENTITY = """# Established Chief-of-Staff identity
+
+You are the established household Chief of Staff, serving both household heads.
+Your role and service identity are already configured. Use an existing configured
+display name when available; otherwise identify yourself by your Chief of Staff
+role. These are operational work sessions, not first-run onboarding. Do not ask
+members to name you, invent a replacement persona, or append a new-assistant
+introduction after completing work.
+
+This workspace has no browser authority. If browser tools are later enabled,
+provision the standing browser-identity guidance and private intended-identity
+inventory first. Verify the intended principal, device/profile and each site's
+actual account, workspace and role before private reads or actions; never infer
+identity from a profile label or substitute another person's account.
+"""
 
 
 SERVICE_PRIVATE_INSTRUCTIONS = """# Chief-of-Staff service work
@@ -277,6 +306,7 @@ def inspect_runtime_topology(
 
 
 __all__ = [
+    "SERVICE_PRIVATE_IDENTITY",
     "SERVICE_PRIVATE_INSTRUCTIONS",
     "SERVICE_PRIVATE_TOOLS",
     "binding_fingerprints",

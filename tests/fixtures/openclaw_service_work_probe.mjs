@@ -29,6 +29,10 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
         const plan = freshRead ? [steps[3]] : steps;
         if (outputs === 0) {
           const encoded = JSON.stringify(input);
+          const prompt = JSON.stringify({ instructions: body.instructions, input });
+          assert(prompt.includes("# Established Chief-of-Staff identity"), "native model prompt lacks established service identity");
+          assert(!prompt.includes("BOOTSTRAP.md - Birth Sequence"), "native model prompt includes first-run onboarding");
+          assert(!prompt.includes("Introduce yourself as the user's new assistant"), "native model prompt requests a new-assistant introduction");
           assert(!encoded.includes("GRANTED_SOURCE_FIXTURE"), "new native request reused earlier granted context");
           initialInputs.push(encoded);
           const names = body.tools.map((tool) => tool.name ?? tool.function?.name);

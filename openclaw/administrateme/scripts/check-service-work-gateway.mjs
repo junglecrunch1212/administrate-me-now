@@ -109,7 +109,9 @@ try {
   await copyFile(path.join(repository, "openclaw/administrateme/openclaw.plugin.json"), path.join(plugin, "openclaw.plugin.json"));
   const workspace = path.join(state, "service-workspace");
   await mkdir(workspace);
-  await copyFile(path.join(repository, "openclaw/administrateme/workspace/service-private/AGENTS.md"), path.join(workspace, "AGENTS.md"));
+  for (const filename of ["AGENTS.md", "IDENTITY.md"]) {
+    await copyFile(path.join(repository, "openclaw/administrateme/workspace/service-private", filename), path.join(workspace, filename));
+  }
   const model = "fixture/service-work";
   const tools = ["administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"];
   const config = {
@@ -133,6 +135,7 @@ try {
     if (result.status === "error") throw new Error("Native service run failed");
     return result.status === "ok";
   }, "native service lifecycle");
+  await assert.rejects(readFile(path.join(workspace, "BOOTSTRAP.md")), { code: "ENOENT" });
   assert.deepEqual(fixtures.receipts.map((entry) => entry.path), [
     "/api/openclaw/v1/tools/service-context",
     "/api/openclaw/v1/tools/service-private-work",
@@ -149,6 +152,7 @@ try {
     if (result.status === "error") throw new Error("Fresh native service run failed");
     return result.status === "ok";
   }, "fresh signed request context");
+  await assert.rejects(readFile(path.join(workspace, "BOOTSTRAP.md")), { code: "ENOENT" });
   assert.equal(fixtures.initialInputs.length, 2);
   assert.equal(new Set(fixtures.receipts.map((entry) => entry.session)).size, 2);
   await stop();
@@ -159,7 +163,7 @@ try {
   await assert.rejects(request("administrateme.service.run", { message: "Denied after revocation", request_id: "native-revoked-001" }), /disabled/);
   assert.equal(fixtures.modelCalls, callsBeforeRevoked);
   assert.deepEqual(fixtures.errors, []);
-  console.log("Pinned Gateway service work: sealed operator entry, native hook/context, granted context/create/lifecycle/read, fresh per-request session, persisted revocation. Synthetic loopback fixtures only.");
+  console.log("Pinned Gateway service work: established CoS identity without onboarding, sealed operator entry, native hook/context, granted context/create/lifecycle/read, fresh per-request session, persisted revocation. Synthetic loopback fixtures only.");
 } catch (error) {
   let redacted = logs.replaceAll(token, "[redacted]").replaceAll(secret, "[redacted]");
   for (const session of sessions) redacted = redacted.replaceAll(session, "[service-session]");

@@ -524,6 +524,7 @@ def _destructive_plugin_cli(
         "openclaw.plugin.json",
         "bin/cos-imsg-guard.mjs",
         "workspace/service-private/AGENTS.md",
+        "workspace/service-private/IDENTITY.md",
     ):
         atomic_write(
             plugin / relative,
