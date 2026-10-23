@@ -77,6 +77,87 @@ MESSAGE_FIELDS = frozenset(
         "native_revision",
     }
 )
+LIST_FIELDS = frozenset(
+    {
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "list_external_id",
+        "list_name",
+        "is_default",
+        "provider_revision",
+        "changed_at",
+    }
+)
+LIST_ITEM_FIELDS = frozenset(
+    {
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "list_external_id",
+        "item_external_id",
+        "list_name",
+        "title",
+        "priority",
+        "completed",
+        "completion_at",
+        "start",
+        "due",
+        "parent_external_id",
+        "provider_position",
+        "provider_revision",
+        "last_modified_at",
+        "read_only_reason",
+    }
+)
+DATE_FIELDS = frozenset(
+    {
+        "year",
+        "month",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "time_zone",
+        "all_day",
+        "floating",
+    }
+)
+SELF_PLANNING_VERSIONS = {
+    "calendar.event_added": ("google_calendar", 3),
+    "calendar.event_updated": ("google_calendar", 3),
+    "list.created": ("google_tasks", 2),
+    "list.updated": ("google_tasks", 2),
+    "list_item.added": ("google_tasks", 4),
+    "list_item.updated": ("google_tasks", 4),
+    "list_item.completed": ("google_tasks", 4),
+    "list_item.uncompleted": ("google_tasks", 4),
+}
+SELF_PLANNING_METADATA = frozenset(
+    {
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "calendar_external_id",
+        "external_event_id",
+        "list_external_id",
+        "item_external_id",
+        "provider_revision",
+        "start",
+        "end",
+        "start_time_zone",
+        "end_time_zone",
+        "all_day",
+        "status",
+        "availability",
+        "completed",
+        "completion_at",
+        "due",
+        "changed_at",
+        "last_modified_at",
+    }
+)
+
 FACT_FIELDS = {
     "task.created": frozenset(
         {
@@ -121,6 +202,12 @@ FACT_FIELDS = {
     "member_knowledge.note_added": NOTE_FIELDS,
     "member_knowledge.note_updated": NOTE_FIELDS,
     "member_knowledge.note_corrected": NOTE_FIELDS,
+    "list.created": LIST_FIELDS,
+    "list.updated": LIST_FIELDS,
+    "list_item.added": LIST_ITEM_FIELDS,
+    "list_item.updated": LIST_ITEM_FIELDS,
+    "list_item.completed": LIST_ITEM_FIELDS,
+    "list_item.uncompleted": LIST_ITEM_FIELDS,
     "messaging.received": MESSAGE_FIELDS,
     "messaging.sent": MESSAGE_FIELDS,
     "artifact.received": frozenset(
@@ -216,6 +303,21 @@ def _self_mail(event: dict[str, Any], session: ServiceSession) -> bool:
     )
 
 
+def _self_planning(event: dict[str, Any], session: ServiceSession) -> bool:
+    p = event["payload"]
+    return (
+        SELF_PLANNING_VERSIONS.get(event["type"])
+        == (p.get("provider"), event["schema_version"])
+        and event["tenant_id"] == session.tenant_id
+        and event["owner_scope"] == session.private_scope
+        and event["visibility_scope"] == session.private_scope
+        and p.get("service_principal_id") == session.principal.principal_id
+        and p.get("member_id") is None
+        and p.get("workspace") == "service"
+        and p.get("provider_account_id") == event["source_account_id"]
+    )
+
+
 def _source_authority(
     runtime: Any,
     session: ServiceSession,
@@ -223,8 +325,8 @@ def _source_authority(
     contexts: list[ServiceRequestContext],
 ) -> dict[str, Any] | None:
     context = _context_for(event, session, contexts)
-    own_mail = _self_mail(event, session)
-    if context is None and not own_mail:
+    own_source = _self_mail(event, session) or _self_planning(event, session)
+    if context is None and not own_source:
         return None
     try:
         coordinate = source_coordinate_for_event(
@@ -235,13 +337,16 @@ def _source_authority(
     effective = runtime.settings_control.effective_source_policy_v2(
         coordinate.owner_principal_id, coordinate
     )
-    if own_mail:
+    if own_source:
         mode = effective["policy"]["context_mode"]
         if (
             mode not in READ_RANK
             or coordinate.owner_principal_id != session.principal.principal_id
         ):
             return None
+        if _self_planning(event, session) and mode == "typed_facts_safe_snippet":
+            # This slice exposes typed planning facts, never descriptions/notes.
+            mode = "typed_facts"
         return {
             "source_event_id": event["event_id"],
             "authority_kind": "service_self",
@@ -320,6 +425,61 @@ def _current_source(runtime: Any, event: dict[str, Any]) -> bool:
             .fetchone()
             is not None
         )
+    if payload.get("service_principal_id") and kind in SELF_PLANNING_VERSIONS:
+        coordinates = (
+            event["tenant_id"],
+            payload["service_principal_id"],
+            payload["provider"],
+            payload["provider_account_id"],
+        )
+        if kind.startswith("calendar."):
+            return (
+                runtime.projections.connection("calendars")
+                .execute(
+                    "SELECT 1 FROM service_calendar_current WHERE tenant_id=? AND service_principal_id=? "
+                    "AND provider=? AND provider_account_id=? AND calendar_external_id=? "
+                    "AND external_event_id=? AND last_event_id=? AND deleted=0",
+                    (
+                        *coordinates,
+                        payload["calendar_external_id"],
+                        payload["external_event_id"],
+                        event["event_id"],
+                    ),
+                )
+                .fetchone()
+                is not None
+            )
+        if kind.startswith("list."):
+            return (
+                runtime.projections.connection("lists")
+                .execute(
+                    "SELECT 1 FROM service_lists_current WHERE tenant_id=? AND service_principal_id=? "
+                    "AND provider=? AND provider_account_id=? AND list_external_id=? AND last_event_id=? AND deleted=0",
+                    (*coordinates, payload["list_external_id"], event["event_id"]),
+                )
+                .fetchone()
+                is not None
+            )
+        return (
+            runtime.projections.connection("lists")
+            .execute(
+                "SELECT 1 FROM service_list_items_current i WHERE tenant_id=? AND service_principal_id=? "
+                "AND provider=? AND provider_account_id=? AND list_external_id=? AND item_external_id=? "
+                "AND last_event_id=? AND deleted=0 AND NOT EXISTS (SELECT 1 FROM service_lists_current l "
+                "WHERE l.tenant_id=i.tenant_id AND l.service_principal_id=i.service_principal_id "
+                "AND l.provider=i.provider AND l.provider_account_id=i.provider_account_id "
+                "AND l.list_external_id=i.list_external_id "
+                "AND (l.deleted=1 OR l.last_deleted_event_id>=i.last_event_id))",
+                (
+                    *coordinates,
+                    payload["list_external_id"],
+                    payload["item_external_id"],
+                    event["event_id"],
+                ),
+            )
+            .fetchone()
+            is not None
+        )
     if kind.startswith("calendar."):
         if event["schema_version"] < 2:
             # v1 updates are patches rather than complete calendar snapshots.
@@ -376,6 +536,9 @@ def _bounded_fact(
             truncated |= len(value) > 2000
         elif value is None or isinstance(value, (bool, int, float)):
             fact[key] = value
+        elif key in {"start", "due"} and isinstance(value, dict):
+            fact[key], shortened = _bounded_fact(value, DATE_FIELDS)
+            truncated |= shortened
         elif key == "identifiers" and isinstance(value, list):
             identifiers = []
             for identifier in value[:20]:
@@ -399,6 +562,10 @@ def fact_for(
     fields = FACT_FIELDS.get(event["type"])
     # Service-derived records must retain their complete source chain through
     # private-state reads; they cannot be reintroduced as unqualified originals.
+    if event["type"].startswith(("list.", "list_item.")) and not _self_planning(
+        event, session
+    ):
+        return None
     if fields is None or (
         event["type"] == "task.created" and event["schema_version"] >= 4
     ):
@@ -409,6 +576,8 @@ def fact_for(
     own_mail = _self_mail(event, session)
     if own_mail and authority["read_mode"] == "metadata_only":
         fields = SELF_MAIL_METADATA
+    elif _self_planning(event, session) and authority["read_mode"] == "metadata_only":
+        fields = fields & SELF_PLANNING_METADATA
     fact, truncated = _bounded_fact(event["payload"], fields)
     body_included = False
     if own_mail and authority["read_mode"] == "typed_facts_safe_snippet":
@@ -448,6 +617,7 @@ async def validate_context_cursor(
         or (
             _context_for(event, session, contexts) is None
             and not _self_mail(event, session)
+            and not _self_planning(event, session)
         )
     ):
         raise HTTPException(404, "authorized context cursor not found")

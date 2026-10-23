@@ -1941,6 +1941,9 @@ def test_service_work_scope_rejects_missing_or_broader_runtime_edits(
         "adminme/products/openclaw/service_context.py",
         "adminme/projections/tasks/handlers.py",
         "adminme/projections/tasks/schema.sql",
+        "adminme/projections/calendars/handlers.py",
+        "adminme/projections/lists/handlers.py",
+        "tests/acceptance/test_cos_service_planning_context.py",
     ],
 )
 def test_service_work_source_receipt_changes_keep_focused_proof(
@@ -1977,6 +1980,8 @@ def test_service_work_runtime_normalization_is_limited_to_direct_router_statemen
     [
         "adminme/events/log.py",
         "adminme/events/schemas/messaging_unreviewed.py",
+        "adminme/projections/calendars/queries.py",
+        "adminme/projections/lists/queries.py",
         "adminme/lib/session.py",
         "adminme/runtime/unreviewed.py",
         "adminme/products/openclaw/routers.py",
@@ -2082,6 +2087,12 @@ def test_service_work_worker_requires_affected_identity_replay_and_recovery_chec
         "PY_CHECK",
         "test_cos_service_private_work.py",
         "test_cos_service_working_context.py",
+        "test_cos_service_planning_context.py",
+        "test_projection_calendars.py",
+        "tests/unit/projections/lists/test_handlers.py",
+        "tests/unit/projections/lists/test_queries.py",
+        "test_lists_projection_runner.py",
+        "test_service_owned_google_sources.py",
         "test_service_work_principal.py",
         "test_service_identities.py",
         "test_operating_agreements.py",

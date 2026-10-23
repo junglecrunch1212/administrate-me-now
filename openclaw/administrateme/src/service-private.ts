@@ -137,7 +137,7 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
     },
     {
       name: SERVICE_PRIVATE_TOOL_NAMES[3],
-      description: "Read authorized household facts and metadata plus your own acquired Gmail, including unrouted mail. Effective policy permits headers or bounded plaintext snippets. Retain source references; no HTML, attachments or outside disclosure rights.",
+      description: "Read authorized household facts and metadata plus your own acquired Google Calendar/Tasks current facts and Gmail, including unrouted mail. Effective policy permits headers or bounded plaintext snippets. Retain source references; no HTML, attachments or outside disclosure rights.",
       parameters: Type.Object({
         source_event_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 20 })),
         after_event_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),

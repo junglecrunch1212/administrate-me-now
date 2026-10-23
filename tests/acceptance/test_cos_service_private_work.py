@@ -488,13 +488,18 @@ def test_encrypted_restore_preserves_service_work_and_client_restrictions(
         from tests.acceptance.test_cos_service_working_context import _own_mail
 
         mail_id = _own_mail(client, "backup-service-mail")
+        from tests.acceptance.test_cos_service_planning_context import _emit
+        from tests.acceptance.test_cos_service_working_context import _context
+
+        calendar_id = _emit(client, "calendar.event_added")
+        item_id = _emit(client, "list_item.added")
         create_body = {
             "provenance": _service("backup-service-note"),
             "request_id": "backup-service-note",
             "title": PRIVATE_TITLE,
             "description": "Retain an authorized client follow-up",
             "record_kind": "note",
-            "source_event_ids": [source_id, mail_id],
+            "source_event_ids": [source_id, mail_id, calendar_id, item_id],
         }
         created = client.post(CREATE, headers=OPENCLAW_HEADERS, json=create_body)
         assert created.status_code == 201, created.text
@@ -563,6 +568,14 @@ def test_encrypted_restore_preserves_service_work_and_client_restrictions(
                 (mail_id,),
             )
             .fetchone()
+        )
+        assert (
+            _context(
+                client,
+                "restored-planning-sources",
+                source_event_ids=[calendar_id, item_id],
+            ).status_code
+            == 200
         )
         after = _read(client, "backup-service-after", task_id=task_id)
         assert after["work"] == expected["work"]

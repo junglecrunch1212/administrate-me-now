@@ -151,8 +151,8 @@ permission, credential or provider destination is changed by implementation.
 
 1. Full-body/attachment access with trusted explicit-demand evidence and
    provider acquisition/current-state indexing not already supported. Own Gmail
-   metadata and policy-permitted plaintext snippets are implemented below; own
-   Calendar/Tasks, Apple/Drive and wider provider content remain later slices.
+   metadata and policy-permitted plaintext snippets are implemented below; Apple/Drive and wider provider content remain later slices; own Calendar/Tasks
+   current facts are implemented below.
 2. Authorized member instruction → bounded CoS work with explicit provenance
    and audience-aware progress receipts; no automatic private-history copy.
 3. One exact service-owned provider workspace at a time, with supported verbs,
@@ -222,5 +222,32 @@ schema still falls back to broader validation. Recovery uses the feature-disable
 command above on a runtime that understands all retained event versions.
 
 This slice does not complete full-body/attachment access, explicit-demand content,
-service-owned Calendar/Tasks current-state reads, Apple/Drive/Contacts setup or
-provider writes. Those remain separate usable deliverables under the full prompt.
+Apple/Drive/Contacts setup or provider writes. Those remain separate usable deliverables under the full prompt.
+
+
+## Service-owned Calendar and Tasks current context
+
+**MODERNIZE:** the same private context tool reads existing Google Calendar v3
+observations and Google Tasks list v2/item v4 snapshots under exact service-self
+ownership. It returns event titles/times, list names, task titles, due components,
+ordering, completion and source revisions. Google Tasks due dates remain floating
+all-day dates, not a scheduled timestamp or timer. Calendar descriptions, arbitrary
+provider data, task note bodies and attachment contents are not exposed.
+
+Calendars v4 and Lists v5 add separate private current-source pointer tables and
+replay retained events. Original encrypted events still supply content. Native
+keys include tenant, principal, provider, account, container and object. A source
+update supersedes only that exact copy. Explicit tombstones hide deleted events
+and items; list deletion also hides its old children, and recreating a list does
+not resurrect old item snapshots. Partial snapshots never imply deletion. Member
+calendar capacity, lists and canonical tasks remain separate.
+
+Existing source policy and v5 note provenance apply without new grants or model
+flags. Metadata mode excludes titles; typed planning facts do not claim snippet
+access. Acquisition pause and retained-context policy remain distinct. Replay,
+restart and encrypted restore rebuild the private pointers and source receipts.
+The focused hosted check adds the affected calendar/list contracts and real
+producer → production service-route → private follow-up tests. Live usability
+still requires authorized acquisition and native service-tool read-back after
+activation. Recover through the existing service-work feature disable on the
+schema-aware runtime; no provider effect or enrollment is introduced here.
