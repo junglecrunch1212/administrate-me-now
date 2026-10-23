@@ -1,4 +1,4 @@
-# mypy: disable-error-code=import-untyped
+# mypy: disable-error-code="import-untyped,import-not-found"
 # pyright: reportMissingImports=false, reportAttributeAccessIssue=false
 """Exact source reads without scans or writes; consent is explicit setup only."""
 
