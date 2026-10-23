@@ -4823,8 +4823,12 @@ function bridgeSettings(data) {
               : ["revoke"];
     for (const action of actions) { const button = text("button", titleCase(action), action === "revoke" ? "button button-quiet" : "button button-secondary"); button.type = "button"; button.disabled = !own || Boolean(pending); button.addEventListener("click", async () => { button.disabled = true; try { const result = await api(`/api/member/v1/settings/bridges/${encodeURIComponent(current.request_id)}/control`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ command_id: crypto.randomUUID(), action }) }); setBanner(`Bridge is ${titleCase(result.state)}. No provider effect occurred.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge was not changed.`); button.disabled = false; } }); buttons.append(button); }
     progress.append(buttons);
-    const finishSetup = document.createElement("section"); finishSetup.className = "state-card";
-    finishSetup.append(text("h3", "3. Check sync and choose permissions"), text("p", "Check each selected source above for a successful sync. A healthy empty source has no items to show. Choose service writing permissions and review your private CoS permissions separately. Each actual write still requires its own approval."), appleServicePermissionLink(), cosPermissionLink());
+    const finishSetup = document.createElement("section"); finishSetup.className = "state-card bridge-finish-setup";
+    const permissionLinks = document.createElement("div"); permissionLinks.className = "button-row";
+    const appleLink = text("a", "Apple permissions", "button button-secondary"); appleLink.href = "/member/settings?section=apple-services";
+    const cosLink = cosPermissionLink(); cosLink.textContent = "CoS permissions";
+    permissionLinks.append(appleLink, cosLink);
+    finishSetup.append(text("h3", "3. Check sync and choose permissions"), text("p", "Check each selected source above for a successful sync. A healthy empty source has no items to show. Choose service writing permissions and review your private CoS permissions separately. Each actual write still requires its own approval."), permissionLinks);
     progress.append(finishSetup); fragment.append(progress);
   }
 

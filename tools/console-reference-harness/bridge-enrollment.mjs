@@ -67,6 +67,14 @@ export async function auditBridgeEnrollment({ page, otherPage, stalePage, baseUr
     await page.reload({ waitUntil: "networkidle" });
     await page.locator(".bridge-enrollment-failure").waitFor();
     record(`Recorded failure remains useful after reload at ${width}`, (await page.locator(".bridge-enrollment-failure").textContent()).includes("A reviewed release commit is required") && posts === 1);
+    const permissionBounds = await page.locator(".bridge-finish-setup").evaluate((section) => {
+      const bounds = section.getBoundingClientRect();
+      return [...section.querySelectorAll("a")].map((link) => {
+        const rect = link.getBoundingClientRect();
+        return { visible: rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom, height: rect.height, fits: link.scrollWidth <= link.clientWidth && link.scrollHeight <= link.clientHeight };
+      });
+    });
+    record(`Final permission links fit without clipping at ${width}`, permissionBounds.length === 2 && permissionBounds.every((item) => item.visible && item.height >= 24 && item.fits), permissionBounds);
     await auditAccessibility(page, `Bridge enrollment failure ${width}`);
     await screenshot(page, `bridge-enrollment-failed-${width}.png`);
   }
