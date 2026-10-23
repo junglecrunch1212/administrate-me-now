@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -455,6 +456,10 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     )
     assert rehearsal["status"] == "healthy"
     assert rehearsal["artifact"]["authenticated"] is True
+    assert re.fullmatch(
+        r"[0-9a-f]{64}", rehearsal["artifact"]["state_inventory_sha256"]
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", rehearsal["artifact"]["key_binding_sha256"])
     assert rehearsal["replay"]["projections_rebuilt"] == 15
     assert rehearsal["workbooks"]["rebuilt_count"] == 2
     assert rehearsal["workbooks"]["bidirectional_sidecar_count"] == 8

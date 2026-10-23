@@ -2660,7 +2660,7 @@ class UpgradeManager:
             if reused is None:
                 backup_result = backup_manager.create(backup_path)
             else:
-                backup_result, rehearsal, reused_receipt_path = reused
+                backup_result, rehearsal, _reused_receipt_path = reused
                 backup_path = Path(backup_result["path"])
             backup_sha256 = self._hash_private_file(backup_path)
             fresh_backup = {
@@ -2692,7 +2692,7 @@ class UpgradeManager:
                     receipt=receipt_path,
                 )
             else:
-                receipt_path = reused_receipt_path
+                receipt_path = reused[2]
             assert rehearsal is not None
             receipt_sha256 = self._hash_private_file(
                 receipt_path,

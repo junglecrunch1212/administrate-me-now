@@ -1715,6 +1715,7 @@ class BackupManager:
             inventory_sha = artifact.get("state_inventory_sha256")
             if (
                 tested_at + MAX_EVIDENCE_AGE <= now
+                or receipt.get("source_events_appended") != 0
                 or receipt_sha != binding["preliminary_rehearsal_receipt_sha256"]
                 or backup_sha != binding["preliminary_backup_artifact_sha256"]
                 or watermark_sha != binding["preliminary_rehearsal_watermark_sha256"]
