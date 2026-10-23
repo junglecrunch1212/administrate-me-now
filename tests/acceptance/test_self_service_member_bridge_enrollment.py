@@ -1064,3 +1064,44 @@ def test_g09_failed_preparation_reason_replays_privately_and_clears_on_retry(
         assert current["reason"] is None
         assert current["request_id"] == request_id
         assert client.portal.call(_provider_effect_count, runtime) == 0
+
+
+def test_installed_helper_download_is_authenticated_exact_and_has_no_enrollment_effects(
+    tmp_path: Path,
+) -> None:
+    from tests.unit.test_bridge_helper_distribution import publish_fixture
+
+    settings, commit = _installed_release_settings(tmp_path)
+    instance = settings.instance.instance_dir
+    payload = publish_fixture(instance, commit)
+    app = create_application(settings)
+    with TestClient(app) as client:
+        endpoint = "/api/member/v1/settings/bridges/helper"
+        assert client.get(endpoint).status_code == 401
+        assert (
+            client.get(
+                endpoint, headers={**A_HEADERS, "X-AdminMe-View-Member": B}
+            ).status_code
+            == 403
+        )
+        metadata = client.get(endpoint, headers=A_HEADERS)
+        assert metadata.status_code == 200, metadata.text
+        assert metadata.json()["release_commit"] == commit
+        download = client.get(metadata.json()["download_url"], headers=A_HEADERS)
+        assert download.status_code == 200
+        assert download.content == payload
+        assert download.headers["cache-control"] == "no-store"
+        assert (
+            download.headers["x-administrateme-sha256"]
+            == hashlib.sha256(payload).hexdigest()
+        )
+        assert not app.state.runtime.bridge_enrollment.bridge_enrollments
+        (
+            instance.parent
+            / "app"
+            / "bridge-helper-downloads"
+            / commit
+            / "AdministrateMe-Bridge-Helper.zip"
+        ).write_bytes(b"changed")
+        assert client.get(endpoint, headers=A_HEADERS).status_code == 503
+        assert client.get(endpoint + "/download", headers=A_HEADERS).status_code == 503

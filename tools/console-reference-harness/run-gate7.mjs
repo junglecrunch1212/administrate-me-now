@@ -204,7 +204,8 @@ async function waitForServer(baseUrl) {
 }
 
 async function startServer(port, modelConfigured, attentionEnabled = false, boundedSample = false, explicitSubmissions = false, cosReplies = false) {
-  const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
+  const installationRoot = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
+  const instance = join(installationRoot, "state");
   const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
     fixturePython ?? (process.platform === "win32" ? "poetry.exe" : "poetry"),
@@ -241,7 +242,7 @@ async function startServer(port, modelConfigured, attentionEnabled = false, boun
     throw new Error(`${error.message}\n${output.slice(-2000)}`);
   }
   console.log(`[Gate 7] Fixture server ready at ${baseUrl}`);
-  return { baseUrl, child, instance, output: () => output };
+  return { baseUrl, child, instance, installationRoot, output: () => output };
 }
 
 async function stopServer(server) {
@@ -261,7 +262,7 @@ async function stopServer(server) {
       await new Promise((resolveWait) => server.child.once("close", resolveWait));
     }
   }
-  await rm(server.instance, {
+  await rm(server.installationRoot, {
     recursive: true,
     force: true,
     maxRetries: 20,
@@ -1421,7 +1422,7 @@ async function run() {
         await auditCosReplyControls({ page: principal.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, mutate: true, label: "desktop" });
         await principal.page.getByRole("button", { name: "Devices & bridges", exact: true }).click();
         const bridgeWizardText = await principal.page.locator("#surface").textContent();
-        record("Settings bridge wizard explains ownership, local permissions, observation, and no writes", bridgeWizardText.includes("Native Apple access stays on your Mac") && bridgeWizardText.includes("observation mode") && bridgeWizardText.includes("macOS control") && bridgeWizardText.includes("No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted"), bridgeWizardText);
+        record("Settings bridge wizard explains ownership, local permissions, observation, and no writes", bridgeWizardText.includes("Native Apple access stays on your Mac") && bridgeWizardText.includes("enrollment does not change system observation mode") && bridgeWizardText.includes("macOS control") && bridgeWizardText.includes("No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted"), bridgeWizardText);
         const replyCapabilityChoice = principal.page.locator(".bridge-capability-choice").filter({ hasText: "Apple Messages reply" }).locator("input");
         record("Settings bridge wizard exposes seven read sources and represents reply as a separate disabled capability", await principal.page.locator('.bridge-capability-choice input:not([disabled])').count() === 7 && await replyCapabilityChoice.count() === 1 && await replyCapabilityChoice.isDisabled() && bridgeWizardText.includes("enable it separately only after Apple Messages read observation settles") && bridgeWizardText.includes("Enable replies from Comms") && bridgeWizardText.includes("Ask every time"), bridgeWizardText);
         record("Settings bridge wizard confirms the exact authenticated read and action member", (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("Authenticated as") && (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("reading as") && (await principal.page.locator(".bridge-member-confirmation").textContent()).includes("actions belong to"), await principal.page.locator(".bridge-member-confirmation").textContent());

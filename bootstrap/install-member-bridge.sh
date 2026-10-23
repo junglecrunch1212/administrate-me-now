@@ -97,8 +97,12 @@ fi
 [[ "$(id -u)" -ne 0 ]] || fail "do not run as root"
 filevault_status="$(fdesetup status 2>/dev/null || true)"
 [[ "$filevault_status" == *"On"* ]] || fail "turn on FileVault before installing the member bridge"
-command -v tailscale >/dev/null 2>&1 || fail "enable Tailscale CLI integration first"
-tailscale status --json >/dev/null || fail "sign in to Tailscale first"
+tailscale_bin="$(command -v tailscale || true)"
+if [[ -z "$tailscale_bin" && -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]]; then
+  tailscale_bin=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+fi
+[[ -n "$tailscale_bin" ]] || fail "install and connect Tailscale first"
+TAILSCALE_BE_CLI=1 "$tailscale_bin" status --json >/dev/null || fail "sign in to Tailscale first"
 command -v brew >/dev/null 2>&1 || fail "install Homebrew first"
 free_kib="$(df -Pk "$(dirname "$BRIDGE_ROOT")" | awk 'NR==2 {print $4}')"
 [[ "$free_kib" =~ ^[0-9]+$ ]] || fail "could not determine free disk space"

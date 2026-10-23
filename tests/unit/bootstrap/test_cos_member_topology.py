@@ -14,9 +14,17 @@ from adminme.openclaw_topology import (
     inspect_runtime_topology,
     member_agent_id,
     member_workspace_path,
+    service_agent_id,
 )
-from adminme.service_identities import DEFAULT_SERVICE_IDENTITY_CONFIG
-from bootstrap.openclaw_activation import prepare_existing_member_topology
+from adminme.service_identities import (
+    COS_SERVICE_PRINCIPAL_ID,
+    DEFAULT_SERVICE_IDENTITY_CONFIG,
+)
+from bootstrap.contracts import DeploymentPaths
+from bootstrap.openclaw_activation import (
+    prepare_existing_member_topology,
+    reconcile_member_topology,
+)
 
 A = "member-topology-fixture-a"  # fixture:tenant_data:ok
 B = "member-topology-fixture-b"  # fixture:tenant_data:ok
@@ -125,3 +133,52 @@ def test_unprovisioned_topology_is_rejected_without_writes(
         )
     assert config == original
     assert not (root / "runtime/openclaw.json").exists()
+
+
+@pytest.mark.parametrize("prior_default", [None, A, B, "service", "operator"])
+def test_repeated_reconciliation_preserves_or_recovers_member_default(
+    tmp_path: Path, prior_default: str | None
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path)
+    root, config, adapters = _fixture(paths.instance_dir)
+    members = config["agents"]["list"][1:]
+    service = {
+        "id": service_agent_id(COS_SERVICE_PRINCIPAL_ID),
+        "workspace": "/fixture/service",
+    }
+    config["agents"]["list"] = [*members, service]
+    if prior_default in {A, B}:
+        for row, member in zip(members, (A, B), strict=True):
+            row["default"] = member == prior_default
+    elif prior_default == "service":
+        service["default"] = True
+    elif prior_default == "operator":
+        config["agents"]["list"].insert(0, {"id": "operator", "default": True})
+    gateway = root / "runtime/openclaw.json"
+    gateway.parent.mkdir()
+    gateway.write_text(json.dumps(config))
+    adapter_path = paths.instance_dir / "config/adapters.json"
+    adapter_path.parent.mkdir()
+    adapter_path.write_text(json.dumps(adapters))
+    expected = (
+        service["id"]
+        if prior_default == "service"
+        else "operator"
+        if prior_default == "operator"
+        else member_agent_id(prior_default or A)
+    )
+    first = None
+    # Exercise two successive installations, including the already-lost flag.
+    for _ in range(2):
+        reconcile_member_topology(paths)
+        current = json.loads(gateway.read_text())
+        assert [
+            row["id"] for row in current["agents"]["list"] if row.get("default") is True
+        ] == [expected]
+        if first is not None:
+            assert current == first
+        first = current
+    for member in (A, B):
+        assert (
+            member_workspace_path(root, member) / "private.txt"
+        ).read_text() == "preserved private member state"

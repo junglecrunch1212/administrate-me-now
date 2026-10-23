@@ -299,3 +299,64 @@ def test_native_workflow_continues_capabilities_without_terminal_steps() -> None
     assert ("permission", "apple_reminders", False, None) in helper.calls
     assert result["provider_writes_authorized"] is False
     assert result["provider_effects"] is False
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="native helper distribution requires macOS"
+)
+def test_publish_exact_native_helper_and_reuse_without_rebuilding(
+    tmp_path, monkeypatch
+):
+    import zipfile
+    from bootstrap.member_bridge_distribution import publish_helper
+    from adminme.bridge_helper_distribution import (
+        ARCHIVE,
+        read_distribution,
+        distribution_root,
+    )
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    original = subprocess.run
+
+    def reviewed_main(arguments, *args, **kwargs):
+        # A hosted PR test merge stands in for protected main only in this lab.
+        if arguments[-2:] == ["rev-parse", "refs/remotes/origin/main"]:
+            return subprocess.CompletedProcess(arguments, 0, commit + "\n", "")
+        return original(arguments, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", reviewed_main)
+    instance = tmp_path / "state"
+    published = publish_helper(REPO_ROOT, instance, commit)
+    checked, _ = read_distribution(instance, commit)
+    assert published == checked
+    archive = distribution_root(instance) / commit / ARCHIVE
+    extracted = tmp_path / "downloaded"
+    with zipfile.ZipFile(archive) as package:
+        package.extractall(extracted)
+        # Finder preserves executable modes. Python's generic extractall does not.
+        for item in package.infolist():
+            (extracted / item.filename).chmod((item.external_attr >> 16) & 0o777)
+    app = extracted / "AdministrateMe Bridge Helper.app"
+    subprocess.run(
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+        check=True,
+        capture_output=True,
+    )
+    metadata = json.loads((app / "Contents/Resources/helper-manifest.json").read_text())
+    assert metadata["prepare_before_pairing"] is True
+    assert metadata["required_central_release_commit"] == commit
+    assert (
+        metadata["prerequisites_sha256"]
+        == hashlib.sha256(
+            (app / "Contents/Resources/prepare-mac.sh").read_bytes()
+        ).hexdigest()
+    )
+    before = archive.stat().st_mtime_ns
+    assert publish_helper(REPO_ROOT, instance, commit) == published
+    assert archive.stat().st_mtime_ns == before
