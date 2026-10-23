@@ -8,13 +8,18 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from adminme.adapters.cos_apple_reminders import local_device_identity
+from adminme.adapters import cos_reminders_helper as client
+from adminme.adapters.cos_apple_reminders import (
+    NativeHelperBinding,
+    local_device_identity,
+)
 from bootstrap import cos_reminders_helper_app as helper
 from bootstrap import cos_reminders_native_worker as worker
 from tests.unit.bootstrap.test_cos_reminders_helper_app_macos import (
@@ -31,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
-    tmp_path, release
+    tmp_path, release, monkeypatch
 ):
     for name in ("adminme", "bootstrap", "packs"):
         shutil.copytree(
@@ -62,6 +67,7 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     assert result["operation"] == "status" and result["nonce"] == value["nonce"]
     assert set(result["result"]) == {"authorization_status"}
     assert result["result"]["authorization_status"] in {0, 1, 2, 3, 4}
+    identity_status = result["result"]["authorization_status"]
     identity = result["identity"]
     assert {key: identity[key] for key in receipt} == receipt
     assert identity["native_executable"] == str(
@@ -72,6 +78,41 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     assert identity["device_identity_sha256"] == device
     assert identity["native_pid"] > 0
     assert worker.artifact_sha256(app) == helper.helper_artifact_sha256(app)
+
+    # Exercise the real controller's default TemporaryDirectory transport under
+    # the OS temp root, not pytest's RUNNER_TEMP under /Users. realpath resolves
+    # this to /private/var; NSString standardizingPath would strip /private.
+    platform_temp = subprocess.check_output(
+        ["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], text=True
+    ).strip()
+    assert platform_temp
+    assert str(Path(platform_temp).resolve()).startswith("/private/var/")
+    coordinates = {
+        key: value[key]
+        for key in (
+            "release_root",
+            "release_commit",
+            "python_executable",
+            "python_library",
+            "python_library_sha256",
+        )
+    }
+    monkeypatch.setattr(client, "release_coordinates", lambda root=None: coordinates)
+    monkeypatch.setattr(tempfile, "tempdir", platform_temp)
+    native_launch = subprocess.run
+    request_paths: list[Path] = []
+
+    def record_launch(arguments, **kwargs):
+        if arguments[:2] == ["/usr/bin/open", "-W"]:
+            request_paths.append(Path(arguments[-1]))
+        return native_launch(arguments, **kwargs)
+
+    monkeypatch.setattr(client.subprocess, "run", record_launch)
+    result = client.invoke(NativeHelperBinding.model_validate(receipt), "status", {})
+    assert result == {"authorization_status": identity_status}
+    assert len(request_paths) == 1
+    assert str(request_paths[0]).startswith("/private/var/")
+    assert not request_paths[0].parent.exists()
 
 
 def test_native_main_loop_services_completion_while_operation_waits(monkeypatch):
