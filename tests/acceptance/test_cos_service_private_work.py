@@ -448,6 +448,9 @@ def test_encrypted_restore_preserves_service_work_and_client_restrictions(
         fixture_member_id=member,
         openclaw_enabled=True,
         openclaw_shared_secret=SECRET,
+        openclaw_actor_identities={
+            "fixture|backup-member-account|backup-member-actor": member,
+        },
     )
     with TestClient(create_application(settings)) as client:
         runtime = client.app.state.runtime

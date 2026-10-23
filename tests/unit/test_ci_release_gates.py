@@ -1814,7 +1814,8 @@ def test_actual_component_junit_gate_rejects_missing_or_partial_evidence(
     script = (
         (ROOT / check_script)
         .read_text()
-        .split("<<'PY_CHECK'\n", 1)[1]
+        .split("<<'PY_CHECK'", 1)[1]
+        .split("\n", 1)[1]
         .split("\nPY_CHECK", 1)[0]
     )
     report = tmp_path / "updater.xml"
@@ -2092,3 +2093,56 @@ def test_service_work_worker_requires_affected_identity_replay_and_recovery_chec
     assert "check-service-work-gateway.mjs" in native
     assert "install-openclaw-source.sh" in native
     assert "reviewed_source_status" in native
+
+
+@pytest.mark.parametrize("failure", ["none", "python", "plugin", "static", "dirty"])
+def test_service_work_waits_for_every_group_and_rejects_any_failure(
+    tmp_path: Path, failure: str
+) -> None:
+    dispatch = (
+        (ROOT / COS_SERVICE_WORK_CHECK_SCRIPT)
+        .read_text()
+        .split(
+            "# Independent groups finish even when another fails; every result gates release.\n",
+            1,
+        )[1]
+    )
+    script = tmp_path / "groups.sh"
+    script.write_text(
+        """set -euo pipefail
+record() {
+  printf '%s completed\\n' "$1"
+  touch "$RUNNER_TEMP/$1.completed"
+  [[ "$FAILED_GROUP" != "$1" ]] || return 17
+}
+python_checks() { record python; }
+plugin_checks() { record plugin; }
+static_checks() { record static; }
+git() {
+  for name in python plugin static; do
+    test -f "$RUNNER_TEMP/$name.completed" || return 79
+  done
+  touch "$RUNNER_TEMP/clean-checked"
+  if [[ "$1" == status && "$FAILED_GROUP" == dirty ]]; then
+    echo ' M generated-file'
+  fi
+}
+"""
+        + dispatch
+    )
+    result = subprocess.run(
+        ["bash", str(script), "linux"],
+        env={**os.environ, "RUNNER_TEMP": str(tmp_path), "FAILED_GROUP": failure},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == (0 if failure == "none" else 1), result.stderr
+    assert (tmp_path / "clean-checked").is_file()
+    for group in ("python", "plugin", "static"):
+        status = 17 if group == failure else 0
+        assert f"{group} checks (exit {status})" in result.stdout
+        assert (tmp_path / f"cos-service-work-{group}.log").read_text() == (
+            f"{group} completed\n"
+        )
