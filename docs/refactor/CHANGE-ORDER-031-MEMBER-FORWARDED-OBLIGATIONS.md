@@ -81,6 +81,16 @@ malformed linkage never falls back to a member/provider account match. This
 implements the CO-023 direct-intake provenance and CO-031 forwarding boundary
 above without re-resolving a later route configuration or authorizing a send.
 
+MODERNIZE historical attribution for manual member submissions: recognize only
+`triage.intent.submitted@2` from the exact supported member surface adapters,
+with matching private owner/visibility/member/account/actor, deterministic
+intent seed and idempotency key, and the original request fingerprint. Linked
+evidence must precede the submission in the same tenant, be visible to its
+member, and retain its sensitivity. PRESERVE the separate provider and native
+OpenClaw attribution routes; malformed member submissions never borrow a
+provider binding. This is content-free historical ownership evidence only,
+with no change to grants, retained events, acquisition, or sending.
+
 MODERNIZE historical attribution for native OpenClaw submissions: a CoS
 transport account alias is not a personal provider account. Reconcile each
 `openclaw-submission` source through its exact private
