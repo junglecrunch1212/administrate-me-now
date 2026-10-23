@@ -113,6 +113,7 @@ class ActivationRequest(BaseModel):
     owner_member_id: str = Field(min_length=1, max_length=240)
     recipient_entries: list[dict[str, str]] | None = None
     allow_owner_self_replies: bool | None = None
+    allow_owner_self_reminders: bool | None = None
     prepared_openclaw_config: dict[str, Any] | None = None
     cos_imsg_guard_config: dict[str, Any] | None = None
 
@@ -1574,11 +1575,48 @@ class CoSChannelActivator:
                 plugin_config.pop("standingSelfReplyBindings", None)
                 if reply_bindings:
                     plugin_config["standingSelfReplyBindings"] = reply_bindings
+                previous_reminders = set(
+                    plugin_config.get("scheduledSelfReminderBindings", [])
+                )
+                from adminme.cos_self_replies import self_reply_binding
+
+                owner_bindings = set()
+                for actor, member in prepared.get(
+                    "openclaw_actor_identities", {}
+                ).items():
+                    parts = actor.split("|")
+                    if (
+                        member == request.owner_member_id
+                        and len(parts) == 3
+                        and parts[0] == "imessage"
+                    ):
+                        owner_bindings.add(
+                            self_reply_binding(member, parts[1], parts[2])
+                        )
+                reminder_bindings = previous_reminders.intersection(reply_bindings)
+                if request.allow_owner_self_reminders is True:
+                    if not owner_bindings.intersection(reply_bindings):
+                        raise CoSActivationError(
+                            "requested reminders require the owner's enabled private reply permission"
+                        )
+                    reminder_bindings.update(
+                        owner_bindings.intersection(reply_bindings)
+                    )
+                elif request.allow_owner_self_reminders is False:
+                    reminder_bindings.difference_update(owner_bindings)
+                plugin_config.pop("scheduledSelfReminderBindings", None)
+                if reminder_bindings:
+                    plugin_config["scheduledSelfReminderBindings"] = sorted(
+                        reminder_bindings
+                    )
+                    prepared_openclaw.setdefault("cron", {}).setdefault("triggers", {})[
+                        "enabled"
+                    ] = True
                 configure_reply_hook(
                     prepared_openclaw["plugins"]["entries"]["administrateme"],
                     reply_bindings,
                 )
-            elif request.allow_owner_self_replies:
+            elif request.allow_owner_self_replies or request.allow_owner_self_reminders:
                 raise CoSActivationError(
                     "standing replies require live guarded iMessage"
                 )

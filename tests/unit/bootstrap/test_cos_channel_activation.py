@@ -886,8 +886,12 @@ def test_standing_owner_reply_activation_is_explicit_retained_and_revocable(
 
 
 @pytest.mark.parametrize("settlement_fails", [False, True])
+@pytest.mark.parametrize("timed_reminders", [False, True])
 def test_standing_reply_operation_publishes_both_grants_or_restores_both(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settlement_fails: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settlement_fails: bool,
+    timed_reminders: bool,
 ) -> None:
     from adminme.cos_self_replies import self_reply_binding
     from adminme.openclaw_topology import member_agent_id
@@ -936,6 +940,7 @@ def test_standing_reply_operation_publishes_both_grants_or_restores_both(
             "prepared_openclaw_config": prepared,
             "cos_imsg_guard_config": guard,
             "allow_owner_self_replies": True,
+            "allow_owner_self_reminders": True if timed_reminders else None,
             "sender_proofs": [*request.sender_proofs, proof],
             "recipient_entries": [
                 *(request.recipient_entries or []),
@@ -970,6 +975,11 @@ def test_standing_reply_operation_publishes_both_grants_or_restores_both(
             ]
             == expected
         )
+        assert host["plugins"]["entries"]["administrateme"]["config"].get(
+            "scheduledSelfReminderBindings", []
+        ) == (expected if timed_reminders else [])
+        if timed_reminders:
+            assert host["cron"]["triggers"]["enabled"] is True
         assert host["models"] == previous["models"]
         assert host["plugins"]["entries"]["administrateme"]["hooks"] == {
             "allowConversationAccess": True

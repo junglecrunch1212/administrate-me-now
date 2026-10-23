@@ -16,6 +16,8 @@ import yaml
 
 from scripts.release_scope import (
     CONTRACT,
+    COS_REMINDER_PATHS,
+    COS_REMINDER_REQUIRED_PATHS,
     BRIDGE_RUNTIME_PATHS,
     _bridge_runtime_dependency_fingerprint,
     COS_RECOVERY_COMPONENT_PATHS,
@@ -106,6 +108,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "bridge-runtime",
         "google-connections",
         "cos-recovery-history",
+        "cos-reminders",
         "system-wide",
     ],
 )
@@ -137,7 +140,8 @@ def test_scope_gate_requires_exact_corresponding_success(
 
 @pytest.mark.parametrize("defect", ["draft", "scope", "interface", "contract"])
 @pytest.mark.parametrize(
-    "scope", ["bridge-helper", "bridge-enrollment", "cos-recovery-history"]
+    "scope",
+    ["bridge-helper", "bridge-enrollment", "cos-recovery-history", "cos-reminders"],
 )
 def test_gate_refuses_development_or_reinterpreted_evidence(
     defect: str, scope: str
@@ -595,6 +599,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "bridge-development",
         "google-connections-validation",
         "cos-recovery-history-validation",
+        "cos-reminder-validation",
         system,
     }
     if platform == "macos":
@@ -1379,3 +1384,142 @@ def test_bridge_runtime_fingerprint_binds_every_unreviewed_byte_and_mode():
         assert _bridge_runtime_dependency_fingerprint(
             base
         ) != _bridge_runtime_dependency_fingerprint((*base, entry(path, mode="120000")))
+
+
+def _reminder_candidate(repository: Path) -> tuple[str, str]:
+    base = _git(repository, "rev-parse", "HEAD")
+    for path in sorted(COS_REMINDER_REQUIRED_PATHS):
+        head = _commit(repository, path, "# Synthetic reminder boundary\n")
+    return base, head
+
+
+def test_reminder_scope_checks_closed_sources_and_normal_protected_workers(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, head = _reminder_candidate(path)
+    for allowed in sorted(COS_REMINDER_PATHS - COS_REMINDER_REQUIRED_PATHS):
+        head = _commit(path, allowed, "# Reviewed reminder boundary\n")
+        if allowed == "scripts/acceptance/openclaw-source-install.sh":
+            (path / allowed).chmod(0o755)
+            _git(path, "add", allowed)
+            _git(path, "commit", "-m", "Retain executable script mode")
+            head = _git(path, "rev-parse", "HEAD")
+    # Mutable checkout claims cannot narrow the immutable candidate.
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-reminders"
+    assert len(proof["cos_reminder_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("cos-reminders", platform) == (
+            "release-scope",
+            "cos-reminder-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "adminme/events/log.py",
+        "adminme/session.py",
+        "bootstrap/upgrade.py",
+        "bootstrap/backup_restore.py",
+        "bootstrap/versions.json",
+        "poetry.lock",
+        "openclaw/administrateme/package-lock.json",
+        "bridge/adminme_bridge/main.py",
+        "tests/unreviewed.py",
+        "unreviewed-runtime.py",
+    ],
+)
+def test_reminder_scope_requires_broad_checks_for_unrelated_dependencies(
+    repository: tuple[Path, str],
+    other: str,
+) -> None:
+    path, _ = repository
+    _commit(path, other, "RETAINED = True\n")
+    base, _ = _reminder_candidate(path)
+    head = _commit(path, other, "CHANGED = True\n")
+    event = _event(base, head)
+    event.update(cos_reminder_interfaces_equal=True, changed_paths=[])
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize(
+    "drift", ["none", "runtime", "mode", "missing-test", "unknown-test"]
+)
+def test_reminder_scope_checks_the_exact_merge_tree(
+    repository: tuple[Path, str],
+    drift: str,
+) -> None:
+    path, _ = repository
+    base, head = _reminder_candidate(path)
+    if drift == "runtime":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY = True\n")
+    elif drift == "mode":
+        (path / "adminme/runtime.py").chmod(0o755)
+    elif drift == "missing-test":
+        (path / "tests/acceptance/test_cos_self_reminders.py").unlink()
+    elif drift == "unknown-test":
+        (path / "tests/unreviewed.py").write_text("UNREVIEWED = True\n")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent reminder merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("cos-reminders" if drift == "none" else "system-wide")
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_reminder_release_worker_requires_the_real_affected_checks(
+    filename: str,
+    protected: str,
+    platform: str,
+    system: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["cos-reminder-validation"]
+    assert job["if"] == "${{ needs.release-scope.outputs.scope == 'cos-reminders' }}"
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert f"bash scripts/acceptance/cos-reminder-release.sh {platform}" in commands
+    script = (ROOT / "scripts/acceptance/cos-reminder-release.sh").read_text()
+    for required in (
+        "set -euo pipefail",
+        '"${GITHUB_ACTIONS:-}" == true',
+        "--runxfail",
+        "test_cos_self_reminders.py",
+        "test_cos_self_replies.py",
+        "test_cos_response_execution.py",
+        "test_cos_response_allowlist_settings.py",
+        "test_cos_identity_delegation_kernel.py",
+        "test_member_cos_approval.py",
+        "test_cos_response_assurance.py",
+        "test_source_assurance.py",
+        "test_historical_attribution.py",
+        "test_schema_registry.py",
+        "test_cos_channel_activation.py",
+        "test_ci_release_gates.py",
+        "npm run check",
+        "npm test",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+        "openclaw-source-install.sh --self-reminder",
+    ):
+        assert required in script
+    native = (ROOT / "scripts/acceptance/openclaw-source-install.sh").read_text()
+    assert '"${1:-}" == --self-reminder' in native
+    assert "check-self-reminder-gateway.mjs" in native
+    assert "check-cos-approval-gateway.mjs" in native
+    assert "check-cos-imessage-text.mjs" in native

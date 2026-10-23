@@ -52,7 +52,9 @@
       "administrateme_skill",
       "administrateme_notification_result",
       "administrateme_cos_response",
-      "administrateme_standing_order"
+      "administrateme_standing_order",
+      "administrateme_self_reminder",
+      "administrateme_self_reminder_fire"
     ]
   },
   "toolMetadata": {
@@ -76,7 +78,9 @@
     "administrateme_skill": { "optional": true },
     "administrateme_notification_result": { "optional": true },
     "administrateme_cos_response": { "optional": true },
-    "administrateme_standing_order": { "optional": true }
+    "administrateme_standing_order": { "optional": true },
+    "administrateme_self_reminder": { "optional": true },
+    "administrateme_self_reminder_fire": { "optional": true }
   },
   "dashboard": {
     "dataBindings": [
@@ -240,6 +244,7 @@
         "maxItems": 50,
         "items": { "type": "string", "pattern": "^adminme-[0-9a-f]{16}$" }
       },
+      "scheduledSelfReminderBindings": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "maxItems": 20, "uniqueItems": true, "default": [] },
       "standingSelfReplyBindings": {
         "type": "array", "maxItems": 20, "uniqueItems": true,
         "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" },

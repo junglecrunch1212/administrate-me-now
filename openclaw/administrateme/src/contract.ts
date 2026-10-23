@@ -38,6 +38,7 @@ export type PluginConfig = {
   modelSessionPrefix: string;
   dmScope: "per_account_channel_peer";
   standingSelfReplyBindings: readonly string[];
+  scheduledSelfReminderBindings: readonly string[];
   memberAgentIds: readonly string[];
   bindingFingerprints: readonly string[];
   uniqueAgents: boolean;
@@ -70,6 +71,8 @@ export const TOOL_NAMES = [
   "administrateme_notification_result",
   "administrateme_cos_response",
   "administrateme_standing_order",
+  "administrateme_self_reminder",
+  "administrateme_self_reminder_fire",
 ] as const;
 
 export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([

@@ -99,6 +99,56 @@ BRIDGE_RUNTIME_PATHS = frozenset(
         "tests/acceptance/test_member_bridge_launch_runtime.py",
     }
 )
+COS_REMINDER_PATHS = frozenset(
+    {
+        ".github/workflows/cos-reply-development.yml",
+        "adminme/cos_response_assurance.py",
+        "adminme/events/schemas/cos_reminders.py",
+        "adminme/historical_attribution.py",
+        "adminme/products/openclaw/cos_reminders.py",
+        "adminme/products/openclaw/cos_self_replies.py",
+        "adminme/runtime/application.py",
+        "adminme/source_assurance.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/openclaw/programs/requested_workflows.md",
+        "docs/refactor/evidence/event-lifecycle-catalog.json",
+        "openclaw/administrateme/openclaw.plugin.json",
+        "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
+        "openclaw/administrateme/scripts/check-self-reminder-gateway.mjs",
+        "openclaw/administrateme/scripts/validate-contract.mjs",
+        "openclaw/administrateme/src/config.ts",
+        "openclaw/administrateme/src/contract.ts",
+        "openclaw/administrateme/src/hooks.ts",
+        "openclaw/administrateme/src/index.ts",
+        "openclaw/administrateme/src/self-reminders.ts",
+        "openclaw/administrateme/src/self-replies.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/agent-harness-runtime.d.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/agent-harness-runtime.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
+        "openclaw/administrateme/test/plugin-contract.test.ts",
+        "openclaw/administrateme/test/self-reminders.test.ts",
+        "openclaw/administrateme/tsconfig.json",
+        "openclaw/administrateme/vitest.config.ts",
+        "openclaw/administrateme/workspace/AGENTS.md",
+        "scripts/acceptance/cos-reminder-release.sh",
+        "scripts/acceptance/openclaw-source-install.sh",
+        "tests/acceptance/test_cos_self_reminders.py",
+        "tests/acceptance/test_cos_self_replies.py",
+        "tests/fixtures/openclaw_self_reminder_probe.mjs",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+    }
+)
+COS_REMINDER_REQUIRED_PATHS = frozenset(
+    {
+        "adminme/products/openclaw/cos_reminders.py",
+        "adminme/events/schemas/cos_reminders.py",
+        "openclaw/administrateme/src/self-reminders.ts",
+        "openclaw/administrateme/scripts/check-self-reminder-gateway.mjs",
+        "tests/acceptance/test_cos_self_reminders.py",
+        "tests/fixtures/openclaw_self_reminder_probe.mjs",
+        "scripts/acceptance/cos-reminder-release.sh",
+    }
+)
 SCOPES = frozenset(
     {
         "documentation",
@@ -107,6 +157,7 @@ SCOPES = frozenset(
         "bridge-runtime",
         "google-connections",
         "cos-recovery-history",
+        "cos-reminders",
         "system-wide",
     }
 )
@@ -161,6 +212,7 @@ def choose_scope(
     google_interfaces_equal: bool = False,
     cos_recovery_interfaces_equal: bool = False,
     bridge_runtime_interfaces_equal: bool = False,
+    cos_reminder_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -188,6 +240,17 @@ def choose_scope(
         )
     ):
         return "bridge-runtime"
+    if (
+        cos_reminder_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in COS_REMINDER_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path) == {_cos_reminder_mode(path)}
+            for status, path in changes
+        )
+        and any(path in COS_REMINDER_REQUIRED_PATHS for _, path in changes)
+    ):
+        return "cos-reminders"
     recovery_allowed = (
         COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
     )
@@ -307,6 +370,31 @@ def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     ).hexdigest()
 
 
+def _cos_reminder_mode(path: str) -> str:
+    return (
+        "100755"
+        if path == "scripts/acceptance/openclaw-source-install.sh"
+        else "100644"
+    )
+
+
+def _cos_reminder_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # The reviewed reply/timer boundary is closed. Storage, crypto, dependencies,
+    # unrelated runtime and tests remain identical in base, head and test merge.
+    allowed = COS_REMINDER_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == _cos_reminder_mode(entry.path)
+            and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
 def google_dependency_fingerprint(repository: Path, revision: str) -> str:
     """Exclude the Google module and only its exact tested integration edits.
 
@@ -393,8 +481,16 @@ def select_scope(
     recovery_fingerprints: dict[str, str] = {}
     bridge_runtime_fingerprints: dict[str, str] = {}
     recovery_sources_present: dict[str, bool] = {}
+    reminder_fingerprints: dict[str, str] = {}
+    reminder_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
+        reminder_fingerprints[revision] = _cos_reminder_dependency_fingerprint(entries)
+        reminder_sources_present[revision] = (
+            revision == base
+            or COS_REMINDER_REQUIRED_PATHS
+            <= {entry.path for entry in entries if entry.mode == "100644"}
+        )
         enrollment_fingerprints[revision] = _enrollment_interface_fingerprint(entries)
         recovery_fingerprints[revision] = _cos_recovery_dependency_fingerprint(entries)
         bridge_runtime_fingerprints[revision] = _bridge_runtime_dependency_fingerprint(
@@ -432,6 +528,10 @@ def select_scope(
         == 1,
         bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
         == 1,
+        cos_reminder_interfaces_equal=(
+            all(reminder_sources_present.values())
+            and len(set(reminder_fingerprints.values())) == 1
+        ),
         cos_recovery_interfaces_equal=(
             all(recovery_sources_present.values())
             and len(set(recovery_fingerprints.values())) == 1
@@ -447,6 +547,7 @@ def select_scope(
         "interface_sha256": checkout_fingerprint,
         "enrollment_interface_sha256": enrollment_fingerprints[checkout],
         "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
+        "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -461,6 +562,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-runtime": "bridge-development",
         "google-connections": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
+        "cos-reminders": "cos-reminder-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",
