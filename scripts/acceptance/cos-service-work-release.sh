@@ -7,6 +7,12 @@ case "${1:-}" in linux|macos) ;; *) echo "Expected linux or macos" >&2; exit 1 ;
 tests=(
   tests/acceptance/test_cos_service_private_work.py
   tests/acceptance/test_cos_service_working_context.py
+  tests/acceptance/test_cos_service_planning_context.py
+  tests/unit/test_projection_calendars.py
+  tests/unit/projections/lists/test_handlers.py
+  tests/unit/projections/lists/test_queries.py
+  tests/integration/test_lists_projection_runner.py
+  tests/integration/test_service_owned_google_sources.py
   tests/unit/test_service_work_principal.py
   tests/unit/test_service_identities.py
   tests/unit/test_operating_agreements.py

@@ -780,3 +780,332 @@ def test_context_bounds_metadata_and_withholds_locked_or_retracted_sources(
                 ).status_code
                 == 404
             )
+
+
+def _own_mail(
+    client: TestClient,
+    key: str,
+    *,
+    native_id: str | None = None,
+    principal: str | None = None,
+    tenant: str | None = None,
+    body: str = "Please prepare the travel options.",
+) -> str:
+    from adminme.service_identities import service_private_scope
+    from tests.acceptance.test_service_owned_cos_sources_direct_intake import (
+        _service_message,
+    )
+
+    runtime = client.app.state.runtime
+    event = _service_message(
+        runtime,
+        key=key,
+        trusted_route_key=None,
+        from_identifier="correspondent@example.invalid",
+        subject=f"Travel {key}",
+        body=body,
+        event_at_ms=1,
+    )
+    if tenant:
+        event = event.model_copy(update={"tenant_id": tenant})
+    payload = dict(event.payload)
+    if native_id:
+        payload["native_message_id"] = native_id
+    if principal:
+        payload["service_principal_id"] = principal
+        event = event.model_copy(
+            update={
+                "owner_scope": service_private_scope(principal),
+                "visibility_scope": service_private_scope(principal),
+            }
+        )
+    payload["body_html"] = "<p>HTML must stay private</p>"
+    event = event.model_copy(update={"payload": payload})
+    event_id = client.portal.call(runtime.events.write, event)
+    client.portal.call(runtime.wait_for_projection, "interactions", event_id)
+    return event_id
+
+
+def _run_provenance(run: str, correlation: str) -> dict[str, Any]:
+    return {**_service(correlation), "session_key": _service(run)["session_key"]}
+
+
+def _run_context(client: TestClient, run: str, correlation: str, **values: Any) -> Any:
+    return client.post(
+        CONTEXT,
+        headers=OPENCLAW_HEADERS,
+        json={"provenance": _run_provenance(run, correlation), **values},
+    )
+
+
+def _run_note(client: TestClient, run: str, request_id: str, **values: Any) -> Any:
+    return client.post(
+        CREATE,
+        headers=OPENCLAW_HEADERS,
+        json={
+            "provenance": _run_provenance(run, request_id),
+            "request_id": request_id,
+            "title": "Private mail follow-up",
+            "record_kind": "note",
+            **values,
+        },
+    )
+
+
+def _mail_policy(
+    client: TestClient, event_id: str, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> dict[str, Any]:
+    from adminme.source_policy import source_coordinate_for_event
+
+    runtime = client.app.state.runtime
+    event = client.portal.call(runtime.event_log.get, event_id)
+    coordinate = source_coordinate_for_event(
+        event, provider_bindings=runtime.settings.provider_bindings
+    )
+    state = runtime.settings_control.read()
+    policy = {
+        **policy_for_preset("balanced").model_dump(mode="json"),
+        "context_mode": mode,
+    }
+    state["source_policies_v2"].setdefault(coordinate.owner_principal_id, {})[
+        coordinate.key
+    ] = {"policy": policy}
+    monkeypatch.setattr(runtime.settings_control, "read", lambda: state)
+    return policy
+
+
+def test_cos_reads_own_unrouted_gmail_and_retains_mixed_source_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    settings = _settings(instance)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        mail = _own_mail(client, "own-source", body="Useful plaintext. " * 200)
+        other = _own_mail(client, "other-service", principal="service-principal:other")
+        foreign = _own_mail(client, "foreign-tenant", tenant="tenant-other-fixture")
+        member = _source(client, A, "Member travel timing", sensitivity="privileged")
+        # Ordinary unrouted service mail does not depend on any member grant.
+        default = _context(client, "own-default")
+        assert default.status_code == 200, default.text
+        assert [fact["event_id"] for fact in default.json()["facts"]] == [mail]
+        assert default.json()["standing_contexts"] == []
+        fact = default.json()["facts"][0]
+        assert fact["authority"]["authority_kind"] == "service_self"
+        assert fact["authority"]["authority_grant_id"] is None
+        assert fact["authority"]["source_audience"] == []
+        assert fact["authority"]["read_mode"] == "typed_facts"
+        assert fact["provider_body_included"] is False
+        assert (
+            _context(client, "wrong-service", source_event_ids=[other]).status_code
+            == 404
+        )
+        assert (
+            _context(client, "wrong-tenant", source_event_ids=[foreign]).status_code
+            == 404
+        )
+        _mail_policy(client, mail, monkeypatch, "typed_facts_safe_snippet")
+        _grant_private(client, A, "mail-note-member-authority")
+        result = _run_context(
+            client,
+            "mail-follow-up-run",
+            "read-mail-and-member",
+            source_event_ids=[mail, member],
+        )
+        assert result.status_code == 200, result.text
+        fact = result.json()["facts"][0]
+        assert fact["provider_body_included"] is True
+        assert len(fact["fact"]["body_snippet"]) == 2000
+        assert fact["fact"]["body_snippet_truncated"] is True
+        assert "body_html" not in str(
+            result.json()
+        ) and "HTML must stay private" not in str(result.json())
+        # Source IDs are deliberately omitted: the trusted receipt carries both.
+        note = _run_note(
+            client,
+            "mail-follow-up-run",
+            "retain-mail-follow-up",
+            description="Prepare travel options using the member timing.",
+        )
+        assert note.status_code == 201, note.text
+        work = note.json()["work"]
+        task_id = work["task_id"]
+        assert work["sensitivity"] == "privileged"
+        assert {source["source_event_id"] for source in work["source_authorities"]} == {
+            mail,
+            member,
+        }
+        event = client.portal.call(runtime.event_log.get, note.json()["event_id"])
+        assert event["schema_version"] == 5
+        assert note.json()["provider_effect_count"] == 0
+        client.portal.call(runtime.projections.rebuild, "tasks")
+        assert _read(client, "own-note-replay", task_id=task_id)["work"][0] == work
+        receipt = (
+            runtime.projections.connection("tasks")
+            .execute(
+                "SELECT COUNT(*) FROM cos_source_read_receipts WHERE source_event_id=?",
+                (mail,),
+            )
+            .fetchone()[0]
+        )
+        assert receipt > 0
+        assert runtime.fixture_adapter.delivered == []
+        # Real member provenance cannot enter the private service tool.
+        from tests.acceptance.test_cos_identity_delegation_kernel import _provenance
+
+        assert (
+            client.post(
+                CONTEXT,
+                headers=OPENCLAW_HEADERS,
+                json={"provenance": _provenance(A, "member-not-service")},
+            ).status_code
+            == 403
+        )
+    # Replay receipts remain authoritative after restart. Default policy is
+    # typed-facts again, so notes derived from snippets are no longer readable.
+    with TestClient(create_application(settings)) as restarted:
+        assert _read(restarted, "snippet-note-blocked-after-restart")["work"] == []
+        _mail_policy(restarted, mail, monkeypatch, "typed_facts_safe_snippet")
+        assert (
+            _read(restarted, "snippet-note-restored", task_id=task_id)["work"][0][
+                "task_id"
+            ]
+            == task_id
+        )
+        same_run = _run_note(
+            restarted, "mail-follow-up-run", "retained-receipt-after-restart"
+        )
+        assert same_run.status_code == 201, same_run.text
+        assert len(same_run.json()["work"]["source_authorities"]) == 2
+        assert restarted.app.state.runtime.fixture_adapter.delivered == []
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["none", "metadata_only", "typed_facts", "content_on_explicit_authorized_demand"],
+)
+def test_mail_snippet_downgrade_blocks_in_run_and_retained_note_laundering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        mail = _own_mail(client, "policy-source", body="Restricted client plan")
+        policy = _mail_policy(client, mail, monkeypatch, "typed_facts_safe_snippet")
+        assert (
+            _run_context(
+                client,
+                "sensitive-run",
+                "consume-client-source",
+                source_event_ids=[mail],
+            ).status_code
+            == 200
+        )
+        note = _run_note(
+            client,
+            "sensitive-run",
+            "retain-client-source",
+            description="Restricted client plan",
+        )
+        assert note.status_code == 201, note.text
+        task_id = note.json()["task_id"]
+        # A second run reading a note inherits its sources, including history.
+        read = client.post(
+            READ,
+            headers=OPENCLAW_HEADERS,
+            json={
+                "provenance": _run_provenance("copy-run", "read-derived-note"),
+                "task_id": task_id,
+            },
+        )
+        assert read.status_code == 200, read.text
+        policy["context_mode"] = mode
+        # Re-reading a less permissive view cannot lower the durable run floor.
+        _run_context(
+            client, "sensitive-run", "consume-lower-view", source_event_ids=[mail]
+        )
+        assert (
+            _run_note(client, "sensitive-run", "launder-by-omission").status_code == 404
+        )
+        assert _run_note(client, "copy-run", "launder-derived-note").status_code == 404
+        assert (
+            _run_note(
+                client, "sensitive-run", "launder-lower-mode", source_event_ids=[mail]
+            ).status_code
+            == 404
+        )
+        assert _read(client, "withheld-retained-client-note")["work"] == []
+        assert "Restricted client plan" not in str(
+            _read(client, "withheld-client-history")
+        )
+        context = _context(client, "policy-current-context", source_event_ids=[mail])
+        if mode in {"none", "content_on_explicit_authorized_demand"}:
+            assert context.status_code == 404
+        else:
+            assert context.status_code == 200, context.text
+            fact = context.json()["facts"][0]
+            assert fact["provider_body_included"] is False
+            assert "body_snippet" not in fact["fact"]
+            if mode == "metadata_only":
+                assert (
+                    "subject" not in fact["fact"]
+                    and "from_identifier" not in fact["fact"]
+                )
+        policy["context_mode"] = "typed_facts_safe_snippet"
+        assert _read(client, "restored-client-note", task_id=task_id)["work"]
+        assert runtime.fixture_adapter.delivered == []
+
+
+def test_own_mail_currentness_is_exact_and_historical_note_keeps_original_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        first = _own_mail(client, "original", native_id="one-native-message")
+        _mail_policy(client, first, monkeypatch, "typed_facts_safe_snippet")
+        note = _run_note(
+            client,
+            "original-run",
+            "note-original-observation",
+            source_event_ids=[first],
+        )
+        assert note.status_code == 201, note.text
+        second = _own_mail(
+            client,
+            "revision",
+            native_id="one-native-message",
+            body="Revised travel request",
+        )
+        assert (
+            _context(
+                client, "superseded-own-mail", source_event_ids=[first]
+            ).status_code
+            == 404
+        )
+        current = _context(client, "current-own-mail")
+        assert [fact["event_id"] for fact in current.json()["facts"]] == [second]
+        assert (
+            current.json()["facts"][0]["fact"]["body_snippet"]
+            == "Revised travel request"
+        )
+        assert (
+            _context(client, "superseded-self-cursor", after_event_id=first).status_code
+            == 200
+        )
+        work = _read(client, "historical-mail-note", task_id=note.json()["task_id"])[
+            "work"
+        ][0]
+        assert work["source_authorities"][0]["source_event_id"] == first
+        client.portal.call(runtime.projections.rebuild, "interactions")
+        assert (
+            _context(client, "replayed-own-mail", source_event_ids=[second]).status_code
+            == 200
+        )
+        assert runtime.fixture_adapter.delivered == []

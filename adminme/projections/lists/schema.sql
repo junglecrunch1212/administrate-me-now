@@ -180,3 +180,29 @@ CREATE TABLE IF NOT EXISTS context_signals (
 
 CREATE INDEX IF NOT EXISTS idx_context_signals_member_kind
     ON context_signals(tenant_id, member_id, kind, observed_at);
+
+
+-- Private source pointers never populate member lists or canonical tasks.
+CREATE TABLE IF NOT EXISTS service_lists_current (
+    tenant_id TEXT NOT NULL,
+    service_principal_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    list_external_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    deleted INTEGER NOT NULL,
+    last_deleted_event_id TEXT,
+    PRIMARY KEY (tenant_id, service_principal_id, provider, provider_account_id, list_external_id)
+);
+CREATE TABLE IF NOT EXISTS service_list_items_current (
+    tenant_id TEXT NOT NULL,
+    service_principal_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    list_external_id TEXT NOT NULL,
+    item_external_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    deleted INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, service_principal_id, provider, provider_account_id,
+                 list_external_id, item_external_id)
+);

@@ -90,7 +90,7 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
   const definitions = [
     {
       name: SERVICE_PRIVATE_TOOL_NAMES[0],
-      description: "Create this service principal's internal work, note or scratchpad with source references and typed history. No provider action or timer is authorized.",
+      description: "Create internal work, notes or scratchpads. Sources consumed in this run are retained automatically alongside explicit references; current restrictions apply. No provider action or timer is authorized.",
       parameters: Type.Object({
         request_id: requestId,
         title: Type.String({ minLength: 1, maxLength: 500 }),
@@ -137,7 +137,7 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
     },
     {
       name: SERVICE_PRIVATE_TOOL_NAMES[3],
-      description: "Read bounded task/commitment facts, current calendar/contact facts, and mail/note/file metadata within standing service grants. Source policy applies; provider bodies and attachments are not returned. Retain source references; access does not authorize disclosure.",
+      description: "Read authorized household facts and metadata plus your own acquired Google Calendar/Tasks current facts and Gmail, including unrouted mail. Effective policy permits headers or bounded plaintext snippets. Retain source references; no HTML, attachments or outside disclosure rights.",
       parameters: Type.Object({
         source_event_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 20 })),
         after_event_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),

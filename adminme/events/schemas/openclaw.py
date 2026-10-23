@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from adminme.events.registry import registry
+from adminme.events.schemas.domain import ServiceWorkSourceAuthority
 
 
 class OpenClawIntegrationStateChangedV1(BaseModel):
@@ -150,6 +151,13 @@ class OpenClawToolCallRecordedV2(BaseModel):
     openclaw_commit: str = Field(min_length=7)
 
 
+class OpenClawToolCallRecordedV3(OpenClawToolCallRecordedV2):
+    """Trusted read receipt: no body, raw session key or new disclosure grant."""
+
+    source_read_session_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_read_authorities: list[ServiceWorkSourceAuthority] = Field(max_length=4000)
+
+
 class OpenClawApprovalReceivedV1(BaseModel):
     """One resolved, content-bound OpenClaw plugin approval consumed once."""
 
@@ -182,6 +190,7 @@ registry.register(
 registry.register("openclaw.model_call.recorded", 1, OpenClawModelCallRecordedV1)
 registry.register("openclaw.tool_call.recorded", 1, OpenClawToolCallRecordedV1)
 registry.register("openclaw.tool_call.recorded", 2, OpenClawToolCallRecordedV2)
+registry.register("openclaw.tool_call.recorded", 3, OpenClawToolCallRecordedV3)
 registry.register("openclaw.approval.received", 1, OpenClawApprovalReceivedV1)
 
 

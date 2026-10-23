@@ -828,9 +828,16 @@ After deploying the protected release, enroll each required purpose with
 calendar-read` (then `tasks-read`). The default `--cos-service` behavior remains
 Gmail read/send. Each workspace purpose uses its own Keychain name and receipt;
 it never overwrites the mail/member secret or requests incremental grant union.
-The scopes are the corresponding `calendar.readonly` or `tasks.readonly` plus
-`userinfo.email` to prove the consented account without granting Gmail access.
-Broader, incomplete and mismatched-account grants fail before secret storage.
+The exact scopes are the corresponding `calendar.readonly` or `tasks.readonly`,
+`openid`, and `https://www.googleapis.com/auth/userinfo.email`. Explicit OpenID
+Connect identity scope matches Google's canonical identity response while the
+resource read scope remains mandatory. Broader, identity-only, incomplete and
+mismatched-account grants fail before secret storage; do not relax oauthlib's
+scope check or union prior grants. Select the requested Calendar or Tasks read
+permission on Google's granular consent screen: signing in alone is not consent
+to that resource. A failed callback stores no new credential or enrollment receipt.
+Google documents [OpenID Connect scopes](https://developers.google.com/identity/openid-connect/openid-connect#scope-param)
+and [checking granted permissions](https://developers.google.com/identity/protocols/oauth2/web-server#check-granted-scopes).
 Google account consent is still necessary; administrative app approval does not
 replace it. Revoking an entire OAuth application at Google may affect all its
 purpose grants, so recovery pauses a source rather than revoking unrelated tokens.
