@@ -42,7 +42,10 @@ RUNTIME_INTERFACE_HASHES: dict[str, frozenset[str]] = {
         {"01b7a3a719f023362933e54d1816b0dae9ef770a11ce6aff1ef222f34b5afcd6"}
     ),
     "bootstrap/bridge_enrollment.py": frozenset(
-        {"9cdc2da8e27fb1905d3ca6b42536c7a65edb220e9ac2fd9264017ab86af656ce"}
+        {
+            "9cdc2da8e27fb1905d3ca6b42536c7a65edb220e9ac2fd9264017ab86af656ce",
+            "af0268ac567859ef8f3e8ffcade61aa8265c415d6e156641985496929bee990e",
+        }
     ),
     # Retained paired runtime and reviewed coordinator-only central successor.
     # Packaging separately proves their edge-used code is unchanged.
@@ -53,6 +56,12 @@ RUNTIME_INTERFACE_HASHES: dict[str, frozenset[str]] = {
         }
     ),
 }
+APP_TAILSCALE_ENROLLMENT_SHA256 = (
+    "af0268ac567859ef8f3e8ffcade61aa8265c415d6e156641985496929bee990e"
+)
+APP_TAILSCALE_DEPENDENCY_SHA256 = (
+    "0450494bb29928b73179028c1b33928ea8cc9b3097ea7725e440209c12b3eda5"
+)
 SELECTED = frozenset({"apple_calendar", "apple_reminders", "apple_notes"})
 CAPABILITY_IDS = SELECTED | {
     "apple_contacts",
@@ -1500,6 +1509,23 @@ def validate_runtime_interfaces(root: Path) -> None:
             source.is_symlink()
             or not source.is_file()
             or hashlib.sha256(source.read_bytes()).hexdigest() not in approved
+        ):
+            raise PermissionFailure("runtime_mismatch")
+
+    # Only the newly reviewed enrollment implementation imports this module.
+    # Retained pre-shortcut runtimes remain compatible without inventing files.
+    if (
+        hashlib.sha256(
+            (root / "bootstrap/bridge_enrollment.py").read_bytes()
+        ).hexdigest()
+        == APP_TAILSCALE_ENROLLMENT_SHA256
+    ):
+        dependency = root / "adminme/tailscale_local.py"
+        if (
+            dependency.is_symlink()
+            or not dependency.is_file()
+            or hashlib.sha256(dependency.read_bytes()).hexdigest()
+            != APP_TAILSCALE_DEPENDENCY_SHA256
         ):
             raise PermissionFailure("runtime_mismatch")
 
