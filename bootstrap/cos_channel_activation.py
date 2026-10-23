@@ -17,9 +17,9 @@ import os
 import stat
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 import yaml
@@ -171,6 +171,88 @@ class EnterObservationRequest(BaseModel):
     expected_release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     expected_activation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     expected_configuration_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MaintenancePreparationRequest(BaseModel):
+    """Existing authority and optional fresh proofs; never new permissions."""
+
+    model_config = {"extra": "forbid", "strict": True}
+
+    owner_authorization_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operator_principal_id: str = Field(pattern=r"^operator:.+", max_length=240)
+    owner_member_id: str = Field(min_length=1, max_length=240)
+    sender_proofs: list[SenderProof] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
+
+
+class MaintenanceRestorationPlan(MaintenancePreparationRequest):
+    """Private pre-maintenance artifact consumed by the ordinary transactions."""
+
+    contract: Literal["cos-maintenance-restoration-v1"] = (
+        "cos-maintenance-restoration-v1"
+    )
+    plan_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    prepared_at: str
+    expires_at: str
+    target_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    predecessor_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    prior_activation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    deployment_snapshot: dict[str, str]
+    adapter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    member_mapping_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    recipient_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    gateway_sha256: str | None = None
+    gateway_compatibility_sha256: str | None = None
+    guard_config: dict[str, Any] | None = None
+    self_reply_bindings: list[str] = Field(default_factory=list, max_length=20)
+    self_reminder_bindings: list[str] = Field(default_factory=list, max_length=20)
+
+    def digest(self) -> str:
+        return _sha(_payload(self.model_dump(mode="json")))
+
+    def observation_request(self) -> EnterObservationRequest:
+        return EnterObservationRequest(
+            owner_authorization_sha256=self.owner_authorization_sha256,
+            operator_principal_id=self.operator_principal_id,
+            owner_member_id=self.owner_member_id,
+            expected_release_commit=self.predecessor_commit,
+            expected_activation_id=self.prior_activation_id,
+            expected_configuration_fingerprint=self.deployment_snapshot[
+                "configuration_fingerprint"
+            ],
+        )
+
+
+def _maintenance_gateway_fingerprint(gateway: dict[str, Any], release: Path) -> str:
+    """Ignore only updater-owned registration metadata and restored grant fields."""
+    value = copy.deepcopy(gateway)
+    metadata = value.setdefault("meta", {})
+    metadata.pop("lastTouchedAt", None)
+    metadata.pop("lastTouchedVersion", None)
+    plugins = value.setdefault("plugins", {})
+    plugins.setdefault("installs", {}).pop("administrateme", None)
+    load = plugins.setdefault("load", {})
+    load["paths"] = [
+        "<selected-administrateme-plugin>"
+        if path == str(release / "openclaw/administrateme")
+        else path
+        for path in load.get("paths", [])
+    ]
+    entry = plugins.setdefault("entries", {}).setdefault("administrateme", {})
+    config = entry.setdefault("config", {})
+    config.pop("standingSelfReplyBindings", None)
+    config.pop("scheduledSelfReminderBindings", None)
+    entry.setdefault("hooks", {}).pop("allowConversationAccess", None)
+    for account in (
+        value.get("channels", {}).get("imessage", {}).get("accounts", {}).values()
+    ):
+        if account.get("cliPath") == str(
+            release / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+        ):
+            account["cliPath"] = "<selected-cos-guard>"
+    return _sha(_payload(value))
 
 
 def _private_bytes(path: Path) -> bytes:
@@ -821,11 +903,298 @@ class CoSChannelActivator:
             # the malformed historical evidence a second time.
             raise
 
+    def _maintenance_controls(self) -> dict[str, Any]:
+        adapters = _json(self.config_dir / "adapters.json")
+        policy = policy_from_config(adapters)
+        receipt = _json(self.config_dir / RECEIPT_FILENAME)
+        activation = parse_activation(receipt["activation"])
+        gateway = None
+        guard = None
+        replies: list[str] = []
+        reminders: list[str] = []
+        if policy is not None and policy.imessage_channel_id is not None:
+            gateway = _json(self.paths.instance_dir / "openclaw/runtime/openclaw.json")
+            guard = _json(self.config_dir / "cos-imsg-guard.json")
+            config = (
+                gateway.get("plugins", {})
+                .get("entries", {})
+                .get("administrateme", {})
+                .get("config", {})
+            )
+            replies = sorted(
+                set(getattr(activation, "self_reply_bindings", [])).intersection(
+                    config.get("standingSelfReplyBindings", [])
+                )
+            )
+            reminders = sorted(
+                set(replies).intersection(
+                    config.get("scheduledSelfReminderBindings", [])
+                )
+            )
+        return {
+            "adapters": adapters,
+            "receipt": receipt,
+            "activation": activation,
+            "members": _json(self.config_dir / "member-mapping.json"),
+            "policy": asyncio.run(self._policy()),
+            "gateway": gateway,
+            "guard": guard,
+            "replies": replies,
+            "reminders": reminders,
+        }
+
+    @staticmethod
+    def _maintenance_proof_expiry(
+        proofs: list[SenderProof], prior: CosChannelActivation
+    ) -> datetime:
+        if sorted(
+            (proof.channel, proof.provider_account_sha256) for proof in proofs
+        ) != sorted(
+            (proof.channel, proof.provider_account_sha256) for proof in prior.channels
+        ):
+            raise CoSActivationError(
+                "maintenance cannot change enrolled sender accounts"
+            )
+        now = datetime.now(timezone.utc)
+        observed = [aware_time(proof.observed_at) for proof in proofs]
+        if any(
+            value is None or not 0 <= (now - value).total_seconds() < 86400
+            for value in observed
+        ):
+            raise CoSActivationError(
+                "refresh actual sender/transport evidence before maintenance"
+            )
+        return min(value + timedelta(days=1) for value in observed if value is not None)
+
+    def prepare_maintenance(
+        self, request: MaintenancePreparationRequest
+    ) -> MaintenanceRestorationPlan:
+        """Read live authority before stopping services; do not mutate the instance."""
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if (
+                self.journal_path.exists()
+                or (self.paths.app_dir / "activation/active.json").exists()
+            ):
+                raise CoSActivationError(
+                    "complete the current operation before preparing maintenance"
+                )
+            commit, release, target = self._observation_selection()
+            snapshot = self._bound_snapshot(commit)
+            before = self.services.runtime_diagnostics() or {}
+            if (
+                before.get("ready") is not True
+                or before.get("observation_active") is not False
+            ):
+                raise CoSActivationError(
+                    "maintenance preparation requires healthy live operation"
+                )
+            live = asyncio.run(self._live_predecessor(release))
+            controls = self._maintenance_controls()
+            if not any(
+                row.get("member_id") == request.owner_member_id
+                and row.get("role") == "principal"
+                for row in controls["members"]["members"]
+            ):
+                raise CoSActivationError(
+                    "operation requires its exact authorizing principal"
+                )
+            proofs = request.sender_proofs or controls["activation"].channels
+            expires = self._maintenance_proof_expiry(proofs, controls["activation"])
+            gateway = controls["gateway"]
+            plan = MaintenanceRestorationPlan(
+                **request.model_dump(mode="json", exclude={"sender_proofs"}),
+                sender_proofs=proofs,
+                plan_id=uuid.uuid4().hex,
+                prepared_at=datetime.now(timezone.utc).isoformat(),
+                expires_at=expires.isoformat(),
+                target_commit=target,
+                predecessor_commit=commit,
+                prior_activation_id=live["activation_id"],
+                deployment_snapshot=snapshot,
+                adapter_sha256=_sha(_payload(controls["adapters"])),
+                receipt_sha256=_sha(_payload(controls["receipt"])),
+                member_mapping_sha256=_sha(_payload(controls["members"])),
+                recipient_policy_sha256=_sha(_payload(controls["policy"])),
+                gateway_sha256=_sha(_payload(gateway)) if gateway is not None else None,
+                gateway_compatibility_sha256=_maintenance_gateway_fingerprint(
+                    gateway, release
+                )
+                if gateway is not None
+                else None,
+                guard_config=controls["guard"],
+                self_reply_bindings=controls["replies"],
+                self_reminder_bindings=controls["reminders"],
+            )
+            self._validate_maintenance_plan(
+                plan, commit=commit, release=release, restoring=False
+            )
+            return plan
+
+    def _validate_maintenance_plan(
+        self,
+        plan: MaintenanceRestorationPlan,
+        *,
+        commit: str,
+        release: Path,
+        restoring: bool,
+    ) -> dict[str, Any]:
+        controls = self._maintenance_controls()
+        prepared = aware_time(plan.prepared_at)
+        expires = aware_time(plan.expires_at)
+        now = datetime.now(timezone.utc)
+        if (
+            prepared is None
+            or expires is None
+            or not prepared <= now < expires
+            or plan.sender_proofs is None
+            or self._maintenance_proof_expiry(
+                plan.sender_proofs, controls["activation"]
+            )
+            != expires
+        ):
+            raise CoSActivationError(
+                "maintenance restoration plan expired or has invalid proof times"
+            )
+        if commit != (plan.target_commit if restoring else plan.predecessor_commit):
+            raise CoSActivationError(
+                "maintenance restoration belongs to another release"
+            )
+        for expected, value in (
+            (plan.adapter_sha256, controls["adapters"]),
+            (plan.receipt_sha256, controls["receipt"]),
+            (plan.member_mapping_sha256, controls["members"]),
+            (plan.recipient_policy_sha256, controls["policy"]),
+        ):
+            if expected != _sha(_payload(value)):
+                raise CoSActivationError(
+                    "maintenance authority or configuration drifted; prepare a new request"
+                )
+        if controls["activation"].activation_id != plan.prior_activation_id:
+            raise CoSActivationError("maintenance predecessor authority changed")
+        gateway = controls["gateway"]
+        if not restoring:
+            if (
+                self._bound_snapshot(commit) != plan.deployment_snapshot
+                or controls["guard"] != plan.guard_config
+                or (_sha(_payload(gateway)) if gateway is not None else None)
+                != plan.gateway_sha256
+                or controls["replies"] != plan.self_reply_bindings
+                or controls["reminders"] != plan.self_reminder_bindings
+            ):
+                raise CoSActivationError(
+                    "maintenance configuration or grants drifted before observation"
+                )
+        else:
+            history = _json(self.directory / "history" / f"{plan.plan_id}.json")
+            if (
+                history.get("phase") != "committed"
+                or history.get("operation") != "enter_observation"
+                or history.get("maintenance_plan_sha256") != plan.digest()
+                or history.get("controller_commit") != plan.target_commit
+                or history.get("prior_activation_id") != plan.prior_activation_id
+                or history.get("initial_snapshot") != plan.deployment_snapshot
+            ):
+                raise CoSActivationError(
+                    "maintenance restoration has no matching completed observation operation"
+                )
+            events = asyncio.run(self._recovery_history_events())
+            tenant_id = load_instance_config(self.paths.instance_dir).tenant_id
+            changes = [
+                row
+                for row in events
+                if row.get("type") in {ACTIVATED_EVENT, DEACTIVATED_EVENT}
+                and row.get("tenant_id") == tenant_id
+            ]
+            latest = changes[-1] if changes else {}
+            if (
+                latest.get("type") != DEACTIVATED_EVENT
+                or latest.get("payload")
+                != {
+                    "activation_id": plan.prior_activation_id,
+                    "operator_principal_id": plan.operator_principal_id,
+                    "reason": "deployment_observation",
+                    "observation_active": True,
+                }
+                or latest.get("idempotency_key")
+                != f"cos-operation:{plan.plan_id}:observation"
+            ):
+                raise CoSActivationError(
+                    "live authority changed after planned observation"
+                )
+            snapshot = self._bound_snapshot(commit)
+            if any(
+                snapshot[key] != plan.deployment_snapshot[key]
+                for key in (
+                    "instance_fingerprint",
+                    "host_fingerprint",
+                    "service_account_fingerprint",
+                )
+            ):
+                raise CoSActivationError(
+                    "maintenance restoration crossed an instance or host boundary"
+                )
+            expected_guard = copy.deepcopy(plan.guard_config)
+            if expected_guard is not None:
+                wrapper = release / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+                expected_guard.update(
+                    wrapper_path=str(wrapper), wrapper_sha256=_sha(wrapper.read_bytes())
+                )
+            if (
+                controls["guard"] != expected_guard
+                or (
+                    _maintenance_gateway_fingerprint(gateway, release)
+                    if gateway is not None
+                    else None
+                )
+                != plan.gateway_compatibility_sha256
+            ):
+                raise CoSActivationError(
+                    "maintenance gateway routing or configuration drifted"
+                )
+            if gateway is not None:
+                config = (
+                    gateway.get("plugins", {})
+                    .get("entries", {})
+                    .get("administrateme", {})
+                    .get("config", {})
+                )
+                for key, previous in (
+                    ("standingSelfReplyBindings", plan.self_reply_bindings),
+                    ("scheduledSelfReminderBindings", plan.self_reminder_bindings),
+                ):
+                    if config.get(key, []) not in ([], previous):
+                        raise CoSActivationError("maintenance host grants changed")
+        return controls
+
+    def pause_maintenance(self, plan: MaintenanceRestorationPlan) -> dict[str, Any]:
+        return self.enter_observation(plan.observation_request(), maintenance_plan=plan)
+
+    def _restoration_request(
+        self, plan: MaintenanceRestorationPlan, *, commit: str, release: Path
+    ) -> ActivationRequest:
+        controls = self._validate_maintenance_plan(
+            plan, commit=commit, release=release, restoring=True
+        )
+        assert plan.sender_proofs is not None
+        return ActivationRequest(
+            adapter_config=controls["adapters"],
+            sender_proofs=plan.sender_proofs,
+            owner_authorization_sha256=plan.owner_authorization_sha256,
+            operator_principal_id=plan.operator_principal_id,
+            owner_member_id=plan.owner_member_id,
+            prepared_openclaw_config=controls["gateway"],
+            cos_imsg_guard_config=controls["guard"],
+        )
+
     def enter_observation(
         self,
         request: EnterObservationRequest,
         *,
         submission_repair_manifest: Path | None = None,
+        maintenance_plan: MaintenanceRestorationPlan | None = None,
     ) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
@@ -837,6 +1206,21 @@ class CoSChannelActivator:
                 raise CoSActivationError("release activation must complete first")
             commit, release, controller_commit = self._observation_selection()
             snapshot = self._bound_snapshot(commit)
+            if maintenance_plan is not None:
+                if (
+                    controller_commit != maintenance_plan.target_commit
+                    or request != maintenance_plan.observation_request()
+                ):
+                    raise CoSActivationError(
+                        "maintenance request does not match the prepared candidate"
+                    )
+                self._validate_maintenance_plan(
+                    maintenance_plan, commit=commit, release=release, restoring=False
+                )
+                if (
+                    self.directory / "history" / f"{maintenance_plan.plan_id}.json"
+                ).exists():
+                    raise CoSActivationError("maintenance plan was already paused")
             before = self.services.runtime_diagnostics() or {}
             repair = (
                 load_submission_repair_manifest(
@@ -913,7 +1297,9 @@ class CoSChannelActivator:
             journal = {
                 "contract": "cos-channel-operation-journal-v1",
                 "operation": "enter_observation",
-                "activation_id": uuid.uuid4().hex,
+                "activation_id": maintenance_plan.plan_id
+                if maintenance_plan is not None
+                else uuid.uuid4().hex,
                 "prior_activation_id": live["activation_id"],
                 "release_commit": commit,
                 "controller_commit": controller_commit,
@@ -940,6 +1326,8 @@ class CoSChannelActivator:
                 },
                 "diagnostic_provider_calls_before": self._provider_calls(before),
             }
+            if maintenance_plan is not None:
+                journal["maintenance_plan_sha256"] = maintenance_plan.digest()
             if repair is not None:
                 journal["submission_repair_manifest"] = repair.model_dump(mode="json")
                 journal["submission_repair"] = repair_binding(repair)
@@ -1427,7 +1815,10 @@ class CoSChannelActivator:
         return value
 
     def activate(
-        self, request: ActivationRequest, *, enable_live: bool
+        self,
+        request: ActivationRequest | MaintenanceRestorationPlan,
+        *,
+        enable_live: bool,
     ) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
@@ -1438,6 +1829,18 @@ class CoSChannelActivator:
             if (self.paths.app_dir / "activation" / "active.json").exists():
                 raise CoSActivationError("release activation must complete first")
             commit, release = self._selection()
+            maintenance_plan = (
+                request if isinstance(request, MaintenanceRestorationPlan) else None
+            )
+            if maintenance_plan is not None:
+                if not enable_live:
+                    raise CoSActivationError(
+                        "maintenance restoration requires the live activation path"
+                    )
+                request = self._restoration_request(
+                    maintenance_plan, commit=commit, release=release
+                )
+            assert isinstance(request, ActivationRequest)
             before = self.services.runtime_diagnostics() or {}
             if (
                 before.get("ready") is not True
@@ -1565,6 +1968,8 @@ class CoSChannelActivator:
                     ]
                 except (OSError, KeyError, TypeError, ValueError):
                     pass
+                if maintenance_plan is not None:
+                    previous_bindings = maintenance_plan.self_reply_bindings
                 reply_bindings = owner_self_reply_bindings(
                     request,
                     prepared,
@@ -1578,6 +1983,12 @@ class CoSChannelActivator:
                 previous_reminders = set(
                     plugin_config.get("scheduledSelfReminderBindings", [])
                 )
+                if maintenance_plan is not None:
+                    if reply_bindings != maintenance_plan.self_reply_bindings:
+                        raise CoSActivationError(
+                            "maintenance cannot restore the exact private reply grants"
+                        )
+                    previous_reminders = set(maintenance_plan.self_reminder_bindings)
                 from adminme.cos_self_replies import self_reply_binding
 
                 owner_bindings = set()
@@ -1699,6 +2110,8 @@ class CoSChannelActivator:
                     proof.model_dump(mode="json") for proof in request.sender_proofs
                 ],
             }
+            if maintenance_plan is not None:
+                journal["maintenance_plan_sha256"] = maintenance_plan.digest()
             if policy.imessage_channel_id is not None:
                 for relative in (
                     "openclaw/runtime/openclaw.json",
@@ -1980,11 +2393,29 @@ def main() -> None:
     parser.add_argument("--instance-root", type=Path, required=True)
     parser.add_argument("--request", type=Path)
     parser.add_argument("--enable-live", action="store_true")
-    parser.add_argument("--enter-observation", action="store_true")
-    parser.add_argument("--repair-recovery-history", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--enter-observation", action="store_true")
+    mode.add_argument("--repair-recovery-history", action="store_true")
+    mode.add_argument("--recover", action="store_true")
+    mode.add_argument("--prepare-maintenance", action="store_true")
+    mode.add_argument("--pause-maintenance", action="store_true")
+    mode.add_argument("--restore-maintenance", action="store_true")
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--submission-repair-manifest", type=Path)
-    parser.add_argument("--recover", action="store_true")
     arguments = parser.parse_args()
+    maintenance = (
+        arguments.prepare_maintenance
+        or arguments.pause_maintenance
+        or arguments.restore_maintenance
+    )
+    if maintenance and (
+        arguments.enable_live or arguments.submission_repair_manifest is not None
+    ):
+        parser.error(
+            "maintenance plans preserve existing grants; do not combine activation options"
+        )
+    if bool(arguments.output) != arguments.prepare_maintenance:
+        parser.error("--output is required only for --prepare-maintenance")
     if arguments.recover == bool(arguments.request):
         parser.error("choose one private request or interrupted-operation recovery")
     if arguments.repair_recovery_history and (
@@ -2007,7 +2438,36 @@ def main() -> None:
         DeploymentPaths.from_root(arguments.instance_root, production=True),
         repository=Path(__file__).resolve().parents[1],
     )
-    if arguments.recover:
+    if arguments.prepare_maintenance:
+        plan = controller.prepare_maintenance(
+            MaintenancePreparationRequest.model_validate(_json(arguments.request))
+        )
+        descriptor = os.open(
+            arguments.output,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(_payload(plan.model_dump(mode="json")))
+            handle.flush()
+            os.fsync(handle.fileno())
+        result = {
+            "status": "maintenance_prepared",
+            "plan_id": plan.plan_id,
+            "target_commit": plan.target_commit,
+            "expires_at": plan.expires_at,
+            "runtime_changed": False,
+        }
+    elif arguments.pause_maintenance:
+        result = controller.pause_maintenance(
+            MaintenanceRestorationPlan.model_validate(_json(arguments.request))
+        )
+    elif arguments.restore_maintenance:
+        result = controller.activate(
+            MaintenanceRestorationPlan.model_validate(_json(arguments.request)),
+            enable_live=True,
+        )
+    elif arguments.recover:
         result = controller.recover()
     elif arguments.repair_recovery_history:
         result = controller.repair_recovery_history(
