@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, Field
 
 from adminme.cos_responses import RESPONSE_CONTRACT, content_fingerprint
+from adminme.cos_reminder_work import reminder_receipt, reminder_work_id
 from adminme.openclaw_topology import member_agent_id
 from adminme.products.openclaw import main as seam
 from adminme.products.openclaw import cos_responses as responses
@@ -178,6 +179,7 @@ async def prepare(body: ReminderRequest, request: Request) -> dict[str, Any]:
             else None
         )
         return {
+            "task_id": reminder_work_id(reminder_id),
             "delivery_status": terminal["payload"]["status"]
             if terminal
             else ("delivery_pending_or_unknown" if approval else None),
@@ -247,6 +249,16 @@ async def cancel(body: ReminderControl, request: Request) -> dict[str, Any]:
             "status": "cancelled",
             "job_id": bound["payload"]["job_id"] if bound else None,
         }
+
+
+@router.post(PREFIX + "/status")
+async def status(body: ReminderControl, request: Request) -> dict[str, Any]:
+    # Reading the member's own receipt does not need current sending authority.
+    # Never return the service-private task, notes, or other source records.
+    session = seam._session(request, body.provenance)
+    runtime = seam._runtime(request)
+    reminder = await _owned(runtime, session, body.reminder_event_id)
+    return await reminder_receipt(runtime, reminder)
 
 
 @router.post(PREFIX + "/fire")

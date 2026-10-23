@@ -30,6 +30,7 @@ function fixture() {
     if (path.endsWith("/prepare")) return { reminder_event_id: reminder, due_at: due, job_id: null };
     if (path.endsWith("/bind")) return { status: "registered" };
     if (path.endsWith("/cancel")) return { status: "cancelled", job_id: "job-fixture" };
+    if (path.endsWith("/status")) return { status: "waiting", reminder_event_id: reminder, task_id: "work-fixture", due_at: due, job_id: "job-fixture", automatic_retry_allowed: false };
     if (path.endsWith("/fire")) return { transport_dispatch: { channel: "imessage", account_id: account, recipient: actor, body: "Weekend reminder.", approval_event_id: "approval-fixture" }, result_provenance: { account_id: account, actor_id: actor } };
     if (path.endsWith("/result")) return { status: "sent" };
     throw new Error(`Unexpected fixture request: ${path}`);
@@ -77,6 +78,30 @@ describe("requested self reminders", () => {
       return impl(...args);
     });
     await expect(f.schedule()).rejects.toThrow("uncertain timeout");
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
+  it("reads the exact native timer for status without scheduling or resending", async () => {
+    const f = fixture(); await f.start(); await f.schedule();
+    await f.hooks.get("before_tool_call")!({ toolName: "administrateme_self_reminder", toolCallId: "status-fixture", params: {} }, f.context);
+    vi.mocked(callGatewayTool).mockClear();
+    const result = await f.tools.get("administrateme_self_reminder")!(f.context).execute("status-fixture", { action: "status", reminder_event_id: reminder });
+    expect(result.details).toMatchObject({ status: "scheduled", task_id: "work-fixture", automatic_retry_allowed: false });
+    expect(result.details).not.toHaveProperty("job_id");
+    expect(vi.mocked(callGatewayTool).mock.calls.map(([method]) => method)).toEqual(["cron.get"]);
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
+  it("reports unavailable timers and terminal uncertainty without a retry", async () => {
+    const f = fixture(); await f.start();
+    vi.mocked(callGatewayTool).mockRejectedValue(new Error("timer unavailable"));
+    const tool = f.tools.get("administrateme_self_reminder")!(f.context);
+    expect((await tool.execute("call-fixture", { action: "status", reminder_event_id: reminder })).details).toMatchObject({ status: "timer_unconfirmed" });
+    await f.hooks.get("before_tool_call")!({ toolName: "administrateme_self_reminder", toolCallId: "status-terminal", params: {} }, f.context);
+    f.request.mockResolvedValueOnce({ status: "unknown", reminder_event_id: reminder, automatic_retry_allowed: false });
+    vi.mocked(callGatewayTool).mockClear();
+    expect((await tool.execute("status-terminal", { action: "status", reminder_event_id: reminder })).details).toMatchObject({ status: "unknown", automatic_retry_allowed: false });
+    expect(vi.mocked(callGatewayTool)).not.toHaveBeenCalled();
     expect(f.send).not.toHaveBeenCalled();
   });
 
