@@ -59,8 +59,9 @@ The service agent exposes exactly:
 - `administrateme_service_private_work_state`: start, hold, follow up, resume,
   complete or cancel one expected revision.
 - `administrateme_service_private_state`: read work and paginated typed history.
-- `administrateme_service_context`: read bounded canonical task and commitment
-  facts across current member/shared/external standing grants.
+- `administrateme_service_context`: read bounded task/commitment facts,
+  current calendar/contact facts, and mail/note/file metadata across current
+  member/shared/external standing grants.
 
 These have standing internal authority and zero provider effects. Existing
 member/private/shared grants and external approval gates remain separate.
@@ -146,9 +147,10 @@ permission, credential or provider destination is changed by implementation.
 
 ## Remaining deliverables
 
-1. Broader source-specific context tools (calendar, mail, files, contacts, notes)
-   with their exact processing restrictions; the current context tool proves the
-   shared working model using canonical tasks and commitment confirmations.
+1. Body/content access with trusted explicit-demand evidence, service-self
+   source authority, and provider acquisition not already supported. The bounded
+   standing-context extension below supplies current calendar/contact facts and
+   mail/note/file metadata from already-ingested authorized sources.
 2. Authorized member instruction → bounded CoS work with explicit provenance
    and audience-aware progress receipts; no automatic private-history copy.
 3. One exact service-owned provider workspace at a time, with supported verbs,
@@ -160,3 +162,40 @@ permission, credential or provider destination is changed by implementation.
 5. Broader matters, callbacks and service operating context only as those
    concrete workflows require them. No second scheduler or generic framework
    is needed for the current internal-work outcome.
+
+
+## Authorized source context extension
+
+**MODERNIZE:** the existing service-context tool now includes current complete
+calendar observations (v2/v3), contacts and bounded mail, note and artifact
+metadata. It uses existing standing grants; no provider calls, credentials or
+new permissions are introduced. Calendar cancellation remains an explicit
+status. Superseded/deleted snapshots, locked notes and retracted messages are
+excluded, including explicit old event references. The original encrypted event
+supplies each fact; its projection only identifies the current revision.
+Metadata fields are bounded and truncation is reported. Provider bodies, HTML,
+attachments, arbitrary contact fields and storage references are not exposed.
+
+**PRESERVE:** source ownership, sensitivity, exact authority and
+internal-processing-only restrictions accompany retained notes. Effective
+source policy now includes the existing parent/container inheritance resolver.
+Only typed-fact modes are admitted; snippet permission does not make this tool
+return snippets. Metadata-only, no-context and explicit-demand-only sources are
+withheld until a separately implemented content route can honor those contracts.
+Retained notes re-read their original event's coordinates and current policy on
+every reuse, without adding a new durable schema. They remain historical notes
+when an underlying observation changes; they are never reintroduced as current
+source facts. Revoked or narrowed authority blocks reuse while preserving history.
+
+Focused production-composition cases in
+`tests/acceptance/test_cos_service_working_context.py` cover multi-source notes,
+content exclusions, latest revisions, tombstones, inherited restrictions, replay
+and restart with no provider effects. The existing `cos-service-work` CI scope
+already includes the changed implementation, instructions and acceptance file.
+No new release gate or schema migration is needed. Recover a regression by
+disabling service work through the documented supported control; preserve the
+schema-aware runtime and inherited confidentiality restrictions during repair.
+
+This extension does not enroll provider accounts, fetch Drive files, expose
+full mail/notes contents, or add service-self provider source authority. Those
+remain distinct deliverables in the full CoS request.
