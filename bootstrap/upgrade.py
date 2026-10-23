@@ -26,6 +26,10 @@ from bootstrap.activation_transaction import (
     sha256_json,
 )
 from bootstrap.backup_restore import BackupManager
+from bootstrap.prepared_runtime import (
+    PreparedRuntimeError,
+    runtime_artifact_fingerprint,
+)
 from bootstrap.candidate_readiness import (
     CandidateReadinessError,
     build_active_attestation_from_pending,
@@ -1094,7 +1098,15 @@ class UpgradeManager:
             and state["activity_inode"] > 0
         )
         if (
-            set(state) != _PREPARATION_STATE_FIELDS
+            set(state)
+            not in (
+                _PREPARATION_STATE_FIELDS,
+                _PREPARATION_STATE_FIELDS | {"runtime_artifact_sha256"},
+            )
+            or (
+                "runtime_artifact_sha256" in state
+                and not _is_lower_hex(state["runtime_artifact_sha256"], 64)
+            )
             or state.get("contract") != _PREPARATION_STATE_CONTRACT
             or state.get("commit") != expected_commit
             or state.get("candidate_controller_commit") != expected_commit
@@ -4830,7 +4842,16 @@ class UpgradeManager:
                 }
                 self._write_preparation_state(releases_descriptor, state)
             elif phase == "complete":
+                # Only completed, unconsumed work at this exact source, pointer,
+                # inode and toolchain may be reused. Older states have no byte
+                # fingerprint and take the existing clean preparation path.
+                expected_runtime = state.get("runtime_artifact_sha256")
+                if expected_runtime is not None:
+                    self._validate_prepared_runtime(release)
+                    if runtime_artifact_fingerprint(release) == expected_runtime:
+                        return
                 state = {**state, "phase": "preparing"}
+                state.pop("runtime_artifact_sha256", None)
                 self._write_preparation_state(releases_descriptor, state)
             remove_generated_runtime_artifacts(
                 release,
@@ -4901,9 +4922,18 @@ class UpgradeManager:
                 raise UpgradeError("candidate preparation activity lease changed")
             self._write_preparation_state(
                 releases_descriptor,
-                {**state, "phase": "complete"},
+                {
+                    **state,
+                    "phase": "complete",
+                    "runtime_artifact_sha256": runtime_artifact_fingerprint(release),
+                },
             )
-        except (OSError, SourceIdentityError, subprocess.SubprocessError) as exc:
+        except (
+            OSError,
+            SourceIdentityError,
+            PreparedRuntimeError,
+            subprocess.SubprocessError,
+        ) as exc:
             raise UpgradeError(
                 "candidate runtime preparation failed at its stable release path"
             ) from exc
@@ -4966,6 +4996,14 @@ class UpgradeManager:
             ):
                 raise UpgradeError("candidate preparation activity lease changed")
             self._validate_prepared_runtime(release)
+            try:
+                runtime_digest = runtime_artifact_fingerprint(release)
+            except PreparedRuntimeError as exc:
+                raise UpgradeError("candidate generated runtime is unsafe") from exc
+            if runtime_digest != state.get("runtime_artifact_sha256"):
+                raise UpgradeError(
+                    "candidate generated runtime changed after preparation"
+                )
             self._write_preparation_state(
                 releases_descriptor,
                 {**state, "phase": "consumed"},

@@ -1533,7 +1533,7 @@ def test_prepare_interruption_retains_source_and_retry_finishes(
     assert state["phase"] == "complete"
 
 
-def test_complete_preparation_rebuilds_after_backup_failure(
+def test_complete_preparation_is_reused_after_backup_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1580,11 +1580,66 @@ def test_complete_preparation_rebuilds_after_backup_failure(
     assert (release / ".venv" / "retry-canary").read_text("utf-8") == ("attempt-1\n")
 
     result = manager.activate(repository)
-    assert prepare_calls == 2
+    assert prepare_calls == 1
     assert backup_calls == 2
     assert result["status"] == "upgraded"
     assert json.loads(state_path.read_text("utf-8"))["phase"] == "consumed"
-    assert (release / ".venv" / "retry-canary").read_text("utf-8") == ("attempt-2\n")
+    assert (release / ".venv" / "retry-canary").read_text("utf-8") == ("attempt-1\n")
+
+
+@pytest.mark.parametrize("change", ["bytes", "mode", "add", "remove", "legacy"])
+def test_complete_preparation_rebuilds_changed_or_unbound_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    repository, commit = _upgrade_repository(tmp_path)
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-cache-change")
+    stub_uninitialized_intake(monkeypatch, paths)
+    manager = UpgradeManager(paths, root=repository, test_mode=True)
+    calls: list[Path] = []
+
+    def prepare(release: Path) -> None:
+        calls.append(release)
+        runtime = release / ".venv"
+        assert not runtime.exists()
+        runtime.mkdir(mode=0o700)
+        (runtime / "proof").write_text("prepared\n")
+
+    monkeypatch.setattr(manager, "_prepare_release", prepare)
+    release = manager._publish_release(repository, commit)  # noqa: SLF001
+    proof = release / ".venv" / "proof"
+    if change == "bytes":
+        proof.write_text("modified\n")
+    elif change == "mode":
+        proof.chmod(0o700)
+    elif change == "add":
+        (proof.parent / "extra").write_text("new\n")
+    elif change == "remove":
+        proof.unlink()
+    else:
+        state_path = release.parent / f".release-state-{commit}.json"
+        state = json.loads(state_path.read_text())
+        state.pop("runtime_artifact_sha256")
+        state_path.write_text(json.dumps(state))
+    assert manager._publish_release(repository, commit) == release  # noqa: SLF001
+    assert len(calls) == 2
+    assert proof.read_text() == "prepared\n"
+
+
+def test_complete_preparation_revalidates_toolchain_before_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, commit = _upgrade_repository(tmp_path)
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-toolchain-drift")
+    stub_uninitialized_intake(monkeypatch, paths)
+    manager = UpgradeManager(paths, root=repository, test_mode=True)
+    manager._publish_release(repository, commit)  # noqa: SLF001
+
+    def reject(_release: Path) -> None:
+        raise UpgradeError("candidate preparation found the wrong pinned Python")
+
+    monkeypatch.setattr(manager, "_validate_prepared_runtime", reject)
+    with pytest.raises(UpgradeError, match="wrong pinned Python"):
+        manager._publish_release(repository, commit)  # noqa: SLF001
 
 
 def test_activation_consumes_preparation_before_first_selector_and_refuses_retry(
