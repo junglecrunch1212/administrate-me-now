@@ -11,7 +11,7 @@ import pytest
 from adminme.historical_attribution import _cos_response_owner_matches
 from adminme.openclaw_topology import member_agent_id
 from adminme.runtime.application import create_application
-from tests.acceptance.test_cos_self_replies import _activate, _inbound, ENDPOINT
+from tests.acceptance.test_cos_self_replies import _activate, _inbound, _send, ENDPOINT
 from tests.acceptance.test_cos_response_execution import (
     A,
     AUTH,
@@ -130,6 +130,27 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
         assert repeated.status_code == 200, repeated.text
         assert repeated.json()["status"] == terminal_status
         assert "transport_dispatch" not in repeated.json()
+        if terminal_status == "sent":
+            # Recovery checkpoint: keep the schema-aware artifact, disable the
+            # new capability, and preserve ordinary replies with retained receipts.
+            path = (
+                client.app.state.runtime.settings.instance.config_dir.parent
+                / "openclaw/runtime/openclaw.json"
+            )
+            value = json.loads(path.read_text())
+            value["plugins"]["entries"]["administrateme"]["config"][
+                "scheduledSelfReminderBindings"
+            ] = []
+            path.write_text(json.dumps(value))
+            _send(client, _inbound(client, "ordinary-after-reminder-recovery"))
+            assert (
+                client.post(BASE + "/fire", headers=AUTH, json=callback).status_code
+                == 403
+            )
+            assurance = client.portal.call(
+                _provider_assurance, client.app.state.runtime
+            )
+            assert assurance["state"] == "healthy", assurance
 
 
 @pytest.mark.parametrize("change", ["cancel", "host", "domain", "job", "agent", "late"])

@@ -29,17 +29,17 @@ async function until(check, label, timeout = 150_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const value = await check(); if (value) return value;
-    if (gateway?.exitCode !== null) throw new Error(`Gateway exited during ${label}`);
+    if (gateway && (gateway.exitCode !== null || gateway.signalCode !== null)) throw new Error(`Gateway exited during ${label}`);
     await pause(300);
   }
   throw new Error(`Timed out: ${label}`);
 }
 async function stop() {
   socket?.close(); socket = undefined;
-  if (!gateway || gateway.exitCode !== null) return;
+  if (!gateway || gateway.exitCode !== null || gateway.signalCode !== null) return;
   const child = gateway; child.kill("SIGTERM");
   await Promise.race([new Promise((resolve) => child.once("exit", resolve)), pause(12_000)]);
-  if (child.exitCode === null) { child.kill("SIGKILL"); await new Promise((resolve) => child.once("exit", resolve)); }
+  if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await new Promise((resolve) => child.once("exit", resolve)); }
 }
 async function freePort() {
   const server = net.createServer(); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

@@ -64,7 +64,7 @@ try {
   await writeFile(selfReplyModule, ts.transpileModule(selfReplySource, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
   }).outputText);
-  const { escapeReplyText, replyParts, rememberSelfReply, registerSelfReplies } = await import(pathToFileURL(selfReplyModule).href);
+  const { escapeReplyText, replyParts, rememberSelfReply, registerSelfReplies, bindReminderTool, takeReminderInput } = await import(pathToFileURL(selfReplyModule).href);
   // Exercise the actual pinned inbound mapper, whose optional runId is absent.
   const hookSdk = await import(pathToFileURL(requirePinned.resolve("openclaw/plugin-sdk/hook-runtime")).href);
   const canonical = hookSdk.deriveInboundMessageHookContext({
@@ -121,11 +121,15 @@ print(json.dumps([enabled, entry["hooks"]]))
     assert.ok(denied.state.registry.diagnostics.some((row) => row.message.includes("allowConversationAccess")));
   }
   registerSelfReplies(api, runtime);
-  assert.equal(admitted.state.registry.typedHooks.length, 1, "Activated reply hook is blocked by the pinned host");
-  assert.equal(admitted.state.registry.typedHooks[0].hookName, "agent_end");
-  const handler = admitted.state.registry.typedHooks[0].handler;
+  assert.deepEqual(admitted.state.registry.typedHooks.map((row) => row.hookName).sort(), ["agent_end", "before_agent_reply"], "Activated reply hooks are blocked by the pinned host");
+  const handler = admitted.state.registry.typedHooks.find((row) => row.hookName === "agent_end").handler;
   rememberSelfReply(runtime, {actor_id: incoming.senderId, account_id: "fixture", channel_id: "imessage",
     message_id: incoming.messageId, session_key: incoming.sessionKey}, incoming.runId, Promise.resolve("receipt-fixture"), incoming.content);
+  const requestHook = admitted.state.registry.typedHooks.find((row) => row.hookName === "before_agent_reply").handler;
+  const reminderContext = {runId: "reminder-run", agentId: agent, sessionKey: incoming.sessionKey};
+  await requestHook({cleanedBody: incoming.content}, reminderContext);
+  assert.equal(bindReminderTool(runtime, reminderContext, "reminder-call"), true);
+  assert.equal((await takeReminderInput(runtime, "reminder-call", reminderContext)).source_message_event_id, "receipt-fixture");
   // This protected transport metadata is preserved by the pinned Codex user
   // snapshot. Its reasoning mirrors are assistant rows without a phase tag.
   await handler({success: true, runId: "agent-generated", messages: [
