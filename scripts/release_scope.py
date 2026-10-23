@@ -170,6 +170,7 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_prepared_runtime.py",
         "tests/unit/bootstrap/test_workspace_instructions.py",
         "tests/unit/bootstrap/test_activation_transaction.py",
+        "tests/acceptance/test_forwarded_submission_repair_operations.py",
         "tests/unit/bootstrap/test_cos_channel_activation.py",
         "tests/unit/bootstrap/test_backup_rehearsal.py",
         "tests/unit/bootstrap/test_candidate_readiness.py",
