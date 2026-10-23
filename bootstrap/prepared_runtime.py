@@ -209,6 +209,6 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                     )
         finally:
             os.close(root)
-    except (OSError, RuntimeError) as exc:
+    except OSError as exc:
         raise PreparedRuntimeError("prepared runtime inventory is unavailable") from exc
     return digest.hexdigest()
