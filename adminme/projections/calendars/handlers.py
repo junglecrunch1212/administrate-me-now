@@ -32,6 +32,7 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     # calendar capacity and policy projections must never treat the CoS as a
     # household member or infer a grant from Workspace access.
     if (envelope.get("payload") or {}).get("service_principal_id"):
+        apply_service_calendar_pointer(envelope, conn)
         return
     event_type = envelope["type"]
     if event_type == "calendar.event_added":
@@ -507,5 +508,47 @@ def apply_calendar_schedule_policy_configured(
             envelope["visibility_scope"],
             envelope["sensitivity"],
             envelope["event_id"],
+        ),
+    )
+
+
+def apply_service_calendar_pointer(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Index complete owner-aware observations and explicit tombstones only."""
+    p = envelope["payload"]
+    principal = p["service_principal_id"]
+    scope = f"service-private:{principal}"
+    if (
+        envelope["type"]
+        not in {
+            "calendar.event_added",
+            "calendar.event_updated",
+            "calendar.event_deleted",
+        }
+        or envelope["schema_version"] != 3
+        or p.get("provider") != "google_calendar"
+        or p.get("member_id") is not None
+        or p.get("workspace") != "service"
+        or envelope["owner_scope"] != scope
+        or envelope["visibility_scope"] != scope
+        or envelope["source_account_id"] != p.get("provider_account_id")
+    ):
+        return
+    conn.execute(
+        "INSERT INTO service_calendar_current VALUES (?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(tenant_id, service_principal_id, provider, provider_account_id, "
+        "calendar_external_id, external_event_id) DO UPDATE SET "
+        "last_event_id=excluded.last_event_id, deleted=excluded.deleted "
+        "WHERE service_calendar_current.last_event_id < excluded.last_event_id",
+        (
+            envelope["tenant_id"],
+            principal,
+            p["provider"],
+            p["provider_account_id"],
+            p["calendar_external_id"],
+            p["external_event_id"],
+            envelope["event_id"],
+            int(envelope["type"] == "calendar.event_deleted"),
         ),
     )

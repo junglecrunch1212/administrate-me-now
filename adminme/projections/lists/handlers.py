@@ -105,6 +105,7 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     # Lists truth. Direct intake or a later reviewed work-order contract may
     # propose member work without forging a member_id here.
     if (envelope.get("payload") or {}).get("service_principal_id"):
+        apply_service_list_pointer(envelope, conn)
         return
     event_type = envelope["type"]
     if event_type in {"list.created", "list.updated"}:
@@ -457,3 +458,77 @@ def clear_reminder_cue(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
         "DELETE FROM reminder_cues WHERE tenant_id=? AND cue_id=? AND member_id=?",
         (envelope["tenant_id"], p["cue_id"], p["member_id"]),
     )
+
+
+def apply_service_list_pointer(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Retain native list/item currentness without implying member ownership."""
+    p = envelope["payload"]
+    principal = p["service_principal_id"]
+    scope = f"service-private:{principal}"
+    kind = envelope["type"]
+    versions = {
+        "list.created": 2,
+        "list.updated": 2,
+        "list.deleted": 2,
+        "list_item.added": 4,
+        "list_item.updated": 4,
+        "list_item.completed": 4,
+        "list_item.uncompleted": 4,
+        "list_item.deleted": 3,
+    }
+    if (
+        envelope["schema_version"] != versions.get(kind)
+        or p.get("provider") != "google_tasks"
+        or p.get("member_id") is not None
+        or p.get("workspace") != "service"
+        or envelope["owner_scope"] != scope
+        or envelope["visibility_scope"] != scope
+        or envelope["source_account_id"] != p.get("provider_account_id")
+    ):
+        return
+    coordinates = (
+        envelope["tenant_id"],
+        principal,
+        p["provider"],
+        p["provider_account_id"],
+        p["list_external_id"],
+    )
+    if kind.startswith("list."):
+        conn.execute(
+            "INSERT INTO service_lists_current VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(tenant_id, service_principal_id, provider, provider_account_id, list_external_id) "
+            "DO UPDATE SET last_event_id=excluded.last_event_id, deleted=excluded.deleted, "
+            "last_deleted_event_id=COALESCE(excluded.last_deleted_event_id, service_lists_current.last_deleted_event_id) "
+            "WHERE service_lists_current.last_event_id < excluded.last_event_id",
+            (
+                *coordinates,
+                envelope["event_id"],
+                int(kind == "list.deleted"),
+                envelope["event_id"] if kind == "list.deleted" else None,
+            ),
+        )
+        if kind == "list.deleted":
+            # Recreating a list cannot resurrect item snapshots from before its
+            # deletion. A later complete item observation may restore an item.
+            conn.execute(
+                "UPDATE service_list_items_current SET deleted=1, last_event_id=? "
+                "WHERE tenant_id=? AND service_principal_id=? AND provider=? "
+                "AND provider_account_id=? AND list_external_id=? AND last_event_id<?",
+                (envelope["event_id"], *coordinates, envelope["event_id"]),
+            )
+    else:
+        conn.execute(
+            "INSERT INTO service_list_items_current VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(tenant_id, service_principal_id, provider, provider_account_id, "
+            "list_external_id, item_external_id) DO UPDATE SET "
+            "last_event_id=excluded.last_event_id, deleted=excluded.deleted "
+            "WHERE service_list_items_current.last_event_id < excluded.last_event_id",
+            (
+                *coordinates,
+                p["item_external_id"],
+                envelope["event_id"],
+                int(kind == "list_item.deleted"),
+            ),
+        )

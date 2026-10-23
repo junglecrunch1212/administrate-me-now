@@ -215,6 +215,12 @@ def build_app():
         human_triage_management_enabled=ATTENTION_ENABLED,
         adapter_config=adapter_config,
     )
+    # Hosted-only inert publication exercises the actual authenticated download
+    # boundary. It is never an installable helper or a member-device artifact.
+    from adminme.bridge_enrollment import reviewed_release
+    from tests.unit.test_bridge_helper_distribution import publish_fixture
+
+    publish_fixture(INSTANCE, reviewed_release(ROOT))
     app = create_application(settings)
 
     @app.post("/__gate7/bridge-preparation")

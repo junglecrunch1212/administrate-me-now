@@ -121,6 +121,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "bridge-helper",
         "bridge-enrollment",
         "bridge-runtime",
+        "bridge-setup",
         "google-connections",
         "cos-google-workspace",
         "cos-recovery-history",
@@ -772,7 +773,7 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
     assert (
         job["if"]
-        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","bridge-runtime","system-wide"]\'), needs.release-scope.outputs.scope) }}'
+        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","bridge-runtime","bridge-setup","system-wide"]\'), needs.release-scope.outputs.scope) }}'
     )
     assert job["runs-on"] == "macos-26"
     install = next(
@@ -822,7 +823,7 @@ def test_enrollment_worker_requires_complete_affected_contract_and_final_binding
     job = _workflow(filename)["jobs"]["bridge-development"]
     assert (
         job["if"]
-        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
+        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || needs.release-scope.outputs.scope == 'bridge-setup' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
     )
     assert job["outputs"] == {"validated_sha": "${{ steps.validated.outputs.sha }}"}
     assert job["steps"][-1]["id"] == "validated"
@@ -1952,6 +1953,37 @@ def test_service_work_scope_rejects_missing_or_broader_runtime_edits(
     )
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/events/schemas/openclaw.py",
+        "adminme/products/openclaw/service_context.py",
+        "adminme/projections/tasks/handlers.py",
+        "adminme/projections/tasks/schema.sql",
+        "adminme/projections/calendars/handlers.py",
+        "adminme/projections/lists/handlers.py",
+        "tests/acceptance/test_cos_service_planning_context.py",
+    ],
+)
+def test_service_work_source_receipt_changes_keep_focused_proof(
+    repository: tuple[Path, str],
+    relative: str,
+) -> None:
+    path, _ = repository
+    _base, base = _service_work_candidate(path)
+    if relative.startswith("tests/"):
+        # A test path belongs to the focused proof alongside its component edit;
+        # the existing selector intentionally requires a component change.
+        _commit(
+            path,
+            "adminme/products/openclaw/service_context.py",
+            "# Reviewed current-source change\n",
+        )
+    head = _commit(path, relative, "# Reviewed receipt or current-source change\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-service-work"
+
+
 def test_service_work_runtime_normalization_is_limited_to_direct_router_statements() -> (
     None
 ):
@@ -1974,6 +2006,9 @@ def test_service_work_runtime_normalization_is_limited_to_direct_router_statemen
     "other",
     [
         "adminme/events/log.py",
+        "adminme/events/schemas/messaging_unreviewed.py",
+        "adminme/projections/calendars/queries.py",
+        "adminme/projections/lists/queries.py",
         "adminme/lib/session.py",
         "adminme/runtime/unreviewed.py",
         "adminme/products/openclaw/routers.py",
@@ -2079,6 +2114,12 @@ def test_service_work_worker_requires_affected_identity_replay_and_recovery_chec
         "PY_CHECK",
         "test_cos_service_private_work.py",
         "test_cos_service_working_context.py",
+        "test_cos_service_planning_context.py",
+        "test_projection_calendars.py",
+        "tests/unit/projections/lists/test_handlers.py",
+        "tests/unit/projections/lists/test_queries.py",
+        "test_lists_projection_runner.py",
+        "test_service_owned_google_sources.py",
         "test_service_work_principal.py",
         "test_service_identities.py",
         "test_operating_agreements.py",
@@ -2178,6 +2219,208 @@ git() {
         assert f"{group} checks (exit {status})" in result.stdout
         assert (tmp_path / f"cos-service-work-{group}.log").read_text() == (
             f"{group} completed\n"
+        )
+
+
+_SETUP_IMPORT = "from adminme.products.member.bridge_setup import router as member_bridge_setup_router\n"
+_SETUP_INCLUDE = "    app.include_router(member_bridge_setup_router)\n"
+_TAILSCALE_IMPORT = "from adminme.tailscale_local import tailscale_executable\n"
+_SETUP_BASE_SHARED = {
+    "adminme/runtime/application.py": "def create_application(settings):\n    app = make_app(settings)\n    return app\n",
+    "adminme/products/member/assets/member.js": "const frozen = 1;\nfunction bridgeSettings(data) { return data; }\nfunction privacySettings(data) { return data; }\n",
+    "bootstrap/bridge_enrollment.py": 'def _tailscale_identity():\n    return subprocess.run(["tailscale", "status", "--json"], check=False)\n',
+    "bridge/adminme_bridge/main.py": 'def _local_device_identity(config, path):\n    return subprocess.run(["tailscale", "status", "--json"], check=False)\n',
+}
+
+
+def _bridge_setup_candidate(path: Path) -> tuple[str, str]:
+    from scripts.release_scope import BRIDGE_SETUP_REQUIRED, _bridge_setup_mode
+
+    for name, source in _SETUP_BASE_SHARED.items():
+        _commit(path, name, source)
+    base = _git(path, "rev-parse", "HEAD")
+    for name in BRIDGE_SETUP_REQUIRED:
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = _SETUP_BASE_SHARED.get(name, "# Reviewed bridge setup component\n")
+        if name == "adminme/runtime/application.py":
+            source = _SETUP_IMPORT + source.replace(
+                "    return app", _SETUP_INCLUDE + "    return app"
+            )
+        elif name.endswith("member.js"):
+            source = source.replace(
+                "function bridgeSettings(data) { return data; }",
+                "function bridgeSettings(data) { return prepareMac(data); }",
+            )
+        elif name in _SETUP_BASE_SHARED:
+            source = _TAILSCALE_IMPORT + source.replace(
+                '["tailscale", "status", "--json"]',
+                '[tailscale_executable(), "status", "--json"]',
+            ).replace(
+                "check=False",
+                'env={**os.environ, "TAILSCALE_BE_CLI": "1"}, check=False',
+            )
+        target.write_text(source)
+        target.chmod(0o755 if _bridge_setup_mode(name) == "100755" else 0o644)
+    _git(path, "add", "-A")
+    _git(path, "commit", "-m", "Prepare member bridge with bounded wiring")
+    return base, _git(path, "rev-parse", "HEAD")
+
+
+def test_bridge_setup_scope_uses_immutable_sources_and_complete_workers(repository):
+    path, _ = repository
+    base, head = _bridge_setup_candidate(path)
+    (path / "adminme/runtime/application.py").write_text("MUTABLE = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "bridge-setup"
+    assert len(proof["bridge_setup_dependency_sha256"]) == 64
+    assert required_workers("bridge-setup", "linux") == (
+        "release-scope",
+        "bridge-development",
+    )
+    assert required_workers("bridge-setup", "macos") == (
+        "release-scope",
+        "bridge-development",
+        "bridge-installed-runtime",
+    )
+    for platform in ("linux", "macos"):
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        *_SETUP_BASE_SHARED,
+        "adminme/products/auth.py",
+        "adminme/events/log.py",
+        "poetry.lock",
+        "bridge/poetry.lock",
+        "adminme/bridge_enrollment.py",
+        "adminme/settings_control.py",
+        "tests/unrelated.py",
+    ],
+)
+def test_bridge_setup_scope_freezes_shared_logic_and_unrelated_dependencies(
+    repository, name
+):
+    path, _ = repository
+    base, _ = _bridge_setup_candidate(path)
+    target = path / name
+    source = target.read_text() if target.exists() else ""
+    head = _commit(path, name, source + "\nBROAD_CHANGE = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing_source",
+        "deleted",
+        "symlink",
+        "unpaired_import",
+        "missing_cli_environment",
+        "misplaced_router",
+        "other_js_function",
+    ],
+)
+def test_bridge_setup_scope_rejects_incomplete_or_broader_setup(repository, fault):
+    path, _ = repository
+    base, _ = _bridge_setup_candidate(path)
+    name = "adminme/products/member/bridge_setup.py"
+    if fault in {"missing_source", "deleted"}:
+        (path / name).unlink()
+    elif fault == "symlink":
+        (path / name).unlink()
+        (path / name).symlink_to("../main.py")
+    elif fault == "unpaired_import":
+        target = path / "adminme/runtime/application.py"
+        target.write_text(target.read_text().replace(_SETUP_IMPORT, ""))
+    elif fault == "misplaced_router":
+        target = path / "adminme/runtime/application.py"
+        target.write_text(
+            target.read_text().replace(_SETUP_INCLUDE, "")
+            + "\ndef unrelated():\n"
+            + _SETUP_INCLUDE
+        )
+    elif fault == "missing_cli_environment":
+        target = path / "bootstrap/bridge_enrollment.py"
+        target.write_text(
+            target.read_text().replace(
+                'env={**os.environ, "TAILSCALE_BE_CLI": "1"}, ', ""
+            )
+        )
+    else:
+        target = path / "adminme/products/member/assets/member.js"
+        target.write_text(
+            target.read_text().replace(
+                "function privacySettings(data) { return data; }",
+                "function privacySettings(data) { return other(data); }",
+            )
+        )
+    _git(path, "add", "-A")
+    _git(path, "commit", "-m", "Incomplete or broader setup")
+    head = _git(path, "rev-parse", "HEAD")
+    if fault == "symlink":
+        with pytest.raises(SourceIdentityError):
+            select_scope(path, _event(base, head), checkout_sha=head)
+        return
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_bridge_setup_scope_checks_the_actual_test_merge(repository, drift):
+    path, _ = repository
+    base, head = _bridge_setup_candidate(path)
+    if drift:
+        (path / "adminme/runtime.py").write_text("UNREVIEWED_MERGE_CHANGE = True\n")
+        _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("system-wide" if drift else "bridge-setup")
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_bridge_setup_worker_keeps_new_authentication_preparation_and_browser_checks(
+    filename,
+):
+    job = _workflow(filename)["jobs"]["bridge-development"]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "'bridge-setup'" in job["if"]
+    for required in (
+        "test_bridge_helper_distribution.py",
+        "test_member_bridge_mac_preparation.py",
+        "test_member_bridge_helper_app.py",
+        "test_self_service_member_bridge_enrollment.py",
+        "test_member_bridge_permission_recovery.py",
+        "test_bridge_authorization.py",
+        "test_runtime_application.py",
+    ):
+        assert required in commands
+    if filename.startswith("macos"):
+        assert "ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY" in json.dumps(job)
+        assert "test:gate7" in commands
+        assert "not test_publish_exact_native_helper" not in commands
+    else:
+        assert (
+            "not test_publish_exact_native_helper_and_reuse_without_rebuilding"
+            in commands
         )
 
 

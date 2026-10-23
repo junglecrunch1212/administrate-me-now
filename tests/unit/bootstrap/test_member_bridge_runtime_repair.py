@@ -309,7 +309,11 @@ def test_acquisition_repair_does_not_allow_other_pack_changes(rig):
 
 @pytest.mark.parametrize(
     "relative",
-    ["adminme/apple_service_permissions.py", "adminme/events/schemas/cos_reminders.py"],
+    [
+        "adminme/apple_service_permissions.py",
+        "adminme/events/schemas/cos_reminders.py",
+        "adminme/tailscale_local.py",
+    ],
 )
 def test_reviewed_write_overlay_requires_exact_bytes_without_changing_read_state(
     rig, monkeypatch, relative
@@ -338,7 +342,11 @@ def test_reviewed_write_overlay_requires_exact_bytes_without_changing_read_state
 
 @pytest.mark.parametrize(
     "relative",
-    ["adminme/apple_service_permissions.py", "adminme/events/schemas/cos_reminders.py"],
+    [
+        "adminme/apple_service_permissions.py",
+        "adminme/events/schemas/cos_reminders.py",
+        "adminme/tailscale_local.py",
+    ],
 )
 def test_unreviewed_write_overlay_refuses_before_switch(rig, monkeypatch, relative):
     paths, fake, _ = rig
@@ -541,3 +549,41 @@ def test_unverifiable_history_or_recovery_coordinate_refuses_before_stop(rig, de
     assert len(fake.actions("bootout")) == stops
     assert fake.loaded
     assert repair._json(paths.root / "app/current-release.json")["commit"] == NEW
+
+
+def test_previous_write_aware_dispatcher_remains_recoverable_without_history_loss(
+    rig, monkeypatch
+):
+    paths, fake, _ = rig
+    previous = b"previous write-aware dispatcher\n"
+    monkeypatch.setattr(
+        repair,
+        "RETAINED_WRITE_AWARE_DISPATCHERS",
+        frozenset({hashlib.sha256(previous).hexdigest()}),
+    )
+    (paths.root / "app/releases" / OLD / repair._DISPATCHER_PATH).write_bytes(previous)
+    activated = repair.repair(paths, predecessor=OLD, candidate=NEW)
+    _attempt(paths)
+    before = (paths.root / "adapter-cursors.db").read_bytes()
+    assert (
+        repair.rollback(paths, activated["operation_id"])["status"]
+        == "rolled_back_stopped"
+    )
+    assert not fake.loaded
+    assert (paths.root / "adapter-cursors.db").read_bytes() == before
+
+
+def test_previous_dispatcher_pin_does_not_authorize_it_as_the_new_candidate(
+    rig, monkeypatch
+):
+    paths, fake, _ = rig
+    previous = b"previous write-aware dispatcher\n"
+    monkeypatch.setattr(
+        repair,
+        "RETAINED_WRITE_AWARE_DISPATCHERS",
+        frozenset({hashlib.sha256(previous).hexdigest()}),
+    )
+    (paths.root / "app/releases" / NEW / repair._DISPATCHER_PATH).write_bytes(previous)
+    with pytest.raises(ValueError, match="unreviewed Apple write overlay"):
+        repair.repair(paths, predecessor=OLD, candidate=NEW)
+    assert not fake.actions("bootstrap")

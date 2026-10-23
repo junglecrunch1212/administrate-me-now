@@ -4795,6 +4795,50 @@ function bridgeSettings(data) {
       if (sameRequest) { sessionStorage.removeItem(pendingKey); pending = null; }
     } catch { pending = { request_id: "unavailable" }; }
   }
+  let preparationConfirmed = false;
+  let helperReady = false;
+  let enrollmentSubmit = null;
+  function updatePreparation() {
+    if (enrollmentSubmit) enrollmentSubmit.disabled = !own || Boolean(pending) || !helperReady || !preparationConfirmed;
+  }
+  const setup = document.createElement("section"); setup.className = "card bridge-mac-preparation";
+  setup.append(text("h2", "1. Prepare your Mac"), text("p", "On the Mac that will run your bridge, download and open the helper, then choose Prepare This Mac. It checks FileVault, Tailscale and developer tools, installs the bridge software, and tells you when preparation is complete. No pairing code or Apple data access is needed yet.", "state-note"));
+  const helperStatus = text("p", "Checking the verified Mac helper…", "state-note"); helperStatus.setAttribute("role", "status"); helperStatus.setAttribute("aria-live", "polite");
+  const helperDownload = text("button", "Download Mac helper", "button button-primary"); helperDownload.type = "button"; helperDownload.disabled = true;
+  const refreshHelper = text("button", "Check helper availability", "button button-secondary"); refreshHelper.type = "button"; refreshHelper.disabled = !own;
+  let helperManifest = null;
+  async function checkHelper() {
+    helperReady = false; helperDownload.disabled = true; refreshHelper.disabled = true; updatePreparation();
+    try {
+      const result = await api("/api/member/v1/settings/bridges/helper");
+      if (!/^[0-9a-f]{40}$/.test(result.release_commit) || !/^[0-9a-f]{64}$/.test(result.sha256) || result.download_url !== "/api/member/v1/settings/bridges/helper/download") throw new Error("The helper release could not be verified.");
+      helperManifest = result; helperReady = true; helperDownload.disabled = !own;
+      helperStatus.textContent = `Available for Apple-silicon Macs with macOS 15 or later · ${(result.size_bytes / 1048576).toFixed(1)} MB. The download matches this server release.`;
+    } catch (error) { helperStatus.textContent = `${error.message} Prepare enrollment after the verified helper is available.`; }
+    refreshHelper.disabled = !own; updatePreparation();
+  }
+  refreshHelper.addEventListener("click", checkHelper);
+  helperDownload.addEventListener("click", async () => {
+    helperDownload.disabled = true;
+    try {
+      const response = await fetch(helperManifest.download_url, { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error("The helper is unavailable. Check availability again.");
+      const bytes = await response.arrayBuffer();
+      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((value) => value.toString(16).padStart(2, "0")).join("");
+      if (digest !== helperManifest.sha256 || bytes.byteLength !== helperManifest.size_bytes) throw new Error("The helper changed or failed verification. Check availability again; this download was not saved.");
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+      const anchor = document.createElement("a"); anchor.href = url; anchor.download = "AdministrateMe-Bridge-Helper.zip"; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+      helperStatus.textContent = "Verified helper downloaded. Unzip it, open AdministrateMe Bridge Helper, and choose Prepare This Mac. Return here when it says Mac Preparation Complete.";
+    } catch (error) { helperStatus.textContent = error.message; }
+    helperDownload.disabled = !own;
+  });
+  const nativeHelp = document.createElement("details"); nativeHelp.append(text("summary", "First-open and Apple account help"), text("p", "This helper is locally signed, not notarized by Apple. If macOS blocks its first launch, review it in System Settings → Privacy & Security and use Open Anyway. The helper does not bypass macOS security. Approve any software installation prompts yourself. Sign in to your Apple account and enable the services you want in macOS before pairing. For a Google calendar displayed in Apple Calendar, select that actual account/calendar; an empty Home calendar is not an error."));
+  const confirmation = document.createElement("label"); confirmation.className = "bridge-prepared-confirmation preference-check";
+  const prepared = document.createElement("input"); prepared.type = "checkbox"; prepared.disabled = !own; prepared.name = "mac_prepared";
+  prepared.addEventListener("change", () => { preparationConfirmed = prepared.checked; updatePreparation(); });
+  confirmation.append(prepared, text("span", "The helper says Mac Preparation Complete on the Mac I am connecting."));
+  setup.append(helperStatus, helperDownload, refreshHelper, nativeHelp, confirmation); fragment.append(setup);
+  if (own) void checkHelper(); else helperStatus.textContent = "Return to your own private view to download the helper and connect your Mac.";
   async function checkEnrollmentStatus() {
     try { await reloadActiveSurface(); }
     catch { setBanner("The enrollment status is not confirmed. Do not repeat the request. Check status again when the connection returns."); }
@@ -4806,7 +4850,7 @@ function bridgeSettings(data) {
     check.addEventListener("click", async () => { check.disabled = true; await checkEnrollmentStatus(); check.disabled = false; });
     uncertain.append(status, text("small", `Request ${pending.request_id}`), check); fragment.append(uncertain);
   }
-  const intro = document.createElement("section"); intro.className = "hero-card bridge-wizard-intro"; intro.append(text("p", "PRIVATE DEVICE CONNECTION", "eyebrow"), text("h2", "Connect Apple Bridge"), text("p", "Native Apple access stays on your Mac. You choose each source, grant Apple permissions locally, and can pause or revoke the bridge at any time. AdministrateMe starts in observation mode and receives no write authority from enrollment.", "brief-summary"));
+  const intro = document.createElement("section"); intro.className = "hero-card bridge-wizard-intro"; intro.append(text("p", "PRIVATE DEVICE CONNECTION", "eyebrow"), text("h2", "Connect Apple Bridge"), text("p", "Native Apple access stays on your Mac. You choose each source, grant Apple permissions locally, and can pause or revoke the bridge at any time. You choose the sources to read during setup. Writing stays off until you enable it for each service; enrollment does not change system observation mode.", "brief-summary"));
   const ownership = document.createElement("ul"); ownership.className = "settings-rule-list"; for (const value of ["Your signed-in identity owns this private bridge.", "Tailscale verifies the device relationship but never substitutes for your consent.", "Apple permission prompts stay under macOS control; the helper cannot click or bypass them.", "No Calendar, Reminders, Contacts, Notes, Messages, or other provider writes are granted."]) ownership.append(text("li", value)); intro.append(ownership); fragment.append(intro);
 
   const identity = document.createElement("section"); identity.className = "card bridge-member-confirmation"; identity.append(text("p", "MEMBER CONFIRMATION", "eyebrow"), text("h2", data.control.identity.authenticated_display_name), text("p", `Authenticated as ${titleCase(data.control.identity.authenticated_role)} · reading as ${data.control.identity.view_display_name} · actions belong to ${data.control.identity.authenticated_display_name}.`, "state-note")); if (data.control.identity.viewing_as) identity.append(text("p", "View-as is read-only. Return to your own context to connect, pause, repair, or revoke a bridge.", "review-state")); fragment.append(identity);
@@ -4833,16 +4877,23 @@ function bridgeSettings(data) {
               ? []
               : ["revoke"];
     for (const action of actions) { const button = text("button", titleCase(action), action === "revoke" ? "button button-quiet" : "button button-secondary"); button.type = "button"; button.disabled = !own || Boolean(pending); button.addEventListener("click", async () => { button.disabled = true; try { const result = await api(`/api/member/v1/settings/bridges/${encodeURIComponent(current.request_id)}/control`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ command_id: crypto.randomUUID(), action }) }); setBanner(`Bridge is ${titleCase(result.state)}. No provider effect occurred.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge was not changed.`); button.disabled = false; } }); buttons.append(button); }
-    progress.append(buttons); fragment.append(progress);
+    progress.append(buttons);
+    const finishSetup = document.createElement("section"); finishSetup.className = "state-card bridge-finish-setup";
+    const permissionLinks = document.createElement("div"); permissionLinks.className = "button-row";
+    const appleLink = text("a", "Apple permissions", "button button-secondary"); appleLink.href = "/member/settings?section=apple-services";
+    const cosLink = cosPermissionLink(); cosLink.textContent = "CoS permissions";
+    permissionLinks.append(appleLink, cosLink);
+    finishSetup.append(text("h3", "3. Check sync and choose permissions"), text("p", "Check each selected source above for a successful sync. A healthy empty source has no items to show. Choose service writing permissions and review your private CoS permissions separately. Each actual write still requires its own approval."), permissionLinks);
+    progress.append(finishSetup); fragment.append(progress);
   }
 
   if (!current || ["revoked", "expired", "failed"].includes(current.state)) {
-    const form = document.createElement("form"); form.className = "card bridge-form"; form.append(text("p", "SELF-SERVICE WIZARD", "eyebrow"), text("h2", "Add Bridge"), text("p", "Review the member, device class, capabilities, data categories, observation behavior, and revocation before creating a 30-minute target-device handoff.", "state-note"));
+    const form = document.createElement("form"); form.className = "card bridge-form"; form.append(text("p", "SELF-SERVICE WIZARD", "eyebrow"), text("h2", "2. Pair your prepared Mac"), text("p", "Once preparation is complete, review your source choices and create a fresh 30-minute handoff. Open it with the helper on that Mac and approve the native permissions. Installation time will not consume this pairing window.", "state-note"));
     const selfCandidate = (data.control.bridge_candidates || []).find((item) => item.member_id === data.control.identity.authenticated_member_id); const member = document.createElement("input"); member.type = "text"; member.value = selfCandidate?.label || data.control.identity.authenticated_display_name; member.readOnly = true; form.append(field("Bridge owner", member));
     const devices = document.createElement("fieldset"); devices.className = "bridge-device-choice"; devices.append(text("legend", "Which Mac?")); for (const [value, label, note] of [["this_mac", "This Mac", "Download and open the handoff here."], ["another_mac", "Another Mac", "Transfer the package and one-time clipboard code. Tailscale and the reviewed helper are required."]]) { const row = document.createElement("label"); const input = document.createElement("input"); input.type = "radio"; input.name = "device_class"; input.value = value; input.checked = value === "this_mac"; input.disabled = !data.control.identity.can_mutate; const copy = document.createElement("span"); copy.append(text("strong", label), text("small", note)); row.append(input, copy); devices.append(row); } form.append(devices);
     const capabilities = document.createElement("fieldset"); capabilities.className = "bridge-capabilities"; capabilities.append(text("legend", "Choose read-only sources")); for (const descriptor of wizard.capabilities || []) { const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; const input = document.createElement("input"); input.type = "checkbox"; input.name = "capability"; input.value = descriptor.capability_id; input.checked = ["apple_calendar", "apple_reminders"].includes(descriptor.capability_id); input.disabled = !data.control.identity.can_mutate || descriptor.implementation !== "available" || descriptor.enrollment_selectable === false; const copy = document.createElement("span"); copy.append(text("strong", descriptor.label), text("small", `${descriptor.administrateme_read_ceiling} · Write ceiling: ${descriptor.administrateme_write_ceiling}`), text("small", descriptor.local_permission)); if (descriptor.enrollment_note) copy.append(text("small", descriptor.enrollment_note)); if (descriptor.implementation !== "available") copy.append(text("span", titleCase(descriptor.implementation), "pill state-label state-unknown")); wrap.append(input, copy); capabilities.append(wrap); } form.append(capabilities);
     const review = document.createElement("section"); review.className = "state-card bridge-review"; review.append(text("strong", "Review"), text("p", "The package binds this member, this instance, the selected device class, exact capabilities, compatible release, and expiry. Pairing alone activates no source. Each connector waits for local permission evidence, adapter authentication, central attestation, and compatible release."), text("p", "Revocation stops central ingestion. Enrollment never creates provider action authority.", "state-note")); form.append(review);
-    const submit = text("button", "Prepare enrollment", "button button-primary"); submit.type = "submit"; submit.disabled = !data.control.identity.can_mutate || !selfCandidate; form.append(submit);
+    const submit = text("button", "Prepare enrollment", "button button-primary"); submit.type = "submit"; submit.disabled = !data.control.identity.can_mutate || !selfCandidate; form.append(submit); enrollmentSubmit = submit; updatePreparation();
     if (pending) for (const control of form.querySelectorAll("input,button")) control.disabled = true;
     form.addEventListener("submit", async (event) => {
       event.preventDefault(); if (!own || pending || submit.disabled) return;
