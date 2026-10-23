@@ -180,6 +180,30 @@ describe("native OpenClaw contract fixture", () => {
     vi.useRealTimers();
   });
 
+  it("binds finance calls to the host run and rejects missing or reused bindings", async () => {
+    const runtime = fakeApi();
+    const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
+    const context = toolContext();
+    const names = ["status", "query", "calculate", "job"];
+    for (const suffix of names) {
+      const name = `administrateme_finance_${suffix}`;
+      const tool = runtime.tools.get(name)!(context) as AnyAgentTool;
+      await expect(tool.execute(`missing-${suffix}`, {})).rejects.toThrow("host-bound");
+      const callId = `finance-${suffix}`;
+      expect(await hook({ toolName: name, params: {}, toolCallId: callId }, {
+        runId: "host-run", sessionKey: context.sessionKey, agentId: context.agentId, toolCallId: callId,
+      })).toBeUndefined();
+      await tool.execute(callId, {});
+      expect(requestBody(fetchMock, names.indexOf(suffix)).provenance).toMatchObject({
+        message_id: "finance-run:host-run", actor_id: "actor-a", session_key: context.sessionKey,
+      });
+      await expect(tool.execute(callId, {})).rejects.toThrow("host-bound");
+    }
+    expect(await hook({ toolName: "administrateme_finance_status", params: {} }, {
+      sessionKey: context.sessionKey, agentId: context.agentId,
+    })).toMatchObject({ block: true });
+  });
+
   it("pins the current native manifest and registers every declared surface", async () => {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const manifest = JSON.parse(await readFile(path.join(root, "openclaw.plugin.json"), "utf8"));
@@ -187,7 +211,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(29);
+    expect([...runtime.tools]).toHaveLength(33);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(18);
     expect(runtime.gateways.has("administrateme.cosPermissions.preflight")).toBe(true);

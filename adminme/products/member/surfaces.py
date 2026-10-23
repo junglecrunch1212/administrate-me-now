@@ -1720,7 +1720,10 @@ def build_surface(
         if session.auth_role == "child":
             raise HTTPException(404, "surface not found")
         cockpit = finance_snapshot(
-            runtime.projections.connection("money"), session, as_of=now
+            runtime.projections.connection("money"),
+            session,
+            as_of=now,
+            accepted_books_enabled=runtime.settings.finance_publications_enabled,
         )
         base["cockpit"] = cockpit
         base["contract"] = {
@@ -1730,13 +1733,31 @@ def build_surface(
             "model_decides_financial_action": False,
             "external_financial_writes": False,
         }
+        accepted_books = cockpit["accepted_books"]
+        has_accepted_books = bool(accepted_books.get("publication_id"))
         base["freshness"] = surface_freshness(
             generated_at=now,
-            latest_source_at=_latest_time([cockpit["data_health"]], "latest_source_at"),
+            latest_source_at=(
+                _latest_time(
+                    [accepted_books["source_clock_summary"]], "oldest_observed_at"
+                )
+                if has_accepted_books
+                else _latest_time([cockpit["data_health"]], "latest_source_at")
+            ),
             stale_after_seconds=172800,
-            row_count=cockpit["data_health"]["transaction_count"],
+            row_count=(
+                sum(len(report["metrics"]) for report in accepted_books["reports"])
+                if has_accepted_books
+                else cockpit["data_health"]["transaction_count"]
+            ),
+            degraded_reason=(
+                "Accepted historical snapshot; current source freshness is unverified."
+                if has_accepted_books
+                else None
+            ),
             configured=bool(
-                cockpit["data_health"]["transaction_count"]
+                has_accepted_books
+                or cockpit["data_health"]["transaction_count"]
                 or cockpit["data_health"]["account_count"]
                 or cockpit["workbook"]
             ),

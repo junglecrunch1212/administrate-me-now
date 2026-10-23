@@ -1,0 +1,75 @@
+# ADR-0010 — Accepted Books publications and bounded finance conversations
+
+Status: implemented candidate; synthetic validation and activation gates apply.
+Date: 2026-10-23
+
+**SUPERSEDE** ADR-0007's XLSX planning authority for a Books-owned book. Books
+owns accepted accounting/planning publications and its scenario math. The legacy
+XLSX path is not reused for this namespace. No automatic migration or dual write
+is authorized. Activation must disable the legacy planning reverse path for the
+adopted book; until that exclusion is proven, activation remains blocked.
+
+**PRESERVE** ADR-0001's dependency direction, one Python runtime, OpenClaw model
+and scheduling boundary, domain approval, privileged owner access, observation,
+and encrypted append-only history. No provider token reuse or provider feed is
+introduced. Private publication ingress and finance model access default off;
+production configuration does not enable these settings automatically.
+
+**MODERNIZE** Finance's empty state: unknown is null, partial account observations
+are qualified, forecasts require authored inputs, and unreleased statements are
+unavailable. A catalog route is not evidence of a supported calculation model.
+
+The canonical interchange is
+`adminme/finance/contracts/household-books.accepted-publication.v1.schema.json`.
+Its adjacent `.sha256` is the exact UTF-8 file digest. The synthetic publication
+is `tests/fixtures/finance/accepted-publication.synthetic.json`. The application
+owns this schema and tests. A Books exporter must adopt the same version/hash;
+no source adapter may invent a parallel shape. No Sheet edits are part of this
+change. Initial exports contain bounded accepted aggregate metrics and scenario
+results, with exact revision references, separate source/acceptance clocks,
+quality dimensions, report release states and opaque owner-only evidence IDs.
+Raw transaction/receipt acquisition is outside this interface.
+
+Canonical content hashing excludes only `content_sha256`, sorts object keys,
+uses compact ASCII JSON and disallows nonfinite values. Schema hashing uses the
+unmodified file bytes. A whole publication validates before a single private
+`finance.publication_accepted` event. The prior-publication successor slot has an
+event-log idempotency key; conflicting content or forks reject. The money
+projection writes immutable history, indexed metrics and the current pointer in
+one transaction. Partial validation never advances the pointer. A crash after
+commit is resolved from the same receipt and replay; it is not permission to
+read pending Books recovery revisions or clear a recovery hold.
+
+Numbers preserve basis, currency/unit, period, owner/allocation, inclusion policy,
+quality and evidence. Accounting actuals, cash movement, observed values, chosen
+budget, cost references, forecasts and intended obligations cannot mix silently.
+The four synthetic scenario results demonstrate unchanged export, not household
+scenario validation. Missing openings/coverage block the associated reports.
+
+Owner-only results use the private book namespace and authenticated actor.
+Another adult, a joint session, child, coach, family audience or professional
+gets no account existence/counts or source link. Joint processing and authorized
+source proxies require additional reviewed authority support. Existing generic
+read-context grants do not imply privileged model-processing consent. Source
+instructions are data, never policy. The runtime may return a preparation route
+without returning private evidence.
+
+The small native facade has status/query/calculate/job operations. Full F01–F31
+metadata stays server-side; persistent context is a bounded status pointer.
+Calculators accept named typed models and exact arithmetic, not expressions or
+SQL. Accepted scenario outputs are returned unchanged. Complex tax, legal,
+benefit eligibility and unvalidated strategic variants have explicit model and
+professional boundaries, with useful evidence/preparation workflows.
+
+Heavy work remains unavailable until reserved general-CoS capacity, process
+termination/memory enforcement, durable terminal receipts and mixed-load
+acceptance are proven. A disabled job route is not an implemented worker.
+Protected caches are optional; private data is not persisted in a generic cache
+or vector corpus. Resource limits and remaining gates are recorded in
+`FINANCE-RESOURCE-GATES.md` and the capability acceptance ledger.
+
+Activation requires separate owner authorization, exporter schema adoption,
+private accepted-data comparisons, model/policy/tool verification, legacy XLSX
+exclusion, guarded update/backup/rollback, authenticated member acceptance and
+measured general-CoS performance. This candidate authorizes none of those live
+operations.

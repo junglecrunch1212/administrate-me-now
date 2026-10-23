@@ -150,7 +150,8 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
 }
 
 function moneyMinor(value, { compact = false } = {}) {
-  const amount = Number(value || 0) / 100;
+  if (value == null || !Number.isFinite(Number(value))) return "Unavailable";
+  const amount = Number(value) / 100;
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: "USD",
@@ -3810,6 +3811,10 @@ const FINANCE_VIEWS = [
   ["health", "Data health"],
 ];
 
+function financeDifference(left, right) {
+  return left == null || right == null ? null : left - right;
+}
+
 function financeControls() {
   const controls = document.createElement("nav"); controls.className = "finance-controls"; controls.setAttribute("aria-label", "Finance views");
   for (const [value, label] of FINANCE_VIEWS) {
@@ -3825,25 +3830,74 @@ function financeHero(cockpit) {
   const focus = cockpit.focus || {};
   const hero = document.createElement("section"); hero.className = `hero-card finance-hero finance-${focus.state || "steady"}`;
   const copy = document.createElement("div");
-  copy.append(text("p", "HOUSEHOLD CASH-FLOW COCKPIT", "eyebrow"), text("h2", focus.title || "Finance plan", "action-title"), text("p", focus.why || "Deterministic workbook and transaction state.", "brief-summary"), text("p", focus.action || "", "microstep"));
+  const hasBooks = Boolean(cockpit.accepted_books?.publication_id);
+  copy.append(text("p", hasBooks ? "OTHER FINANCIAL OBSERVATIONS" : "HOUSEHOLD CASH-FLOW COCKPIT", "eyebrow"), text("h2", focus.title || "Finance plan", "action-title"), text("p", focus.why || "Deterministic workbook and transaction state.", "brief-summary"), text("p", hasBooks ? "Accepted Books reports are shown separately above." : focus.action || "", "microstep"));
   const baseline = (cockpit.scenarios || []).find((item) => item.is_baseline) || cockpit.scenarios?.[0];
   const quick = document.createElement("dl"); quick.className = "finance-hero-stats";
   for (const [label, value] of [
     ["Cash", moneyMinor(cockpit.summary.cash_minor, { compact: true })],
     ["Month-to-date", moneyMinor(cockpit.summary.mtd_net_minor, { compact: true })],
     ["Monthly plan", moneyMinor((baseline || {}).monthly_net_minor, { compact: true })],
-    ["Cash runway", baseline?.cash_out_month ? `${baseline.cash_out_month} mo` : `>${baseline?.horizon_months || 60} mo`],
+    ["Cash safety", "Not established"],
   ]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); quick.append(item); }
   hero.append(copy, quick); return hero;
+}
+
+function financeAcceptedBooks(cockpit) {
+  const books = cockpit.accepted_books || { state: "missing_evidence", reports: [] };
+  const section = document.createElement("section"); section.className = "card finance-accepted-books";
+  section.append(text("h2", "Accepted Books reports"));
+  if (!books.publication_id) {
+    const messages = {
+      disabled: "Accepted Books integration is not enabled.",
+      permission_required: "Books reports require your authorized private session.",
+      selection_required: "Select an authorized book through Finance query before reviewing its reports.",
+      missing_evidence: "No accepted publication is available in this scope. Missing values are unavailable, not zero.",
+    };
+    section.append(text("p", messages[books.state] || "Accepted Books reports are temporarily unavailable.", "empty"));
+    return section;
+  }
+  section.append(text("p", `Qualified historical snapshot · accepted ${books.as_of} · publication ${books.publication_id}`, "state-note"));
+  for (const limitation of books.limitations || []) section.append(text("p", limitation, "state-note"));
+  const provenance = document.createElement("details"); provenance.append(text("summary", "Publication provenance"));
+  provenance.append(text("p", `Book: ${books.book_id} · contract: ${books.schema_version} · content hash: ${books.content_hash}`));
+  const clocks = books.source_clock_summary || {};
+  provenance.append(text("p", `Oldest source observation: ${clocks.oldest_observed_at || "Unavailable"}. Current source freshness is unverified.`));
+  section.append(provenance);
+  for (const report of books.reports || []) {
+    const details = document.createElement("details"); details.open = true;
+    details.append(text("summary", `${titleCase(report.report_id)} · ${titleCase(report.release_state)}`));
+    details.append(text("p", `${titleCase(report.basis)} · ${report.period_start} to ${report.period_end} · model ${report.model_id} ${report.model_version}`, "meta"));
+    details.append(text("p", `Quality: ${Object.entries(report.quality || {}).map(([dimension, value]) => `${titleCase(dimension)} ${value}`).join("; ")}.`, "state-note"));
+    if (report.required_evidence?.length) details.append(text("p", `Required evidence: ${report.required_evidence.join(", ")}.`, "state-note"));
+    if (!(report.metrics || []).length) details.append(text("p", report.release_state === "unavailable" ? "This report has not been released." : "No metrics in this bounded view.", "empty"));
+    else {
+      const table = document.createElement("table"); table.className = "finance-table";
+      const head = document.createElement("thead"); const heading = document.createElement("tr");
+      for (const label of ["Published metric", "Exact value", "Scenario / evidence"]) heading.append(text("th", label));
+      head.append(heading); table.append(head); const body = document.createElement("tbody");
+      for (const metric of report.metrics) {
+        const row = document.createElement("tr");
+        const value = metric.value_minor == null ? "Unavailable" : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(metric.value_minor)} ${metric.currency} minor units`;
+        row.append(text("th", metric.metric_id), text("td", value), text("td", `${metric.scenario_id || "No scenario"} · ${(metric.evidence_ids || []).join(", ") || "No evidence reference"}`));
+        body.append(row);
+      }
+      table.append(body); details.append(table);
+    }
+    if (report.more_metrics) details.append(text("p", "Additional metrics require a bounded Finance report query.", "state-note"));
+    section.append(details);
+  }
+  if (books.details_state === "report_query_required") section.append(text("p", "Report details exceed this display budget. Request one bounded report before relying on its values.", "state-note"));
+  return section;
 }
 
 function financeKpis(cockpit) {
   const grid = document.createElement("section"); grid.className = "finance-kpi-grid"; grid.setAttribute("aria-label", "Finance summary");
   const values = [
-    ["Forecast month-end", cockpit.summary.projected_month_income_minor - cockpit.summary.projected_month_expenses_minor, "Current pace, not a promise"],
-    ["Monthly plan", cockpit.summary.base_monthly_income_minor - cockpit.summary.base_monthly_expenses_minor, "Workbook baseline"],
-    ["Net worth", cockpit.summary.net_worth_minor, "Observed accounts + workbook assets − liabilities"],
-    ["Spending vs prior", cockpit.summary.mtd_expenses_minor - cockpit.summary.prior_month_expenses_minor, "Same elapsed time last month"],
+    ["Observed month-end pace", financeDifference(cockpit.summary.projected_month_income_minor, cockpit.summary.projected_month_expenses_minor), "Partial observations; coverage unverified"],
+    ["Monthly plan", financeDifference(cockpit.summary.base_monthly_income_minor, cockpit.summary.base_monthly_expenses_minor), "Chosen assumptions; not actuals"],
+    ["Listed net value", cockpit.summary.observed_listed_net_minor, "Observed inputs; not a reconciled balance sheet"],
+    ["Spending vs prior", financeDifference(cockpit.summary.mtd_expenses_minor, cockpit.summary.prior_month_expenses_minor), "Same elapsed time; coverage unverified"],
   ];
   for (const [label, value, note] of values) { const item = document.createElement("article"); item.className = "card finance-kpi"; item.append(text("span", label, "eyebrow"), text("strong", moneyMinor(value, { compact: true })), text("small", note)); grid.append(item); }
   return grid;
@@ -3854,7 +3908,7 @@ function financeCashFlow(cockpit) {
   const rows = [
     ["Income", cockpit.summary.mtd_income_minor, cockpit.summary.base_monthly_income_minor],
     ["Expenses", cockpit.summary.mtd_expenses_minor, cockpit.summary.base_monthly_expenses_minor],
-    ["Net", cockpit.summary.mtd_net_minor, cockpit.summary.base_monthly_income_minor - cockpit.summary.base_monthly_expenses_minor],
+    ["Net", cockpit.summary.mtd_net_minor, financeDifference(cockpit.summary.base_monthly_income_minor, cockpit.summary.base_monthly_expenses_minor)],
   ];
   const table = document.createElement("table"); table.className = "finance-table"; const head = document.createElement("thead"); const headRow = document.createElement("tr"); for (const value of ["Measure", "Month to date", "Monthly plan"]) headRow.append(text("th", value)); head.append(headRow); const body = document.createElement("tbody");
   for (const [label, actual, plan] of rows) { const row = document.createElement("tr"); row.append(text("th", label), text("td", moneyMinor(actual)), text("td", moneyMinor(plan))); body.append(row); }
@@ -3865,21 +3919,21 @@ function financeBudgets(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-budget"; section.append(text("h2", "Spending plan"));
   if (!(cockpit.budgets || []).length) { section.append(text("p", "No category budgets are published yet. Add them in the workbook; the dashboard will not invent targets.", "empty")); return section; }
   const list = document.createElement("ul"); list.className = "finance-budget-list";
-  for (const item of cockpit.budgets) { const row = document.createElement("li"); const heading = document.createElement("div"); heading.append(text("strong", item.category), text("span", item.state === "watch" ? "Review" : "Within plan", `pill state-label state-${item.state === "watch" ? "degraded" : "healthy"}`)); const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); const ratio = item.planned_minor ? Math.min(1.2, item.actual_minor / item.planned_minor) : 0; fill.style.width = `${Math.min(100, ratio * 100)}%`; progress.append(fill); row.append(heading, progress, text("small", `${moneyMinor(item.actual_minor)} of ${moneyMinor(item.planned_minor)} · ${moneyMinor(item.remaining_minor)} remaining`)); list.append(row); }
+  for (const item of cockpit.budgets) { const row = document.createElement("li"); const heading = document.createElement("div"); heading.append(text("strong", item.category), text("span", item.state === "watch" ? "Review" : item.state === "unavailable" ? "Unavailable" : "Partial observations", `pill state-label state-${item.state === "watch" ? "degraded" : "healthy"}`)); const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); const ratio = item.planned_minor && item.actual_minor != null ? Math.min(1.2, item.actual_minor / item.planned_minor) : 0; fill.style.width = `${Math.min(100, ratio * 100)}%`; progress.append(fill); row.append(heading, progress, text("small", `${moneyMinor(item.actual_minor)} of ${moneyMinor(item.planned_minor)} · ${moneyMinor(item.remaining_minor)} remaining`)); list.append(row); }
   section.append(list); return section;
 }
 
 function financeScenarios(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-scenarios"; section.append(text("h2", "Scenario lab"), text("p", "Scenarios are workbook-authored deltas. Switching here compares projections; it does not change the baseline.", "state-note"));
   const scenarios = cockpit.scenarios || [];
-  if (!scenarios.length) { section.append(text("p", "No scenario is available.", "empty")); return section; }
+  if (!scenarios.length) { section.append(text("p", "A scenario needs explicit opening cash, income, expenses and reserve inputs. Missing inputs do not establish zero spending or safe runway.", "empty")); return section; }
   if (!state.financeScenario || !scenarios.some((item) => item.scenario_id === state.financeScenario)) state.financeScenario = (scenarios.find((item) => item.is_baseline) || scenarios[0]).scenario_id;
   const switcher = document.createElement("div"); switcher.className = "finance-scenario-switcher";
   for (const scenario of scenarios) { const button = text("button", scenario.name, "finance-scenario-button"); button.type = "button"; button.setAttribute("aria-pressed", String(scenario.scenario_id === state.financeScenario)); button.addEventListener("click", () => { state.financeScenario = scenario.scenario_id; renderFinance(state.surface); }); switcher.append(button); }
   const selected = scenarios.find((item) => item.scenario_id === state.financeScenario) || scenarios[0]; const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
   for (const [label, value] of [["Monthly net", moneyMinor(selected.monthly_net_minor)], ["Ending cash", moneyMinor(selected.ending_cash_minor)], ["Below reserve", selected.below_floor_month ? `Month ${selected.below_floor_month}` : "Not in horizon"], ["Cash out", selected.cash_out_month ? `Month ${selected.cash_out_month}` : "Not in horizon"]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); stats.append(item); }
   const chart = document.createElement("div"); chart.className = "finance-spark"; chart.setAttribute("aria-label", `${selected.name} cash forecast`); const points = selected.points || []; const max = Math.max(...points.map((item) => Math.abs(item.cash_minor)), 1); for (const point of points.filter((_item, index) => index % Math.max(1, Math.ceil(points.length / 24)) === 0)) { const bar = document.createElement("span"); bar.style.height = `${Math.max(4, Math.abs(point.cash_minor) / max * 100)}%`; bar.classList.toggle("negative", point.cash_minor < 0); bar.title = `Month ${point.month}: ${moneyMinor(point.cash_minor)}`; chart.append(bar); }
-  section.append(switcher, stats, chart); if (selected.notes) section.append(text("p", selected.notes, "meta")); return section;
+  section.append(switcher, stats, chart); for (const limitation of selected.limitations || []) section.append(text("p", limitation, "state-note")); if (selected.notes) section.append(text("p", selected.notes, "meta")); return section;
 }
 
 function financeGoals(cockpit) {
@@ -3953,9 +4007,9 @@ function financeTransactions(cockpit) {
 }
 
 function financeAccounts(cockpit) {
-  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Net worth inputs"), text("p", `Computed net worth: ${moneyMinor(cockpit.summary.net_worth_minor)}. Account details remain member-scoped and privileged.`, "state-note"));
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Observed asset and liability inputs"), text("p", `Listed net value: ${moneyMinor(cockpit.summary.observed_listed_net_minor)}. Coverage is unverified; a reconciled balance sheet is unavailable.`, "state-note"));
   if (!(cockpit.accounts || []).length) { section.append(text("p", "No visible provider accounts. Workbook asset and liability assumptions still participate in the total.", "empty")); return section; }
-  const list = document.createElement("ul"); list.className = "finance-account-list"; for (const account of cockpit.accounts) { const row = document.createElement("li"); const body = document.createElement("div"); const liability = ["credit", "loan"].includes(account.account_type); body.append(text("strong", account.display_name), text("small", `${account.institution_name} · ${liability ? "Liability" : "Asset"} · ${titleCase(account.account_type)} · •••• ${account.last4 || "—"}`)); const signed = liability ? -Math.abs(Number(account.current_balance_minor || 0)) : Number(account.current_balance_minor || 0); row.append(body, text("strong", moneyMinor(signed), liability ? "finance-outflow" : "")); list.append(row); } section.append(list); return section;
+  const list = document.createElement("ul"); list.className = "finance-account-list"; for (const account of cockpit.accounts) { const row = document.createElement("li"); const body = document.createElement("div"); const liability = ["credit", "loan"].includes(account.account_type); body.append(text("strong", account.display_name), text("small", `${account.institution_name} · ${liability ? "Liability" : "Asset"} · ${titleCase(account.account_type)} · •••• ${account.last4 || "—"}`)); const signed = account.current_balance_minor == null ? null : liability ? -Math.abs(Number(account.current_balance_minor)) : Number(account.current_balance_minor); row.append(body, text("strong", moneyMinor(signed), liability ? "finance-outflow" : "")); list.append(row); } section.append(list); return section;
 }
 
 function financeHealth(cockpit) {
@@ -3963,14 +4017,15 @@ function financeHealth(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-health"; section.append(text("h2", "Source and model health"));
   const facts = document.createElement("dl"); facts.className = "finance-health-grid"; for (const [label, value] of [["State", titleCase(health.state)], ["Transactions", health.transaction_count || 0], ["Accounts", health.account_count || 0], ["Accounts needing attention", health.unhealthy_account_count || 0], ["Pending", health.pending_count || 0], ["Uncategorized", health.uncategorized_count || 0], ["Non-USD rows excluded", health.unsupported_currency_count || 0], ["Latest source", health.latest_source_at ? new Date(health.latest_source_at).toLocaleString() : "No source watermark"], ["Workbook", workbook ? `${titleCase(workbook.validation_state)} · schema ${workbook.workbook_schema_version}` : "Not published"]]) facts.append(text("dt", label), text("dd", value)); section.append(facts);
   if (workbook?.validation_failures?.length) { const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const failure of workbook.validation_failures) list.append(text("li", failure)); section.append(text("h3", "Workbook checks"), list); }
-  section.append(text("p", "Authority split: Plaid owns provider facts; the workbook owns reviewed planning inputs and manual overrides; the event log preserves provenance and replay.", "review-state")); return section;
+  for (const [report, status] of Object.entries(cockpit.reports || {})) section.append(text("h3", titleCase(report)), text("p", `${titleCase(status.state)} · ${status.reason}`, "state-note"));
+  section.append(text("p", "Accepted Books publications own accounting and planning. Provider observations alone do not release reports; the event log preserves accepted provenance and replay.", "review-state")); return section;
 }
 
 function renderFinance(data) {
   const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic planning · no bank writes";
   const cockpit = data.cockpit || { summary: {}, budgets: [], scenarios: [], accounts: [], data_health: {} };
   const requested = new URLSearchParams(location.search).get("view"); if (FINANCE_VIEWS.some(([value]) => value === requested)) state.financeView = requested;
-  root.append(freshnessStrip(data), financeHero(cockpit), financeControls());
+  root.append(freshnessStrip(data), financeAcceptedBooks(cockpit), financeHero(cockpit), financeControls());
   if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit));
   else if (state.financeView === "cashflow") root.append(financeCashFlow(cockpit), financeScenarios(cockpit));
   else if (state.financeView === "spending") root.append(financeBudgets(cockpit), financeTransactions(cockpit));
@@ -5260,7 +5315,8 @@ function freshnessStrip(data) {
   const strip = document.createElement("div"); strip.className = "freshness-strip";
   if (!value) return strip;
   strip.append(text("span", titleCase(value.state), `pill state-label state-${String(value.state).replaceAll("_", "-")}`));
-  const latest = value.latest_source_at ? `Latest source ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
+  const sourceLabel = data.surface === "finance" && data.cockpit?.accepted_books?.publication_id ? "Books source watermark" : "Latest source";
+  const latest = value.latest_source_at ? `${sourceLabel} ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
   strip.append(text("span", `${latest} · ${value.row_count} visible record${value.row_count === 1 ? "" : "s"}`));
   if (value.checkpoint_required) strip.append(text("span", value.checkpoint_event_id ? `Checkpoint ${String(value.checkpoint_event_id).slice(-10)}` : "No processing checkpoint yet"));
   if (Number(value.lag_count || 0) > 0) strip.append(text("strong", `${value.lag_count} event${value.lag_count === 1 ? "" : "s"} waiting to process`));

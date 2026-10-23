@@ -21,6 +21,8 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.finance.publication import PublicationError
+from adminme.finance.queries import publication_status, query_publication
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
 
@@ -201,6 +203,7 @@ def finance_snapshot(
     session: Session,
     *,
     as_of: datetime,
+    accepted_books_enabled: bool = False,
 ) -> dict[str, Any]:
     """Compose the deterministic Finance projection consumed by workbook/UI.
 
@@ -211,6 +214,15 @@ def finance_snapshot(
 
     if as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=timezone.utc)
+    # General row stripping is insufficient for financial fields (whose names
+    # are not all financial_*). A coach, child, device or view-as session must
+    # not learn even the existence of another member's financial sources.
+    if (
+        session.auth_role != "principal"
+        or session.is_view_as
+        or f"private:{session.auth_member_id}" not in session.allowed_scopes
+    ):
+        return _unavailable_finance_snapshot(as_of)
     month_start = as_of.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     previous_month = (
         month_start.replace(day=1)
@@ -228,15 +240,6 @@ def finance_snapshot(
         previous_start + timedelta(seconds=(as_of - month_start).total_seconds()),
         month_start,
     )
-    trailing_start_month = month_start.month - 3
-    trailing_year = month_start.year
-    while trailing_start_month <= 0:
-        trailing_start_month += 12
-        trailing_year -= 1
-    trailing_start = month_start.replace(
-        year=trailing_year, month=trailing_start_month, day=1
-    )
-
     base_currency = "USD"
     observed_flows = _visible_rows(
         conn,
@@ -294,9 +297,9 @@ def finance_snapshot(
     )
 
     workbook_row = conn.execute(
-        "SELECT * FROM finance_workbook_state WHERE tenant_id=? "
+        "SELECT * FROM finance_workbook_state WHERE tenant_id=? AND published_by_party_id=? "
         "ORDER BY published_at DESC LIMIT 1",
-        (session.tenant_id,),
+        (session.tenant_id, session.auth_member_id),
     ).fetchone()
     workbook = dict(workbook_row) if workbook_row is not None else None
     if workbook is not None:
@@ -313,28 +316,28 @@ def finance_snapshot(
 
     mtd = [row for row in flows if in_period(row, month_start, as_of)]
     prior = [row for row in flows if in_period(row, previous_start, previous_end)]
-    trailing = [row for row in flows if in_period(row, trailing_start, month_start)]
     mtd_income, mtd_expenses = _income_expense(mtd)
     prior_income, prior_expenses = _income_expense(prior)
-    trailing_income, trailing_expenses = _income_expense(trailing)
-    trailing_monthly_income = trailing_income // 3
-    trailing_monthly_expenses = trailing_expenses // 3
-
+    # A partial ledger cannot establish a zero-income/zero-expense baseline.
+    # Monthly scenarios use explicitly chosen inputs, never a three-month
+    # divisor applied to whatever observations happen to be visible.
     assumption_values = {
-        str(row["assumption_id"]): _assumption_minor(row) for row in assumptions
+        str(row["assumption_id"]): value
+        for row in assumptions
+        if (value := _assumption_minor(row)) is not None
     }
-    base_income = assumption_values.get("base_monthly_income", trailing_monthly_income)
-    base_expenses = assumption_values.get(
-        "base_monthly_expenses", trailing_monthly_expenses
+    base_income = assumption_values.get("base_monthly_income")
+    base_expenses = assumption_values.get("base_monthly_expenses")
+    minimum_cash = assumption_values.get("minimum_cash_floor")
+    liquid_accounts = [
+        row for row in accounts if row.get("account_type") == "depository"
+    ]
+    cash_balance = (
+        sum(int(row["current_balance_minor"]) for row in liquid_accounts)
+        if liquid_accounts
+        and all(row.get("current_balance_minor") is not None for row in liquid_accounts)
+        else None
     )
-    minimum_cash = assumption_values.get("minimum_cash_floor", 0)
-    cash_balance = sum(
-        int(row.get("current_balance_minor") or 0)
-        for row in accounts
-        if row.get("account_type") == "depository"
-    )
-    if not accounts:
-        cash_balance = assumption_values.get("opening_cash", 0)
 
     days_elapsed = max(1, as_of.day)
     days_in_month = monthrange(as_of.year, as_of.month)[1]
@@ -351,7 +354,7 @@ def finance_snapshot(
 
     category_actuals: dict[str, int] = {}
     for row in mtd:
-        if row.get("kind") == "received":
+        if row.get("kind") != "paid":
             continue
         category = str(row.get("category") or "Uncategorized")
         category_actuals[category] = category_actuals.get(category, 0) + abs(
@@ -359,7 +362,7 @@ def finance_snapshot(
         )
     budget_rows: list[dict[str, Any]] = []
     for budget in budgets:
-        actual = category_actuals.get(str(budget["category"]), 0)
+        actual = category_actuals.get(str(budget["category"]), 0) if mtd else None
         planned = int(budget["amount_minor"])
         budget_rows.append(
             {
@@ -367,51 +370,75 @@ def finance_snapshot(
                 "category": budget["category"],
                 "planned_minor": planned,
                 "actual_minor": actual,
-                "remaining_minor": planned - actual,
-                "state": "watch" if actual > planned else "within_plan",
+                "remaining_minor": planned - actual if actual is not None else None,
+                "state": (
+                    "unavailable"
+                    if actual is None
+                    else "watch"
+                    if actual > planned
+                    else "qualified"
+                ),
             }
         )
-    budget_rows.sort(key=lambda row: (row["remaining_minor"], row["category"]))
-
-    scenario_rows = scenarios or [
-        {
-            "scenario_id": "base",
-            "name": "Current plan",
-            "is_baseline": 1,
-            "horizon_months": 60,
-            "opening_cash_delta_minor": 0,
-            "monthly_income_delta_minor": 0,
-            "monthly_expense_delta_minor": 0,
-            "one_time_month": None,
-            "one_time_amount_minor": 0,
-            "notes": None,
-        }
-    ]
-    forecasts = [
-        _forecast_scenario(
-            scenario,
-            opening_cash=cash_balance,
-            monthly_income=base_income,
-            monthly_expenses=base_expenses,
-            minimum_cash=minimum_cash,
+    budget_rows.sort(
+        key=lambda row: (
+            row["remaining_minor"] is None,
+            row["remaining_minor"] or 0,
+            row["category"],
         )
-        for scenario in scenario_rows
-    ]
+    )
 
-    net_worth = 0
+    opening_cash = assumption_values.get("opening_cash")
+    forecasts: list[dict[str, Any]] = []
+    if (
+        opening_cash is not None
+        and base_income is not None
+        and base_expenses is not None
+        and minimum_cash is not None
+        and not (workbook and workbook.get("validation_state") == "rejected")
+    ):
+        forecasts = [
+            {
+                **_forecast_scenario(
+                    scenario,
+                    opening_cash=opening_cash,
+                    monthly_income=base_income,
+                    monthly_expenses=base_expenses,
+                    minimum_cash=minimum_cash,
+                ),
+                "readiness": "qualified",
+                "basis": "chosen_monthly_plan",
+                "limitations": [
+                    "Hypothetical monthly path; account and obligation coverage is unverified.",
+                    "This is not a dated cash-safety or affordability assessment.",
+                ],
+            }
+            for scenario in scenarios
+        ]
+
+    observed_net = 0
     for row in accounts:
         balance = int(row.get("current_balance_minor") or 0)
         if row.get("account_type") in {"credit", "loan"}:
-            net_worth -= abs(balance)
+            observed_net -= abs(balance)
         else:
-            net_worth += balance
-    net_worth += sum(
+            observed_net += balance
+    observed_net += sum(
         value for key, value in assumption_values.items() if key.startswith("asset_")
     )
-    net_worth -= sum(
+    observed_net -= sum(
         abs(value)
         for key, value in assumption_values.items()
         if key.startswith("liability_")
+    )
+    has_net_inputs = bool(accounts) or any(
+        key.startswith(("asset_", "liability_")) for key in assumption_values
+    )
+    observed_net_minor = (
+        observed_net
+        if has_net_inputs
+        and all(row.get("current_balance_minor") is not None for row in accounts)
+        else None
     )
 
     latest_source = max(
@@ -459,24 +486,58 @@ def finance_snapshot(
     elif stale:
         health_state = "stale"
     else:
-        health_state = "ready"
+        health_state = "qualified"
 
     return {
         "contract_version": "deterministic-finance-cockpit-v1",
         "base_currency": base_currency,
         "as_of": as_of.isoformat().replace("+00:00", "Z"),
+        "accepted_books": (
+            _accepted_books_snapshot(conn, session)
+            if accepted_books_enabled
+            else {
+                "state": "disabled",
+                "reports": [],
+                "provider_effect_count": 0,
+            }
+        ),
         "summary": {
             "cash_minor": cash_balance,
-            "net_worth_minor": net_worth,
-            "mtd_income_minor": mtd_income,
-            "mtd_expenses_minor": mtd_expenses,
-            "mtd_net_minor": mtd_income - mtd_expenses,
-            "projected_month_income_minor": projected_month_income,
-            "projected_month_expenses_minor": projected_month_expenses,
+            "net_worth_minor": None,
+            "observed_listed_net_minor": observed_net_minor,
+            "mtd_income_minor": mtd_income if mtd else None,
+            "mtd_expenses_minor": mtd_expenses if mtd else None,
+            "mtd_net_minor": mtd_income - mtd_expenses if mtd else None,
+            "projected_month_income_minor": projected_month_income if mtd else None,
+            "projected_month_expenses_minor": projected_month_expenses if mtd else None,
             "base_monthly_income_minor": base_income,
             "base_monthly_expenses_minor": base_expenses,
-            "prior_month_income_minor": prior_income,
-            "prior_month_expenses_minor": prior_expenses,
+            "prior_month_income_minor": prior_income if prior else None,
+            "prior_month_expenses_minor": prior_expenses if prior else None,
+        },
+        "reports": {
+            "observed_activity": {
+                "state": "qualified" if mtd else "missing_evidence",
+                "basis": "visible_observations",
+                "reason": "Coverage and accounting classifications are not established by observations.",
+            },
+            "liquid_cash": {
+                "state": "qualified"
+                if cash_balance is not None
+                else "missing_evidence",
+                "basis": "observed_liquid_accounts",
+                "reason": "Listed balances do not establish complete reconciled opening cash.",
+            },
+            "monthly_scenarios": {
+                "state": "qualified" if forecasts else "missing_evidence",
+                "basis": "chosen_monthly_plan",
+                "reason": "Requires explicit opening cash, income, expenses, reserve and a chosen scenario; monthly timing is hypothetical.",
+            },
+            "balance_sheet": {
+                "state": "missing_evidence",
+                "basis": "accounting_actual",
+                "reason": "A reconciled statement requires accepted complete coverage and release approval.",
+            },
         },
         "focus": focus,
         "budgets": budget_rows,
@@ -502,6 +563,127 @@ def finance_snapshot(
             "unsupported_currency_count": unsupported_currency_count,
         },
     }
+
+
+def _unavailable_finance_snapshot(as_of: datetime) -> dict[str, Any]:
+    return {
+        "contract_version": "deterministic-finance-cockpit-v1",
+        "base_currency": "USD",
+        "as_of": as_of.isoformat().replace("+00:00", "Z"),
+        "accepted_books": {
+            "state": "permission_required",
+            "reports": [],
+            "provider_effect_count": 0,
+        },
+        "summary": dict.fromkeys(
+            (
+                "cash_minor",
+                "net_worth_minor",
+                "observed_listed_net_minor",
+                "mtd_income_minor",
+                "mtd_expenses_minor",
+                "mtd_net_minor",
+                "projected_month_income_minor",
+                "projected_month_expenses_minor",
+                "base_monthly_income_minor",
+                "base_monthly_expenses_minor",
+                "prior_month_income_minor",
+                "prior_month_expenses_minor",
+            )
+        ),
+        "focus": {
+            "state": "permission_required",
+            "title": "Finance is unavailable in this session",
+            "why": "Finance requires the authorized adult's private session.",
+            "action": "Open your own private Finance session.",
+        },
+        "reports": {},
+        "budgets": [],
+        "scenarios": [],
+        "goals": [],
+        "accounts": [],
+        "recent_flows": [],
+        "workbook": None,
+        "data_health": {
+            "state": "permission_required",
+            "latest_source_at": None,
+            "transaction_count": 0,
+            "account_count": 0,
+            "uncategorized_count": 0,
+            "pending_count": 0,
+            "unhealthy_account_count": 0,
+            "unsupported_currency_count": 0,
+        },
+    }
+
+
+def _accepted_books_snapshot(
+    conn: sqlcipher3.Connection,
+    session: Session,
+) -> dict[str, Any]:
+    """Bounded exact published metrics; never map arbitrary IDs onto legacy totals."""
+    try:
+        status = publication_status(conn, session)
+        if "publication_id" not in status:
+            return status
+        reports = [
+            {**report, "metrics": [], "more_metrics": False}
+            for report in status["reports"]
+        ]
+        result = {
+            **status,
+            "reports": reports,
+            "snapshot_kind": "accepted_historical_snapshot",
+            "limitations": [
+                "Acceptance preserves the published values; it does not verify current source freshness.",
+                "Report-specific omissions apply. These metrics are separate from other observations.",
+            ],
+            "display_budget": {
+                "per_report": 10,
+                "total_metrics": 20,
+                "max_bytes": 32768,
+            },
+        }
+        if len(json.dumps(result).encode()) > 32768:
+            return {
+                **{key: value for key, value in result.items() if key != "reports"},
+                "reports": [],
+                "details_state": "report_query_required",
+            }
+        remaining = 20
+        for report in reports:
+            if report["release_state"] == "unavailable":
+                continue
+            if remaining == 0:
+                report["more_metrics"] = True
+                continue
+            page = query_publication(
+                conn,
+                session,
+                status["book_id"],
+                status["publication_id"],
+                report["report_id"],
+                limit=min(10, remaining),
+            )
+            report["more_metrics"] = page.get("next_offset") is not None
+            for metric in page["metrics"]:
+                report["metrics"].append(metric)
+                if len(json.dumps(result).encode()) > 32768:
+                    report["metrics"].pop()
+                    report["more_metrics"] = True
+                    remaining = 0
+                    break
+                remaining -= 1
+        return result
+    except PublicationError as exc:
+        # The only disclosed selection requirement concerns the caller's own
+        # books. Never return hidden account IDs/counts or raw database errors.
+        state = (
+            "selection_required"
+            if str(exc) == "finance_book_selection_required"
+            else "permission_required"
+        )
+        return {"state": state, "reports": [], "provider_effect_count": 0}
 
 
 def _visible_rows(
@@ -536,17 +718,26 @@ def _income_expense(rows: list[dict[str, Any]]) -> tuple[int, int]:
         amount = abs(int(row.get("amount_minor") or 0))
         if row.get("kind") == "received":
             income += amount
-        else:
+        elif row.get("kind") == "paid":
             expenses += amount
     return income, expenses
 
 
-def _assumption_minor(row: dict[str, Any]) -> int:
+def _assumption_minor(row: dict[str, Any]) -> int | None:
     try:
-        value = Decimal(str(row.get("value_decimal") or "0"))
+        value = Decimal(str(row.get("value_decimal")))
     except InvalidOperation:
-        return 0
+        return None
+    if not value.is_finite():
+        return None
     unit = row.get("unit")
+    if unit not in {"USD", "USD/month", "USD/year"}:
+        return None
+    if (
+        row.get("assumption_id") in {"opening_cash", "minimum_cash_floor"}
+        and unit != "USD"
+    ):
+        return None
     if unit == "USD/year":
         value = value / Decimal(12)
     if unit in {"USD", "USD/month", "USD/year"}:
@@ -633,7 +824,7 @@ def _finance_focus(
             "state": "connect_or_import",
             "title": "Add a financial source",
             "why": "No transaction or account observations are available yet.",
-            "action": "Import the workbook now; connect Plaid later in Settings.",
+            "action": "Request an accepted Books publication and review its coverage.",
         }
     unhealthy = next((item for item in accounts if not item.get("link_healthy")), None)
     if unhealthy is not None:
@@ -650,19 +841,19 @@ def _finance_focus(
             "why": "The newest account or transaction observation is over 48 hours old.",
             "action": "Check the Plaid connection or publish the latest workbook.",
         }
-    baseline = next((item for item in forecasts if item["is_baseline"]), forecasts[0])
-    if baseline["cash_out_month"] is not None:
+    baseline = next((item for item in forecasts if item["is_baseline"]), None)
+    if baseline and baseline["cash_out_month"] is not None:
         return {
             "state": "cash_gap",
             "title": f"Cash crosses zero in month {baseline['cash_out_month']}",
-            "why": "The baseline cash-flow math reaches a negative balance.",
+            "why": "The hypothetical monthly plan reaches a negative balance; dated cash safety is unverified.",
             "action": "Compare a lower-expense or higher-income workbook scenario.",
         }
-    if baseline["below_floor_month"] is not None:
+    if baseline and baseline["below_floor_month"] is not None:
         return {
             "state": "reserve_watch",
             "title": f"Cash falls below reserve in month {baseline['below_floor_month']}",
-            "why": "The baseline crosses the household-authored minimum cash floor.",
+            "why": "The hypothetical monthly plan crosses the chosen reserve; dated cash safety is unverified.",
             "action": "Compare an explicit timing, spending, or income scenario.",
         }
     over = next((item for item in budgets if item["state"] == "watch"), None)
@@ -673,6 +864,13 @@ def _finance_focus(
             "why": "Month-to-date spending is above its workbook budget.",
             "action": "Reclassify transactions or change the plan in the workbook.",
         }
+    if not forecasts:
+        return {
+            "state": "missing_evidence",
+            "title": "Cash safety is not established",
+            "why": "A complete opening, chosen plan and dated obligations are not available.",
+            "action": "Review accepted source coverage and the missing planning inputs.",
+        }
     uncategorized = sum(1 for item in flows if not item.get("category"))
     if uncategorized:
         return {
@@ -682,8 +880,8 @@ def _finance_focus(
             "action": "Add reviewed categories in Raw Data; Plaid facts stay protected.",
         }
     return {
-        "state": "steady",
-        "title": "The current plan is internally consistent",
-        "why": "No deterministic cash gap, workbook failure, or budget overage ranks higher.",
-        "action": "Use Scenarios for the next planned decision.",
+        "state": "qualified",
+        "title": "Review the chosen monthly plan",
+        "why": "Monthly scenarios do not establish complete account coverage or dated cash safety.",
+        "action": "Check accepted source coverage and obligations before an affordability decision.",
     }

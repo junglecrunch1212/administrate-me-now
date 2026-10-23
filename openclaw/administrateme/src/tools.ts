@@ -8,6 +8,7 @@ import { provenanceFromTool } from "./provenance.js";
 import { toolResult } from "./result.js";
 import { trackSession, type PluginRuntime } from "./runtime.js";
 import { waitForApprovalPublication } from "./approval.js";
+import { FINANCE_TOOLS, takeFinanceTurn } from "./finance-turns.js";
 
 const ItemKind = Type.Union([Type.Literal("task"), Type.Literal("commitment")]);
 const LifecycleAction = Type.Union([
@@ -119,6 +120,9 @@ function makeTool(
         definition.standingOrder ? "standing_order" : "tool",
         runtime.transport.config.sharedSecretEnv,
       );
+      if (FINANCE_TOOLS.has(definition.name)) {
+        provenance.message_id = takeFinanceTurn(runtime, id, context);
+      }
       trackSession(runtime, provenance);
       const typedParams = params as Record<string, unknown>;
       const invocationParams: Record<string, unknown> = definition.standingOrder
@@ -178,6 +182,49 @@ function makeTool(
 
 export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): void {
   const definitions = [
+    {
+      name: "administrateme_finance_status",
+      description: "Check one private finance capability or accepted-publication status. Missing evidence is not zero; this grants no action authority.",
+      parameters: Type.Object({
+        capability_id: Type.Optional(Type.String({ minLength: 3, maxLength: 3 })),
+        book_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        include_bundle: Type.Optional(Type.Boolean()),
+        compound_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-status",
+    },
+    {
+      name: "administrateme_finance_query",
+      description: "Read a bounded accepted finance report pinned to its private publication; never raw transactions, SQL or source links.",
+      parameters: Type.Object({
+        book_id: Type.String({ minLength: 1, maxLength: 120 }),
+        publication_id: Type.String({ minLength: 1, maxLength: 120 }),
+        report_id: Type.String({ minLength: 1, maxLength: 40 }),
+        offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-query",
+    },
+    {
+      name: "administrateme_finance_calculate",
+      description: "Run a named, versioned, bounded deterministic finance model on explicitly hypothetical typed inputs. No code, formulas, writes or action grants.",
+      parameters: Type.Object({
+        calculator_id: Type.String({ minLength: 1, maxLength: 80 }),
+        version: Type.String({ minLength: 1, maxLength: 40 }),
+        inputs: Type.Record(Type.String(), Type.Unknown()),
+        hypothetical: Type.Literal(true),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-calculate",
+    },
+    {
+      name: "administrateme_finance_job",
+      description: "Check finance job admission. Heavy processing stays unavailable until isolated resource limits and ordinary CoS capacity are verified.",
+      parameters: Type.Object({
+        operation: Type.Union([Type.Literal("submit"), Type.Literal("status"), Type.Literal("cancel")]),
+        job_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-job",
+    },
     {
       name: "administrateme_state",
       description: "Read the authorized member's AdministrateMe state, Triage queue, and commitments.",

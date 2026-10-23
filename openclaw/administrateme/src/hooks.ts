@@ -13,6 +13,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { rememberSelfReply, registerSelfReplies, bindReminderTool } from "./self-replies.js";
 import { TransportError } from "./transport.js";
 import { provenanceFromServiceTool, SERVICE_PRIVATE_TOOL_NAMES } from "./service-private.js";
+import { bindFinanceTurn, FINANCE_TOOLS } from "./finance-turns.js";
 
 type BridgeMarker = {
   consent?: unknown;
@@ -25,6 +26,16 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
   api.on(
     "before_tool_call",
     async (event, context) => {
+      if (FINANCE_TOOLS.has(event.toolName)) {
+        if (!bindFinanceTurn(runtime, {
+          runId: typeof context.runId === "string" ? context.runId : undefined,
+          sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,
+          agentId: typeof context.agentId === "string" ? context.agentId : undefined,
+        }, typeof context.toolCallId === "string" ? context.toolCallId : event.toolCallId)) {
+          return { block: true, blockReason: "Finance requires a current host-bound private turn." };
+        }
+        return;
+      }
       if ((SERVICE_PRIVATE_TOOL_NAMES as readonly string[]).includes(event.toolName)) {
         try {
           provenanceFromServiceTool(context, runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);

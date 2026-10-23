@@ -1,0 +1,63 @@
+name: Finance development
+on:
+  pull_request:
+    paths:
+      - 'adminme/finance/**'
+      - 'adminme/events/schemas/finance*'
+      - 'adminme/projections/money/**'
+      - 'tests/**/test_finance*'
+      - '.github/workflows/finance-development.yml'
+permissions:
+  contents: read
+concurrency:
+  group: finance-development-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  synthetic-finance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev
+      - name: Finance synthetic process and numerical checks
+        run: >-
+          poetry run pytest -q --runxfail
+          tests/unit/test_finance_capabilities.py
+          tests/unit/test_finance_resources.py
+          tests/unit/test_finance_workflows.py
+          tests/unit/test_finance_calculators.py
+          tests/unit/test_projection_money.py
+          tests/unit/test_xlsx_finance_workbook.py
+          tests/acceptance/test_finance_publications.py
+          tests/acceptance/test_finance_native_facade.py
+          tests/acceptance/test_gate7_household_experience.py
+      - name: Static checks
+        if: always()
+        run: |
+          poetry run ruff check adminme bridge/adminme_bridge
+          poetry run mypy adminme bridge/adminme_bridge
+          bash scripts/verify_invariants.sh
+      - name: Native plugin
+        if: always()
+        run: |
+          npm --prefix openclaw/administrateme ci
+          npm --prefix openclaw/administrateme run check
+          npm --prefix openclaw/administrateme test
+      - name: Synthetic light mixed-load measurement
+        if: always()
+        env:
+          ADMINME_FINANCE_BENCHMARK: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py

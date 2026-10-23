@@ -4091,3 +4091,393 @@ async def dashboard_surface(
 
 
 __all__ = ["router"]
+
+
+class FinanceStatusRequest(ContextRequest):
+    capability_id: str | None = Field(
+        default=None, pattern=r"^F(0[1-9]|[12][0-9]|3[01])$"
+    )
+    book_id: str | None = Field(default=None, min_length=1, max_length=120)
+    include_bundle: bool = False
+    compound_id: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[a-z_]+$"
+    )
+
+    @model_validator(mode="after")
+    def one_finance_question(self) -> "FinanceStatusRequest":
+        if self.compound_id and (self.capability_id or self.include_bundle):
+            raise ValueError("choose_one_finance_question")
+        return self
+
+
+class FinanceQueryRequest(ContextRequest):
+    book_id: str = Field(min_length=1, max_length=120)
+    publication_id: str = Field(min_length=1, max_length=120)
+    report_id: Literal[
+        "actuals",
+        "cash",
+        "budget",
+        "observed_net",
+        "balance_sheet",
+        "scenarios",
+        "quality",
+    ]
+    offset: int = Field(default=0, ge=0, le=10000)
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class FinanceCalculateRequest(ContextRequest):
+    calculator_id: str = Field(
+        min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    version: str = Field(min_length=1, max_length=40)
+    inputs: dict[str, Any]
+    hypothetical: Literal[True]
+
+
+class FinanceJobRequest(ContextRequest):
+    operation: Literal["submit", "status", "cancel"]
+    job_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+def _finance_permitted(runtime: Any, session: Session) -> bool:
+    return bool(
+        session.auth_role == "principal"
+        and session.auth_member_id == session.view_member_id
+        and session.auth_member_id
+        in getattr(runtime.settings, "finance_model_members", frozenset())
+        and f"private:{session.auth_member_id}" in session.allowed_scopes
+    )
+
+
+def _finance_admit(runtime: Any, session: Session, provenance: Provenance) -> Any:
+    from adminme.finance.budgets import TurnBudgetStore, TurnIdentity
+
+    if not hasattr(runtime, "_finance_turn_budgets"):
+        runtime._finance_turn_budgets = TurnBudgetStore()
+    identity = TurnIdentity(
+        tenant_id=session.tenant_id,
+        actor_id=session.auth_member_id,
+        audience_id=f"private:{session.auth_member_id}",
+        session_id=provenance.session_id or provenance.session_key or "",
+        turn_id=provenance.message_id or "",
+    )
+    # No authenticated round identifier is available in this pinned transport.
+    # Count each call as a round; do not accept a caller-invented round number.
+    return runtime._finance_turn_budgets.admit(identity)
+
+
+async def _finance_delivery(
+    request: Request,
+    body: ContextRequest,
+    session: Session,
+    result: dict[str, Any],
+    *,
+    operation: str,
+    receipt: Any = None,
+    private_result: bool = False,
+) -> dict[str, Any]:
+    from adminme.finance.budgets import FinanceBudgetError
+
+    runtime = _runtime(request)
+    await _record_tool_call(request, session, body.provenance, operation=operation)
+    # The audit append yields: resolve the effective grant again afterwards.
+    latest = _session(request, body.provenance)
+    if private_result and not _finance_permitted(runtime, latest):
+        raise HTTPException(403, "finance_authority_changed")
+    if private_result and not getattr(
+        runtime.settings, "finance_publications_enabled", False
+    ):
+        raise HTTPException(403, "finance_processing_disabled")
+    result["provider_effect_count"] = 0
+    if receipt is not None:
+        try:
+            return runtime._finance_turn_budgets.charge(receipt, result)
+        except FinanceBudgetError as exc:
+            return {
+                "state": "temporarily_unavailable",
+                "reason": exc.code,
+                "next_step": "Request a smaller report or one capability.",
+                "provider_effect_count": 0,
+            }
+    return result
+
+
+def _finance_blocked(runtime: Any, session: Session) -> dict[str, Any] | None:
+    if not _finance_permitted(runtime, session):
+        return {
+            "state": "permission_required",
+            "reason": "Current owner authority for private finance processing is required.",
+        }
+    if not getattr(runtime.settings, "finance_publications_enabled", False):
+        return {
+            "state": "temporarily_unavailable",
+            "reason": "Finance publication processing is disabled.",
+        }
+    return None
+
+
+@router.post("/tools/finance-status")
+async def finance_status(
+    body: FinanceStatusRequest, request: Request
+) -> dict[str, Any]:
+    from adminme.finance.budgets import FinanceBudgetError, enforce_context
+    from adminme.finance.capabilities import (
+        CAPABILITIES,
+        REGISTRY_VERSION,
+        capability,
+        readiness,
+        skill_bundle,
+    )
+    from adminme.finance.calculators import calculator_metadata
+    from adminme.finance.queries import publication_status
+    from adminme.finance.workflows import compound_readiness, preparation_workflow
+
+    session = _session(request, body.provenance)
+    runtime = _runtime(request)
+    receipt = None
+    permitted = _finance_permitted(runtime, session)
+    enabled = bool(getattr(runtime.settings, "finance_publications_enabled", False))
+    result: dict[str, Any] = {
+        "registry_version": REGISTRY_VERSION,
+        "implementation_state": "implemented",
+        "numerical_models_require_individual_validation": True,
+    }
+    try:
+        receipt = _finance_admit(runtime, session, body.provenance)
+        blocked = _finance_blocked(runtime, session)
+        if blocked:
+            result.update(blocked)
+        else:
+            publication = publication_status(
+                runtime.projections.connection("money"), session, book_id=body.book_id
+            )
+            result["state"] = publication["state"]
+            result["publication"] = {
+                key: publication[key]
+                for key in (
+                    "publication_id",
+                    "book_id",
+                    "as_of",
+                    "content_hash",
+                    "schema_version",
+                )
+                if key in publication
+            }
+            result["reports"] = [
+                {"id": row["report_id"], "state": row["release_state"]}
+                for row in publication.get("reports", [])
+            ]
+            result["report_boundary"] = (
+                "Read the selected report for its basis, period, quality and limitations before any financial conclusion."
+            )
+        if body.compound_id:
+            preparation = compound_readiness(body.compound_id, {})
+            states = {
+                row["capability_id"]: readiness(
+                    row["capability_id"],
+                    dependencies={},
+                    permitted=permitted,
+                    enabled=enabled,
+                )["readiness"]
+                for row in preparation["dependencies"]
+            }
+            result = compound_readiness(body.compound_id, states)
+            if blocked:
+                result["readiness"] = blocked["state"]
+        elif body.capability_id:
+            # A publication/report is not evidence of all topic dependencies.
+            # Until typed domain dependencies are accepted, request them honestly.
+            if body.include_bundle:
+                bundle = (
+                    preparation_workflow(body.capability_id)
+                    if body.capability_id in {"F18", "F19", "F20", "F25", "F27", "F29"}
+                    else skill_bundle(body.capability_id)
+                )
+                enforce_context(bundle, kind="bundle")
+                runtime._finance_turn_budgets.charge_bundle(receipt.identity, bundle)
+                result = {"state": "preparation_only", "bundle": bundle}
+            else:
+                item = capability(body.capability_id)
+                models = calculator_metadata()
+                checked = readiness(
+                    body.capability_id,
+                    dependencies={},
+                    available_calculators=frozenset(models),
+                    permitted=permitted,
+                    enabled=enabled,
+                )
+                result = {
+                    "capability_id": item.capability_id,
+                    "label": item.label,
+                    "implementation_state": "implemented",
+                    "implementation_state_applies_to": "routing_and_preparation",
+                    "readiness": checked["readiness"],
+                    "reason": checked["reason"],
+                    "missing_evidence": checked.get("missing_evidence", []),
+                    "unavailable_models": checked.get("unavailable_models", []),
+                    "professional_review_required": item.professional_review,
+                    "next_step": checked.get("next_step", checked["partial_answer"]),
+                }
+                result["models"] = {
+                    name: {
+                        "version": models[name]["version"],
+                        "implementation_state": models[name]["implementation_state"],
+                    }
+                    if name in models
+                    else {"implementation_state": "planned"}
+                    for name in item.calculator_ids
+                }
+        elif body.include_bundle:
+            result["next_step"] = (
+                "Choose one capability ID before requesting its bundle."
+            )
+        else:
+            if not permitted or not enabled:
+                result["capability_index"] = {
+                    key: value.label for key, value in CAPABILITIES.items()
+                }
+            result["next_step"] = (
+                "Choose one capability (F01 through F31) or accepted report. Topic instructions are loaded only on request."
+            )
+    except FinanceBudgetError as exc:
+        result = {
+            "state": "temporarily_unavailable",
+            "reason": exc.code,
+            "next_step": "Start a new explicit question with a smaller scope.",
+        }
+    except ValueError:
+        result = {
+            "state": "missing_evidence",
+            "reason": "Select one accepted book and a released report.",
+        }
+    return await _finance_delivery(
+        request,
+        body,
+        session,
+        result,
+        operation="finance.status",
+        receipt=receipt,
+        private_result=permitted and enabled,
+    )
+
+
+@router.post("/tools/finance-query")
+async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str, Any]:
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.queries import query_publication
+
+    session = _session(request, body.provenance)
+    runtime = _runtime(request)
+    receipt = None
+    private_result = False
+    try:
+        receipt = _finance_admit(runtime, session, body.provenance)
+        result = _finance_blocked(runtime, session)
+        private_result = result is None
+        if result is None:
+            result = query_publication(
+                runtime.projections.connection("money"),
+                session,
+                book_id=body.book_id,
+                publication_id=body.publication_id,
+                report_id=body.report_id,
+                offset=body.offset,
+                limit=body.limit,
+            )
+    except FinanceBudgetError as exc:
+        result = {"state": "temporarily_unavailable", "reason": exc.code}
+    except ValueError:
+        result = {
+            "state": "missing_evidence",
+            "reason": "The selected accepted report is unavailable; check its publication and release state.",
+        }
+    return await _finance_delivery(
+        request,
+        body,
+        session,
+        result,
+        operation="finance.query",
+        receipt=receipt,
+        private_result=private_result,
+    )
+
+
+@router.post("/tools/finance-calculate")
+async def finance_calculate(
+    body: FinanceCalculateRequest, request: Request
+) -> dict[str, Any]:
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.calculators import (
+        CalculatorError,
+        calculate,
+        calculator_metadata,
+    )
+
+    session = _session(request, body.provenance)
+    runtime = _runtime(request)
+    receipt = None
+    private_result = False
+    try:
+        receipt = _finance_admit(runtime, session, body.provenance)
+        result = _finance_blocked(runtime, session)
+        private_result = result is None
+        if result is None:
+            if len(json.dumps(body.inputs, ensure_ascii=False).encode("utf-8")) > 6000:
+                raise ValueError("finance_input_budget_exceeded")
+            model = calculator_metadata().get(body.calculator_id)
+            if model is None or model.get("performance_class") != "light":
+                raise ValueError("finance_job_required")
+            result = calculate(body.calculator_id, body.version, body.inputs)
+            result["hypothetical"] = True
+            result["accepted_baseline_modified"] = False
+            result["input_authority"] = (
+                "Caller-supplied hypothetical inputs; not accepted household truth."
+            )
+    except FinanceBudgetError as exc:
+        result = {"state": "temporarily_unavailable", "reason": exc.code}
+    except CalculatorError as exc:
+        result = {
+            "state": "missing_evidence" if exc.missing_fields else "model_unavailable",
+            "reason": exc.code,
+            "required_fields": exc.missing_fields,
+            "next_step": "Provide only the required hypothetical fields; accepted household truth is unchanged.",
+        }
+    except ValueError:
+        result = {
+            "state": "model_unavailable",
+            "reason": "The named model/version or its typed inputs are outside the supported contract.",
+            "next_step": "Check the model's required inputs, limits and exclusions; do not substitute model arithmetic.",
+        }
+    return await _finance_delivery(
+        request,
+        body,
+        session,
+        result,
+        operation="finance.calculate",
+        receipt=receipt,
+        private_result=private_result,
+    )
+
+
+@router.post("/tools/finance-job")
+async def finance_job(body: FinanceJobRequest, request: Request) -> dict[str, Any]:
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.jobs import finance_job_status
+
+    session = _session(request, body.provenance)
+    runtime = _runtime(request)
+    receipt = None
+    try:
+        receipt = _finance_admit(runtime, session, body.provenance)
+        result = _finance_blocked(runtime, session) or finance_job_status()
+    except FinanceBudgetError as exc:
+        result = {"state": "temporarily_unavailable", "reason": exc.code}
+    return await _finance_delivery(
+        request,
+        body,
+        session,
+        result,
+        operation=f"finance.job.{body.operation}",
+        receipt=receipt,
+    )

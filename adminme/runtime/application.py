@@ -193,6 +193,8 @@ class RuntimeSettings:
     adapter_config: dict[str, Any] = field(
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
+    finance_publications_enabled: bool = False
+    finance_model_members: frozenset[str] = field(default_factory=frozenset)
     openclaw_enabled: bool = False
     openclaw_shared_secret: str | None = field(default=None, repr=False)
     openclaw_actor_identities: dict[str, str] = field(default_factory=dict)

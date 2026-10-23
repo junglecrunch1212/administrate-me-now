@@ -25,11 +25,15 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
-CATALOG_VERSION = "1.3.0"
+CATALOG_VERSION = "1.4.0"
 CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
 _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
+    "administrateme_finance_status": frozenset({"read_context"}),
+    "administrateme_finance_query": frozenset({"read_context"}),
+    "administrateme_finance_calculate": frozenset({"read_context"}),
+    "administrateme_finance_job": frozenset({"read_context"}),
     "administrateme_state": frozenset({"read_context"}),
     "administrateme_what_now": frozenset({"read_context"}),
     "administrateme_capabilities": frozenset({"read_context"}),
@@ -66,6 +70,21 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
 
 
 _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "capability_id": "domain.household_finance",
+        "category": "finance",
+        "label": "Understand accepted household finance",
+        "outcome": "Check private accepted reports, bounded hypothetical models and topic prerequisites; preparation grants no financial action.",
+        "source": "product:household-finance",
+        "verbs": {"read": "supported", "prepare": "supported"},
+        "sensitivity": ["privileged"],
+        "openclaw_tools": [
+            "administrateme_finance_status",
+            "administrateme_finance_query",
+            "administrateme_finance_calculate",
+            "administrateme_finance_job",
+        ],
+    },
     {
         "capability_id": "domain.member_chat",
         "category": "foundation",
@@ -208,6 +227,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
+    "product:household-finance": "adminme/finance/capabilities.py",
     "product:member-chat": "adminme/member_chat.py",
     "product:member-surfaces": "adminme/products/member/surfaces.py",
     "product:google-tasks-create-production-v2": "adminme/google_tasks_execution.py",
@@ -1120,6 +1140,20 @@ def compose_member_catalog(
             )
         )
         declared_tools = sorted(set(row.get("openclaw_tools") or []) & plugin_tools)
+        if capability_id == "domain.household_finance":
+            read_available = bool(
+                read_available
+                and not viewing_as
+                and session.auth_role == "principal"
+                and "read_context" in permissions
+                and getattr(runtime.settings, "finance_publications_enabled", False)
+                and member_id
+                in getattr(runtime.settings, "finance_model_members", frozenset())
+            )
+            setup = (
+                "explicit_activation_required" if not read_available else "configured"
+            )
+            freshness = "unknown"  # Topic-specific evidence is checked on demand.
         required_permissions = set().union(
             *(
                 _TOOL_PERMISSION_OPTIONS.get(tool, frozenset())
@@ -1220,6 +1254,10 @@ def compose_member_catalog(
                             "administrateme_what_now",
                             "administrateme_capabilities",
                             "administrateme_settings_context",
+                            "administrateme_finance_status",
+                            "administrateme_finance_query",
+                            "administrateme_finance_calculate",
+                            "administrateme_finance_job",
                         }
                         for tool in declared_tools
                     ),

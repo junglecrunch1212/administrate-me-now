@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from adminme.capability_catalog import compose_member_catalog
+from adminme.finance.capabilities import core_pointer
 from adminme.openclaw_topology import member_agent_id
 from adminme.projections.parties.queries import (
     effective_operating_agreements,
@@ -169,6 +170,11 @@ def compile_effective_cos_context(
             "provider_execution_authority": False,
         },
         "capabilities": effective_capabilities,
+        "finance": core_pointer(
+            enabled=bool(
+                getattr(runtime.settings, "finance_publications_enabled", False)
+            )
+        ),
         "safety": {
             "observation_mode": bool(runtime._observation_active),
             "catalog_grants_authority": False,

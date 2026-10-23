@@ -188,3 +188,36 @@ CREATE TABLE IF NOT EXISTS finance_workbook_state (
     last_event_id            TEXT NOT NULL,
     PRIMARY KEY (tenant_id, workbook_name)
 );
+
+-- Accepted Books is a separate private book namespace; never legacy shared XLSX.
+CREATE TABLE IF NOT EXISTS finance_publications (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    publication_id TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    publication_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, publication_id)
+);
+CREATE TABLE IF NOT EXISTS finance_publication_heads (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    publication_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id)
+);
+CREATE TABLE IF NOT EXISTS finance_publication_metrics (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    publication_id TEXT NOT NULL,
+    report_id TEXT NOT NULL,
+    metric_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    metric_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, publication_id, metric_id)
+);
+CREATE INDEX IF NOT EXISTS idx_finance_publication_report
+ON finance_publication_metrics(tenant_id,owner_id,book_id,publication_id,report_id,ordinal);
