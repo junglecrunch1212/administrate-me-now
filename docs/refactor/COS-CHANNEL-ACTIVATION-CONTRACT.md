@@ -279,9 +279,12 @@ SELECTED_PYTHON -m bootstrap.cos_channel_activation \
 
 Restoration constructs the concrete activation request from the current selected
 configuration. No hand-edited release paths or blanket owner opt-in are needed.
-It requires the completed planned observation journal, the same receipt, recipient
-policy, member mapping, adapter selection, instance and host, and no later
-activation or revocation. Guard changes are limited to the reviewed target's
+It requires both the completed planned observation journal and the exact committed
+updater transaction. The current deployment fingerprint must equal that updater
+transaction's sealed post-reconciliation configuration; a later native hook or
+host-grant revocation cannot be mistaken for reinstallation loss. The same receipt, recipient
+policy, member mapping, adapter selection, instance and host are required, with no
+later activation or revocation. Guard changes are limited to the reviewed target's
 wrapper path and content. Gateway compatibility ignores only updater-owned plugin
 registration metadata, its release paths, and the exact grants/hook being restored;
 models, routing, tools and other configuration remain bound. Host grants must be

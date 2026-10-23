@@ -1083,6 +1083,30 @@ def _maintenance_controller(
         "bootstrap.cos_channel_activation.capture_deployment_snapshot",
         lambda _paths: SimpleNamespace(public=lambda: copy.deepcopy(snapshot)),
     )
+    # The real updater seals the post-reconciliation deployment fingerprint in
+    # its validated committed journal. This fixture stubs only that deployment
+    # boundary; activation, encrypted events and restoration remain real.
+    prior_binding = {
+        "release_commit": "a" * 40,
+        **{
+            key: snapshot[key]
+            for key in (
+                "instance_fingerprint",
+                "host_fingerprint",
+                "configuration_fingerprint",
+            )
+        },
+    }
+    monkeypatch.setattr(
+        "bootstrap.activation_transaction.ActivationJournal.committed_activation",
+        lambda self, **_kwargs: {
+            "initial_pointer_sha256": snapshot["pointer_sha256"],
+            "initial_readiness": {"deployment_binding": prior_binding},
+            "active_readiness": {
+                "deployment_binding": {**prior_binding, "release_commit": "b" * 40}
+            },
+        },
+    )
     return controller, request
 
 
@@ -1208,6 +1232,9 @@ def test_maintenance_rejects_changed_plan_before_pausing(
         "revocation",
         "missing_pause",
         "candidate",
+        "native_hook",
+        "native_grant",
+        "updater_history",
     ],
 )
 def test_restoration_refuses_drift_or_new_authority_without_mutation(
@@ -1234,6 +1261,29 @@ def test_restoration_refuses_drift_or_new_authority_without_mutation(
         guard = json.loads(path.read_text())
         guard["db_path"] = "/fixture/different-messages.db"
         _write(path, guard)
+    elif mutation in {"native_hook", "native_grant"}:
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        gateway = json.loads(path.read_text())
+        entry = gateway["plugins"]["entries"]["administrateme"]
+        if mutation == "native_hook":
+            entry["hooks"]["allowConversationAccess"] = False
+        else:
+            entry["config"].pop("standingSelfReplyBindings")
+        _write(path, gateway)
+        # A native-only revocation can update normal readiness too; it must
+        # still differ from the immutable post-updater fingerprint.
+        drifted = {**plan.deployment_snapshot, "configuration_fingerprint": "8" * 64}
+        monkeypatch.setattr(controller, "_bound_snapshot", lambda _commit: drifted)
+    elif mutation == "updater_history":
+        from bootstrap.activation_transaction import ActivationJournalError
+
+        def missing_history(self, **_kwargs):
+            raise ActivationJournalError("no completed deployment")
+
+        monkeypatch.setattr(
+            "bootstrap.activation_transaction.ActivationJournal.committed_activation",
+            missing_history,
+        )
     elif mutation == "recipient":
         current = asyncio.run(controller._policy())
         current["revision"] += 1

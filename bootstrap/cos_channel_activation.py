@@ -62,6 +62,7 @@ from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
+from bootstrap.activation_transaction import ActivationJournalError
 from bootstrap.backup_restore import (
     BackupManager,
     _MAX_BACKUP_BYTES,
@@ -982,6 +983,8 @@ class CoSChannelActivator:
                     "complete the current operation before preparing maintenance"
                 )
             commit, release, target = self._observation_selection()
+            if commit == target:
+                raise CoSActivationError("maintenance target is already selected")
             snapshot = self._bound_snapshot(commit)
             before = self.services.runtime_diagnostics() or {}
             if (
@@ -1076,6 +1079,29 @@ class CoSChannelActivator:
             raise CoSActivationError("maintenance predecessor authority changed")
         gateway = controls["gateway"]
         if not restoring:
+            # A recipient revocation can leave old host/domain binding hashes
+            # behind. Discover an unrestorable grant before entering maintenance.
+            assert plan.sender_proofs is not None
+            authority = ActivationRequest(
+                adapter_config=controls["adapters"],
+                sender_proofs=plan.sender_proofs,
+                owner_authorization_sha256=plan.owner_authorization_sha256,
+                operator_principal_id=plan.operator_principal_id,
+                owner_member_id=plan.owner_member_id,
+            )
+            eligible = owner_self_reply_bindings(
+                authority,
+                controls["adapters"],
+                controls["policy"]["entries"],
+                plan.self_reply_bindings,
+                enable_live=True,
+            )
+            if eligible != plan.self_reply_bindings or not set(
+                plan.self_reminder_bindings
+            ).issubset(eligible):
+                raise CoSActivationError(
+                    "private reply grants no longer match current recipient routes"
+                )
             if (
                 self._bound_snapshot(commit) != plan.deployment_snapshot
                 or controls["guard"] != plan.guard_config
@@ -1125,6 +1151,51 @@ class CoSChannelActivator:
                     "live authority changed after planned observation"
                 )
             snapshot = self._bound_snapshot(commit)
+            updater = UpgradeManager(
+                self.paths, root=self.repository, test_mode=self.test_mode
+            )
+            try:
+                deployment = updater.activation_journal.committed_activation(
+                    target_commit=plan.target_commit,
+                    predecessor_commit=plan.predecessor_commit,
+                )
+            except ActivationJournalError as exc:
+                raise CoSActivationError(
+                    "maintenance requires the exact completed updater transaction"
+                ) from exc
+            prior_binding = {
+                "release_commit": plan.predecessor_commit,
+                **{
+                    key: plan.deployment_snapshot[key]
+                    for key in (
+                        "instance_fingerprint",
+                        "host_fingerprint",
+                        "configuration_fingerprint",
+                    )
+                },
+            }
+            current_binding = {
+                "release_commit": plan.target_commit,
+                **{
+                    key: snapshot[key]
+                    for key in (
+                        "instance_fingerprint",
+                        "host_fingerprint",
+                        "configuration_fingerprint",
+                    )
+                },
+            }
+            if (
+                deployment.get("initial_pointer_sha256")
+                != plan.deployment_snapshot["pointer_sha256"]
+                or (deployment.get("initial_readiness") or {}).get("deployment_binding")
+                != prior_binding
+                or (deployment.get("active_readiness") or {}).get("deployment_binding")
+                != current_binding
+            ):
+                raise CoSActivationError(
+                    "maintenance configuration changed outside the completed updater transaction"
+                )
             if any(
                 snapshot[key] != plan.deployment_snapshot[key]
                 for key in (
