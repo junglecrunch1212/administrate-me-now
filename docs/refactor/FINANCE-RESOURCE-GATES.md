@@ -14,8 +14,8 @@ Admission expires after 250 milliseconds with a typed busy result. Busy
 responses still traverse the existing audit path; private data is not read
 before admission, and current domain authority is resolved after waiting. Cancellation
 and failures release the lane. Non-finance requests never acquire this lane.
-The observer releases at response headers, so long chat streams cannot block
-their own tools. This is bounded HTTP admission, not preemption of synchronous
+Ordinary responses retain priority through their final body send; SSE releases
+at headers so long chat streams cannot block their own tools. This is bounded HTTP admission, not preemption of synchronous
 Python or proof of reserved Gateway/model capacity.
 
 `adminme.finance.budgets` admits work using tenant, resolved actor, audience,
@@ -157,3 +157,12 @@ every durable subscriber, including unrelated projections. The next candidate
 uses committed-type wake hints while retaining wildcard, legacy-hint and
 startup recovery behavior, with focused delivery/restart regression coverage.
 No thresholds are relaxed and the performance gate remains unmet.
+
+At `a315afc4`, 696 Python and 96 native tests passed; the new purchase result
+exceeded the conservative reply budget and requires shorter equivalent caveats.
+The isolated Chrome 155 desktop save/pause/preference/reload flow passed and its
+screenshot was inspected. Mixed load still failed: baseline 4.357 ms versus
+5.581 ms loaded (1.280843); finance status/calculation p95 improved to
+16.863/16.972 ms. The next diagnostic records server response time separately
+from client latency to locate the remaining contention. The original client
+10% assertion remains unchanged; instrumentation is not a performance fix.

@@ -581,6 +581,7 @@ def test_purchase_comparison_current_native_result_fits_reply_budget(tmp_path):
         )
         assert compared.status_code == 200, compared.text
         result = compared.json()
+        assert "values" in result, result
         assert result["values"]["nominal_cost_change_minor"] == -3500
         assert result["values"]["upfront_cash_change_minor"] == 7000
         assert result["answer_ref"]

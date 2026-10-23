@@ -57,8 +57,37 @@ def _settings(root: Path):
     )
 
 
+class _SyntheticServerTiming:
+    """Measure server work separately without relaxing the raw client gate."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        started = time.perf_counter()
+
+        async def observed(message):
+            if scope["type"] == "http" and message["type"] == "http.response.start":
+                message = {
+                    **message,
+                    "headers": [
+                        *message.get("headers", []),
+                        (
+                            b"x-synthetic-server-us",
+                            str(
+                                int((time.perf_counter() - started) * 1_000_000)
+                            ).encode(),
+                        ),
+                    ],
+                }
+            await send(message)
+
+        await self.app(scope, receive, observed)
+
+
 def _serve(root: Path, listener: socket.socket, ready) -> None:
     app = create_application(_settings(root))
+    app.add_middleware(_SyntheticServerTiming)
     original = app.router.lifespan_context
 
     @asynccontextmanager
@@ -237,6 +266,8 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                 (calculations if calculation else statuses).append(elapsed)
                 return elapsed
 
+            server_timings: list[float] = []
+
             async def core_call(index: int) -> float:
                 route = (
                     "/api/core/v1/what-now"
@@ -247,6 +278,9 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                 response = await core_client.get(route, headers=HEADERS)
                 elapsed = time.perf_counter() - started
                 assert response.status_code == 200, response.text
+                server_timings.append(
+                    int(response.headers["x-synthetic-server-us"]) / 1_000_000
+                )
                 return elapsed
 
             cold_status = await finance_call()
@@ -264,7 +298,10 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                     )
                 return values
 
+            server_timings.clear()
             baseline = await core_phase()
+            baseline_server = list(server_timings)
+            server_timings.clear()
             load_receive, load_send = context.Pipe(duplex=False)
             load_process = context.Process(
                 target=_finance_load,
@@ -277,6 +314,8 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             )
             assert load_receive.recv() == {"ready": True}
             mixed = await core_phase()
+            mixed_server = list(server_timings)
+            server_timings.clear()
             stop_load.set()
             assert await asyncio.to_thread(load_receive.poll, 15), (
                 "finance load client did not settle"
@@ -290,6 +329,7 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             )
             finance = statuses + calculations
             after = await core_phase()
+            after_server = list(server_timings)
             baseline_p95 = max(_p95(baseline), _p95(after))
             report = {
                 "contract": "synthetic-light-finance-http-mixed-load-v3",
@@ -300,6 +340,9 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                 "finance_samples": len(finance),
                 "independent_load_processes": True,
                 "cold_status_ms": round(cold_status * 1000, 3),
+                "baseline_before_server_p95_ms": round(_p95(baseline_server) * 1000, 3),
+                "baseline_after_server_p95_ms": round(_p95(after_server) * 1000, 3),
+                "mixed_server_p95_ms": round(_p95(mixed_server) * 1000, 3),
                 "baseline_before_p95_ms": round(_p95(baseline) * 1000, 3),
                 "baseline_after_p95_ms": round(_p95(after) * 1000, 3),
                 "mixed_core_p95_ms": round(_p95(mixed) * 1000, 3),

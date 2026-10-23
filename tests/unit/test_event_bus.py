@@ -600,17 +600,22 @@ async def test_typed_writer_batch_delivers_every_matching_type_and_restart_recov
 
     log, bus, root = rig
     received = []
+    other = []
 
     async def callback(event):
         received.append(event["payload"]["i"])
 
+    async def other_callback(event):
+        other.append(event["payload"]["i"])
+
     bus.subscribe("foo-only", ["foo"], callback)
+    bus.subscribe("bar-only", ["bar"], other_callback)
     await bus.start()
     writer = EventWriter(log, bus)
     await writer.write_batch(
         [_event(1, type="foo"), _event(2, type="bar"), _event(3, type="foo")]
     )
-    await _wait_for(lambda: received == [1, 3])
+    await _wait_for(lambda: received == [1, 3] and other == [2])
     await bus.stop()
     # A commit without a wake hint is recovered on startup from its checkpoint.
     await log.append(_event(4, type="foo"))

@@ -1111,12 +1111,12 @@ _SPECS: dict[str, _Spec] = {
         _purchase,
         "hypothetical_nominal_cost_comparison",
         (
-            "Matching currency, horizon and nominal annual discount rate divided by 12; monthly end-period costs.",
-            "Positive difference means the alternative costs more. Each option rounds half-up to minor units before subtraction.",
+            "Same currency/horizon; nominal annual discount rate / 12; monthly end-period costs.",
+            "Positive change means the alternative costs more; round each option half-up before subtraction.",
         ),
         (
-            "Not affordability, realized savings, investment return or a recommendation; cash timing and chosen reserves require separate checks.",
-            "Taxes, financing, upkeep and residual values must be supplied explicitly in costs; no real-value conversion or inferred resale asset for a lease.",
+            "Not affordability, realized savings, return or advice; check cash timing and reserves separately.",
+            "Supply taxes, financing, upkeep and residuals explicitly. No real-value conversion or lease resale.",
         ),
     ),
     "cash_ladder": _Spec(

@@ -3938,7 +3938,7 @@ function financeScenarios(cockpit) {
 
 function financeGoals(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-goals";
-  section.append(text("h2", "Goals and capital plans"), text("p", "Goals organize future uses of money. They never move funds or silently change a scenario.", "state-note"));
+  section.append(text("h2", "Workbook goals and capital plans"), text("p", "Goals organize future uses of money. They never move funds or silently change a scenario.", "state-note"));
   const goals = cockpit.goals || [];
   if (!goals.length) { section.append(text("p", "No goals are published yet. Add a target in the workbook when it is useful.", "empty")); return section; }
   const list = document.createElement("ul"); list.className = "finance-goal-list";
