@@ -390,3 +390,14 @@ def test_native_error_diagnostics_are_fixed_and_redacted(
         client.invoke(selected.native_helper, "status", {})
     assert failure.value.code == expected
     assert "private provider" not in client.redacted_error(failure.value)
+
+
+def test_every_fixed_native_failure_remains_diagnosable():
+    import re
+
+    root = Path(__file__).parents[3]
+    source = (root / "bootstrap/native/cos_reminders_launcher.m").read_text()
+    codes = set(re.findall(r'failure\(parent, @"([a-z_]+)"', source))
+    assert codes and codes <= client.NATIVE_ERROR_CODES
+    for code in codes:
+        assert client.NativeHelperError(code).code == code

@@ -112,6 +112,31 @@ def release(tmp_path_factory: pytest.TempPathFactory) -> Path:
         check=True,
         capture_output=True,
     )
+    # setup-python owns a shared tool cache. Its permissions are not the
+    # immutable release fixture's contract, and must never be chmod'ed here.
+    # Retain exact interpreter/library bytes in private fixture-owned files.
+    executable = release / ".venv/bin/python"
+    executable_bytes = executable.resolve().read_bytes()
+    executable.unlink()
+    executable.write_bytes(executable_bytes)
+    executable.chmod(0o700)
+    assert (
+        hashlib.sha256(executable.read_bytes()).digest()
+        == hashlib.sha256(executable_bytes).digest()
+    )
+    private_runtime = release / "native-fixture-runtime"
+    private_runtime.mkdir(mode=0o700)
+    library_bytes = _library().read_bytes()
+    library = private_runtime / "Python"
+    library.write_bytes(library_bytes)
+    library.chmod(0o600)
+    assert (
+        hashlib.sha256(library.read_bytes()).digest()
+        == hashlib.sha256(library_bytes).digest()
+    )
+    (release / ".venv/pyvenv.cfg").chmod(0o600)
+    for path in (release, release / ".venv", release / ".venv/bin"):
+        path.chmod(0o700)
     marker = release / ".administrateme-source-commit"
     marker.write_text("a" * 40 + "\n")
     marker.chmod(0o600)
@@ -123,7 +148,7 @@ def _request(
 ) -> tuple[Path, dict[str, object]]:
     directory = tmp_path.resolve() / "private-request"
     directory.mkdir(mode=0o700)
-    library = _library()
+    library = release / "native-fixture-runtime/Python"
     now = int(time.time() * 1000)
     value = {
         "contract": "cos-reminders-helper-request-v1",
@@ -221,8 +246,8 @@ def test_python_is_embedded_in_native_app_and_bound_to_release(
         [str(executable), str(request)], stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     stdout, stderr = process.communicate(timeout=30)
-    assert process.returncode == 0, (stdout, stderr)
     result = json.loads(request.with_name("result.json").read_bytes())
+    assert process.returncode == 0, (result, stdout, stderr)
     assert result["native_pid"] == process.pid
     assert result["native_executable"] == str(executable)
     assert result["python_executable"] == str(release / ".venv/bin/python")
@@ -289,7 +314,8 @@ def test_claim_is_single_use_and_existing_result_never_overwritten(
     native_app: Path, release: Path, tmp_path: Path
 ) -> None:
     request, value = _request(tmp_path, release)
-    assert _execute(native_app, request).returncode == 0
+    completed = _execute(native_app, request)
+    assert completed.returncode == 0, request.with_name("result.json").read_text()
     result_path = request.with_name("result.json")
     before = result_path.read_bytes()
     request.write_text(json.dumps(value))
@@ -316,7 +342,7 @@ def test_launchservices_preserves_native_main_bundle(
     )
     assert launched.returncode == 0, launched.stderr
     result = json.loads(request.with_name("result.json").read_bytes())
-    assert result["bundle_identifier"] == helper.BUNDLE_IDENTIFIER
+    assert result.get("bundle_identifier") == helper.BUNDLE_IDENTIFIER, result
     assert result["native_executable"] == str(
         native_app / "Contents/MacOS" / helper.EXECUTABLE
     )
@@ -338,3 +364,30 @@ def test_changed_sealed_worker_cannot_execute(
     assert completed.returncode != 0
     result = json.loads(request.with_name("result.json").read_bytes())
     assert result["error"] == "helper_identity_invalid"
+
+
+@pytest.mark.parametrize(
+    "coordinate,error",
+    [
+        (".venv/pyvenv.cfg", "python_venv_config_invalid"),
+        (".venv/bin/python", "python_executable_writable"),
+        ("native-fixture-runtime/Python", "python_library_writable"),
+    ],
+)
+def test_writable_interpreter_coordinates_remain_rejected(
+    native_app: Path, release: Path, tmp_path: Path, coordinate: str, error: str
+) -> None:
+    request, _ = _request(tmp_path, release)
+    target = release / coordinate
+    original_mode = stat.S_IMODE(target.stat().st_mode)
+    try:
+        target.chmod(original_mode | 0o020)
+        assert _execute(native_app, request).returncode != 0
+        result = json.loads(request.with_name("result.json").read_bytes())
+        assert result == {
+            "contract": "cos-reminders-helper-error-v1",
+            "status": "failed",
+            "error": error,
+        }
+    finally:
+        target.chmod(original_mode)

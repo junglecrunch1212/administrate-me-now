@@ -2736,3 +2736,18 @@ def test_cos_native_process_proof_is_required_only_on_macos_worker() -> None:
             "test_cos_reminders_helper_macos.py",
         ):
             assert (name in commands) == ("macos" in filename)
+
+
+def test_native_boundary_is_visible_before_remaining_macos_suite() -> None:
+    job = _workflow("macos-bootstrap.yml")["jobs"]["google-connections-validation"]
+    names = [step.get("name", "") for step in job["steps"]]
+    assert names.index(
+        "Prove native Reminders app identity and callback boundary"
+    ) < names.index(
+        "Validate private Google acquisition, capabilities and guarded recovery"
+    )
+    native = job["steps"][
+        names.index("Prove native Reminders app identity and callback boundary")
+    ]
+    assert "cos-reminders-native.xml" in native["run"]
+    assert "('skipped', 'failures', 'errors')" in native["run"]

@@ -171,7 +171,7 @@ static int launch(NSString *path) {
     int venvFD = open(venvConfig.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     NSData *venvData = readRegular(venvFD, 16384, NO);
     if (venvFD >= 0) close(venvFD);
-    if (!venvData) return failure(parent, @"python_coordinate_invalid");
+    if (!venvData) return failure(parent, @"python_venv_config_invalid");
     NSString *marker = [root stringByAppendingPathComponent:@".administrateme-source-commit"];
     int markerFD = open(marker.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     NSData *markerData = readRegular(markerFD, 128, YES);
@@ -181,17 +181,29 @@ static int launch(NSString *path) {
     if (![markerText isEqual:commit] && ![markerText isEqual:[commit stringByAppendingString:@"\n"]])
         return failure(parent, @"release_marker_invalid");
     struct stat pythonStat;
-    if (stat(python.fileSystemRepresentation, &pythonStat) || !S_ISREG(pythonStat.st_mode) ||
-        !(pythonStat.st_mode & 0111) || (pythonStat.st_mode & 0022) ||
-        (pythonStat.st_uid != getuid() && pythonStat.st_uid != 0)) return failure(parent, @"python_coordinate_invalid");
+    if (stat(python.fileSystemRepresentation, &pythonStat)) return failure(parent, @"python_executable_missing");
+    if (!S_ISREG(pythonStat.st_mode)) return failure(parent, @"python_executable_not_regular");
+    if (!(pythonStat.st_mode & 0111)) return failure(parent, @"python_executable_not_executable");
+    if (pythonStat.st_mode & 0022) return failure(parent, @"python_executable_writable");
+    if (pythonStat.st_uid != getuid() && pythonStat.st_uid != 0)
+        return failure(parent, @"python_executable_owner_invalid");
     char realLibrary[PATH_MAX];
     if (!realpath(library.fileSystemRepresentation, realLibrary) || ![library isEqual:@(realLibrary)])
         return failure(parent, @"python_library_invalid");
     int libraryFD = open(realLibrary, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     struct stat libraryBefore, libraryAfter;
-    if (libraryFD < 0 || fstat(libraryFD, &libraryBefore) ||
-        ![digestFile(libraryFD) isEqual:request[@"python_library_sha256"]]) {
-        if (libraryFD >= 0) close(libraryFD); return failure(parent, @"python_library_invalid");
+    if (libraryFD < 0) return failure(parent, @"python_library_missing");
+    if (fstat(libraryFD, &libraryBefore)) {
+        close(libraryFD); return failure(parent, @"python_library_metadata_invalid");
+    }
+    if (libraryBefore.st_mode & 0022) {
+        close(libraryFD); return failure(parent, @"python_library_writable");
+    }
+    if (libraryBefore.st_uid != getuid() && libraryBefore.st_uid != 0) {
+        close(libraryFD); return failure(parent, @"python_library_owner_invalid");
+    }
+    if (![digestFile(libraryFD) isEqual:request[@"python_library_sha256"]]) {
+        close(libraryFD); return failure(parent, @"python_library_digest_invalid");
     }
     void *handle = dlopen(realLibrary, RTLD_NOW | RTLD_GLOBAL);
     if (!handle || stat(realLibrary, &libraryAfter) || !unchanged(libraryBefore, libraryAfter)) {
