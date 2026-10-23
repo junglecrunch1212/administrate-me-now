@@ -1529,12 +1529,79 @@ def test_workspace_preflight_refuses_custom_generated_instructions_before_mainte
     assert controller.services.runtime_diagnostics()["observation_active"] is False
 
 
+def test_successor_reconciliation_recovers_lost_default_before_ordinary_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from adminme.openclaw_topology import member_agent_id
+    from bootstrap.openclaw_activation import (
+        reconcile_member_topology,
+        reconcile_service_topology,
+    )
+
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    paths = controller.paths
+    reconcile_member_topology(paths)
+    reconcile_service_topology(paths, ROOT)
+    plan = _prepare_maintenance(controller, request)
+    controller.pause_maintenance(plan)
+    gateway_path = paths.instance_dir / "openclaw/runtime/openclaw.json"
+    gateway = json.loads(gateway_path.read_bytes())
+    member = next(
+        row
+        for row in gateway["agents"]["list"]
+        if row["id"] == member_agent_id(MEMBER_A)
+    )
+    assert member.pop("default") is True
+    _write(gateway_path, gateway)
+
+    # Model the supported successor's reconciliation from the failed observed
+    # state, then ordinary activation. The old maintenance plan is not reused.
+    reconcile_member_topology(paths)
+    reconcile_service_topology(paths, ROOT)
+    current = json.loads(gateway_path.read_bytes())
+    assert (
+        next(
+            row
+            for row in current["agents"]["list"]
+            if row["id"] == member_agent_id(MEMBER_A)
+        )["default"]
+        is True
+    )
+    monkeypatch.setattr(controller, "_selection", lambda: ("c" * 40, ROOT))
+    restored = request.model_copy(
+        update={
+            "prepared_openclaw_config": current,
+            "cos_imsg_guard_config": json.loads(
+                (controller.config_dir / "cos-imsg-guard.json").read_bytes()
+            ),
+            "allow_owner_self_replies": None,
+            "allow_owner_self_reminders": None,
+        }
+    )
+    result = controller.activate(restored, enable_live=True)
+    assert result["observation_active"] is False
+    assert result["provider_test_messages_sent"] == 0
+    receipt = json.loads(
+        (controller.config_dir / "cos-channel-operation.json").read_bytes()
+    )
+    assert receipt["activation"]["self_reply_bindings"] == plan.self_reply_bindings
+    installed = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
+        "administrateme"
+    ]["config"]
+    assert installed["standingSelfReplyBindings"] == plan.self_reply_bindings
+    assert installed["scheduledSelfReminderBindings"] == plan.self_reminder_bindings
+
+
 @pytest.mark.parametrize(
     "mutation",
     [None, "service_allowlist", "service_workspace", "service_agent", "member_tools"],
 )
+@pytest.mark.parametrize("service_present", [False, True])
 def test_real_plugin_replacement_preserves_maintenance_restoration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str | None,
+    service_present: bool,
 ) -> None:
     from adminme.openclaw_topology import (
         SERVICE_PRIVATE_TOOLS,
@@ -1543,7 +1610,10 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     )
     from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
     from bootstrap.cos_guard_release import COORDINATES, prepare_rebind, snapshot_bytes
-    from bootstrap.openclaw_activation import reconcile_member_topology
+    from bootstrap.openclaw_activation import (
+        reconcile_member_topology,
+        reconcile_service_topology,
+    )
     from bootstrap.openclaw_tools import reconcile_administrateme_plugin
     from tests.unit.bootstrap.test_openclaw_plugin_reconciliation import (
         _destructive_plugin_cli,
@@ -1553,6 +1623,9 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     paths = controller.paths
     # Begin with the same fully reconciled topology that an installed release has.
     reconcile_member_topology(paths)
+    if service_present:
+        # A subsequent upgrade retains a service row before rebuilding members.
+        reconcile_service_topology(paths, ROOT)
     gateway_path = paths.instance_dir / COORDINATES["gateway"]
     guard_path = paths.instance_dir / COORDINATES["guard"]
     # This composition crosses the updater's immutable-file guard as well as
@@ -1571,7 +1644,9 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     gateway_before = gateway_path.read_bytes()
     plan = _prepare_maintenance(controller, request)
     assert gateway_path.read_bytes() == gateway_before
-    assert not (paths.instance_dir / "openclaw/service-workspaces").exists()
+    assert (
+        paths.instance_dir / "openclaw/service-workspaces"
+    ).exists() is service_present
     controller.pause_maintenance(plan)
     candidate = tmp_path / "candidate"
 
@@ -1595,6 +1670,14 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     assert reconcile_administrateme_plugin(paths, candidate)["ok"] is True
     assert any(command[1:3] == ["plugins", "uninstall"] for command in commands)
     installed = json.loads(gateway_path.read_bytes())
+    assert (
+        next(
+            row
+            for row in installed["agents"]["list"]
+            if row["id"] == member_agent_id(MEMBER_A)
+        )["default"]
+        is True
+    )
     service = next(
         row
         for row in installed["agents"]["list"]
