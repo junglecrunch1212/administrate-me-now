@@ -271,3 +271,81 @@ def test_enrollment_refuses_ambiguous_or_unrecognized_owners_before_oauth(
     assert requested == []
     assert flow.run_calls == []
     assert store.puts == []
+
+
+@pytest.mark.parametrize("purpose", ["calendar-read", "tasks-read"])
+def test_cos_workspace_enrollment_uses_separate_exact_grant_and_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, purpose: str
+) -> None:
+    flow, store, requested = _install_fakes(monkeypatch, tmp_path)
+    scopes = list(google_oauth.grant_scopes(purpose))
+    flow.credentials.scopes = scopes
+    flow.credentials.granted_scopes = scopes
+    legacy_marker = tmp_path / "cos-google-enrollment.json"
+    legacy_marker.write_text("existing mail proof")
+    reference = google_oauth.enroll(
+        tmp_path / "client.json",
+        service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+        purpose=purpose,
+        expected_account_id="cos@example.invalid",
+        account_resolver=lambda _credentials: "cos@example.invalid",
+    )
+    assert requested == [scopes]
+    assert len(scopes) == 2
+    assert all("gmail" not in scope for scope in scopes)
+    assert flow.run_calls[0]["include_granted_scopes"] == "false"
+    [(name, raw)] = store.puts
+    assert name.endswith("-" + purpose)
+    assert name != google_oauth.member_google_secret_name("member-fixture-b")
+    document = json.loads(raw)
+    assert document["grant_purpose"] == purpose
+    assert document["scopes"] == sorted(scopes)
+    marker = tmp_path / f"cos-google-{purpose}-enrollment.json"
+    receipt = json.loads(marker.read_text())
+    assert receipt["credential_reference"] == reference
+    assert receipt["grant_purpose"] == purpose
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    assert legacy_marker.read_text() == "existing mail proof"
+
+
+@pytest.mark.parametrize(
+    "bad_scope",
+    [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/gmail.send",
+    ],
+)
+def test_workspace_enrollment_cannot_accumulate_other_grants(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad_scope: str
+) -> None:
+    flow, store, _requested = _install_fakes(monkeypatch, tmp_path)
+    flow.credentials.scopes = list(google_oauth.grant_scopes("calendar-read"))
+    flow.credentials.granted_scopes = [*flow.credentials.scopes, bad_scope]
+    with pytest.raises(RuntimeError, match="exactly match"):
+        google_oauth.enroll(
+            tmp_path / "client.json",
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            purpose="calendar-read",
+            expected_account_id="cos@example.invalid",
+            account_resolver=lambda _credentials: "cos@example.invalid",
+        )
+    assert store.puts == []
+
+
+@pytest.mark.parametrize("verified", [False, None, "true"])
+def test_workspace_account_proof_requires_google_verified_email(
+    monkeypatch: pytest.MonkeyPatch, verified: object
+) -> None:
+    response = {"email": "cos@example.invalid", "verified_email": verified}
+    fake = SimpleNamespace(
+        userinfo=lambda: SimpleNamespace(
+            get=lambda: SimpleNamespace(execute=lambda: response)
+        )
+    )
+    monkeypatch.setattr(
+        "googleapiclient.discovery.build", lambda *_args, **_kwargs: fake
+    )
+    with pytest.raises(RuntimeError, match="verified account"):
+        google_oauth._resolve_workspace_account_id(object())
+    response["verified_email"] = True
+    assert google_oauth._resolve_workspace_account_id(object()) == "cos@example.invalid"
