@@ -362,7 +362,7 @@ jobs:
   google-connections-validation:
     name: Google connections release (macos)
     needs: [release-scope]
-    if: ${{ needs.release-scope.outputs.scope == 'google-connections' }}
+    if: ${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' }}
     runs-on: macos-15
     timeout-minutes: 20
     env:
@@ -393,6 +393,12 @@ jobs:
           poetry run pytest -p no:cacheprovider --runxfail -q -ra \
             --basetemp="$RUNNER_TEMP/google-connections-tests" \
             --junitxml="$RUNNER_TEMP/google-connections.xml" \
+            tests/unit/bootstrap/test_cos_google_workspace.py \
+            tests/unit/bootstrap/test_google_oauth.py \
+            tests/adapters/test_credentials.py \
+            tests/unit/test_provider_bindings.py \
+            packs/adapters/calendaring/google-calendar/tests/test_google_calendar_pack_internal.py \
+            packs/adapters/tasks/google-tasks/tests/test_google_tasks_pack_internal.py \
             tests/acceptance/test_member_google_connections.py \
             tests/acceptance/test_cos_channel_acquisition.py \
             tests/acceptance/test_forwarded_channel_intake.py \
