@@ -1,0 +1,378 @@
+"""Private immutable dated-projection storage and bounded reads.
+
+The file-adapter seam is disabled with finance publications. It has no provider
+credentials, public ingestion endpoint or authority to accept accounting rows.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+from adminme.events.envelope import EventEnvelope
+from adminme.finance.dated_projection import validate_projection
+from adminme.finance.importer import _settled
+from adminme.finance.publication import PublicationError, canonical_bytes
+from adminme.finance.queries import _owner
+from adminme.lib.session import Session
+
+
+def _coordinates(session: Session, book_id: str) -> tuple[str, str, str]:
+    return session.tenant_id, _owner(session), book_id
+
+
+def _anchored(conn: Any, p: dict[str, Any], *, current: bool) -> None:
+    key = (p["tenant_id"], p["owner_id"], p["book_id"])
+    row = conn.execute(
+        "SELECT content_sha256, publication_json FROM finance_publications WHERE tenant_id=? AND owner_id=? AND book_id=? AND publication_id=?",
+        (*key, p["accounting_publication_id"]),
+    ).fetchone()
+    if row is None or row[0] != p["accounting_content_sha256"]:
+        raise PublicationError("projection_accounting_anchor_invalid")
+    accounting = json.loads(row[1])
+    if not set(p["accounting_revision_ids"]) <= set(
+        accounting["accepted_journal_revision_ids"]
+    ):
+        raise PublicationError("projection_unaccepted_accounting_revision")
+    if current:
+        head = conn.execute(
+            "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+            key,
+        ).fetchone()
+        if head is None or head[0] != p["accounting_publication_id"]:
+            raise PublicationError("projection_accounting_anchor_not_current")
+
+
+def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
+    p = validate_projection(envelope["payload"]["projection"])
+    scope = f"private:{p['owner_id']}"
+    if (
+        envelope["tenant_id"] != p["tenant_id"]
+        or envelope["owner_scope"] != scope
+        or envelope["visibility_scope"] != scope
+        or envelope["sensitivity"] != "privileged"
+    ):
+        raise PublicationError("projection_scope_invalid")
+    key = (p["tenant_id"], p["owner_id"], p["book_id"])
+    existing = conn.execute(
+        "SELECT content_sha256 FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?",
+        (*key, p["projection_id"]),
+    ).fetchone()
+    if existing:
+        if existing[0] != p["content_sha256"]:
+            raise PublicationError("projection_identity_conflict")
+        return
+    _anchored(conn, p, current=True)
+    head = conn.execute(
+        "SELECT projection_id FROM finance_dated_projection_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+        key,
+    ).fetchone()
+    if (head[0] if head else None) != p["prior_projection_id"]:
+        raise PublicationError("projection_prior_conflict")
+    metadata = {
+        k: v for k, v in p.items() if k not in {"detail_events", "evidence_ids"}
+    }
+    conn.execute(
+        "INSERT INTO finance_dated_projections VALUES (?,?,?,?,?,?,?)",
+        (
+            *key,
+            p["projection_id"],
+            p["content_sha256"],
+            canonical_bytes(metadata).decode(),
+            envelope["event_id"],
+        ),
+    )
+    counts: dict[str, int] = {}
+    for row in p["detail_events"]:
+        context_id = row["context_id"]
+        ordinal = counts.get(context_id, 0)
+        conn.execute(
+            "INSERT INTO finance_dated_projection_events VALUES (?,?,?,?,?,?,?,?)",
+            (
+                *key,
+                p["projection_id"],
+                context_id,
+                ordinal,
+                row["event_id"],
+                canonical_bytes(row).decode(),
+            ),
+        )
+        counts[context_id] = ordinal + 1
+    conn.execute(
+        "INSERT INTO finance_dated_projection_heads VALUES (?,?,?,?) ON CONFLICT(tenant_id,owner_id,book_id) DO UPDATE SET projection_id=excluded.projection_id",
+        (*key, p["projection_id"]),
+    )
+
+
+async def import_projection(
+    runtime: Any, session: Session, value: dict[str, Any]
+) -> dict[str, Any]:
+    if not runtime.settings.finance_publications_enabled:
+        raise PublicationError("projection_ingress_disabled")
+    if (
+        session.auth_role != "principal"
+        or session.is_view_as
+        or session.service_context is not None
+    ):
+        raise PublicationError("projection_owner_authority_required")
+    lock = getattr(runtime, "_finance_publication_lock", None)
+    if lock is None:
+        lock = runtime._finance_publication_lock = asyncio.Lock()
+    if lock.locked():
+        raise PublicationError("projection_ingress_busy")
+    async with lock:
+        p = await asyncio.to_thread(validate_projection, value)
+        if (
+            p["tenant_id"] != session.tenant_id
+            or p["owner_id"] != session.auth_member_id
+        ):
+            raise PublicationError("projection_owner_authority_required")
+        if datetime.fromisoformat(p["verified_at"]) > datetime.now(
+            timezone.utc
+        ) + timedelta(minutes=5):
+            raise PublicationError("projection_future_clock")
+        event_key = (
+            "finance-dated-projection:"
+            + hashlib.sha256(
+                canonical_bytes(
+                    [
+                        p[k]
+                        for k in (
+                            "tenant_id",
+                            "owner_id",
+                            "book_id",
+                            "prior_projection_id",
+                        )
+                    ]
+                )
+            ).hexdigest()
+        )
+        prior = await runtime.event_log.get_by_idempotency(session.tenant_id, event_key)
+        if prior:
+            previous = prior["payload"]["projection"]
+            if (
+                previous["projection_id"] != p["projection_id"]
+                or previous["content_sha256"] != p["content_sha256"]
+            ):
+                raise PublicationError("projection_identity_or_prior_conflict")
+            await _settled(runtime)
+            return {
+                "state": "verified",
+                "projection_id": p["projection_id"],
+                "event_id": prior["event_id"],
+                "idempotent": True,
+                "provider_effect_count": 0,
+            }
+        await _settled(runtime)
+
+        def check(conn):
+            _anchored(conn, p, current=True)
+            key = _coordinates(session, p["book_id"])
+            head = conn.execute(
+                "SELECT projection_id FROM finance_dated_projection_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+                key,
+            ).fetchone()
+            if (head[0] if head else None) != p["prior_projection_id"]:
+                raise PublicationError("projection_prior_conflict")
+            if conn.execute(
+                "SELECT 1 FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?",
+                (*key, p["projection_id"]),
+            ).fetchone():
+                raise PublicationError("projection_identity_conflict")
+
+        await runtime.projections.read("money", check)
+        now = datetime.now(timezone.utc)
+        scope = f"private:{session.auth_member_id}"
+        event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=session.tenant_id,
+                type="finance.projection_verified",
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="accepted_books_projection",
+                source_account_id=p["book_id"],
+                owner_scope=scope,
+                visibility_scope=scope,
+                sensitivity="privileged",
+                actor_identity=session.event_actor_identity,
+                idempotency_key=event_key,
+                payload={"projection": p},
+            )
+        )
+        await _settled(runtime)
+        return {
+            "state": "verified",
+            "projection_id": p["projection_id"],
+            "event_id": event_id,
+            "idempotent": False,
+            "provider_effect_count": 0,
+        }
+
+
+def projection_head(conn: Any, session: Session, book_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT projection_id FROM finance_dated_projection_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+        _coordinates(session, book_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _compact_range(value: dict[str, Any]) -> list[int | None]:
+    return [value["lower_minor"], value["upper_minor"]]
+
+
+def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]:
+    unknowns: dict[str, str] = {}
+    for name, value in (
+        ("opening", context["opening"]),
+        ("encumbered", context["encumbered"]),
+        ("closing", horizon["closing"]),
+        ("minimum", horizon["minimum"]),
+    ):
+        for endpoint in ("lower", "upper"):
+            reason = value[f"{endpoint}_unknown_reason"]
+            if reason is not None:
+                unknowns[f"{name}.{endpoint}"] = reason
+    for name in (
+        "reserve_threshold",
+        "checking_threshold",
+        "reserve_breach",
+        "negative_bank_cash",
+        "checking_shortage",
+    ):
+        if horizon[name]["unknown_reason"] is not None:
+            unknowns[name] = horizon[name]["unknown_reason"]
+    return {
+        "days": horizon["days"],
+        "start_inclusive": horizon["start_inclusive"],
+        "end_exclusive": horizon["end_exclusive"],
+        "estimate_state": horizon["estimate_state"],
+        "completeness_state": horizon["completeness_state"],
+        "safety_state": horizon["safety_state"],
+        "opening": _compact_range(context["opening"]),
+        "encumbered": _compact_range(context["encumbered"]),
+        "closing": _compact_range(horizon["closing"]),
+        "minimum": _compact_range(horizon["minimum"]),
+        "reserve_threshold": horizon["reserve_threshold"]["value_minor"],
+        "checking_threshold": horizon["checking_threshold"]["value_minor"],
+        "reserve_breach": horizon["reserve_breach"]["value"],
+        "negative_bank_cash": horizon["negative_bank_cash"]["value"],
+        "checking_shortage": horizon["checking_shortage"]["value"],
+        "unknowns": unknowns,
+        "conditions": horizon["conditions"],
+        "evidence_ids": horizon["evidence_ids"],
+    }
+
+
+def query_projection(
+    conn: Any,
+    session: Session,
+    *,
+    book_id: str,
+    projection_id: str | None = None,
+    context_id: str | None = None,
+    horizon_days: int = 30,
+    report_id: str = "planning_contexts",
+    offset: int = 0,
+    limit: int = 1,
+) -> dict[str, Any]:
+    if (
+        type(offset) is not int
+        or not 0 <= offset <= 10000
+        or type(limit) is not int
+        or not 1 <= limit <= 100
+    ):
+        raise PublicationError("projection_pagination_invalid")
+    if horizon_days not in {7, 30, 90, 180, 365} or type(horizon_days) is not int:
+        raise PublicationError("projection_horizon_invalid")
+    key = _coordinates(session, book_id)
+    head_id = projection_head(conn, session, book_id)
+    requested = projection_id or head_id
+    row = conn.execute(
+        "SELECT metadata_json FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?",
+        (*key, requested),
+    ).fetchone()
+    if row is None:
+        return {
+            "state": "missing_evidence",
+            "required_evidence": ["verified_dated_projection"],
+        }
+    p = json.loads(row[0])
+    accounting_head = conn.execute(
+        "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+        key,
+    ).fetchone()
+    result: dict[str, Any] = {
+        "state": "qualified",
+        "result_kind": report_id,
+        "publication": {
+            "book_id": book_id,
+            "publication_id": p["accounting_publication_id"],
+            "content_hash": p["accounting_content_sha256"],
+            "current_head_publication_id": accounting_head[0]
+            if accounting_head
+            else None,
+        },
+        "projection": {
+            "id": requested,
+            "hash": p["content_sha256"],
+            "head_id": head_id,
+        },
+        "engine": [p["engine_id"], p["engine_version"], p["input_sha256"]],
+        "refresh_state": p["refresh_state"],
+        "source_clocks": p["source_clocks"],
+        "limits": [
+            "historical_projection",
+            "non_additive_measures",
+            "positive_remainder_is_not_available_surplus",
+        ],
+    }
+    if accounting_head is None or accounting_head[0] != p["accounting_publication_id"]:
+        result["limits"].append("accounting_baseline_superseded")
+    if report_id == "planning_contexts":
+        result["contexts"] = [
+            {
+                k: v
+                for k, v in c.items()
+                if k
+                not in {"opening", "encumbered", "mandatory_flow_coverage", "horizons"}
+            }
+            for c in p["contexts"][offset : offset + limit]
+        ]
+        result["next_offset"] = (
+            offset + limit if offset + limit < len(p["contexts"]) else None
+        )
+        result["total_contexts"] = len(p["contexts"])
+        return result
+    context = next((c for c in p["contexts"] if c["context_id"] == context_id), None)
+    if context is None:
+        raise PublicationError("projection_context_required")
+    result["context"] = {
+        k: v
+        for k, v in context.items()
+        if k not in {"opening", "encumbered", "horizons"}
+    }
+    if report_id == "planning_projection":
+        horizon = next(h for h in context["horizons"] if h["days"] == horizon_days)
+        result["summary"] = _summary(context, horizon)
+    elif report_id == "planning_events":
+        end = (
+            date.fromisoformat(context["as_of_date"]) + timedelta(days=horizon_days + 1)
+        ).isoformat()
+        rows = conn.execute(
+            "SELECT event_json FROM finance_dated_projection_events WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND json_extract(event_json,'$.earliest_date') < ? ORDER BY ordinal LIMIT ? OFFSET ?",
+            (*key, requested, context_id, end, limit + 1, offset),
+        ).fetchall()
+        result["events"] = [json.loads(r[0]) for r in rows[:limit]]
+        result["next_offset"] = offset + limit if len(rows) > limit else None
+        result["horizon_days"] = horizon_days
+        result["manifest"] = next(
+            m for m in p["detail_manifest"] if m["context_id"] == context_id
+        )
+    else:
+        raise PublicationError("projection_report_unknown")
+    return result

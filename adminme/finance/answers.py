@@ -74,6 +74,34 @@ def render_result(result: dict[str, Any]) -> str:
         lines.append(
             "Next step: confirm the selected inputs and the model's limits; this authorizes no financial action."
         )
+    elif str(result.get("result_kind", "")).startswith("planning_"):
+        lines.append("Books planning projection: qualified historical output.")
+        lines.append(
+            "Bank cash and cash-equivalent funding are non-additive views. Modeled net funding is not payroll or guaranteed bank income."
+        )
+        lines.append(
+            "Amounts are producer-rounded minor units in the context currency. Ranges retain both endpoints; null is unknown."
+        )
+        for key in (
+            "context",
+            "contexts",
+            "summary",
+            "events",
+            "manifest",
+            "source_clocks",
+            "refresh_state",
+            "limits",
+            "engine",
+            "publication",
+            "projection",
+        ):
+            if key in result:
+                lines.append(key.replace("_", " ") + ": " + _value(result[key]))
+        if result.get("next_offset") is not None:
+            lines.append("More results are available; this page is incomplete.")
+        lines.append(
+            "Positive remainder is not available surplus. Confirm current openings, encumbrances, flows and thresholds before a cash-safety conclusion."
+        )
     elif result.get("result_kind") == "owner_choices":
         lines.append("Your explicitly saved private choices.")
         lines.append(

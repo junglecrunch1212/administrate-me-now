@@ -4137,10 +4137,15 @@ class FinanceQueryRequest(ContextRequest):
         "cash_projection",
         "cash_events",
         "owner_choices",
+        "planning_contexts",
+        "planning_projection",
+        "planning_events",
     ]
     scenario_id: Literal["current", "expected", "chosen"] | None = None
     horizon_days: Literal[7, 30, 90, 180, 365] | None = None
-    offset: int = Field(default=0, ge=0, le=1000)
+    projection_id: str | None = Field(default=None, min_length=1, max_length=80)
+    context_id: str | None = Field(default=None, min_length=1, max_length=80)
+    offset: int = Field(default=0, ge=0, le=10000)
     limit: int = Field(default=50, ge=1, le=100)
 
 
@@ -4589,7 +4594,33 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
             if result is None:
                 from adminme.finance.choices import query_choices
 
-                if body.report_id == "owner_choices":
+                if body.report_id.startswith("planning_"):
+                    from adminme.finance.planning_store import query_projection
+
+                    if body.scenario_id is not None:
+                        raise ValueError("projection_exact_context_required")
+                    result = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_projection(
+                            conn,
+                            session,
+                            book_id=body.book_id,
+                            projection_id=body.projection_id,
+                            context_id=body.context_id,
+                            horizon_days=body.horizon_days or 30,
+                            report_id=body.report_id,
+                            offset=body.offset,
+                            limit=min(body.limit, 1),
+                        ),
+                    )
+                    if (
+                        result.get("publication", {}).get("publication_id")
+                        != body.publication_id
+                    ):
+                        raise ValueError("projection_accounting_anchor_mismatch")
+                elif body.projection_id is not None or body.context_id is not None:
+                    raise ValueError("projection_filter_invalid")
+                elif body.report_id == "owner_choices":
                     if body.scenario_id is not None or body.horizon_days is not None:
                         raise ValueError("finance_choice_filter_invalid")
                     result = await runtime.projections.read(

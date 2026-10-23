@@ -3992,6 +3992,75 @@ function financeGoalLifecycleDialog(goal, action) {
   openActionDialog(action === "complete" ? "Complete this goal?" : "Pause this goal?", form);
 }
 
+function financePlanningCard(books) {
+  const section = document.createElement("section"); section.className = "card finance-planning";
+  section.append(text("h2", "Dated Books projections"));
+  if (!books?.publication_id) { section.append(text("p", "An accepted accounting publication is required.", "empty")); return section; }
+  const status = text("p", "Loading verified projection contexts…", "state-note"); section.append(status);
+  const controls = document.createElement("div"); controls.className = "button-row";
+  const contextSelect = document.createElement("select"); contextSelect.setAttribute("aria-label", "Projection context"); contextSelect.style.maxWidth = "100%";
+  const horizonSelect = document.createElement("select"); horizonSelect.setAttribute("aria-label", "Projection horizon");
+  for (const days of [7, 30, 90, 180, 365]) { const option = text("option", `${days} days`); option.value = String(days); horizonSelect.append(option); }
+  horizonSelect.value = "30";
+  controls.append(contextSelect, horizonSelect);
+  const content = document.createElement("div"); const detail = document.createElement("div");
+  section.append(controls, content, detail); controls.hidden = true;
+  let projectionId = null; let requestNumber = 0;
+  const request = (report, extra = {}) => api(`/api/member/v1/finance/planning?${new URLSearchParams({ book_id: books.book_id, report_id: report, ...(projectionId ? { projection_id: projectionId } : {}), ...extra })}`);
+  const exact = (value, currency) => value == null ? "Unknown" : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)} ${currency} minor units`;
+  const range = (values, currency) => values ? `${exact(values[0], currency)} to ${exact(values[1], currency)}` : "Unknown";
+  async function events(offset, generation) {
+    const answer = await request("planning_events", { context_id: contextSelect.value, horizon_days: horizonSelect.value, offset: String(offset) });
+    if (generation !== requestNumber || !section.isConnected) return;
+    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page is filtered to ${answer.horizon_days} days.`, "state-note"));
+    const table = document.createElement("table"); table.className = "finance-table";
+    const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Included"]) head.append(text("th", label)); table.append(head);
+    for (const item of answer.events || []) {
+      const row = document.createElement("tr"); row.append(text("td", `${item.earliest_date} – ${item.latest_date} · ${item.account_route_id}`), text("td", titleCase(item.kind)), text("td", range([item.amount.lower_minor, item.amount.upper_minor], answer.context.currency)), text("td", item.included ? "Yes" : "No")); table.append(row);
+    }
+    detail.append(table);
+    for (const [label, next] of [["Previous events", offset > 0 ? Math.max(0, offset - 50) : null], ["Next events", answer.next_offset]]) {
+      if (next == null) continue;
+      const button = text("button", label, "button button-quiet"); button.type = "button";
+      button.addEventListener("click", () => { button.disabled = true; void events(next, generation).catch(() => { status.textContent = "Event details could not be loaded. Retry the selected context."; }); }); detail.append(button);
+    }
+  }
+  async function load() {
+    const generation = ++requestNumber;
+    content.replaceChildren(); detail.replaceChildren(); status.textContent = "Loading selected projection…";
+    try {
+      const answer = await request("planning_projection", { context_id: contextSelect.value, horizon_days: horizonSelect.value });
+      if (generation !== requestNumber || !section.isConnected) return;
+      const c = answer.context; const h = answer.summary;
+      status.textContent = `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash subset" : "Cash-equivalent funding — not bank cash"} · ${h.completeness_state} · ${h.estimate_state}`;
+      content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${c.income_basis} · ${c.opening_basis}`, "state-note"));
+      content.append(text("p", `${h.start_inclusive} inclusive to ${h.end_exclusive} exclusive · ${c.timezone}. Cash safety: ${h.safety_state === "SOURCE_VERIFIED" ? "historically verified by source; current safety unverified" : "not established"}.`, "state-note"));
+      const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
+      for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], ["Minimum range", h.minimum], ["Encumbered range", h.encumbered]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", range(value, c.currency))); stats.append(item); }
+      content.append(stats, text("p", "These measures cannot be added. Positive remainder is not available surplus. Modeled net funding is not payroll or guaranteed bank income.", "state-note"));
+      for (const [label, value] of [["Reserve breach", h.reserve_breach], ["Negative bank cash", h.negative_bank_cash], ["Checking shortage", h.checking_shortage]]) content.append(text("p", `${label}: ${value == null ? "Unknown" : value ? "Yes" : "No"}.`, "state-note"));
+      for (const condition of h.conditions) content.append(text("p", `Condition: ${titleCase(condition)}`, "state-note"));
+      for (const [field, reason] of Object.entries(h.unknowns)) content.append(text("p", `${titleCase(field)}: ${titleCase(reason)}`, "state-note"));
+      content.append(text("p", `Source refresh: ${answer.refresh_state}.`, "state-note"));
+      for (const [name, clock] of Object.entries(answer.source_clocks)) content.append(text("p", `${titleCase(name)}: ${clock.value || `Unknown (${titleCase(clock.unknown_reason)})`}`, "meta"));
+      for (const limit of answer.limits) content.append(text("p", titleCase(limit), "meta"));
+      const show = text("button", "Show dated events", "button button-quiet"); show.type = "button"; show.addEventListener("click", () => { show.disabled = true; void events(0, generation).catch(() => { status.textContent = "Event details could not be loaded. Retry the selected context."; show.disabled = false; }); }); content.append(show);
+    } catch { if (generation === requestNumber) { content.replaceChildren(); detail.replaceChildren(); status.textContent = "This projection is unavailable in the current private session."; } }
+  }
+  contextSelect.addEventListener("change", () => { void load(); }); horizonSelect.addEventListener("change", () => { void load(); });
+  void (async () => {
+    try {
+      const index = await request("planning_contexts");
+      if (!section.isConnected) return;
+      if (!index.contexts?.length) { status.textContent = "No verified dated projection is available. Accounting acceptance alone does not establish a forecast."; return; }
+      projectionId = index.projection.id;
+      for (const c of index.contexts) { const option = text("option", `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash" : "Funding, not bank cash"} · ${titleCase(c.scenario_id)} · ${c.income_basis} · ${c.opening_basis} · ${c.plan_case_id}`); option.value = c.context_id; contextSelect.append(option); }
+      controls.hidden = false; await load();
+    } catch { status.textContent = "Dated projections are unavailable in the current private session."; }
+  })();
+  return section;
+}
+
 function financeChoicesCard(books) {
   const section = document.createElement("section"); section.className = "card finance-choices";
   section.append(text("h2", "Your finance choices"), text("p", "Save a goal or an explicit preference against this accepted snapshot. These choices do not change Books, schedule reviews, move money, or give anyone else access.", "state-note"));
@@ -4130,7 +4199,7 @@ function renderFinance(data) {
   const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic planning · no bank writes";
   const cockpit = data.cockpit || { summary: {}, budgets: [], scenarios: [], accounts: [], data_health: {} };
   const requested = new URLSearchParams(location.search).get("view"); if (FINANCE_VIEWS.some(([value]) => value === requested)) state.financeView = requested;
-  root.append(freshnessStrip(data), financeAcceptedBooks(cockpit), financeHero(cockpit), financeControls());
+  root.append(freshnessStrip(data), financeAcceptedBooks(cockpit), financePlanningCard(cockpit.accepted_books), financeHero(cockpit), financeControls());
   if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit), financeChoicesCard(cockpit.accepted_books));
   else if (state.financeView === "cashflow") root.append(financeCashFlow(cockpit), financeScenarios(cockpit));
   else if (state.financeView === "spending") root.append(financeBudgets(cockpit), financeTransactions(cockpit));

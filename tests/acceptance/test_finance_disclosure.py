@@ -514,7 +514,13 @@ def test_authority_change_after_receipt_snapshot_blocks_release(
                 if change == "revoke_grant":
                     await revoke(runtime, grant)
                 else:
-                    runtime.settings = replace(runtime.settings, member_roles={})
+                    runtime.settings = replace(
+                        runtime.settings,
+                        member_roles={
+                            **runtime.settings.member_roles,
+                            PRINCIPAL: "child",
+                        },
+                    )
             return found
 
         monkeypatch.setattr(

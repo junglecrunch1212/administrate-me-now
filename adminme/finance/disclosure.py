@@ -325,6 +325,18 @@ async def check_disclosure(
             if head is None or head[0] != receipt.get("head_publication_id"):
                 raise FinanceDisclosureError("finance_disclosure_publication_changed")
         result = json.loads(receipt["result_json"])
+        if str(result.get("result_kind", "")).startswith("planning_"):
+            from adminme.finance.planning_store import projection_head
+
+            if (
+                projection_head(
+                    runtime.projections.connection("money"),
+                    session,
+                    result["publication"]["book_id"],
+                )
+                != result["projection"]["head_id"]
+            ):
+                raise FinanceDisclosureError("finance_disclosure_projection_changed")
         if result.get("result_kind") == "owner_choices":
             from adminme.finance.choices import choice_head
 

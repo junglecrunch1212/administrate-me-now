@@ -1,0 +1,604 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:household-books.dated-projection.v1",
+  "title": "Verified dated planning export anchored to accepted Books accounting",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_sha256",
+    "content_sha256",
+    "tenant_id",
+    "owner_id",
+    "book_id",
+    "projection_id",
+    "prior_projection_id",
+    "accounting_publication_id",
+    "accounting_content_sha256",
+    "engine_id",
+    "engine_version",
+    "input_sha256",
+    "published_at",
+    "verified_at",
+    "verification_id",
+    "selected_plan_case_id",
+    "source_clocks",
+    "refresh_state",
+    "rounding_policy",
+    "evidence_ids",
+    "contexts",
+    "detail_manifest",
+    "detail_events",
+    "accounting_revision_ids"
+  ],
+  "properties": {
+    "contract": {
+      "const": "household-books.dated-projection.v1"
+    },
+    "schema_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "owner_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "book_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "projection_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "prior_projection_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "accounting_publication_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "accounting_content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "engine_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "engine_version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "input_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "published_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "verification_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "selected_plan_case_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "source_clocks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_as_of",
+        "retrieved_at",
+        "observed_at"
+      ],
+      "properties": {
+        "provider_as_of": {
+          "$ref": "#/$defs/clock"
+        },
+        "retrieved_at": {
+          "$ref": "#/$defs/clock"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/clock"
+        }
+      }
+    },
+    "refresh_state": {
+      "enum": [
+        "ON",
+        "OFF",
+        "UNKNOWN"
+      ]
+    },
+    "rounding_policy": {
+      "enum": [
+        "PRODUCER_MINOR_UNITS"
+      ]
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+      },
+      "minItems": 1,
+      "maxItems": 10000
+    },
+    "contexts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/context"
+      },
+      "minItems": 1,
+      "maxItems": 48
+    },
+    "detail_manifest": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/manifest"
+      },
+      "minItems": 1,
+      "maxItems": 48
+    },
+    "detail_events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "accounting_revision_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+      },
+      "maxItems": 10000,
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "unknown_reason"
+      ],
+      "properties": {
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lower_minor",
+        "upper_minor",
+        "lower_unknown_reason",
+        "upper_unknown_reason"
+      ],
+      "properties": {
+        "lower_minor": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "upper_minor": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "lower_unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "upper_unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        }
+      }
+    },
+    "threshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value_minor",
+        "unknown_reason"
+      ],
+      "properties": {
+        "value_minor": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "unknown_reason"
+      ],
+      "properties": {
+        "value": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        }
+      }
+    },
+    "horizon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "days",
+        "start_inclusive",
+        "end_exclusive",
+        "estimate_state",
+        "completeness_state",
+        "safety_state",
+        "closing",
+        "minimum",
+        "reserve_threshold",
+        "checking_threshold",
+        "reserve_breach",
+        "negative_bank_cash",
+        "checking_shortage",
+        "conditions",
+        "evidence_ids"
+      ],
+      "properties": {
+        "days": {
+          "enum": [
+            7,
+            30,
+            90,
+            180,
+            365
+          ]
+        },
+        "start_inclusive": {
+          "type": "string",
+          "format": "date"
+        },
+        "end_exclusive": {
+          "type": "string",
+          "format": "date"
+        },
+        "estimate_state": {
+          "enum": [
+            "PROVIDED",
+            "UNAVAILABLE"
+          ]
+        },
+        "completeness_state": {
+          "enum": [
+            "COMPLETE",
+            "INCOMPLETE"
+          ]
+        },
+        "safety_state": {
+          "enum": [
+            "NOT_ESTABLISHED",
+            "SOURCE_VERIFIED"
+          ]
+        },
+        "closing": {
+          "$ref": "#/$defs/range"
+        },
+        "minimum": {
+          "$ref": "#/$defs/range"
+        },
+        "reserve_threshold": {
+          "$ref": "#/$defs/threshold"
+        },
+        "checking_threshold": {
+          "$ref": "#/$defs/threshold"
+        },
+        "reserve_breach": {
+          "$ref": "#/$defs/signal"
+        },
+        "negative_bank_cash": {
+          "$ref": "#/$defs/signal"
+        },
+        "checking_shortage": {
+          "$ref": "#/$defs/signal"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 0,
+          "maxItems": 16
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 0,
+          "maxItems": 16
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_id",
+        "measure",
+        "scenario_id",
+        "income_basis",
+        "opening_basis",
+        "plan_case_id",
+        "currency",
+        "timezone",
+        "as_of_date",
+        "opening",
+        "encumbered",
+        "mandatory_flow_coverage",
+        "horizons"
+      ],
+      "properties": {
+        "context_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "measure": {
+          "enum": [
+            "BANK_CASH_SUBSET",
+            "CASH_EQUIVALENT_FUNDING_NOT_BANK"
+          ]
+        },
+        "scenario_id": {
+          "enum": [
+            "current",
+            "expected",
+            "chosen"
+          ]
+        },
+        "income_basis": {
+          "enum": [
+            "OBSERVED_BASE_ONLY",
+            "PLAN_MODELED_NET_FUNDING_NOT_PAYROLL"
+          ]
+        },
+        "opening_basis": {
+          "enum": [
+            "verified_unrestricted",
+            "observed_cash_hypothetical"
+          ]
+        },
+        "plan_case_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "as_of_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "opening": {
+          "$ref": "#/$defs/range"
+        },
+        "encumbered": {
+          "$ref": "#/$defs/range"
+        },
+        "mandatory_flow_coverage": {
+          "enum": [
+            "COMPLETE",
+            "INCOMPLETE",
+            "UNKNOWN"
+          ]
+        },
+        "horizons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/horizon"
+          },
+          "minItems": 5,
+          "maxItems": 5
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "context_id",
+        "earliest_date",
+        "latest_date",
+        "kind",
+        "account_route_id",
+        "recognition_id",
+        "included",
+        "direction",
+        "amount",
+        "bank_effect",
+        "debt_effect",
+        "evidence_ids",
+        "conditions"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "context_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "earliest_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "latest_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "kind": {
+          "enum": [
+            "income",
+            "expense",
+            "card_purchase",
+            "card_settlement",
+            "internal_transfer",
+            "provision",
+            "bill",
+            "other"
+          ]
+        },
+        "account_route_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "recognition_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "direction": {
+          "enum": [
+            "inflow",
+            "outflow",
+            "neutral"
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/range"
+        },
+        "bank_effect": {
+          "$ref": "#/$defs/range"
+        },
+        "debt_effect": {
+          "$ref": "#/$defs/range"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 0,
+          "maxItems": 8
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_id",
+        "row_count",
+        "rows_sha256"
+      ],
+      "properties": {
+        "context_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "row_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "rows_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

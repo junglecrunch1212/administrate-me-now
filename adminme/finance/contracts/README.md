@@ -75,14 +75,16 @@ later expected inflow despite a higher ending balance, and a distinct chosen
 spending scenario. It establishes transport/semantic tests, not the correctness
 of the Books engine or private household plan.
 
-## Planned versioned planning-view extension
+## Candidate versioned planning-view extension
 
 The coordinating review reports that Books Financial Projection v1.2 cannot be
 represented losslessly by v1's scalar bank-cash projection. The existing v1
 schema and SHA remain frozen. The next interchange version will preserve
 Books-produced planning views; it will not reproduce their forecasting math.
-Exact field mapping and supported combinations remain pending the independent
-mapper's review, so v2 publications are not yet admitted.
+The candidate `household-books.dated-projection.v1` contract is separate from
+accepted-publication v1. Its schema, SHA file, validator and private file-adapter
+seam are now present; hosted validation and exact native exporter mapping remain
+pending. It is not adopted by Books or enabled for private ingestion.
 
 The extension will be a separately versioned dated-projection export anchored
 to the exact accepted accounting publication ID and content hash. Projection
@@ -99,9 +101,9 @@ The extension must retain these separate coordinates:
 | Result | Source-produced lower/upper ranges and their missing endpoints, not an invented scalar |
 | Status | Explicitly conditional `INCOMPLETE` planning estimates remain distinguishable from released safety conclusions |
 
-Implementation will add a versioned schema/hash and distinct validator,
-preserve immutable projection/event version provenance and predecessor checks,
-and expose distinct bounded planning-view queries and rendered qualifications.
+The candidate preserves immutable projection/event version provenance and
+predecessor checks, and exposes bounded planning-view queries and rendered
+qualifications. See `DATED-PROJECTION.md` for the precise transport contract.
 Only declared source combinations will be indexed; no cross product or sum of
 views is inferred. Conditional planning values must not be relabeled ready,
 verified openings, payroll, bank cash, or realized transactions. Existing v1

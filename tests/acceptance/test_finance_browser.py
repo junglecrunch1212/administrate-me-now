@@ -26,6 +26,8 @@ from adminme.runtime.application import create_application
 from tests.acceptance.test_finance_disclosure import enabled_settings
 from tests.acceptance.test_finance_publications import publication
 from tests.acceptance.test_openclaw_native_seam import PRINCIPAL
+from adminme.finance.planning_store import import_projection
+from tests.fixtures.finance_planning import projection
 
 
 def _serve_choices(root, listener, ready):
@@ -46,6 +48,11 @@ def _serve_choices(root, listener, ready):
                 runtime,
                 build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
                 value,
+            )
+            await import_projection(
+                runtime,
+                build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
+                projection(value, 24),
             )
             ready.send(True)
             ready.close()
@@ -208,6 +215,37 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             assert identity["member"]["authenticated_id"] == PRINCIPAL
             assert not identity["member"]["viewing_as"]
             assert identity["trust"]["reads_as"] == identity["trust"]["actions_as"]
+            await wait_for(
+                "document.querySelector('.finance-planning')?.textContent.includes('500 USD minor units to 501 USD minor units')"
+            )
+            await evaluate("""(() => {
+              const select=document.querySelector('[aria-label="Projection context"]');
+              if(select.options.length!==12) throw Error('context coverage lost');
+              select.value='funding-chosen-plan';select.dispatchEvent(new Event('change'));
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('800 USD minor units to 801 USD minor units') && document.querySelector('.finance-planning').textContent.includes('not bank cash')"
+            )
+            assert await evaluate(
+                "document.querySelector('.finance-planning').textContent.includes('INCOMPLETE') && document.querySelector('.finance-planning').textContent.includes('Source refresh: OFF') && document.querySelector('.finance-planning').textContent.includes('Provider Clock Unknown')"
+            )
+            await evaluate(
+                "document.querySelector('.finance-planning').scrollIntoView({block:'start'})"
+            )
+            planning_shot = await call("Page.captureScreenshot", {"format": "png"})
+            planning_output = Path(
+                os.environ.get("FINANCE_BROWSER_ARTIFACT_DIR", str(tmp_path))
+            )
+            planning_output.mkdir(parents=True, exist_ok=True)
+            (planning_output / "finance-planning-synthetic.png").write_bytes(
+                base64.b64decode(planning_shot["data"])
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-planning button')).find(b=>b.textContent==='Show dated events').click()"
+            )
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('Full context manifest: 2 events')"
+            )
             await wait_for(
                 "Array.from(document.querySelectorAll('.finance-choices button')).some(b => b.textContent === 'Add a goal' && !b.disabled)"
             )

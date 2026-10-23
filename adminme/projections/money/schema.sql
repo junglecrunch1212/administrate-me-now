@@ -246,3 +246,34 @@ CREATE TABLE IF NOT EXISTS finance_choice_heads (
     last_event_id TEXT NOT NULL,
     PRIMARY KEY (tenant_id, owner_id, book_id)
 );
+
+-- Independent verified planning exports anchored to immutable accounting.
+CREATE TABLE IF NOT EXISTS finance_dated_projections (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_projection_heads (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_projection_events (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    event_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, context_id, ordinal),
+    UNIQUE (tenant_id, owner_id, book_id, projection_id, context_id, event_id)
+);

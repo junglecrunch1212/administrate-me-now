@@ -197,14 +197,16 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     },
     {
       name: "administrateme_finance_query",
-      description: "Read a bounded accepted finance report pinned to its private publication, or report_id owner_choices for explicit saved private goals/preferences (at most three per page). Never raw transactions, SQL or source links.",
+      description: "Read a private accepted report, owner_choices (up to three/page), or planning_contexts, planning_projection and planning_events (one/page, next_offset). Planning requires the exact projection_id/context_id and a 7/30/90/180/365-day horizon; bank and funding views are non-additive. No raw transactions, SQL or source links.",
       parameters: Type.Object({
         book_id: Type.String({ minLength: 1, maxLength: 120 }),
         publication_id: Type.String({ minLength: 1, maxLength: 120 }),
         report_id: Type.String({ minLength: 1, maxLength: 40 }),
         scenario_id: Type.Optional(Type.String({ maxLength: 16 })),
         horizon_days: Type.Optional(Type.Integer({ minimum: 7, maximum: 365 })),
-        offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 1000 })),
+        projection_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        context_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
       }, { additionalProperties: false }),
       path: "/api/openclaw/v1/tools/finance-query",

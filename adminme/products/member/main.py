@@ -9664,3 +9664,43 @@ async def record_attention_feedback(
 
 
 __all__ = ["router"]
+
+
+@router.get("/api/member/v1/finance/planning")
+async def finance_planning(
+    request: Request,
+    session: SessionDep,
+    book_id: str = Query(min_length=1, max_length=80),
+    projection_id: str | None = Query(default=None, max_length=80),
+    context_id: str | None = Query(default=None, max_length=80),
+    report_id: Literal[
+        "planning_contexts", "planning_projection", "planning_events"
+    ] = "planning_contexts",
+    horizon_days: Literal[7, 30, 90, 180, 365] = 30,
+    offset: int = Query(default=0, ge=0, le=10000),
+) -> dict[str, Any]:
+    from adminme.finance.planning_store import query_projection
+
+    runtime = _runtime(request)
+    _finance_choice_owner(runtime, session)
+    try:
+        result = await runtime.projections.read(
+            "money",
+            lambda conn: query_projection(
+                conn,
+                session,
+                book_id=book_id,
+                projection_id=projection_id,
+                context_id=context_id,
+                report_id=report_id,
+                horizon_days=horizon_days,
+                offset=offset,
+                limit=50,
+            ),
+        )
+    except ValueError:
+        raise HTTPException(422, "finance_planning_selection_invalid") from None
+    if session_from_request(request) != session:
+        raise HTTPException(403, "finance_planning_identity_changed")
+    _finance_choice_owner(runtime, session)
+    return result

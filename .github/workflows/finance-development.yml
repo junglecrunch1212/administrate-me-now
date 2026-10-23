@@ -62,6 +62,7 @@ jobs:
           tests/unit/test_projection_money.py
           tests/unit/test_xlsx_finance_workbook.py
           tests/acceptance/test_finance_publications.py
+          tests/acceptance/test_finance_planning.py
           tests/acceptance/test_finance_native_facade.py
           tests/acceptance/test_finance_disclosure.py
           tests/acceptance/test_finance_choices.py
