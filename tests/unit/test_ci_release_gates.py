@@ -2290,6 +2290,10 @@ def test_bridge_setup_scope_rejects_incomplete_or_broader_setup(repository, faul
     _git(path, "add", "-A")
     _git(path, "commit", "-m", "Incomplete or broader setup")
     head = _git(path, "rev-parse", "HEAD")
+    if fault == "symlink":
+        with pytest.raises(SourceIdentityError):
+            select_scope(path, _event(base, head), checkout_sha=head)
+        return
     assert (
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "system-wide"
