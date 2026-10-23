@@ -95,7 +95,7 @@ def test_enroll_requests_only_three_readonly_scopes_and_uses_member_key(
             "port": 0,
             "authorization_prompt_message": "",
             "success_message": (
-                "AdministrateMe authorization complete. You may close this tab."
+                "Authorization returned. Check the setup result to confirm the connection."
             ),
             "open_browser": False,
             "access_type": "offline",
@@ -291,7 +291,12 @@ def test_cos_workspace_enrollment_uses_separate_exact_grant_and_receipt(
         account_resolver=lambda _credentials: "cos@example.invalid",
     )
     assert requested == [scopes]
-    assert len(scopes) == 2
+    assert set(scopes) == {
+        "https://www.googleapis.com/auth/"
+        + ("calendar.readonly" if purpose == "calendar-read" else "tasks.readonly"),
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+    }
     assert all("gmail" not in scope for scope in scopes)
     assert flow.run_calls[0]["include_granted_scopes"] == "false"
     [(name, raw)] = store.puts
@@ -349,3 +354,90 @@ def test_workspace_account_proof_requires_google_verified_email(
         google_oauth._resolve_workspace_account_id(object())
     response["verified_email"] = True
     assert google_oauth._resolve_workspace_account_id(object()) == "cos@example.invalid"
+
+
+@pytest.mark.parametrize("purpose", ["calendar-read", "tasks-read"])
+@pytest.mark.parametrize("resource_consent", [True, False])
+def test_workspace_callback_preserves_oauthlib_exact_scope_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    purpose: str,
+    resource_consent: bool,
+) -> None:
+    from oauthlib.oauth2 import WebApplicationClient
+
+    monkeypatch.delenv("OAUTHLIB_RELAX_TOKEN_SCOPE", raising=False)
+    flow, store, requested = _install_fakes(monkeypatch, tmp_path)
+    resource_scope = "https://www.googleapis.com/auth/" + (
+        "calendar.readonly" if purpose == "calendar-read" else "tasks.readonly"
+    )
+    callback_scopes = ["openid", "https://www.googleapis.com/auth/userinfo.email"]
+    if resource_consent:
+        callback_scopes.append(resource_scope)
+    flow.credentials.scopes = list(google_oauth.grant_scopes(purpose))
+    original_run = flow.run_local_server
+
+    def callback(**kwargs: object) -> object:
+        original_run(**kwargs)
+        # Exercise the same oauthlib token-response parser that rejected the
+        # production callback, without network, browser or credentials.
+        token = WebApplicationClient("fixture-client").parse_request_body_response(
+            json.dumps(
+                {
+                    "access_token": "fixture-access",
+                    "token_type": "Bearer",
+                    "scope": " ".join(callback_scopes),
+                }
+            ),
+            scope=" ".join(requested[0]),
+        )
+        flow.credentials.granted_scopes = token["scope"]
+        return flow.credentials
+
+    monkeypatch.setattr(flow, "run_local_server", callback)
+
+    def enroll_callback() -> str:
+        return google_oauth.enroll(
+            tmp_path / "client.json",
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            purpose=purpose,
+            expected_account_id="cos@example.invalid",
+            account_resolver=lambda _credentials: "cos@example.invalid",
+        )
+
+    if resource_consent:
+        enroll_callback()
+        assert len(store.puts) == 1
+        assert set(json.loads(store.puts[0][1])["scopes"]) == set(callback_scopes)
+    else:
+        with pytest.raises(Warning, match="Scope has changed"):
+            enroll_callback()
+        assert store.puts == []
+        assert not (tmp_path / f"cos-google-{purpose}-enrollment.json").exists()
+    assert not (tmp_path / "google-oauth-authorization-url").exists()
+
+
+@pytest.mark.parametrize("purpose", ["calendar-read", "tasks-read"])
+def test_workspace_identity_only_credentials_never_reach_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    purpose: str,
+) -> None:
+    flow, store, _requested = _install_fakes(monkeypatch, tmp_path)
+    flow.credentials.scopes = list(google_oauth.grant_scopes(purpose))
+    flow.credentials.granted_scopes = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+    ]
+    with pytest.raises(RuntimeError, match="exactly match"):
+        google_oauth.enroll(
+            tmp_path / "client.json",
+            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
+            purpose=purpose,
+            expected_account_id="cos@example.invalid",
+            account_resolver=lambda _credentials: pytest.fail(
+                "identity-only consent must fail before account access"
+            ),
+        )
+    assert store.puts == []
+    assert not (tmp_path / f"cos-google-{purpose}-enrollment.json").exists()

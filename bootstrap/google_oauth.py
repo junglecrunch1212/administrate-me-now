@@ -124,7 +124,7 @@ def enroll(
             port=0,
             authorization_prompt_message="",
             success_message=(
-                "AdministrateMe authorization complete. You may close this tab."
+                "Authorization returned. Check the setup result to confirm the connection."
             ),
             open_browser=False,
             access_type="offline",
