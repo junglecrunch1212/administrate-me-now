@@ -225,3 +225,16 @@ CREATE TABLE IF NOT EXISTS finance_publication_metrics (
 );
 CREATE INDEX IF NOT EXISTS idx_finance_publication_report
 ON finance_publication_metrics(tenant_id,owner_id,book_id,publication_id,report_id,ordinal);
+
+
+-- Explicit planning intent; accepted Books reports remain immutable.
+CREATE TABLE IF NOT EXISTS finance_choices (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    choice_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, kind, choice_id)
+);

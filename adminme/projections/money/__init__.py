@@ -15,7 +15,7 @@ from adminme.projections.money import handlers
 
 class MoneyProjection(Projection):
     name = "money"
-    version = 4
+    version = 5
     subscribes_to = [
         "money_flow.recorded",
         "money_flow.manually_added",
@@ -34,6 +34,8 @@ class MoneyProjection(Projection):
         "finance.goal_reopened",
         "finance.workbook_published",
         "finance.publication_accepted",
+        "finance.goal_recorded",
+        "finance.preference_recorded",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

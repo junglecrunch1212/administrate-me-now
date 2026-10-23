@@ -70,6 +70,7 @@ class MetricReference(FinanceRecord):
 
 class FinanceGoalRecordedV1(FinanceRecord):
     goal_id: Id
+    label: str | None = Field(default=None, min_length=1, max_length=120)
     revision: int = Field(ge=1)
     supersedes_event_id: Id | None = None
     scope: RecordScope

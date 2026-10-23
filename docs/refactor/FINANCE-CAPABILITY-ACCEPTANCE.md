@@ -45,6 +45,12 @@ The following common test locations establish the intended validation paths:
   exact report basis/release/quality, incomplete clocks and no semantic inference
   from report names. Accepted metadata supplies qualified report pointers while
   complete/current question evidence remains independently required.
+- `tests/acceptance/test_finance_choices.py`: private explicit owner goals and
+  preferences through member APIs, duplicate/conflicting requests, denied-write
+  redaction, projection rebuild and restart.
+- `tests/acceptance/test_finance_browser.py`: hosted disposable Chromium goal,
+  pause, preference and reload flow using synthetic identity and publications;
+  it does not establish live member-device or mobile acceptance.
 - `tests/unit/test_finance_workflows.py`: exact decision quorum, changed
   baseline/audience/policy, expiry/revocation, attribution, minimum output,
   professional preparation and compound dependencies.
@@ -94,7 +100,7 @@ withholding an unsupported numerical or professional conclusion.
 | F25 | Coverage/claim checklist and professional packet preparation | Policy terms/limits/exclusions and validated shock interpretation; no binding, cancellation or claim assertion |
 | F26 | Candidate support-capacity comparison and family-minimum brief | Support intent, chosen reserve policy and agreement; optional reserves are not legal debts |
 | F27 | Document/beneficiary/incapacity preparation | Current document metadata and actual fiduciary authority; no credential vault, legal instruments or automatic access |
-| F28 | Typed explicit preferences, alternatives and decision quorum contracts | Production event-ingestion/projection and verified joint authority required before durable joint workflow claims |
+| F28 | Candidate private owner goal/preference recording and replay; typed alternatives and decision quorum contracts | Hosted API/browser acceptance required for owner choices; joint decisions still require production integration and verified joint authority |
 | F29 | Affected-dependency and reversible-step preparation | Event-specific income/care/housing/coverage/legal facts; status/relationship never establishes eligibility or authority |
 | F30 | Accepted scenario comparisons and candidate bounded goal paths | Integrated alternatives require compatible accepted baselines/assumptions; no single optimal answer claim |
 | F31 | Typed expected/observed outcome and professional manifest contracts | Production record integration plus accepted comparable evidence; preparation does not authorize disclosure or causal savings claims |
@@ -105,9 +111,13 @@ withholding an unsupported numerical or professional conclusion.
 proposal, agreement, outcome and packet contracts. The schemas registered in
 `adminme/events/schemas/finance_workflows.py` are immutable event facts once
 accepted by the existing governed event-write path. Registration alone does
-not activate an ingestion route or a projection. Durable goal/decision
-workflows are **not complete** until that production integration and replay
-acceptance pass. Existing legacy goal events remain distinct.
+not activate an ingestion route or a projection. Explicit private owner goals
+and preferences now have candidate member forms, governed ingestion and a
+replayable money projection. They require an accepted owner publication and
+optimistic predecessor, preserve immutable history, and grant no provider
+action. Hosted acceptance remains pending for this revision. Joint decisions,
+outcomes and professional packets still lack production record integration.
+Existing legacy goal events remain distinct.
 
 A decision agreement binds the exact proposal digest, baseline, audience,
 policy, chosen alternative, adult identity, receipt and expiry. The resolver

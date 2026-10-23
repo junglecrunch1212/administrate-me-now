@@ -8660,6 +8660,215 @@ async def define_routine(
     }
 
 
+class FinanceChoiceRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    book_id: str = Field(min_length=1, max_length=96, pattern=r"^[A-Za-z0-9_.:-]+$")
+    publication_id: str = Field(
+        min_length=1, max_length=96, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+    expected_event_id: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class FinanceGoalChoiceRequest(FinanceChoiceRequest):
+    label: str = Field(min_length=1, max_length=120)
+    kind: Literal["reserve", "purchase", "education", "retirement", "support", "debt"]
+    status: Literal["selected", "paused", "completed"] = "selected"
+    target_minor: int | None = Field(default=None, strict=True, ge=0, le=10**15)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    target_date: date | None = None
+    priority: Literal["unranked", "essential", "preferred", "optional"] = "unranked"
+
+
+class FinancePreferenceChoiceRequest(FinanceChoiceRequest):
+    selected_option_id: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+
+
+def _finance_choice_owner(runtime: Any, session: Session) -> None:
+    require_principal(session)
+    if (
+        session.is_view_as
+        or session.service_context is not None
+        or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
+        or not runtime.settings.finance_publications_enabled
+    ):
+        raise HTTPException(403, "finance_explicit_owner_choice_required")
+
+
+@router.get("/api/member/v1/finance/choices")
+async def finance_choices(
+    request: Request,
+    session: SessionDep,
+    book_id: str | None = Query(default=None, max_length=96),
+    offset: int = Query(default=0, ge=0, le=1000),
+) -> dict[str, Any]:
+    from adminme.finance.choices import list_choices
+    from adminme.finance.queries import publication_status
+
+    runtime = _runtime(request)
+    _finance_choice_owner(runtime, session)
+    conn = runtime.projections.connection("money")
+    try:
+        publication = publication_status(conn, session, book_id)
+    except ValueError:
+        return {"state": "book_selection_required", "can_record": False, "items": []}
+    if not publication.get("publication_id"):
+        return {
+            "state": "accepted_publication_required",
+            "can_record": False,
+            "items": [],
+        }
+    return {
+        "state": "available",
+        "can_record": True,
+        "publication": {
+            key: publication[key] for key in ("book_id", "publication_id", "as_of")
+        },
+        **list_choices(conn, session, publication["book_id"], offset),
+    }
+
+
+async def _save_finance_choice(
+    request: Request,
+    session: Session,
+    body: FinanceChoiceRequest,
+    choice_id: str,
+    kind: str,
+) -> dict[str, Any]:
+    from adminme.finance.choices import current_choice, validate_choice
+
+    runtime = _runtime(request)
+    _finance_choice_owner(runtime, session)
+    if (
+        not choice_id
+        or len(choice_id) > 160
+        or any(
+            c
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-"
+            for c in choice_id
+        )
+    ):
+        raise HTTPException(422, "invalid_finance_choice_id")
+    event_type = (
+        "finance.goal_recorded" if kind == "goal" else "finance.preference_recorded"
+    )
+    key = f"finance-choice:{session.tenant_id}:{session.auth_member_id}:{body.book_id}:{kind}:{choice_id}"
+    async with runtime.settings_command_locks.setdefault(key, asyncio.Lock()):
+        fingerprint = _member_command_fingerprint(kind, choice_id, body)
+        prior_command = await _prior_member_command(
+            runtime,
+            session,
+            event_type=event_type,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+        )
+        conn = runtime.projections.connection("money")
+        if prior_command is not None:
+            await runtime.wait_for_projection("money", prior_command["event_id"])
+            _finance_choice_owner(runtime, session)
+            return {
+                "event_id": prior_command["event_id"],
+                "duplicate": True,
+                "choice": current_choice(conn, session, body.book_id, kind, choice_id),
+                "provider_effect_count": 0,
+            }
+        current = current_choice(conn, session, body.book_id, kind, choice_id)
+        expected = current["event_id"] if current else None
+        if body.expected_event_id != expected:
+            raise HTTPException(409, "finance_choice_changed")
+        now = EventEnvelope.now_utc_iso()
+        scope = {
+            "book_id": body.book_id,
+            "owner_member_id": session.auth_member_id,
+            "applicable_adult_ids": [session.auth_member_id],
+            "audience_member_ids": [session.auth_member_id],
+            "policy_revision": "explicit-owner-choice-v1",
+            "baseline_publication_id": body.publication_id,
+        }
+        payload: dict[str, Any] = {"scope": scope, "recorded_at": now}
+        if isinstance(body, FinanceGoalChoiceRequest):
+            payload.update(
+                {
+                    key: value
+                    for key, value in body.model_dump(mode="json").items()
+                    if key
+                    not in {
+                        "request_id",
+                        "book_id",
+                        "publication_id",
+                        "expected_event_id",
+                    }
+                }
+            )
+            payload.update(
+                goal_id=choice_id,
+                revision=current["record"]["revision"] + 1 if current else 1,
+                supersedes_event_id=expected,
+                selected_by_member_id=session.auth_member_id,
+            )
+        elif isinstance(body, FinancePreferenceChoiceRequest):
+            payload.update(
+                preference_id=body.request_id,
+                chosen_by_member_id=session.auth_member_id,
+                dimension=choice_id,
+                selected_option_id=body.selected_option_id,
+            )
+        private = f"private:{session.auth_member_id}"
+        event = _member_command_event(
+            session,
+            event_type=event_type,
+            payload=payload,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+            causation_id=expected,
+            owner_scope=private,
+            visibility_scope=private,
+            sensitivity="privileged",
+        )
+        try:
+            payload = validate_choice(conn, event.model_dump(mode="json"))
+        except ValueError:
+            raise HTTPException(
+                422, "finance_choice_or_accepted_baseline_invalid"
+            ) from None
+        event = event.model_copy(update={"payload": payload})
+        await _guard_member_write(
+            runtime, session, event_type, {"operation": "record_private_finance_choice"}
+        )
+        _finance_choice_owner(runtime, session)
+        try:
+            event_id = await runtime.events.write(event)
+        except IdempotencyConflict:
+            raise HTTPException(409, "finance_choice_request_conflict") from None
+        await runtime.wait_for_projection("money", event_id)
+        _finance_choice_owner(runtime, session)
+        return {
+            "event_id": event_id,
+            "duplicate": False,
+            "choice": current_choice(conn, session, body.book_id, kind, choice_id),
+            "provider_effect_count": 0,
+        }
+
+
+@router.post("/api/member/v1/finance/choices/goals/{goal_id}")
+async def record_finance_goal_choice(
+    goal_id: str, body: FinanceGoalChoiceRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    return await _save_finance_choice(request, session, body, goal_id, "goal")
+
+
+@router.post("/api/member/v1/finance/choices/preferences/{dimension}")
+async def record_finance_preference_choice(
+    dimension: str,
+    body: FinancePreferenceChoiceRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    return await _save_finance_choice(request, session, body, dimension, "preference")
+
+
 @router.post("/api/member/v1/finance/goals/{goal_id}/lifecycle")
 async def finance_goal_lifecycle(
     goal_id: str,

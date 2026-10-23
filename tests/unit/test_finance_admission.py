@@ -96,7 +96,13 @@ async def test_streaming_foreground_releases_at_response_headers() -> None:
     close_stream = asyncio.Event()
 
     async def app(scope, receive, send):
-        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream; charset=utf-8")],
+            }
+        )
         headers_sent.set()
         await close_stream.wait()
         await send({"type": "http.response.body", "body": b"", "more_body": False})
@@ -136,4 +142,33 @@ async def test_foreground_failure_cleans_observation() -> None:
             {"type": "http", "path": "/api/core/v1/what-now"}, receive, send
         )
     async with gate.slot(("fixture-tenant", "member-a")) as admitted:
+        assert admitted
+
+
+async def test_ordinary_response_keeps_priority_through_body_send():
+    gate = FinanceAdmissionGate(quiet_seconds=0, wait_seconds=0.001)
+    observed = []
+
+    async def send(message):
+        async with gate.slot(("fixture", "member")) as admitted:
+            observed.append(admitted)
+
+    async def app(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"{}", "more_body": False})
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    await FinancePriorityMiddleware(app, gate)(
+        {"type": "http", "path": "/api/core/v1/what-now"}, receive, send
+    )
+    assert observed == [False, False]
+    async with gate.slot(("fixture", "member")) as admitted:
         assert admitted

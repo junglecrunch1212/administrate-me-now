@@ -140,3 +140,11 @@ settings. It measures 500 core samples per phase at 20 requests/second with
 keeps the same 10% and 100/500 ms assertions. This is a specified synthetic
 load, not household traffic or heavy-worker acceptance. The earlier failures
 remain recorded; no passing performance claim follows from changing a harness.
+
+At `0e3c17ee`, the v3 independent-client run measured before/after core p95
+3.899/3.710 ms and mixed p95 4.311 ms (ratio 1.105731): **failed** the unchanged
+1.10 gate. Its 251 admitted finance calls measured status/calculation p95
+27.148/35.523 ms. The next candidate retains ordinary response priority through
+the final body send (SSE releases after headers) and batches two exact durable
+receipt reads to reduce shared event-log executor contention. These are runtime
+changes requiring new evidence, not a waiver or a passing performance claim.

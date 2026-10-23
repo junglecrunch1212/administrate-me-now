@@ -23,6 +23,7 @@ from typing import Any
 import sqlcipher3
 
 from adminme.finance.projection import apply_publication
+from adminme.finance.choices import apply_choice
 
 _log = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "finance.goal_reopened": apply_finance_goal_reopened,
         "finance.workbook_published": apply_finance_workbook_published,
         "finance.publication_accepted": apply_publication,
+        "finance.goal_recorded": apply_choice,
+        "finance.preference_recorded": apply_choice,
     }
     handler = dispatch.get(event_type)
     if handler is None:

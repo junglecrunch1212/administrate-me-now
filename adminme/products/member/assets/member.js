@@ -3992,6 +3992,108 @@ function financeGoalLifecycleDialog(goal, action) {
   openActionDialog(action === "complete" ? "Complete this goal?" : "Pause this goal?", form);
 }
 
+function financeChoicesCard(books) {
+  const section = document.createElement("section"); section.className = "card finance-choices";
+  section.append(text("h2", "Your finance choices"), text("p", "Save a goal or an explicit preference against this accepted snapshot. These choices do not change Books, schedule reviews, move money, or give anyone else access.", "state-note"));
+  const identity = state.bootstrap?.member; const trust = state.bootstrap?.trust;
+  if (!books?.publication_id || !identity || identity.authenticated_role !== "principal" || identity.viewing_as || identity.authenticated_id !== identity.id || trust?.actions_as !== trust?.reads_as) {
+    section.append(text("p", "An accepted publication and your own private view are required.", "empty")); return section;
+  }
+  const endpoint = "/api/member/v1/finance/choices";
+  const status = text("p", "Loading your saved choices…", "state-note"); status.setAttribute("role", "status");
+  const list = document.createElement("ul"); list.className = "finance-goal-list";
+  const actions = document.createElement("div"); actions.className = "button-row";
+  const add = text("button", "Add a goal", "button button-primary"); add.type = "button"; add.disabled = true;
+  const prefer = text("button", "Choose a preference", "button button-secondary"); prefer.type = "button"; prefer.disabled = true;
+  const refresh = text("button", "Refresh choices", "button button-quiet"); refresh.type = "button";
+  actions.append(add, prefer, refresh); section.append(status, list, actions);
+  let current = null; let busy = false;
+  const preferenceOptions = {
+    grocery_substitution: ["ask_before_substitution", "keep_menu", "compare_unit_prices"],
+    service_time_tradeoff: ["ask_about_time_value", "minimize_cost", "prioritize_time"],
+    reserve_policy: ["ask_before_using_reserve", "review_chosen_floor", "preserve_chosen_floor"],
+    support_intent: ["discuss_before_committing", "prefer_gift", "prefer_documented_loan", "optional_reserve"],
+    review_cadence: ["on_request", "monthly", "annually"],
+    decision_priority: ["compare_cost_and_risk", "prioritize_flexibility", "ask_each_time"],
+  };
+  function select(values, prompt) {
+    const control = document.createElement("select"); control.required = true;
+    const empty = text("option", prompt); empty.value = ""; control.append(empty);
+    for (const value of values) { const option = text("option", titleCase(value)); option.value = value; control.append(option); }
+    return control;
+  }
+  async function load() {
+    add.disabled = true; prefer.disabled = true;
+    try {
+      current = await api(`${endpoint}?book_id=${encodeURIComponent(books.book_id)}`);
+      list.replaceChildren();
+      for (const item of current.items || []) {
+        const record = item.record; const row = document.createElement("li");
+        if (item.kind === "goal") {
+          row.append(text("strong", record.label || titleCase(record.kind)), text("p", `${titleCase(record.status)} · ${record.target_minor == null ? "Target not selected" : new Intl.NumberFormat(undefined, { style: "currency", currency: record.currency }).format(record.target_minor / (10 ** new Intl.NumberFormat(undefined, { style: "currency", currency: record.currency }).resolvedOptions().maximumFractionDigits))}${record.target_date ? ` · ${record.target_date}` : ""}`));
+          const controls = document.createElement("div"); controls.className = "button-row";
+          for (const [value, label] of (record.status === "selected" ? [["paused", "Pause"], ["completed", "Mark complete"]] : [["selected", "Resume"]])) {
+            const button = text("button", label, "button button-quiet"); button.type = "button";
+            button.addEventListener("click", () => { if (busy) return; const body = { request_id: crypto.randomUUID(), book_id: books.book_id, publication_id: current.publication.publication_id, expected_event_id: item.event_id, label: record.label || titleCase(record.kind), kind: record.kind, status: value, target_minor: record.target_minor, currency: record.currency, target_date: record.target_date, priority: record.priority }; void save(`/goals/${encodeURIComponent(record.goal_id)}`, body); }); controls.append(button);
+          }
+          row.append(controls);
+        } else row.append(text("strong", titleCase(record.dimension)), text("p", titleCase(record.selected_option_id)));
+        const provenance = document.createElement("details"); provenance.append(text("summary", "Saved choice evidence"), text("p", `Publication ${record.scope.baseline_publication_id} · recorded ${record.recorded_at}`));
+        const evidence = text("button", "View recorded choice", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.event_id)); provenance.append(evidence); row.append(provenance); list.append(row);
+      }
+      status.textContent = current.can_record ? ((current.items || []).length ? "Your explicit choices are saved privately." : "No explicit choices have been saved yet.") : "An accepted publication is required before saving a choice.";
+      if (current.next_offset != null) status.textContent += " More choices exist beyond this page.";
+      add.disabled = !current.can_record; prefer.disabled = !current.can_record;
+    } catch (error) { status.textContent = `${error.message} Saved choices could not be checked.`; }
+  }
+  async function save(path, body, submit = null) {
+    if (busy) return; busy = true; if (submit) submit.disabled = true; status.textContent = "Saving your explicit choice…";
+    try {
+      await api(endpoint + path, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) });
+      closeActionDialog(); await load();
+    } catch (error) { status.textContent = `${error.message} Save is unconfirmed. Retry this same choice or refresh to inspect saved choices.`; }
+    finally { busy = false; if (submit) submit.disabled = false; }
+  }
+  add.addEventListener("click", () => {
+    if (!current?.can_record || busy) return;
+    const form = document.createElement("form"); form.className = "dialog-form";
+    const label = document.createElement("input"); label.required = true; label.maxLength = 120; label.addEventListener("input", () => label.setCustomValidity(""));
+    const kind = select(["reserve", "purchase", "education", "retirement", "support", "debt"], "Choose a goal type");
+    const amount = document.createElement("input"); amount.inputMode = "decimal"; amount.placeholder = "Leave blank if undecided"; amount.pattern = "[0-9]{1,10}(\\.[0-9]{1,2})?";
+    const due = document.createElement("input"); due.type = "date";
+    const priority = select(["unranked", "essential", "preferred", "optional"], "Choose a priority");
+    const submit = text("button", "Save my goal", "button button-primary"); submit.type = "submit";
+    const requestId = crypto.randomUUID(); const goalId = crypto.randomUUID(); let pending = null;
+    form.append(field("Goal name", label), field("Goal type", kind), field("Target in USD (optional)", amount), field("Target date (optional)", due), field("Priority", priority), submit);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault(); if (busy) return;
+      if (!pending) {
+        if (!label.value.trim()) { label.setCustomValidity("Enter a goal name."); label.reportValidity(); return; }
+        label.setCustomValidity("");
+        const parts = amount.value.trim().split("."); const minor = amount.value.trim() ? Number(parts[0]) * 100 + Number((parts[1] || "").padEnd(2, "0")) : null;
+        pending = { request_id: requestId, book_id: books.book_id, publication_id: current.publication.publication_id, label: label.value.trim(), kind: kind.value, status: "selected", target_minor: minor, currency: "USD", target_date: due.value || null, priority: priority.value };
+        for (const control of form.querySelectorAll("input,select")) control.disabled = true;
+      }
+      void save(`/goals/${goalId}`, pending, submit);
+    }); openActionDialog("Save a finance goal", form);
+  });
+  prefer.addEventListener("click", () => {
+    if (!current?.can_record || busy) return;
+    const form = document.createElement("form"); form.className = "dialog-form";
+    const dimension = select(Object.keys(preferenceOptions), "Choose a topic"); const option = select([], "Choose your preference");
+    dimension.addEventListener("change", () => { const replacement = select(preferenceOptions[dimension.value] || [], "Choose your preference"); option.replaceChildren(...replacement.childNodes); });
+    const submit = text("button", "Save my preference", "button button-primary"); submit.type = "submit";
+    const requestId = crypto.randomUUID(); let pending = null; let selectedDimension = null;
+    form.append(field("Topic", dimension), field("Your explicit choice", option), submit);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault(); if (busy) return;
+      if (!pending) { selectedDimension = dimension.value; const prior = current.items.find((item) => item.kind === "preference" && item.record.dimension === selectedDimension); pending = { request_id: requestId, book_id: books.book_id, publication_id: current.publication.publication_id, expected_event_id: prior?.event_id || null, selected_option_id: option.value }; dimension.disabled = true; option.disabled = true; }
+      void save(`/preferences/${encodeURIComponent(selectedDimension)}`, pending, submit);
+    }); openActionDialog("Save an explicit preference", form);
+  });
+  refresh.addEventListener("click", () => { if (!busy) void load(); }); void load(); return section;
+}
+
 function financeTransactions(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-transactions"; section.append(text("h2", "Recent money movement"));
   const flows = cockpit.recent_flows || [];
@@ -4026,10 +4128,10 @@ function renderFinance(data) {
   const cockpit = data.cockpit || { summary: {}, budgets: [], scenarios: [], accounts: [], data_health: {} };
   const requested = new URLSearchParams(location.search).get("view"); if (FINANCE_VIEWS.some(([value]) => value === requested)) state.financeView = requested;
   root.append(freshnessStrip(data), financeAcceptedBooks(cockpit), financeHero(cockpit), financeControls());
-  if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit));
+  if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit), financeChoicesCard(cockpit.accepted_books));
   else if (state.financeView === "cashflow") root.append(financeCashFlow(cockpit), financeScenarios(cockpit));
   else if (state.financeView === "spending") root.append(financeBudgets(cockpit), financeTransactions(cockpit));
-  else if (state.financeView === "scenarios") root.append(financeScenarios(cockpit), financeGoals(cockpit));
+  else if (state.financeView === "scenarios") root.append(financeScenarios(cockpit), financeGoals(cockpit), financeChoicesCard(cockpit.accepted_books));
   else if (state.financeView === "networth") root.append(financeAccounts(cockpit));
   else root.append(financeHealth(cockpit));
 }

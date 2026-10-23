@@ -117,8 +117,10 @@ def _remember_marker(runtime: Any, session_hash: str) -> None:
 
 async def _read(runtime: Any, session: Session, key: str) -> dict[str, Any] | None:
     row = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
-    if row is None:
-        return None
+    return _checked_payload(row, session) if row else None
+
+
+def _checked_payload(row: dict[str, Any], session: Session) -> dict[str, Any]:
     if (
         row["type"] != "finance.disclosure_recorded"
         or row["owner_scope"] != f"private:{session.auth_member_id}"
@@ -172,7 +174,14 @@ async def record_disclosure(
     async with runtime.settings_command_locks.setdefault(
         f"finance-disclosure:{session_hash}", asyncio.Lock()
     ):
-        marker = await _read(runtime, session, _marker_key(session_hash))
+        key = _run_key(session_hash, run_hash, slot)
+        rows = await runtime.event_log.get_by_idempotency_keys(
+            session.tenant_id, [_marker_key(session_hash), key]
+        )
+        existing = {
+            row["idempotency_key"]: _checked_payload(row, session) for row in rows
+        }
+        marker = existing.get(_marker_key(session_hash))
         now = datetime.now(timezone.utc)
         common = {
             "member_id": session.auth_member_id,
@@ -188,11 +197,10 @@ async def record_disclosure(
                 {"kind": "session", **common},
             )
         _remember_marker(runtime, session_hash)
-        key = _run_key(session_hash, run_hash, slot)
         from adminme.finance.answers import answer_reference
 
         result_hash = answer_reference(result)
-        prior = await _read(runtime, session, key)
+        prior = existing.get(key)
         if prior is not None:
             if prior["result_sha256"] != result_hash:
                 raise FinanceDisclosureError("finance_disclosure_result_conflict")

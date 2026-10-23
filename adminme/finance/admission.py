@@ -123,8 +123,8 @@ class FinanceAdmissionGate:
 class FinancePriorityMiddleware:
     """Observe ordinary HTTP work without queuing it behind finance.
 
-    Response-start ends the foreground interval, so a long-lived chat stream
-    does not deadlock its own finance tools. WebSocket/lifespan scopes pass
+    Ordinary responses retain priority until their body has been sent. SSE
+    headers release long-lived chat streams so they cannot deadlock their tools. WebSocket/lifespan scopes pass
     through and are not treated as proof of Gateway compute capacity.
     """
 
@@ -143,10 +143,18 @@ class FinancePriorityMiddleware:
 
         async def observed_send(message: Message) -> None:
             nonlocal finished
-            if not finished and message["type"] == "http.response.start":
+            streaming = message["type"] == "http.response.start" and any(
+                key.lower() == b"content-type"
+                and value.lower().startswith(b"text/event-stream")
+                for key, value in message.get("headers", [])
+            )
+            complete = message["type"] == "http.response.body" and not message.get(
+                "more_body", False
+            )
+            await send(message)
+            if not finished and (streaming or complete):
                 finished = True
                 self.gate.foreground_finished()
-            await send(message)
 
         try:
             await self.app(scope, receive, observed_send)
