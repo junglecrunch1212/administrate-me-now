@@ -17,6 +17,7 @@ tests=(
   tests/acceptance/test_upgrade_readiness_blackout.py
   tests/acceptance/test_recovery_readiness_baseline.py
   tests/acceptance/test_cos_live_maintenance.py
+  tests/acceptance/test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip
   tests/unit/test_ci_release_gates.py
 )
 # A module introduced by a later small PR must bring its corresponding proof.
@@ -46,8 +47,8 @@ tests = sum(int(suite.attrib["tests"]) for suite in suites)
 assert tests > 0 and len(list(root.iter("testcase"))) == tests
 assert not any(list(root.iter(k)) for k in ("skipped", "failure", "error"))
 PY_CHECK
-poetry run ruff check bootstrap scripts/release_scope.py "${tests[@]}"
-poetry run ruff format --check bootstrap scripts/release_scope.py "${tests[@]}"
+poetry run ruff check bootstrap scripts/release_scope.py "${tests[@]%%::*}"
+poetry run ruff format --check bootstrap scripts/release_scope.py "${tests[@]%%::*}"
 poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py
 poetry run pyright bootstrap scripts/release_scope.py
 bash -n scripts/acceptance/updater-delivery-release.sh

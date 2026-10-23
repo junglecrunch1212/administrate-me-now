@@ -1583,7 +1583,6 @@ def test_updater_scope_binds_closed_paths_and_optional_feature_proof(
 @pytest.mark.parametrize(
     "other",
     [
-        "bootstrap/source_identity.py",
         "bootstrap/versions.json",
         "bootstrap/services.py",
         "bootstrap/recovery_readiness.py",
@@ -1724,6 +1723,7 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
         "test_upgrade_readiness_blackout.py",
         "test_recovery_readiness_baseline.py",
         "test_cos_live_maintenance.py",
+        "test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip",
         "test_ci_release_gates.py",
         "prepared_runtime workspace_instructions",
         'test -f "tests/unit/bootstrap/test_$module.py"',

@@ -155,6 +155,7 @@ COS_REMINDER_REQUIRED_PATHS = frozenset(
 UPDATER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/upgrade.py",
+        "bootstrap/source_identity.py",
         "bootstrap/prepared_runtime.py",
         "bootstrap/workspace_instructions.py",
         "bootstrap/activation_transaction.py",
@@ -177,6 +178,7 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/acceptance/test_upgrade_readiness_blackout.py",
         "tests/acceptance/test_recovery_readiness_baseline.py",
         "tests/acceptance/test_cos_live_maintenance.py",
+        "tests/acceptance/test_macos_bootstrap_operations.py",
     }
 )
 UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
