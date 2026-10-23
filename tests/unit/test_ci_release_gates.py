@@ -42,6 +42,9 @@ from scripts.release_scope import (
     COS_GOOGLE_WORKSPACE_COMPONENT_PATHS,
     COS_GOOGLE_WORKSPACE_REQUIRED_PATHS,
     _cos_google_workspace_dependency_fingerprint,
+    _cos_apple_reminders_dependency_fingerprint,
+    COS_APPLE_REMINDERS_COMPONENT_PATHS,
+    COS_APPLE_REMINDERS_REQUIRED_PATHS,
     google_dependency_fingerprint,
     choose_scope,
     required_workers,
@@ -123,6 +126,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "bridge-runtime",
         "google-connections",
         "cos-google-workspace",
+        "cos-apple-reminders",
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
@@ -167,6 +171,7 @@ def test_scope_gate_requires_exact_corresponding_success(
         "updater-delivery",
         "cos-service-work",
         "cos-google-workspace",
+        "cos-apple-reminders",
     ],
 )
 def test_gate_refuses_development_or_reinterpreted_evidence(
@@ -1091,12 +1096,16 @@ def test_google_release_requires_production_packaged_privacy_recovery_and_types(
     job = _workflow(filename)["jobs"]["google-connections-validation"]
     assert (
         job["if"]
-        == "${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' }}"
+        == "${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' || needs.release-scope.outputs.scope == 'cos-apple-reminders' }}"
     )
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     for required in (
         "test_member_google_connections.py",
         "test_cos_google_workspace.py",
+        "test_cos_apple_reminders.py",
+        "test_adapter_schemas.py",
+        "test_lists_schemas.py",
+        "packs/adapters/reminders/apple-eventkit/tests",
         "test_google_oauth.py",
         "test_credentials.py",
         "test_provider_bindings.py",
@@ -2296,3 +2305,138 @@ def test_cos_google_workspace_fingerprint_binds_every_other_byte_and_mode() -> N
         assert _cos_google_workspace_dependency_fingerprint(
             base
         ) != _cos_google_workspace_dependency_fingerprint((*base, executable))
+
+
+def _cos_apple_reminders_candidate(repository: Path) -> tuple[str, str]:
+    base = _git(repository, "rev-parse", "HEAD")
+    for relative in sorted(COS_APPLE_REMINDERS_REQUIRED_PATHS):
+        target = repository / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# Synthetic Apple Reminders component\n")
+    _git(repository, "add", "-A")
+    _git(repository, "commit", "-m", "CoS Apple Reminders fixture")
+    return base, _git(repository, "rev-parse", "HEAD")
+
+
+def test_cos_apple_reminders_scope_reuses_both_protected_google_workers(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, head = _cos_apple_reminders_candidate(path)
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-apple-reminders"
+    assert len(proof["cos_apple_reminders_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("cos-apple-reminders", platform) == (
+            "release-scope",
+            "google-connections-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "poetry.lock",
+        "bootstrap/versions.json",
+        "bootstrap/upgrade.py",
+        "adminme/runtime/application.py",
+        "adminme/events/log.py",
+        "adminme/events/schemas/ingest.py",
+        "adminme/service_identities.py",
+        "bridge/adminme_bridge/daemon.py",
+        "packs/adapters/messaging/gmail/adapter.py",
+        "tests/unreviewed.py",
+    ],
+)
+def test_cos_apple_reminders_never_exempts_outside_contracts_or_tests(
+    repository: tuple[Path, str], extra: str
+) -> None:
+    path, _ = repository
+    base, _ = _cos_apple_reminders_candidate(path)
+    head = _commit(path, extra, "# Outside the tested acquisition component\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "defect", ["none", "missing-proof", "mode", "unknown-test", "runtime", "symlink"]
+)
+def test_cos_apple_reminders_checks_exact_merge_tree_and_required_proof(
+    repository: tuple[Path, str], defect: str
+) -> None:
+    path, _ = repository
+    base, head = _cos_apple_reminders_candidate(path)
+    target = path / "tests/unit/bootstrap/test_cos_apple_reminders.py"
+    if defect == "missing-proof":
+        target.unlink()
+    elif defect == "mode":
+        target.chmod(0o755)
+    elif defect == "unknown-test":
+        (path / "tests/unreviewed.py").write_text("# unreviewed\n")
+    elif defect == "runtime":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY_CHANGE = True\n")
+    elif defect == "symlink":
+        target.unlink()
+        target.symlink_to("test_google_oauth.py")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Exact-parent CoS Apple Reminders merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    if defect == "symlink":
+        with pytest.raises(SourceIdentityError, match="unsupported object or mode"):
+            select_scope(path, _event(base, head), checkout_sha=merge)
+        return
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == (
+        "cos-apple-reminders" if defect == "none" else "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,modes", [("D", {"100644"}), ("T", {"100644", "120000"}), ("M", {"100755"})]
+)
+def test_cos_apple_reminders_rejects_removed_or_retyped_component_sources(
+    status: str, modes: set[str]
+) -> None:
+    path = "bootstrap/cos_apple_reminders.py"
+    assert (
+        choose_scope(
+            [(status, path)],
+            interfaces_equal=False,
+            cos_apple_reminders_interfaces_equal=True,
+            path_modes={path: modes},
+        )
+        == "system-wide"
+    )
+
+
+def test_cos_apple_reminders_fingerprint_binds_every_other_byte_and_mode() -> None:
+    from bootstrap.source_identity import GitTreeEntry
+
+    base = (GitTreeEntry(path="poetry.lock", mode="100644", object_id="a" * 40),)
+    changed = (GitTreeEntry(path="poetry.lock", mode="100644", object_id="b" * 40),)
+    assert _cos_apple_reminders_dependency_fingerprint(
+        base
+    ) != _cos_apple_reminders_dependency_fingerprint(changed)
+    for path in COS_APPLE_REMINDERS_COMPONENT_PATHS:
+        regular = GitTreeEntry(path=path, mode="100644", object_id="a" * 40)
+        executable = GitTreeEntry(path=path, mode="100755", object_id="a" * 40)
+        assert _cos_apple_reminders_dependency_fingerprint(
+            base
+        ) == _cos_apple_reminders_dependency_fingerprint((*base, regular))
+        assert _cos_apple_reminders_dependency_fingerprint(
+            base
+        ) != _cos_apple_reminders_dependency_fingerprint((*base, executable))

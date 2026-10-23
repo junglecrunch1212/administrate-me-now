@@ -881,3 +881,92 @@ regressions, supervisor recovery, affected pack validators and type checks. The
 selector requires the component and its proof files as regular files in the head
 and actual merge tree, and binds every unrelated byte and mode; dependency,
 bridge, runtime, persistence or unknown-file changes retain system validation.
+
+### CoS-owned Apple Reminders: one selected list
+
+MODERNIZE the Apple acquisition boundary for the CoS work computer. The new
+`reminders-cos-apple-eventkit` central adapter reads one existing, explicitly
+reviewed list as `service-principal:chief-of-staff`; the existing member bridge
+adapter and its enrollment remain unchanged. It emits owner-aware `list.*` v2
+and list-item snapshot v4/deletion v3 facts into the encrypted event log. It
+cannot create lists/reminders, complete tasks, send, or write provider data.
+Native-context exposure is a separate consumer integration and must be verified
+through the CoS context tool before claiming the list is usable by the agent.
+
+Keep the selected native source ID, list ID, device/Unix-user binding and
+source-ownership evidence in private operator files. A local source belongs to
+the reviewed work-computer environment; do not invent an iCloud address. An
+explicit `icloud` selection additionally requires the operator's evidence of
+that actual signed-in Apple account and its selected list. EventKit's CalDAV
+source type or a display name does not establish account ownership. Signing in
+later does not migrate, replace or broaden the existing local selection.
+
+The private `CoSRemindersSelection` document contains `adapter_id`, `source_id`,
+`list_id`, `source_kind` (`local` or `icloud`), `device_identity_sha256`, `os_uid`,
+`source_ownership_evidence_sha256`, and `owner_authorization_sha256`. The device
+digest is `local_device_identity()` from the deployed module; the ownership
+and authorization hashes identify the operator's exact private reviewed
+records. To resolve IDs, create an owner-only lookup file containing the exact
+`list_name` and `source_kind`; optionally supply a previously verified `source_id`
+to disambiguate identical list titles. Run the deployed setup inspector:
+
+```text
+python -m bootstrap.cos_apple_reminders --inspect <private-lookup.json> --output <new-private-resource.json>
+```
+
+This inspects only EventKit list metadata, filters to the requested title/type,
+rejects zero or multiple matches and reads no reminder content. The new private
+file contains only that source/list and the device/Unix-user binding. It is a
+resource proposal, not an ownership proof or activation input: review it against
+the actual Apple account/source UI and add the exact private ownership and owner
+authorization evidence when forming the selection. This does not update Reminders
+formats, move lists, or migrate a local source to iCloud. EventKit's catalog API
+is used only by this explicit setup command; runtime polling never enumerates
+accounts/lists or uses a default list.
+
+Run the deployed helper with owner-only files:
+
+```text
+python -m bootstrap.cos_apple_reminders --selection <private-selection.json> --previous-config <private-adapters.json> --output <new-private-prepared.json>
+```
+
+This checks the device/user, current Reminders permission, exact native source
+and selected existing list, then writes a new private activation input. It
+prints only proof flags/counts and never writes active configuration. Add
+`--request-permission` only for an explicitly authorized setup consent handoff;
+ordinary preparation and runtime polling never request permission. A helper's
+TCC grant does not establish the runtime executable's grant. The runtime must
+independently pass its own current permission and selected-list read-back.
+Apple documents the authorization boundary in
+[EKEventStore](https://developer.apple.com/documentation/EventKit/EKEventStore)
+and distinct native source types in
+[EKSourceType](https://developer.apple.com/documentation/eventkit/eksourcetype).
+
+Use the prepared document as `ActivationRequest.adapter_config` through the
+existing journaled CoS channel activation. Only the exact selected source can
+be added. Existing member, Gmail and Google workspace records remain intact;
+paused adapters stay paused. A source change requires deliberate review:
+revoke the old selection, retain its disabled record/history, then prepare a
+new adapter ID for the new source. Do not retarget an old cursor to another list.
+
+Acceptance is the selected list's current facts through production ingestion,
+with service-private provenance and zero writes, followed by the native-context
+consumer check. Permission loss, source mismatch, nil/failed fetches and invalid
+snapshots do not generate deletion facts. A complete successful snapshot emits
+tombstones for missing prior items; a durable metadata-only checkpoint permits
+restart/retry without duplicating complete snapshots. Incomplete publication
+never advances that checkpoint. Polling can resume after permission is restored.
+
+For recovery, set this source adapter `enabled: false`, or set
+`cos_apple_reminders.selection` to null, through the same guarded activation.
+History and separately authorized retained-context access remain intact.
+Pause the feature on a schema-aware runtime after its new OS-authentication v3
+receipt has been written; an older binary is not the default recovery for that
+history. Deployment alone does not enable or enroll this source.
+
+The `cos-apple-reminders` CI scope reuses the protected connections worker on
+Linux and macOS, adding native permission/resource fakes, actual loader/event-log
+polling, restart/tombstone/error recovery, legacy EventKit pack regressions and
+schema checks. Only these exact component/proof paths are excluded from its
+dependency fingerprint. Unrelated source changes, missing proofs, deletions,
+symlinks and executable-mode drift retain the protected system fallback.

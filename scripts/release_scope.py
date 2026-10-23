@@ -102,6 +102,40 @@ COS_GOOGLE_WORKSPACE_TEST_PATHS = frozenset(
 COS_GOOGLE_WORKSPACE_REQUIRED_PATHS = (
     COS_GOOGLE_WORKSPACE_COMPONENT_PATHS | COS_GOOGLE_WORKSPACE_TEST_PATHS
 )
+COS_APPLE_REMINDERS_COMPONENT_PATHS = frozenset(
+    {
+        "adminme/adapters/cos_apple_reminders.py",
+        "adminme/adapters/cos_apple_reminders_native.py",
+        "adminme/adapters/cos_channel_acquisition.py",
+        "adminme/adapters/disposable_test_acquisition.py",
+        "adminme/provider_bindings.py",
+        "adminme/events/schemas/adapters.py",
+        "bootstrap/cos_apple_reminders.py",
+        "bootstrap/cos_channel_activation.py",
+        "packs/adapters/reminders/cos-apple-eventkit/adapter.py",
+        "packs/adapters/reminders/cos-apple-eventkit/pack.yaml",
+        "packs/adapters/reminders/cos-apple-eventkit/config.schema.json",
+        "packs/adapters/reminders/cos-apple-eventkit/config.example.yaml",
+        "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+    }
+)
+COS_APPLE_REMINDERS_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_cos_apple_reminders.py",
+        "tests/unit/test_provider_bindings.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/acceptance/test_cos_channel_acquisition.py",
+        "tests/unit/events/test_adapter_schemas.py",
+        "tests/unit/events/schemas/test_lists_schemas.py",
+        "packs/adapters/reminders/apple-eventkit/tests/test_apple_eventkit_adapter_pack_internal.py",
+        "packs/adapters/reminders/apple-eventkit/tests/test_apple_eventkit_dual_deployment_pack_internal.py",
+        "packs/adapters/reminders/apple-eventkit/tests/test_apple_eventkit_dual_emit_pack_internal.py",
+        "packs/adapters/reminders/apple-eventkit/tests/test_apple_eventkit_external_state_mirror_retrofit_pack_internal.py",
+    }
+)
+COS_APPLE_REMINDERS_REQUIRED_PATHS = (
+    COS_APPLE_REMINDERS_COMPONENT_PATHS | COS_APPLE_REMINDERS_TEST_PATHS
+)
 COS_RECOVERY_CONTROLLER = "bootstrap/cos_channel_activation.py"
 COS_RECOVERY_HISTORY = "bootstrap/cos_recovery_history.py"
 COS_RECOVERY_COMPONENT_PATHS = frozenset(
@@ -299,6 +333,7 @@ SCOPES = frozenset(
         "bridge-runtime",
         "google-connections",
         "cos-google-workspace",
+        "cos-apple-reminders",
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
@@ -356,6 +391,7 @@ def choose_scope(
     enrollment_interfaces_equal: bool = False,
     google_interfaces_equal: bool = False,
     cos_google_workspace_interfaces_equal: bool = False,
+    cos_apple_reminders_interfaces_equal: bool = False,
     cos_recovery_interfaces_equal: bool = False,
     bridge_runtime_interfaces_equal: bool = False,
     cos_reminder_interfaces_equal: bool = False,
@@ -452,6 +488,20 @@ def choose_scope(
         )
     ):
         return "cos-recovery-history"
+    if (
+        cos_apple_reminders_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (
+                path in COS_APPLE_REMINDERS_REQUIRED_PATHS | POLICY_PATHS
+                or _prose(path)
+            )
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(path in COS_APPLE_REMINDERS_COMPONENT_PATHS for _, path in changes)
+    ):
+        return "cos-apple-reminders"
     if (
         cos_google_workspace_interfaces_equal
         and all(
@@ -715,6 +765,23 @@ def _cos_google_workspace_dependency_fingerprint(
     ).hexdigest()
 
 
+def _cos_apple_reminders_dependency_fingerprint(
+    entries: tuple[GitTreeEntry, ...],
+) -> str:
+    """Freeze unrelated runtime, bridge, source and credential bytes/modes."""
+    allowed = COS_APPLE_REMINDERS_REQUIRED_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
 def google_dependency_fingerprint(repository: Path, revision: str) -> str:
     """Exclude the Google module and only its exact tested integration edits.
 
@@ -807,6 +874,8 @@ def select_scope(
     updater_sources_present: dict[str, bool] = {}
     workspace_fingerprints: dict[str, str] = {}
     workspace_sources_present: dict[str, bool] = {}
+    apple_fingerprints: dict[str, str] = {}
+    apple_sources_present: dict[str, bool] = {}
     service_work_fingerprints: dict[str, str] = {}
     service_work_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
@@ -818,6 +887,12 @@ def select_scope(
         )
         workspace_sources_present[revision] = (
             revision == base or COS_GOOGLE_WORKSPACE_REQUIRED_PATHS <= regular_paths
+        )
+        apple_fingerprints[revision] = _cos_apple_reminders_dependency_fingerprint(
+            entries
+        )
+        apple_sources_present[revision] = (
+            revision == base or COS_APPLE_REMINDERS_REQUIRED_PATHS <= regular_paths
         )
         service_work = _service_work_dependency_fingerprint(
             repository, revision, entries
@@ -890,6 +965,10 @@ def select_scope(
             all(workspace_sources_present.values())
             and len(set(workspace_fingerprints.values())) == 1
         ),
+        cos_apple_reminders_interfaces_equal=(
+            all(apple_sources_present.values())
+            and len(set(apple_fingerprints.values())) == 1
+        ),
         bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
         == 1,
         cos_service_work_interfaces_equal=(
@@ -923,6 +1002,7 @@ def select_scope(
         "updater_dependency_sha256": updater_fingerprints[checkout],
         "cos_service_work_dependency_sha256": service_work_fingerprints[checkout],
         "cos_google_workspace_dependency_sha256": workspace_fingerprints[checkout],
+        "cos_apple_reminders_dependency_sha256": apple_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -937,6 +1017,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-runtime": "bridge-development",
         "google-connections": "google-connections-validation",
         "cos-google-workspace": "google-connections-validation",
+        "cos-apple-reminders": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
         "cos-reminders": "cos-reminder-validation",
         "updater-delivery": "updater-delivery-validation",

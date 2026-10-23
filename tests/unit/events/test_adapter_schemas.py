@@ -18,6 +18,7 @@ from adminme.events.schemas.adapters import (
     AdapterAuthenticatedV1,
     AdapterCursorAdvancedV1,
     AdapterErrorV1,
+    ServiceOSAuthenticatedV3,
 )
 
 
@@ -103,7 +104,8 @@ def test_adapter_error_rejects_extra_keys() -> None:
 def test_adapter_authenticated_registered_at_v1() -> None:
     ensure_autoloaded()
     assert registry.get("adapter.authenticated", 1) is AdapterAuthenticatedV1
-    assert registry.latest_version("adapter.authenticated") == 2
+    assert registry.get("adapter.authenticated", 3) is ServiceOSAuthenticatedV3
+    assert registry.latest_version("adapter.authenticated") == 3
 
 
 def test_adapter_authenticated_minimum_payload_validates() -> None:
