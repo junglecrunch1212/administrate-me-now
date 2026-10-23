@@ -74,3 +74,38 @@ The dated example is entirely synthetic. It demonstrates a shortage before a
 later expected inflow despite a higher ending balance, and a distinct chosen
 spending scenario. It establishes transport/semantic tests, not the correctness
 of the Books engine or private household plan.
+
+## Planned versioned planning-view extension
+
+The coordinating review reports that Books Financial Projection v1.2 cannot be
+represented losslessly by v1's scalar bank-cash projection. The existing v1
+schema and SHA remain frozen. The next interchange version will preserve
+Books-produced planning views; it will not reproduce their forecasting math.
+Exact field mapping and supported combinations remain pending the independent
+mapper's review, so v2 publications are not yet admitted.
+
+The extension must retain these separate coordinates:
+
+| Coordinate | Distinction to preserve |
+|---|---|
+| Measure | `BANK_CASH_SUBSET` versus `CASH_EQUIVALENT_FUNDING_NOT_BANK`; they are non-additive views |
+| Income basis | `OBSERVED_BASE_ONLY` versus `PLAN_MODELED_NET_FUNDING_NOT_PAYROLL` |
+| Opening basis | `verified_unrestricted` versus `observed_cash_hypothetical` |
+| Result | Source-produced lower/upper ranges and their missing endpoints, not an invented scalar |
+| Status | Explicitly conditional `INCOMPLETE` planning estimates remain distinguishable from released safety conclusions |
+
+Implementation will add a versioned schema/hash and explicit validator dispatch,
+preserve immutable publication/event version provenance and predecessor checks,
+and expose distinct bounded planning-view queries and rendered qualifications.
+Only declared source combinations will be indexed; no cross product or sum of
+views is inferred. Conditional planning values must not be relabeled ready,
+verified openings, payroll, bank cash, or realized transactions. Existing v1
+cash safety and accepted/recovery authority gates remain unchanged.
+
+Synthetic acceptance must prove both versions replay unchanged; reject measure,
+income/opening-basis and range/status conflation; preserve conditional ranges
+with their exact evidence and limits; and retain owner isolation, held-revision
+exclusion, current-grant checks and bounded results. Private financial values,
+Sheet identifiers and live data are excluded from fixtures and logs. Exporter
+adoption requires review of the exact new schema/hash after that mapping and
+those tests exist; this plan authorizes no private import or activation.

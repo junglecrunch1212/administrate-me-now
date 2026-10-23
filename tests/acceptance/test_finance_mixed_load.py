@@ -88,10 +88,11 @@ class _SyntheticServerTiming:
 class _SyntheticCpuProfile:
     """Diagnostic only: never used by the latency acceptance measurement."""
 
-    def __init__(self, app):
+    def __init__(self, app, output_path):
         import cProfile
 
         self.app = app
+        self.output_path = output_path
         self.profile = cProfile.Profile()
         self.count = 0
         self.started = False
@@ -110,23 +111,56 @@ class _SyntheticCpuProfile:
                 import pstats
 
                 self.profile.disable()
-                print(
-                    "SYNTHETIC_FINANCE_CPU_PROFILE: diagnostic, not latency evidence",
-                    flush=True,
+                stats = pstats.Stats(self.profile)
+
+                def row(item):
+                    (
+                        (filename, line, function),
+                        (primitive, calls, own, cumulative, _),
+                    ) = item
+                    return {
+                        "function": function,
+                        "file": filename.rsplit("/", 1)[-1],
+                        "line": line,
+                        "calls": calls,
+                        "self_ms": round(own * 1000, 3),
+                        "cumulative_ms": round(cumulative * 1000, 3),
+                    }
+
+                self.output_path.write_text(
+                    json.dumps(
+                        {
+                            "diagnostic_only": True,
+                            "profiled_finance_calls": self.count,
+                            "top_self": [
+                                row(item)
+                                for item in sorted(
+                                    stats.stats.items(),
+                                    key=lambda item: item[1][2],
+                                    reverse=True,
+                                )[:20]
+                            ],
+                            "domain_cumulative": [
+                                row(item)
+                                for item in sorted(
+                                    stats.stats.items(),
+                                    key=lambda item: item[1][3],
+                                    reverse=True,
+                                )
+                                if "/adminme/" in item[0][0]
+                            ][:30],
+                        }
+                    )
                 )
-                pstats.Stats(self.profile).strip_dirs().sort_stats(
-                    "tottime"
-                ).print_stats(45)
-                pstats.Stats(self.profile).strip_dirs().sort_stats(
-                    "cumulative"
-                ).print_stats("main.py|disclosure.py|runner.py|bus.py|log.py")
 
 
 def _serve(root: Path, listener: socket.socket, ready, profile: bool = False) -> None:
     app = create_application(_settings(root))
     app.add_middleware(_SyntheticServerTiming)
     if profile:
-        app.add_middleware(_SyntheticCpuProfile)
+        app.add_middleware(
+            _SyntheticCpuProfile, output_path=root / "finance-cpu-profile.json"
+        )
     original = app.router.lifespan_context
 
     @asynccontextmanager
@@ -480,7 +514,18 @@ async def test_profile_light_finance_request_cost(tmp_path):
                     )
 
             await asyncio.gather(finance_calls(), core_calls())
-            await asyncio.sleep(0.1)
+            report_path = tmp_path / "profile-instance" / "finance-cpu-profile.json"
+            for _ in range(50):
+                if report_path.exists():
+                    break
+                await asyncio.sleep(0.01)
+            report = json.loads(report_path.read_text())
+            assert (
+                report["profiled_finance_calls"] == 50
+                and report["top_self"]
+                and report["domain_cumulative"]
+            )
+            print("SYNTHETIC_FINANCE_CPU_PROFILE " + json.dumps(report), flush=True)
     finally:
         receive.close()
         listener.close()
