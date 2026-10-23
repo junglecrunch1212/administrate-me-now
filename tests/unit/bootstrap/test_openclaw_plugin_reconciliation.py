@@ -6,11 +6,12 @@ import json
 import stat
 import subprocess
 from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
 from adminme.openclaw_topology import member_agent_id
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.openclaw_activation import remove_unsupported_member_topology
 from bootstrap.openclaw_tools import (
     OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS,
@@ -72,10 +73,12 @@ def test_plugin_status_rejects_a_loaded_stale_release(
 
 
 @pytest.mark.parametrize("standing_supported", [False, True])
+@pytest.mark.parametrize("permitted", [False, True])
 def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     standing_supported: bool,
+    permitted: bool,
 ) -> None:
     paths = DeploymentPaths.from_root(tmp_path / "instance")
     release = tmp_path / "releases" / "candidate"
@@ -91,6 +94,8 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
                         "bindingFingerprints": {},
                         "dmScope": {},
                         "memberAgentIds": {},
+                        "forwardIntakeAccounts": {},
+                        "scheduledSelfReminderBindings": {},
                         **(
                             {"standingSelfReplyBindings": {}}
                             if standing_supported
@@ -138,7 +143,19 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
                 "plugins": {
                     "entries": {
                         "administrateme": {
-                            "config": {"standingSelfReplyBindings": ["f" * 64]}
+                            "enabled": True,
+                            "hooks": {"allowConversationAccess": permitted},
+                            "config": {
+                                "forwardIntakeAccounts": [
+                                    {"channelId": "imessage", "accountId": "fixture"}
+                                ],
+                                "standingSelfReplyBindings": ["f" * 64]
+                                if permitted
+                                else [],
+                                "scheduledSelfReminderBindings": ["f" * 64]
+                                if permitted
+                                else [],
+                            },
                         }
                     }
                 },
@@ -164,6 +181,22 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
             if inspect_count == 1:
                 return subprocess.CompletedProcess(command, 0, "{}", "")
             return subprocess.CompletedProcess(command, 1, "", "not installed")
+        if command[1:3] in (["plugins", "uninstall"], ["plugins", "install"]):
+            target = runtime_dir / "openclaw.json"
+            current = json.loads(target.read_bytes())
+            entries = current["plugins"]["entries"]
+            entries.pop("administrateme", None)
+            if command[2] == "install":
+                entries["administrateme"] = {"enabled": True}
+            atomic_write(target, json.dumps(current).encode())
+        if command[1:3] == ["config", "validate"]:
+            entry = json.loads((runtime_dir / "openclaw.json").read_bytes())["plugins"][
+                "entries"
+            ]["administrateme"]
+            assert entry["hooks"] == {"allowConversationAccess": permitted}
+            assert entry["config"]["forwardIntakeAccounts"] == [
+                {"channelId": "imessage", "accountId": "fixture"}
+            ]
         return subprocess.CompletedProcess(command, 0, "{}", "")
 
     monkeypatch.setattr("bootstrap.openclaw_tools.subprocess.run", run)
@@ -180,7 +213,13 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     stored = json.loads((runtime_dir / "openclaw.json").read_text("utf-8"))
     assert stored["plugins"]["entries"]["administrateme"]["config"].get(
         "standingSelfReplyBindings", []
-    ) == (["f" * 64] if standing_supported else [])
+    ) == (["f" * 64] if standing_supported and permitted else [])
+    entry = stored["plugins"]["entries"]["administrateme"]
+    assert entry["enabled"] is True
+    assert entry["hooks"] == {"allowConversationAccess": permitted}
+    assert entry["config"]["scheduledSelfReminderBindings"] == (
+        ["f" * 64] if permitted else []
+    )
     assert {row["id"] for row in stored["agents"]["list"]} == {
         "operator",
         member_agent_id("member-a"),
@@ -269,7 +308,7 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
     def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         nonlocal inspect_count
         commands.append(command)
-        if command[1:3] == ["plugins", "install"]:
+        if command[1:3] == ["plugins", "uninstall"]:
             preinstall = json.loads(target.read_text("utf-8"))
             assert preinstall["agents"]["list"] == [{"default": True, "id": "operator"}]
             assert preinstall["bindings"] == [
@@ -278,8 +317,12 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
             assert preinstall["plugins"]["entries"]["administrateme"]["config"] == {
                 "baseUrl": "http://127.0.0.1:3330"
             }
-            preinstall["plugins"]["entries"]["administrateme"] = {"enabled": True}
-            target.write_text(json.dumps(preinstall), encoding="utf-8")
+            preinstall["plugins"]["entries"].pop("administrateme")
+            atomic_write(target, json.dumps(preinstall).encode())
+        if command[1:3] == ["plugins", "install"]:
+            current = json.loads(target.read_bytes())
+            current["plugins"]["entries"]["administrateme"] = {"enabled": True}
+            atomic_write(target, json.dumps(current).encode())
         if command[1:4] == ["plugins", "inspect", "administrateme"]:
             inspect_count += 1
             if "--runtime" in command:
@@ -302,7 +345,9 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
     stored = json.loads(target.read_text("utf-8"))
     assert stored["agents"]["list"] == [{"default": True, "id": "operator"}]
     assert stored["bindings"] == [{"agentId": "operator", "match": {"channel": "cli"}}]
-    assert stored["plugins"]["entries"]["administrateme"] == {"enabled": True}
+    assert stored["plugins"]["entries"]["administrateme"] == {
+        "config": {"baseUrl": "http://127.0.0.1:3330"}
+    }
     assert stored["session"]["dmScope"] == "per-account-channel-peer"
     assert ["/reviewed/openclaw", "config", "validate"] in commands
 
@@ -420,3 +465,121 @@ def test_reconcile_timeout_restores_exact_private_openclaw_config(
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert observed_timeouts
     assert set(observed_timeouts) == {OPENCLAW_PLUGIN_COMMAND_TIMEOUT_SECONDS}
+
+
+def _destructive_plugin_cli(
+    paths: DeploymentPaths,
+    release: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    validate: Callable[[dict[str, Any]], None] | None = None,
+    failure: str | None = None,
+) -> list[list[str]]:
+    """Model native registration: uninstall removes the entry, install defaults it."""
+    root = Path(__file__).resolve().parents[3]
+    plugin = release / "openclaw/administrateme"
+    atomic_write(plugin / "dist/index.js", b"export default {};")
+    for relative in ("openclaw.plugin.json", "bin/cos-imsg-guard.mjs"):
+        atomic_write(
+            plugin / relative,
+            (root / "openclaw/administrateme" / relative).read_bytes(),
+        )
+    config_path = paths.instance_dir / "openclaw/runtime/openclaw.json"
+    installed = True
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal installed
+        commands.append(command)
+        config = json.loads(config_path.read_bytes())
+        entries = config["plugins"]["entries"]
+        output = "{}"
+        result = 0
+        if command[1:3] == ["plugins", "uninstall"]:
+            entries.pop("administrateme", None)
+            atomic_write(config_path, json.dumps(config).encode())
+            installed = False
+        elif command[1:3] == ["plugins", "install"]:
+            entries["administrateme"] = {"enabled": True}
+            config["plugins"]["installs"] = {
+                "administrateme": {
+                    "sourcePath": str(plugin),
+                    "installPath": str(plugin),
+                }
+            }
+            atomic_write(config_path, json.dumps(config).encode())
+            installed = True
+            result = int(failure == "install")
+        elif command[1:3] == ["plugins", "inspect"]:
+            result = 0 if installed else 1
+            output = _inspection(plugin)
+            if (
+                "--runtime" in command
+                and entries["administrateme"].get("enabled") is False
+            ):
+                document = json.loads(output)
+                document["plugin"].update(status="disabled", activated=False)
+                output = json.dumps(document)
+            if "--runtime" in command and failure == "runtime":
+                result = 1
+        elif command[1:3] == ["config", "validate"]:
+            if validate is not None:
+                validate(config)
+            result = int(failure == "validate")
+        return subprocess.CompletedProcess(command, result, output, "")
+
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
+        lambda _paths: "/reviewed/openclaw",
+    )
+    monkeypatch.setattr("bootstrap.openclaw_tools.subprocess.run", run)
+    return commands
+
+
+@pytest.mark.parametrize("failure", ["install", "validate", "runtime", "disabled"])
+def test_destructive_reconciliation_failure_restores_exact_permissions_and_denials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    release = tmp_path / "candidate"
+    config_path = paths.instance_dir / "openclaw/runtime/openclaw.json"
+    original = (
+        json.dumps(
+            {
+                "plugins": {
+                    "entries": {
+                        "administrateme": {
+                            "enabled": failure != "disabled",
+                            "hooks": {"allowConversationAccess": False},
+                            "config": {
+                                "forwardIntakeAccounts": [],
+                                "standingSelfReplyBindings": [],
+                                "scheduledSelfReminderBindings": [],
+                            },
+                        }
+                    }
+                },
+                "unrelated": {"retained": True},
+            },
+            indent=4,
+        ).encode()
+        + b"\n"
+    )
+    atomic_write(config_path, original)
+    atomic_write(paths.instance_dir / "config/adapters.json", b"{}")
+
+    def validate(config: dict[str, Any]) -> None:
+        entry = config["plugins"]["entries"]["administrateme"]
+        assert entry["enabled"] is (failure != "disabled")
+        assert entry["hooks"] == {"allowConversationAccess": False}
+        assert entry["config"]["forwardIntakeAccounts"] == []
+        assert entry["config"]["standingSelfReplyBindings"] == []
+        assert entry["config"]["scheduledSelfReminderBindings"] == []
+
+    _destructive_plugin_cli(
+        paths, release, monkeypatch, validate=validate, failure=failure
+    )
+    with pytest.raises(RuntimeError):
+        reconcile_administrateme_plugin(paths, release)
+    assert config_path.read_bytes() == original
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600

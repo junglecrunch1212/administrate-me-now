@@ -254,6 +254,14 @@ def reconcile_administrateme_plugin(
             # a retained predecessor can be installed and then checked again.
             topology = remove_unsupported_member_topology(paths)
 
+        # Native uninstall removes the entire entry, including enrollment,
+        # grants and explicit hook denials. Retain the schema-compatible entry
+        # independently of registration metadata written by the installer.
+        retained_entries = (
+            json.loads(config_path.read_text("utf-8"))
+            .get("plugins", {})
+            .get("entries", {})
+        )
         for _ in range(20):
             inspected = run(["plugins", "inspect", ADMINISTRATEME_PLUGIN, "--json"])
             if inspected.returncode:
@@ -279,6 +287,16 @@ def reconcile_administrateme_plugin(
         installed = run(["plugins", "install", "--link", "--force", str(plugin)])
         if installed.returncode:
             raise RuntimeError("reviewed AdministrateMe plugin registration failed")
+        if ADMINISTRATEME_PLUGIN in retained_entries:
+            current = json.loads(config_path.read_text("utf-8"))
+            current.setdefault("plugins", {}).setdefault("entries", {})[
+                ADMINISTRATEME_PLUGIN
+            ] = retained_entries[ADMINISTRATEME_PLUGIN]
+            atomic_write(
+                config_path,
+                json.dumps(current, indent=2, sort_keys=True).encode(),
+                mode=original_mode,
+            )
         topology = (
             reconcile_member_topology(paths)
             if supports_member_topology

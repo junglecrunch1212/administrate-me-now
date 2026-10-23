@@ -163,6 +163,7 @@ UPDATER_COMPONENT_PATHS = frozenset(
         "bootstrap/cos_channel_activation.py",
         "bootstrap/candidate_readiness.py",
         "bootstrap/backup_restore.py",
+        "bootstrap/openclaw_tools.py",
     }
 )
 UPDATER_TEST_PATHS = frozenset(
@@ -176,6 +177,8 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_backup_rehearsal.py",
         "tests/unit/bootstrap/test_candidate_readiness.py",
         "tests/unit/bootstrap/test_recovery_readiness.py",
+        "tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py",
+        "tests/unit/bootstrap/test_cos_guard_release.py",
         "tests/acceptance/test_upgrade_deadline_rollback.py",
         "tests/acceptance/test_upgrade_readiness_blackout.py",
         "tests/acceptance/test_recovery_readiness_baseline.py",

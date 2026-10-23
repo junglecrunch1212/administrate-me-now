@@ -260,3 +260,43 @@ def test_wrapper_tamper_or_broader_journal_delta_is_refused(
     with pytest.raises(ActivationJournalError, match="CoS guard"):
         manager.activation_journal.create(changed)
     assert not manager.activation_journal.path.exists()
+
+
+def test_real_plugin_replacement_keeps_reverse_guard_preparation_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bootstrap.openclaw_activation import reconcile_member_topology
+    from bootstrap.openclaw_tools import reconcile_administrateme_plugin
+    from tests.unit.bootstrap.test_openclaw_plugin_reconciliation import (
+        _destructive_plugin_cli,
+    )
+
+    manager, value, adapters = _fixture(tmp_path, monkeypatch)
+    source, target = Path(value["predecessor_path"]), Path(value["target_path"])
+    _destructive_plugin_cli(manager.paths, target, monkeypatch)
+    reconcile_member_topology(manager.paths)
+    gateway_path = manager.paths.instance_dir / COORDINATES["gateway"]
+    before = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
+        "administrateme"
+    ]
+    assert before["config"]["forwardIntakeAccounts"]
+    forward = manager._prepare_cos_guard_rebind(
+        adapter_config=adapters, source_release=source, target_release=target
+    )
+    assert forward is not None
+    for name, relative in COORDINATES.items():
+        atomic_write(
+            manager.paths.instance_dir / relative,
+            snapshot_bytes(forward[name]["after"]),
+        )
+    assert reconcile_administrateme_plugin(manager.paths, target)["ok"] is True
+    assert (
+        json.loads(gateway_path.read_bytes())["plugins"]["entries"]["administrateme"]
+        == before
+    )
+    reverse = manager._prepare_cos_guard_rebind(
+        adapter_config=adapters, source_release=target, target_release=source
+    )
+    assert reverse is not None
+    restored_gateway = json.loads(snapshot_bytes(reverse["gateway"]["after"]))
+    assert restored_gateway["plugins"]["entries"]["administrateme"] == before
