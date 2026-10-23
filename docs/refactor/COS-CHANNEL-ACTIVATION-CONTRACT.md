@@ -267,8 +267,10 @@ SELECTED_PYTHON -m bootstrap.cos_channel_activation \
 
 Preparation reads current authority and configuration under the operation lock;
 it does not stop services, change grants, append events, enroll accounts or send
-anything. Pausing uses the existing observation transaction and journals the exact
-plan digest. After the ordinary guarded updater selects the plan's target, use the
+anything. It also runs the supported workspace-instruction preflight and repeats
+that read-only check immediately before pausing. A customized generated block or
+unsafe workspace fails before observation starts; private overlays are preserved.
+Pausing uses the existing observation transaction and journals the exact plan digest. After the ordinary guarded updater selects the plan's target, use the
 same plan from the selected merged checkout and its installed Python:
 
 ```sh
@@ -298,7 +300,10 @@ reply grants and the original reminder subset, creates a new audited activation
 boundary, and retains its backup, settlement and observation recovery behavior.
 On a failed activation, recover through `--recover`; this keeps observation active.
 Do not retry an expired/drifted plan or treat returning to observation as restored
-normal service. Successful restoration is still followed by the bounded affected
+normal service. A plan restores only its successfully committed target; if the
+updater returns to the predecessor, use the existing activation path to restore
+that release's already-authorized operation. This plan does not automatically
+re-enable a rolled-back runtime. Successful restoration is still followed by the bounded affected
 workflow check; preparation alone is not evidence that live replies work.
 
 ### Upgrading an already live CoS

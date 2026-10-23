@@ -1467,3 +1467,45 @@ def test_maintenance_does_not_turn_disabled_native_controls_into_authority(
         _prepare_maintenance(controller, request)
     assert controller.services.stops == stops
     assert json.loads(path.read_text()) == gateway
+
+
+@pytest.mark.parametrize("stage", ["prepare", "pause"])
+def test_workspace_preflight_refuses_custom_generated_instructions_before_maintenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    from adminme.openclaw_topology import member_agent_id
+    from bootstrap.workspace_instructions import compile_instructions
+
+    controller, request = _maintenance_controller(tmp_path, monkeypatch, messages=False)
+    candidate = tmp_path / "candidate"
+    programs = candidate / "bootstrap/openclaw/programs"
+    programs.mkdir(parents=True)
+    (programs / "fixture.md").write_text("Updated generated instructions.\n")
+    controller.repository = candidate
+    adapters = json.loads((controller.config_dir / "adapters.json").read_text())
+    members = set((adapters.get("openclaw_actor_identities") or {}).values()) | set(
+        adapters.get("member_chat_enabled_members") or []
+    )
+    coordinates = ["workspace"] + [
+        f"member-workspaces/{member_agent_id(member)}" for member in sorted(members)
+    ]
+    files = []
+    for coordinate in coordinates:
+        directory = controller.paths.instance_dir / "openclaw" / coordinate
+        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        path = directory / "AGENTS.md"
+        atomic_write(path, compile_instructions(ROOT) + b"Private overlay.\n")
+        files.append(path)
+    plan = _prepare_maintenance(controller, request) if stage == "pause" else None
+    atomic_write(files[0], b"Customized generated instructions.\n")
+    before = [path.read_bytes() for path in files]
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="before maintenance"):
+        if plan is not None:
+            controller.pause_maintenance(plan)
+        else:
+            _prepare_maintenance(controller, request)
+    assert controller.services.stops == stops
+    assert [path.read_bytes() for path in files] == before
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is False

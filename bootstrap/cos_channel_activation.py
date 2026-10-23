@@ -1079,6 +1079,23 @@ class CoSChannelActivator:
             raise CoSActivationError("maintenance predecessor authority changed")
         gateway = controls["gateway"]
         if not restoring:
+            from bootstrap.workspace_instructions import (
+                WorkspaceInstructionsError,
+                prepare_transition,
+            )
+
+            try:
+                # Read and discard the private byte plan. The updater captures
+                # its own transactional plan later; no instructions are printed
+                # or installed during maintenance preparation or containment.
+                prepare_transition(
+                    self.paths,
+                    source_release=release,
+                    target_release=self.repository,
+                    adapter_config=controls["adapters"],
+                )
+            except WorkspaceInstructionsError as exc:
+                raise CoSActivationError(str(exc)) from exc
             if gateway is not None:
                 native_hook = (
                     gateway.get("plugins", {})
