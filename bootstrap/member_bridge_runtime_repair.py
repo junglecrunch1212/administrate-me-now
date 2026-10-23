@@ -53,6 +53,13 @@ UNCHANGED_TREES = (
 # Exact old/new bytes prevent this component repair from becoming a generic
 # runtime-interface bypass. Refresh a pair only with its affected checks.
 APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
+    # A central-only schema was added after the retained write-aware edge.
+    # Bind that additive file exactly; no bridge command or retained event format
+    # changes when installing the Calendar acquisition repair.
+    "adminme/events/schemas/cos_reminders.py": (
+        None,
+        "f1051aa26ecfc4a5912de3acafc6db4e4cfd0276adf731376b27499e387f76d6",
+    ),
     "adminme/apple_service_permissions.py": (
         None,
         "26a6413a1eb41f51a4276007d1a7f25ec2751fac6d4b76d79f22484f46acfee1",
@@ -82,8 +89,8 @@ APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
         "66d9d895be554dba3820cca81c8136678424bfd30bbf86384bdd2370ee738a20",
     ),
     "packs/adapters/calendaring/apple-calendar/adapter.py": (
-        "d508be2822271f8710fbb0843c799662fd49d3f7bfbecc53dab7713b33457e7c",
         "830e04296d6f6a341c08ed324351c6a4cada39bf5e84c6bf5c67e1f3717bea5b",
+        "fd4d07b07f3288ee719cc74a64ce7494e9b4a20c35867a2e7c623641fd00f7e9",
     ),
     "packs/adapters/reminders/apple-eventkit/adapter.py": (
         "c25e284adeaa872292ead2228d0e9b6d2024b837e3adeb09e28779f6bdddaa97",

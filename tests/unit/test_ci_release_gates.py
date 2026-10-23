@@ -804,6 +804,8 @@ def test_enrollment_worker_requires_complete_affected_contract_and_final_binding
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     for boundary in (
         "test_self_service_member_bridge_enrollment.py",
+        "tests/unit/adapters/calendaring",
+        "tests/acceptance/test_apple_calendar_native_date_readback.py",
         "test_member_bridge_permission_recovery.py",
         "test_member_bridge_progress_synchronization.py",
         "test_member_bridge_knowledge_vertical_slice.py",
@@ -1292,6 +1294,7 @@ def test_actual_recovery_junit_gate_rejects_missing_or_partial_evidence(
         "bootstrap/member_bridge_runtime_repair.py",
         "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
         "packs/adapters/reminders/apple-eventkit/adapter.py",
+        "packs/adapters/calendaring/apple-calendar/adapter.py",
     ],
 )
 def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies(
@@ -1300,6 +1303,8 @@ def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies(
     changes = [
         ("M", runtime_path),
         ("A", "tests/unit/adapters/reminders/test_eventkit_selected_sources.py"),
+        ("A", "tests/unit/adapters/calendaring/test_apple_calendar_native_dates.py"),
+        ("A", "tests/acceptance/test_apple_calendar_native_date_readback.py"),
         (
             "M",
             "tests/integration/test_adapter_apple_eventkit_dual_deployment_integration.py",
@@ -1326,6 +1331,8 @@ def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies(
         "bridge/adminme_bridge/adapters/sinks.py",
         "tests/unreviewed.py",
         "bootstrap/arbitrary.py",
+        "adminme/projections/calendars/queries.py",
+        "packs/adapters/calendaring/google-calendar/adapter.py",
     ):
         assert (
             choose_scope(

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import logging
+import math
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,16 +94,13 @@ def _noop_ek_event_store_factory() -> Any:
 
 
 def _to_iso(value: Any) -> str:
-    """Coerce an ``EKEvent`` date accessor value to ISO-8601. PyObjC's
-    NSDate bridges to datetime; tests pass datetime directly. Empty
-    input → ``""`` so the v1 schema's ``min_length=1`` surfaces it."""
-    if value is None:
-        return ""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return str(value)
+    """Normalize native NSDate accessors without using their display strings.
+
+    Keep subsecond precision for provider revisions. Missing required dates
+    retain the empty sentinel so the event schema rejects the snapshot.
+    """
+    parsed = _to_datetime(value)
+    return parsed.isoformat().replace("+00:00", "Z") if parsed is not None else ""
 
 
 def _attendees(value: Any) -> list[dict[str, Any]]:
@@ -145,14 +143,26 @@ def _call(value: Any, name: str, default: Any = None) -> Any:
 
 
 def _to_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    timestamp = _call(value, "timeIntervalSince1970") if value is not None else None
-    return (
-        datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
-        if timestamp is not None
-        else None
-    )
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            timestamp = _call(value, "timeIntervalSince1970")
+            if timestamp is None or isinstance(timestamp, bool):
+                raise ValueError("unsupported date")
+            seconds = float(timestamp)
+            if not math.isfinite(seconds):
+                raise ValueError("non-finite date")
+            parsed = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        raise ValueError("invalid EventKit date") from exc
 
 
 def _adminme_link(value: Any) -> tuple[str | None, str | None]:
