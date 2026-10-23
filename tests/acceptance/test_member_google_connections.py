@@ -628,7 +628,6 @@ def test_production_reads_project_private_facts_without_candidates_across_restar
             assert all(s["policy"]["triage_mode"] == "manual_only" for s in selected)
             for source in selected:
                 writable = read_write and source["adapter_instance_id"] in {
-                    "fixture-personal-gmail",
                     "fixture-personal-calendar",
                     "fixture-personal-tasks",
                 }
