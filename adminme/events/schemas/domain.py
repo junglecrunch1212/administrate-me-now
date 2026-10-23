@@ -289,17 +289,43 @@ class ServiceSourceAuthority(BaseModel):
         return self
 
 
-class TaskCreatedV4(TaskCreatedV2):
+class TaskCreatedV4(BaseModel):
     """Service-self internal work without delegated or provider authority."""
 
-    work_kind: Literal["service_operational"]
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    description: str | None = None
     owner_member_id: None = None
+    due: str | None = None
+    due_date: str | None = None
+    available_from: str | None = None
+    energy: Literal["low", "medium", "high"] | None = None
+    effort_min: int | None = Field(default=None, ge=0)
+    effort: Literal["tiny", "small", "medium", "large"] | None = None
+    domain: str | None = None
+    item_type: (
+        Literal[
+            "task",
+            "purchase",
+            "appointment",
+            "research",
+            "decision",
+            "chore",
+            "maintenance",
+        ]
+        | None
+    ) = None
+    micro_script: str | None = None
+    notes: str | None = None
+    created_by: Literal["service-principal:chief-of-staff"] = Field()
+    source_system: str | None = None
+    source_commitment_id: None = None
+    work_kind: Literal["service_operational"]
     owner_party_id: Literal["service-party:chief-of-staff"] = Field()
     responsible_party_id: Literal["service-party:chief-of-staff"] = Field()
     assignee_party_id: Literal["service-party:chief-of-staff"] = Field()
     beneficiary_party_id: None = None
-    created_by: Literal["service-principal:chief-of-staff"] = Field()
-    source_commitment_id: None = None
     service_assignment_role: Literal["internal"]
     service_party_id: Literal["service-party:chief-of-staff"]
     authority_kind: Literal["service_self"]
@@ -357,8 +383,8 @@ class TaskCreatedV4(TaskCreatedV2):
         return self
 
 
-class _CoSWorkStateChangedBase(BaseModel):
-    """Service-authored lifecycle without fabricating a human member actor."""
+class CoSWorkStateChangedV1(BaseModel):
+    """Existing delegated work lifecycle retains its mandatory exact grant."""
 
     model_config = {"extra": "forbid"}
 
@@ -380,7 +406,7 @@ class _CoSWorkStateChangedBase(BaseModel):
     actor_service_principal_id: str = Field(min_length=1)
     actor_service_party_id: str = Field(min_length=1)
     operator_principal_id: str = Field(min_length=1)
-    authority_grant_id: str | None = Field(default=None, min_length=1)
+    authority_grant_id: str = Field(min_length=1)
     active_member_id: str | None = Field(default=None, min_length=1)
     on_behalf_of_member_id: str | None = Field(default=None, min_length=1)
     waiting_on_party_id: str | None = Field(default=None, min_length=1)
@@ -401,68 +427,92 @@ class _CoSWorkStateChangedBase(BaseModel):
     provider_effect_count: Literal[0] = 0
 
     @model_validator(mode="after")
-    def validate_transition(self) -> _CoSWorkStateChangedBase:
-        if (self.active_member_id is None) != (self.on_behalf_of_member_id is None):
-            raise ValueError("active and on-behalf-of member must travel together")
-        if self.active_member_id != self.on_behalf_of_member_id:
-            raise ValueError("active and on-behalf-of member must agree")
-        expected_status = {
-            "start": "in_progress",
-            "wait_on_member": "waiting_on",
-            "wait_on_other": "waiting_on",
-            "follow_up": "deferred",
-            "hold": "deferred",
-            "resume": "next",
-            "complete": "done",
-            "cancel": "cancelled",
-        }[self.action]
-        if self.resulting_status != expected_status:
-            raise ValueError("CoS work action has an invalid resulting status")
-        if self.action == "wait_on_member":
-            if not self.waiting_on_member_id or self.waiting_on_party_id:
-                raise ValueError("member wait requires exactly one member dependency")
-        elif self.action == "wait_on_other":
-            if not self.waiting_on_party_id or self.waiting_on_member_id:
-                raise ValueError("external wait requires exactly one Party dependency")
-        elif self.action in {"follow_up", "hold"}:
-            if self.follow_up_at is None:
-                raise ValueError("follow-up/hold requires a future activation")
-            if self.waiting_on_member_id or self.waiting_on_party_id:
-                raise ValueError("follow-up/hold cannot name a waiting dependency")
-        elif (
-            self.waiting_on_member_id
-            or self.waiting_on_party_id
-            or self.follow_up_at is not None
-        ):
-            raise ValueError(
-                "this action cannot carry waiting or follow-up coordinates"
-            )
-        if self.follow_up_at is not None and self.follow_up_at <= self.changed_at:
-            raise ValueError("follow-up activation must be after the state change")
+    def validate_transition(self) -> CoSWorkStateChangedV1:
+        _validate_cos_work_transition(self)
         return self
 
 
-class CoSWorkStateChangedV1(_CoSWorkStateChangedBase):
-    """Existing delegated work lifecycle retains its mandatory exact grant."""
-
-    authority_grant_id: str = Field(min_length=1)
-
-
-class CoSWorkStateChangedV2(_CoSWorkStateChangedBase):
+class CoSWorkStateChangedV2(BaseModel):
     """Service-self lifecycle; a date is state, never delivery authorization."""
 
-    authority_kind: Literal["service_self"]
-    authority_grant_id: None = Field()
-    actor_service_principal_id: Literal["service-principal:chief-of-staff"]
-    actor_service_party_id: Literal["service-party:chief-of-staff"]
-    operator_principal_id: Literal["operator:openclaw:automation"]
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
     action: Literal[
         "start", "wait_on_other", "follow_up", "hold", "resume", "complete", "cancel"
     ]
+    resulting_status: Literal[
+        "next", "in_progress", "waiting_on", "deferred", "done", "cancelled"
+    ]
+    changed_at: AwareDatetime
+    actor_service_principal_id: Literal["service-principal:chief-of-staff"]
+    actor_service_party_id: Literal["service-party:chief-of-staff"]
+    operator_principal_id: Literal["operator:openclaw:automation"]
+    authority_grant_id: None = Field()
     active_member_id: None = None
     on_behalf_of_member_id: None = None
-    waiting_on_member_id: None = None
     waiting_on_party_id: Literal["service-party:chief-of-staff"] | None = None
+    waiting_on_member_id: None = None
+    follow_up_at: AwareDatetime | None = None
+    reason_code: Literal[
+        "member_input",
+        "external_dependency",
+        "clarification",
+        "provider_failure",
+        "reconciliation",
+        "scheduled_hold",
+        "completed",
+        "cancelled",
+        "other",
+    ]
+    expected_last_event_id: str = Field(min_length=1)
+    provider_effect_count: Literal[0] = 0
+    authority_kind: Literal["service_self"]
+
+    @model_validator(mode="after")
+    def validate_transition(self) -> CoSWorkStateChangedV2:
+        _validate_cos_work_transition(self)
+        return self
+
+
+def _validate_cos_work_transition(
+    work: CoSWorkStateChangedV1 | CoSWorkStateChangedV2,
+) -> None:
+    """Share lifecycle rules without weakening either version's identity fields."""
+    if (work.active_member_id is None) != (work.on_behalf_of_member_id is None):
+        raise ValueError("active and on-behalf-of member must travel together")
+    if work.active_member_id != work.on_behalf_of_member_id:
+        raise ValueError("active and on-behalf-of member must agree")
+    expected_status = {
+        "start": "in_progress",
+        "wait_on_member": "waiting_on",
+        "wait_on_other": "waiting_on",
+        "follow_up": "deferred",
+        "hold": "deferred",
+        "resume": "next",
+        "complete": "done",
+        "cancel": "cancelled",
+    }[work.action]
+    if work.resulting_status != expected_status:
+        raise ValueError("CoS work action has an invalid resulting status")
+    if work.action == "wait_on_member":
+        if not work.waiting_on_member_id or work.waiting_on_party_id:
+            raise ValueError("member wait requires exactly one member dependency")
+    elif work.action == "wait_on_other":
+        if not work.waiting_on_party_id or work.waiting_on_member_id:
+            raise ValueError("external wait requires exactly one Party dependency")
+    elif work.action in {"follow_up", "hold"}:
+        if work.follow_up_at is None:
+            raise ValueError("follow-up/hold requires a future activation")
+        if work.waiting_on_member_id or work.waiting_on_party_id:
+            raise ValueError("follow-up/hold cannot name a waiting dependency")
+    elif (
+        work.waiting_on_member_id
+        or work.waiting_on_party_id
+        or work.follow_up_at is not None
+    ):
+        raise ValueError("this action cannot carry waiting or follow-up coordinates")
+    if work.follow_up_at is not None and work.follow_up_at <= work.changed_at:
+        raise ValueError("follow-up activation must be after the state change")
 
 
 class TaskCompletedV1(BaseModel):

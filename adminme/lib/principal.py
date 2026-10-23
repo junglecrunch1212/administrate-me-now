@@ -62,11 +62,13 @@ class ServiceSession:
             raise ValueError("service session actor and principal disagree")
         if context.context_scope != "service_private":
             raise ValueError("service session requires service-private authority")
-        if context.permissions - {
-            "read_context",
-            "create_internal_work",
-            "manage_internal_work",
-        }:
+        if not context.permissions.issubset(
+            {
+                "read_context",
+                "create_internal_work",
+                "manage_internal_work",
+            }
+        ):
             raise ValueError("service-self authority cannot include delegated effects")
         if context.resource_owner_principal_id not in {
             None,
