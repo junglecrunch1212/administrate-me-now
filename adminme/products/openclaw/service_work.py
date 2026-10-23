@@ -25,7 +25,7 @@ from adminme.products.openclaw.service_context import (
     active_contexts,
     fact_for,
     source_facts,
-    work_authorized,
+    validate_context_cursor,
     work_view,
 )
 from adminme.projections.tasks.queries import get_task, service_work_for_principal
@@ -272,7 +272,7 @@ async def _audit(
     )
 
 
-def _work(runtime: Any, session: ServiceSession, task_id: str) -> dict[str, Any]:
+async def _work(runtime: Any, session: ServiceSession, task_id: str) -> dict[str, Any]:
     row = get_task(runtime.projections.connection("tasks"), session, task_id=task_id)
     if (
         row is None
@@ -285,7 +285,7 @@ def _work(runtime: Any, session: ServiceSession, task_id: str) -> dict[str, Any]
         or row.get("beneficiary_party_id") is not None
     ):
         raise HTTPException(404, "CoS-private work not found")
-    return work_view(runtime, session, row)
+    return await work_view(runtime, session, row)
 
 
 @router.post("/service-private-work", status_code=201)
@@ -365,7 +365,7 @@ async def create_work(
             "task_id": task_id,
             "event_id": event_id,
             "duplicate": prior is not None,
-            "work": _work(runtime, session, task_id),
+            "work": await _work(runtime, session, task_id),
             "provider_effect_count": 0,
             "timer_registered": False,
         }
@@ -391,7 +391,7 @@ async def transition_work(
         if prior is not None:
             event_id = prior["event_id"]
         else:
-            row = _work(runtime, session, task_id)
+            row = await _work(runtime, session, task_id)
             if row["last_event_id"] != body.expected_last_event_id:
                 raise HTTPException(409, "CoS-private work changed")
             if row["status"] in {"done", "cancelled", "dismissed"}:
@@ -444,7 +444,7 @@ async def transition_work(
             "task_id": task_id,
             "event_id": event_id,
             "duplicate": prior is not None,
-            "work": _work(runtime, session, task_id),
+            "work": await _work(runtime, session, task_id),
             "provider_effect_count": 0,
             "timer_registered": False,
         }
@@ -466,7 +466,7 @@ async def read_work(body: ReadPrivateWorkRequest, request: Request) -> dict[str,
             raise HTTPException(404, "CoS-private history cursor not found")
     next_work_offset: int | None = None
     if body.task_id:
-        work = [_work(runtime, session, body.task_id)]
+        work = [await _work(runtime, session, body.task_id)]
     else:
         work = []
         offset = body.work_offset
@@ -481,8 +481,10 @@ async def read_work(body: ReadPrivateWorkRequest, request: Request) -> dict[str,
                 break
             for row in rows:
                 offset += 1
-                if work_authorized(runtime, session, row):
-                    work.append(work_view(runtime, session, row))
+                try:
+                    work.append(await work_view(runtime, session, row))
+                except HTTPException:
+                    continue
                 if len(work) == body.limit:
                     next_work_offset = offset
                     break
@@ -512,7 +514,7 @@ async def read_work(body: ReadPrivateWorkRequest, request: Request) -> dict[str,
         event_task_id = payload.get("task_id")
         if event_task_id:
             try:
-                _work(runtime, session, event_task_id)
+                await _work(runtime, session, event_task_id)
             except HTTPException:
                 relevant = False
         if visible and body.task_id and event["type"] == "openclaw.tool_call.recorded":
@@ -575,13 +577,14 @@ async def read_context(
     contexts = active_contexts(runtime, session)
     facts = await source_facts(runtime, session, body.source_event_ids)
     if body.after_event_id:
-        await source_facts(runtime, session, [body.after_event_id])
+        await validate_context_cursor(runtime, session, contexts, body.after_event_id)
     next_cursor: str | None = None
     scan_truncated = False
     if not body.source_event_ids:
         scopes = sorted(
             {scope for context in contexts for scope in context.allowed_scopes}
         )
+        scan_boundaries: list[str] = []
         for scope in scopes:
             scanned = 0
             matched = 0
@@ -597,11 +600,19 @@ async def read_context(
                     break
                 if scanned == 1000:
                     scan_truncated = True
+                    scan_boundaries.append(event["event_id"])
                     break
+        # Do not skip a scope that hit its scan budget before finding current
+        # facts. The next page can advance past filtered historical revisions.
+        boundary = min(scan_boundaries) if scan_boundaries else None
+        if boundary is not None:
+            facts = [fact for fact in facts if fact["event_id"] <= boundary]
         facts.sort(key=lambda fact: fact["event_id"])
         if len(facts) > body.limit:
             facts = facts[: body.limit]
             next_cursor = facts[-1]["event_id"]
+        elif boundary is not None:
+            next_cursor = boundary
     await _audit(
         runtime,
         session,
