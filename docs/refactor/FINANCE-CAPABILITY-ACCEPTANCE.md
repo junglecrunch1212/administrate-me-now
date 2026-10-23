@@ -117,9 +117,9 @@ replayable money projection. They require an accepted owner publication and
 optimistic predecessor, preserve immutable history, and grant no provider
 action. The native query can retrieve up to three explicit choices per page
 under current processing authority. Final delivery rejects a choice set changed
-since retrieval, including an initially empty set. Owner API/replay/restart
-coverage passed at `6b2930ef`; native choice and Chromium acceptance remain
-pending for the next revision. Joint decisions,
+since retrieval, including an initially empty set. Owner API/replay/restart, native choice, revocation and synthetic Chromium
+coverage passed at `2b292cdc`. Current-source CI must also validate subsequent
+identity-resolution changes; live member-device acceptance remains separate. Joint decisions,
 outcomes and professional packets still lack production record integration.
 Existing legacy goal events remain distinct.
 

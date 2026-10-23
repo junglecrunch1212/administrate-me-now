@@ -462,3 +462,32 @@ def test_authority_revoked_during_async_finance_read_cannot_receive_result(
         assert response.status_code == 403, response.text
         assert "publication_id" not in response.text
         assert "choices" not in response.text and "metrics" not in response.text
+
+
+@pytest.mark.parametrize("change", ["portal_binding", "transport_key"])
+def test_binding_or_transport_revoked_during_receipt_append_blocks_delivery(
+    tmp_path, monkeypatch, change
+):
+    from adminme.finance import disclosure
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "receipt-binding-race")
+        original = disclosure._append
+
+        async def append_then_change(runtime, session, key, payload):
+            await original(runtime, session, key, payload)
+            if payload["kind"] == "run":
+                if change == "portal_binding":
+                    runtime.settings = replace(
+                        runtime.settings, member_chat_enabled_members=frozenset()
+                    )
+                else:
+                    runtime.settings = replace(
+                        runtime.settings,
+                        openclaw_shared_secret="rotated-synthetic-transport-key",
+                    )
+
+        monkeypatch.setattr(disclosure, "_append", append_then_change)
+        response = calculate(client, "receipt-binding-race")
+        assert response.status_code in {401, 403}, response.text
+        assert "values" not in response.text and "answer_ref" not in response.text

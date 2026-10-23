@@ -124,55 +124,23 @@ converts an offset into liquidity or debt principal into expense. The validated
 Books funding-outlook publication and any required semantic schema extension
 remain an integration-review dependency; the v1 interchange stays unchanged.
 
-At `2f0ddbfa`, hosted functional/static/native checks passed (353 Python and
-92 plugin tests). The v2 benchmark assertion also passed, but its sequential
-baseline was 44.044 ms versus 4.113 ms loaded. This approximately 40 ms transport
-stall is not accepted as performance-isolation evidence. The next harness sets
-TCP_NODELAY explicitly on the supplied listener and both clients to remove
-Nagle/delayed-ACK distortion; all original thresholds remain unchanged.
+Latest hosted evidence at `2b292cdc`: 718 Python tests, 96 native tests and the
+Chrome 155 desktop choice/reload flow passed. The generated event catalog
+matched the merged source exactly. The light mixed-load gate **failed**: raw
+core client p95 4.066 ms baseline versus 4.839 ms loaded (1.190208). Server
+p95 was 1.762 versus 1.824 ms; finance status/calculation p95 were
+16.180/16.252 ms across 251 calls. See the [hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40035805432).
 
-At `75c81d8c`, explicit TCP_NODELAY removed the inflated baseline: before/after
-core p95 were 3.490/3.503 ms, loaded p95 7.219 ms (ratio 2.061), so the gate
-failed. The v3 harness separates finance and core load generators into distinct
-processes/event loops, preserving the independent HTTP server and socket
-settings. It measures 500 core samples per phase at 20 requests/second with
-10 finance calls/second, requires at least 100 successful finance calls, and
-keeps the same 10% and 100/500 ms assertions. This is a specified synthetic
-load, not household traffic or heavy-worker acceptance. The earlier failures
-remain recorded; no passing performance claim follows from changing a harness.
+The v3 harness uses independent server, core client and finance client
+processes, explicit TCP_NODELAY, 500 samples per phase, bracketed baselines,
+20 core requests/second and 10 finance calls/second. Server timings diagnose
+queueing but do not replace the raw client assertion. Earlier v1/v2 failures
+and the rejected delayed-ACK baseline remain in this file's Git history.
 
-At `0e3c17ee`, the v3 independent-client run measured before/after core p95
-3.899/3.710 ms and mixed p95 4.311 ms (ratio 1.105731): **failed** the unchanged
-1.10 gate. Its 251 admitted finance calls measured status/calculation p95
-27.148/35.523 ms. The next candidate retains ordinary response priority through
-the final body send (SSE releases after headers) and batches two exact durable
-receipt reads to reduce shared event-log executor contention. These are runtime
-changes requiring new evidence, not a waiver or a passing performance claim.
-
-At `6b2930ef`, 389 functional Python and 96 native tests passed, while the
-mixed-load gate again failed: before/after core p95 3.842/3.906 ms, mixed
-4.916 ms (ratio 1.258718), with 251 finance calls. Status/calculation p95 were
-22.646/22.881 ms. Source inspection found each committed finance audit waking
-every durable subscriber, including unrelated projections. The next candidate
-uses committed-type wake hints while retaining wildcard, legacy-hint and
-startup recovery behavior, with focused delivery/restart regression coverage.
-No thresholds are relaxed and the performance gate remains unmet.
-
-At `a315afc4`, 696 Python and 96 native tests passed; the new purchase result
-exceeded the conservative reply budget and requires shorter equivalent caveats.
-The isolated Chrome 155 desktop save/pause/preference/reload flow passed and its
-screenshot was inspected. Mixed load still failed: baseline 4.357 ms versus
-5.581 ms loaded (1.280843); finance status/calculation p95 improved to
-16.863/16.972 ms. The next diagnostic records server response time separately
-from client latency to locate the remaining contention. The original client
-10% assertion remains unchanged; instrumentation is not a performance fix.
-
-At `1dd86ded`, the purchase response passed its native budget check; the only
-functional failure was a stale caption assertion after clarifying workbook
-goals (696 other tests passed). Native (96) and Chrome checks passed. The
-diagnostic measured core server p95 1.809 ms baseline versus 2.054 ms mixed,
-while raw client p95 was 4.200 versus 5.115 ms (1.217878, still failed). Finance
-reads are next moved to the existing asynchronous projection read API: one
-coherent worker callback instead of synchronous per-statement calls from the
-HTTP loop. New tests revoke authority during that awaited read and require
-final delivery to refuse its result.
+Asynchronous whole-query reads reduced measured server contention. The next
+candidate also runs initial/post-audit identity resolution and initial receipt
+authority resolution on the existing projection worker using detached values.
+Final authority, publication, choice and audience checks remain synchronous
+immediately before disclosure; no grant is cached across requests. Tests revoke
+authority, transport and portal bindings during awaited reads/writes. The
+10% gate remains unchanged and unmet until a genuine passing run.

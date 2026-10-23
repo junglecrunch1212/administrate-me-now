@@ -170,7 +170,9 @@ async def record_disclosure(
     if not run_id or len(run_id) > 200:
         raise FinanceDisclosureError("finance_disclosure_run_required")
     run_hash = _digest(run_id)
-    authority_hash = validate_current_authority(runtime, session)
+    authority_hash = await runtime.projections.read(
+        "parties", lambda _conn: validate_current_authority(runtime, session)
+    )
     async with runtime.settings_command_locks.setdefault(
         f"finance-disclosure:{session_hash}", asyncio.Lock()
     ):

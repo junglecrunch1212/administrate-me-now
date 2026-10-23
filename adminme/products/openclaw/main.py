@@ -4183,6 +4183,27 @@ def _finance_admission_identity(
     return runtime.settings.instance.tenant_id, member
 
 
+async def _finance_session(request: Request, provenance: Provenance) -> Session:
+    """Resolve the existing exact identity contract without blocking HTTP I/O.
+
+    Only detached dataclass fields cross the projection worker boundary. This
+    does not cache a grant; final delivery independently rechecks current scope.
+    """
+    from dataclasses import asdict
+    from adminme.service_identities import ServiceRequestContext
+
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "CoS delegation projection is unavailable")
+    fields = await runtime.projections.read(
+        "parties", lambda _conn: asdict(_session(request, provenance))
+    )
+    context = fields.get("service_context")
+    if context is not None:
+        fields["service_context"] = ServiceRequestContext(**context)
+    return Session(**fields)
+
+
 def _finance_private_context(
     runtime: Any, session: Session, provenance: Provenance
 ) -> bool:
@@ -4263,7 +4284,7 @@ async def _finance_delivery(
     runtime = _runtime(request)
     await _record_tool_call(request, session, body.provenance, operation=operation)
     # The audit append yields: resolve the effective grant again afterwards.
-    latest = _session(request, body.provenance)
+    latest = await _finance_session(request, body.provenance)
     # Frozen Session equality includes tenant, actor/view identity, allowed
     # audience via the exact service grant, grant ID, permissions and quorum.
     # A newly authorized different owner/grant cannot receive this old result.
@@ -4301,6 +4322,11 @@ async def _finance_delivery(
                 )
             except FinanceDisclosureError as exc:
                 raise HTTPException(403, str(exc)) from None
+            # Receipt persistence yields. Recheck the transport and exact private
+            # audience binding as well as the domain grant checked by the writer.
+            _authenticate(request)
+            if not _finance_permitted(runtime, latest, body.provenance):
+                raise HTTPException(403, "finance_private_context_changed")
         try:
             runtime._finance_turn_budgets.check_delivery(receipt)
         except FinanceBudgetError as exc:
@@ -4357,7 +4383,7 @@ async def finance_status(
     ) as admitted:
         # Scope resolution touches the projection executor: defer even this work
         # until ordinary household requests have finished.
-        session = _session(request, body.provenance)
+        session = await _finance_session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4545,7 +4571,7 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
     ) as admitted:
         # Scope resolution touches the projection executor: defer even this work
         # until ordinary household requests have finished.
-        session = _session(request, body.provenance)
+        session = await _finance_session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4629,7 +4655,7 @@ async def finance_calculate(
     ) as admitted:
         # Scope resolution touches the projection executor: defer even this work
         # until ordinary household requests have finished.
-        session = _session(request, body.provenance)
+        session = await _finance_session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4700,7 +4726,7 @@ async def finance_job(body: FinanceJobRequest, request: Request) -> dict[str, An
     ) as admitted:
         # Scope resolution touches the projection executor: defer even this work
         # until ordinary household requests have finished.
-        session = _session(request, body.provenance)
+        session = await _finance_session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
