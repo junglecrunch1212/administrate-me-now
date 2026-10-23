@@ -28,8 +28,8 @@ function fixture(enabled = true) {
   registerHooks(api, runtime); registerMemberWorkTool(api, runtime);
   const context = { agentId: agent, sessionKey: session, runId: "run-fixture" };
   const bind = (id = "call-fixture") => hooks.get("before_tool_call")!({ toolName, toolCallId: id, params: {} }, context);
-  const start = async () => {
-    await hooks.get("message_received")!({ from: actor, senderId: actor, content: text, messageId: "native-fixture" }, { channelId: "imessage", accountId: account, sessionKey: session, agentId: agent });
+  const start = async (messageId = "native-fixture") => {
+    await hooks.get("message_received")!({ from: actor, senderId: actor, content: text, messageId }, { channelId: "imessage", accountId: account, sessionKey: session, agentId: agent });
     await hooks.get("before_agent_reply")!({ cleanedBody: text }, context);
     return bind();
   };
@@ -53,6 +53,11 @@ describe("member-requested internal CoS work", () => {
     ] }, f.context);
     expect(f.send).not.toHaveBeenCalled();
     expect(f.request.mock.calls).toHaveLength(2); // No absent standing-reply authority borrowed.
+    // Finishing an internal-only turn consumes its captured input too; a later
+    // identical instruction must bind to the new native message unambiguously.
+    expect(await f.start("native-next-request")).toBeUndefined();
+    await f.tool.execute("call-fixture", { action: "create", instruction: text });
+    expect(f.request.mock.calls.at(-1)?.[1].provenance.message_id).toBe("native-next-request");
   });
 
   it("binds status to a fresh current member input and exposes no caller-chosen audience", async () => {

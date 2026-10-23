@@ -156,8 +156,13 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
     if (!session || !inbox || !event.success) return;
     const matches = matchInputs(inbox, event.messages, session, runId);
     const input = matches.at(-1)?.[1];
-    if (!input || context.agentId !== input.provenance.agent_id ||
-        !runtime.transport.config.standingSelfReplyBindings.includes(input.binding)) return;
+    if (!input || context.agentId !== input.provenance.agent_id) return;
+    if (!runtime.transport.config.standingSelfReplyBindings.includes(input.binding)) {
+      // Internal-only turns still finish: stale identical inputs must not make
+      // the next explicit request ambiguous or retain unnecessary private text.
+      for (const [key] of matches) inbox.delete(key);
+      return;
+    }
     const accountId = input.provenance.account_id;
     if (!accountId) return;
     const parts = replyParts(event.messages);
