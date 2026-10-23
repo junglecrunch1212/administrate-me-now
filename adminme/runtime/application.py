@@ -169,6 +169,7 @@ from adminme.source_assessment_recovery import (
     recovery_batch_fingerprint,
 )
 from adminme.temporary_surfaces import TemporarySurfaceStore
+from adminme.finance.admission import FinanceAdmissionGate, FinancePriorityMiddleware
 
 _log = logging.getLogger(__name__)
 
@@ -824,6 +825,7 @@ class AdministrateMeRuntime:
         self.settings_command_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
+        self.finance_admission = FinanceAdmissionGate()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
         self.member_chat_last_failure: dict[str, Any] | None = None
         self.observation: ObservationManager | None = None
@@ -3951,6 +3953,8 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.runtime = runtime
+    if settings.finance_publications_enabled:
+        app.add_middleware(FinancePriorityMiddleware, gate=runtime.finance_admission)
     app.include_router(core_router)
     app.include_router(comms_router)
     app.include_router(capture_router)

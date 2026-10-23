@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -144,6 +144,52 @@ def validate_publication(value: dict[str, Any]) -> dict[str, Any]:
                     raise PublicationError("publication_release_incomplete")
                 if report["report_id"] == "scenarios" and not metric["scenario_id"]:
                     raise PublicationError("publication_scenario_identity_required")
+        if "cash_projection" in value:
+            from adminme.finance.cash_publication import (
+                validate_cash_export,
+                cash_reports,
+            )
+
+            validate_cash_export(
+                value["cash_projection"],
+                references,
+                datetime.fromisoformat(value["accepted_at"]),
+            )
+            generated_ids = [
+                m["metric_id"]
+                for r in cash_reports(value["cash_projection"])
+                for m in r["metrics"]
+            ]
+            if (
+                len(generated_ids) != len(set(generated_ids))
+                or set(generated_ids) & metric_ids
+            ):
+                raise PublicationError("cash_projection_metric_collision")
+        publication_accepted = datetime.fromisoformat(value["accepted_at"]).astimezone(
+            timezone.utc
+        )
+        for source in value["source_coverage"]:
+            observed = datetime.fromisoformat(source["observed_at"]).astimezone(
+                timezone.utc
+            )
+            accepted_at = datetime.fromisoformat(source["accepted_at"]).astimezone(
+                timezone.utc
+            )
+            if not observed <= accepted_at <= publication_accepted:
+                raise PublicationError("publication_source_clock_order")
+            if (
+                source["valuation_date"]
+                and date.fromisoformat(source["valuation_date"]) > observed.date()
+            ):
+                raise PublicationError("publication_future_valuation")
+        for report in value["reports"]:
+            if (
+                report["basis"]
+                in {"accounting_actual", "cash_movement", "observed_value"}
+                and date.fromisoformat(report["period_end"])
+                > publication_accepted.date()
+            ):
+                raise PublicationError("publication_future_actual")
         # Clock dimensions remain independent; acceptance cannot precede creation.
         if datetime.fromisoformat(value["accepted_at"]) < datetime.fromisoformat(
             value["published_at"]

@@ -741,6 +741,90 @@ async def test_unconfigured_finance_is_unknown_not_zero(rig: dict[str, Any]) -> 
     assert snapshot["reports"]["liquid_cash"]["state"] == "missing_evidence"
 
 
+async def test_workbook_receipts_preserve_event_scope_across_replay(
+    rig: dict[str, Any],
+) -> None:
+    shared_payload = {
+        "workbook_name": "shared-fixture.xlsx",
+        "workbook_sha256": "a" * 64,
+        "workbook_schema_version": 2,
+        "published_at": "2026-08-01T12:00:00Z",
+        "published_by_party_id": "xlsx_reverse",
+        "validation_state": "valid",
+        "validation_failures": [],
+    }
+    await rig["log"].append(
+        _envelope(
+            "finance.workbook_published",
+            shared_payload,
+            sensitivity="sensitive",
+        )
+    )
+    private_payload = {
+        **shared_payload,
+        "workbook_name": "private-fixture.xlsx",
+        "published_at": "2026-08-02T12:00:00Z",
+        # Attribution alone must not make a private envelope readable.
+        "published_by_party_id": "test_actor",
+        "validation_state": "rejected",
+        "validation_failures": ["Private synthetic validation detail"],
+    }
+    last = await rig["log"].append(
+        _envelope(
+            "finance.workbook_published",
+            private_payload,
+            owner_scope="private:other-member",
+            sensitivity="privileged",
+        )
+    )
+    await rig["bus"].notify(last)
+    await _wait_for_checkpoint(rig["bus"], "projection:money", last)
+    for replay in (False, True):
+        if replay:
+            await rig["runner"].rebuild("money")
+        conn = rig["runner"].connection("money")
+        visible = finance_snapshot(
+            conn, _S(), as_of=datetime(2026, 8, 15, tzinfo=timezone.utc)
+        )
+        assert visible["workbook"]["workbook_name"] == "shared-fixture.xlsx"
+        assert visible["workbook"]["validation_state"] == "valid"
+        assert "Private synthetic" not in json.dumps(visible)
+        owner = build_internal_session("other-member", "principal", "tenant-a")
+        private = finance_snapshot(
+            conn, owner, as_of=datetime(2026, 8, 15, tzinfo=timezone.utc)
+        )
+        assert private["workbook"]["workbook_name"] == "private-fixture.xlsx"
+        assert private["workbook"]["validation_state"] == "rejected"
+
+
+async def test_historical_workbook_receipt_without_scope_is_denied(
+    rig: dict[str, Any],
+) -> None:
+    conn = rig["runner"].connection("money")
+    # Older installations had these nine fields only. Migration defaults for
+    # the newly added scopes deliberately carry no authority until replay.
+    conn.execute(
+        "INSERT INTO finance_workbook_state (tenant_id,workbook_name,workbook_sha256,"
+        "workbook_schema_version,published_at,published_by_party_id,validation_state,"
+        "validation_failures_json,last_event_id) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "tenant-a",
+            "legacy-fixture.xlsx",
+            "a" * 64,
+            2,
+            "2026-08-01T12:00:00Z",
+            "test_actor",
+            "valid",
+            "[]",
+            "legacy-receipt",
+        ),
+    )
+    snapshot = finance_snapshot(
+        conn, _S(), as_of=datetime(2026, 8, 15, tzinfo=timezone.utc)
+    )
+    assert snapshot["workbook"] is None
+
+
 async def test_accepted_books_display_limits_preserve_required_qualifications(
     rig: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -814,11 +898,14 @@ async def test_finance_nonprivate_sessions_do_not_learn_source_existence(
     )
     await rig["bus"].notify(last)
     await _wait_for_checkpoint(rig["bus"], "projection:money", last)
-    session = (
-        replace(_S(), view_member_id="other-member")
-        if role == "view_as"
-        else build_internal_session("test_actor", role, "tenant-a")
-    )
+    if role == "view_as":
+        session = replace(_S(), view_member_id="other-member")
+    elif role == "ambient":
+        # Ambient cannot act internally. Construct its read-session shape
+        # directly to exercise defense in depth at the projection boundary.
+        session = replace(_S(), auth_role="ambient", view_role="ambient")
+    else:
+        session = build_internal_session("test_actor", role, "tenant-a")
     snapshot = finance_snapshot(
         rig["runner"].connection("money"),
         session,

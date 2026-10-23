@@ -1101,7 +1101,7 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
             "Cash flow plan",
             "Scenario lab",
             "Goals and capital plans",
-            "Net worth inputs",
+            "Observed asset and liability inputs",
             "Source and model health",
         ):
             assert copy in js

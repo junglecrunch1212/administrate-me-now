@@ -409,6 +409,18 @@ def test_cash_opening_breach_and_zero_explicit_events():
     assert out["minimum_cash_worst_timing_minor"] == 2000
 
 
+@pytest.mark.parametrize("date_value", [1893456000, "20300101", "2030-01-01T00:00:00Z"])
+def test_numeric_or_ambiguous_dates_are_not_silently_coerced(date_value):
+    with pytest.raises(CalculatorError, match="invalid_inputs"):
+        values("cash_ladder", start_date=date_value)
+
+
+@pytest.mark.parametrize("value", [1, "true", "yes", None])
+def test_confirmation_flags_require_actual_boolean_true(value):
+    with pytest.raises(CalculatorError, match="invalid_inputs"):
+        values("cash_ladder", opening_reconciled=value)
+
+
 def test_reserve_floor_is_chosen_and_reference_zero_is_invalid():
     assert values("reserve_coverage")["reference_months_covered"] == "4.000000"
     assert values("reserve_coverage")["above_chosen_floor_minor"] == 60000

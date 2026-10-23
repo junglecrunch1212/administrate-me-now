@@ -19,6 +19,14 @@ receipts, assumptions and exclusions. Every successful result is `qualified` and
 advice, or permission to act. Unknown model/version and invalid or missing inputs
 produce safe error codes without echoing financial values.
 
+Each result has a SHA-256 identity over model/version and normalized typed
+inputs, including default values, currency, dates and canonical identifiers.
+Equivalent decimal strings normalize identically; identifiers do not. Every
+numeric metric ID includes that result identity, so comparisons cannot confuse
+two alternatives that happen to use the same model and field names. This digest
+is evidence identity, not authorization or permission to reuse another audience's
+result; the service must still enforce its actor/policy/publication cache key.
+
 | Model | Supported calculation | Boundary and independent oracle |
 |---|---|---|
 | `cash_ladder` | At most 100 dated flows over 366 days; independent early/late settlement bounds, minimum and closing cash, reserve breach date | Reconciled opening and complete mandatory flows required. No intraday/holiday inference. Hand-worked early bill/late income ledger tests. |

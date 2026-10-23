@@ -73,3 +73,22 @@ private accepted-data comparisons, model/policy/tool verification, legacy XLSX
 exclusion, guarded update/backup/rollback, authenticated member acceptance and
 measured general-CoS performance. This candidate authorizes none of those live
 operations.
+
+## Dated projection export
+
+The optional `cash_projection` object preserves Books-produced current,
+expected and chosen scenarios, each with 7/30/90/180/365-day horizons. Horizon
+end dates are `as_of_date + days` in the declared timezone/calendar-date model.
+The opening is a reconciled liquid-cash value, not net worth. Mandatory-flow
+coverage is explicit; missing opening/coverage forbids numerical safety results.
+Shortage/surplus dates are accepted engine signals, not recomputed here.
+
+`cash_projection` and `cash_events` reports index these accepted values and
+planned events unchanged. Events retain direction, kind, certainty, earliest/
+latest dates and protected evidence references. They are forecasts, not actual
+posted transactions. Event detail defaults to the current scenario and 90 days;
+callers can explicitly select a supported scenario/horizon. Economic-cost
+measures are not separately defined in v1; a later reviewed schema version must
+specify them rather than relabel cash or accounting numbers. The dated synthetic
+fixture is `accepted-publication.dated.synthetic.json`. Schema adoption remains
+a coordinating review gate, independent from this producer-neutral reader.

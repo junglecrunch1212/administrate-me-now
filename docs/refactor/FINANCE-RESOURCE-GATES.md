@@ -6,6 +6,18 @@ The accepted-publication finance contract is disabled pending activation.
 
 ## Implemented boundaries
 
+`adminme.finance.admission` gives ordinary HTTP work priority over light
+finance requests. After authenticating and resolving the member, finance
+waits for a five-millisecond foreground quiet interval, with one active
+finance request and at most four FIFO waiters (one waiting slot per member).
+Admission expires after 250 milliseconds with a typed busy result. Busy
+responses still traverse the existing audit path; private data is not read
+before admission, and authority is resolved again after waiting. Cancellation
+and failures release the lane. Non-finance requests never acquire this lane.
+The observer releases at response headers, so long chat streams cannot block
+their own tools. This is bounded HTTP admission, not preemption of synchronous
+Python or proof of reserved Gateway/model capacity.
+
 `adminme.finance.budgets` admits work using tenant, resolved actor, audience,
 authenticated session and inbound message identity. Missing identity refuses
 admission. A new correlation ID cannot reset the budget. The pinned transport
@@ -85,3 +97,14 @@ test directory. It asserts the 10% regression and 100/500 ms status/calculation
 targets. This preliminary harness does not prove a large accepted ledger,
 heavy-worker memory/termination, reminder delivery or deployment hardware.
 Its default skip is explicit; a skipped benchmark is not a passed gate.
+
+The first hosted measurement **failed** the unchanged 10% raw client latency
+gate: baseline p95 1.380 ms, mixed core p95 2.418 ms, ratio 1.752. Warm finance
+status/calculation p95 were 8.759/9.181 ms. The failure is retained; neither
+those small absolute times nor an admission configuration proves isolation.
+The next harness also reports a diagnostic matched-thread control with an
+existing lightweight system HTTP request, plus server-only core timing, to
+separate shared TestClient/portal contention from application work. Those
+diagnostics do not replace the original baseline, relax its assertion or
+establish live hardware performance. New admission behavior requires a fresh
+hosted result before any passing claim.

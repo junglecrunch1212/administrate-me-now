@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +28,7 @@ type GatewayRegistration = {
 };
 type HookRegistration = {
   handler: (event: Record<string, unknown>, context: Record<string, unknown>) => unknown;
+  options?: Record<string, unknown>;
 };
 
 function fakeApi(
@@ -69,9 +70,9 @@ function fakeApi(
     registerService(service: OpenClawPluginService) {
       services.push(service);
     },
-    on(hook: string, handler: HookRegistration["handler"]) {
+    on(hook: string, handler: HookRegistration["handler"], options?: Record<string, unknown>) {
       const registrations = hooks.get(hook) ?? [];
-      registrations.push({ handler });
+      registrations.push({ handler, ...(options ? { options } : {}) });
       hooks.set(hook, registrations);
     },
   } as unknown as OpenClawPluginApi;
@@ -181,9 +182,16 @@ describe("native OpenClaw contract fixture", () => {
   });
 
   it("binds finance calls to the host run and rejects missing or reused bindings", async () => {
-    const runtime = fakeApi();
+    const agent = "adminme-0123456789abcdef";
+    const peer = "0123456789abcdefabcd";
+    const signature = createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!).update(`portal-session|${peer}`).digest("hex").slice(0, 32);
+    const runtime = fakeApi({ memberAgentIds: [agent] });
     const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
-    const context = toolContext();
+    const context = { agentId: agent, sessionKey: `agent:${agent}:administrateme-portal-${peer}-${signature}`, sessionId: "private-finance-session", messageChannel: "gateway" };
+    for (const handler of runtime.hooks.get("before_agent_reply")!) {
+      await handler.handler({ cleanedBody: "Review my finance question." }, { ...context, runId: "host-run" });
+    }
+    expect(runtime.hooks.get("before_agent_reply")![0]!.options).toMatchObject({ eligibleTriggers: ["user"] });
     const names = ["status", "query", "calculate", "job"];
     for (const suffix of names) {
       const name = `administrateme_finance_${suffix}`;
@@ -195,13 +203,44 @@ describe("native OpenClaw contract fixture", () => {
       })).toBeUndefined();
       await tool.execute(callId, {});
       expect(requestBody(fetchMock, names.indexOf(suffix)).provenance).toMatchObject({
-        message_id: "finance-run:host-run", actor_id: "actor-a", session_key: context.sessionKey,
+        message_id: "finance-run:host-run", actor_id: `portal:${peer}`, session_key: context.sessionKey,
       });
       await expect(tool.execute(callId, {})).rejects.toThrow("host-bound");
     }
     expect(await hook({ toolName: "administrateme_finance_status", params: {} }, {
       sessionKey: context.sessionKey, agentId: context.agentId,
     })).toMatchObject({ block: true });
+    expect(await hook({ toolName: "administrateme_finance_status", params: {}, toolCallId: "background" }, {
+      ...context, runId: "unadmitted-background", toolCallId: "background",
+    })).toMatchObject({ block: true });
+    for (const sessionKey of ["main", "shared", `agent:${agent}:imessage:fixture:group:chat`, `${context.sessionKey}:thread:group`, `adminme:tenant:actor:dm`]) {
+      for (const handler of runtime.hooks.get("before_agent_reply")!) await handler.handler({ cleanedBody: "Review" }, { ...context, sessionKey, runId: "unsafe-run" });
+      expect(await hook({ toolName: "administrateme_finance_status", params: {}, toolCallId: "unsafe" }, {
+        ...context, sessionKey, runId: "unsafe-run", toolCallId: "unsafe",
+      })).toMatchObject({ block: true });
+    }
+    const count = fetchMock.mock.calls.length;
+    for (const deliveryContext of [{ channel: "discord", accountId: "group", to: "channel" }, { channel: "administrateme-portal", accountId: "member-portal", threadId: "group" }]) {
+      await hook({ toolName: "administrateme_finance_status", params: {}, toolCallId: "contradiction" }, { ...context, runId: "host-run", toolCallId: "contradiction" });
+      const tool = runtime.tools.get("administrateme_finance_status")!({ ...context, deliveryContext }) as AnyAgentTool;
+      await expect(tool.execute("contradiction", {})).rejects.toThrow(/private/);
+    }
+    expect(fetchMock.mock.calls.length).toBe(count);
+  });
+
+  it("admits only the exactly configured private iMessage finance audience", async () => {
+    const agent = "adminme-0123456789abcdef";
+    const account = "fixture-finance";
+    const actor = "+12025550101"; // fixture:tenant_data:ok
+    const binding = createHash("sha256").update(JSON.stringify(["cos-self-reply-v1", agent, "imessage", account, actor])).digest("hex");
+    const runtime = fakeApi({ memberAgentIds: [agent], standingSelfReplyBindings: [binding] });
+    const context = { agentId: agent, sessionKey: `agent:${agent}:imessage:${account}:direct:${actor}`, requesterSenderId: actor, agentAccountId: account, messageChannel: "imessage", deliveryContext: { channel: "imessage", accountId: account, to: actor } };
+    for (const handler of runtime.hooks.get("before_agent_reply")!) await handler.handler({ cleanedBody: "Review my budget" }, { ...context, runId: "private-run" });
+    const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
+    expect(await hook({ toolName: "administrateme_finance_status", params: {}, toolCallId: "private-call" }, { ...context, runId: "private-run", toolCallId: "private-call" })).toBeUndefined();
+    const tool = runtime.tools.get("administrateme_finance_status")!(context) as AnyAgentTool;
+    await tool.execute("private-call", {});
+    expect(requestBody(fetchMock).provenance).toMatchObject({ actor_id: actor, account_id: account, channel_id: "imessage", message_id: "finance-run:private-run" });
   });
 
   it("pins the current native manifest and registers every declared surface", async () => {

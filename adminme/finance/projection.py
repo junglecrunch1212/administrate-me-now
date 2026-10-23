@@ -1,6 +1,8 @@
 """Atomic, replayable publication projection within the money transaction."""
 
 from typing import Any
+from datetime import datetime, timezone
+from adminme.finance.cash_publication import cash_reports
 from adminme.finance.publication import (
     PublicationError,
     canonical_bytes,
@@ -47,6 +49,7 @@ def apply_publication(envelope: dict[str, Any], conn: Any) -> None:
         if k
         not in {
             "reports",
+            "cash_projection",
             "accepted_journal_revision_ids",
             "excluded_pending_revision_ids",
             "source_coverage",
@@ -55,15 +58,30 @@ def apply_publication(envelope: dict[str, Any], conn: Any) -> None:
     }
     metadata["source_clock_summary"] = {
         "oldest_observed_at": min(
-            (s["observed_at"] for s in p["source_coverage"]), default=None
+            (
+                datetime.fromisoformat(s["observed_at"])
+                .astimezone(timezone.utc)
+                .isoformat()
+                for s in p["source_coverage"]
+            ),
+            default=None,
         ),
         "oldest_accepted_at": min(
-            (s["accepted_at"] for s in p["source_coverage"]), default=None
+            (
+                datetime.fromisoformat(s["accepted_at"])
+                .astimezone(timezone.utc)
+                .isoformat()
+                for s in p["source_coverage"]
+            ),
+            default=None,
         ),
         "current_freshness_verified": False,
     }
+    reports = p["reports"] + (
+        cash_reports(p["cash_projection"]) if "cash_projection" in p else []
+    )
     metadata["reports"] = [
-        {k: v for k, v in r.items() if k != "metrics"} for r in p["reports"]
+        {k: v for k, v in r.items() if k != "metrics"} for r in reports
     ]
     conn.execute(
         "INSERT INTO finance_publications VALUES (?,?,?,?,?,?,?,?)",
@@ -76,7 +94,7 @@ def apply_publication(envelope: dict[str, Any], conn: Any) -> None:
             envelope["event_id"],
         ),
     )
-    for report in p["reports"]:
+    for report in reports:
         conn.executemany(
             "INSERT INTO finance_publication_metrics VALUES (?,?,?,?,?,?,?,?)",
             [

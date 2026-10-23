@@ -296,12 +296,19 @@ def finance_snapshot(
         (session.tenant_id,),
     )
 
+    scopes = tuple(sorted(session.allowed_scopes))
+    placeholders = ",".join("?" for _ in scopes)
     workbook_row = conn.execute(
-        "SELECT * FROM finance_workbook_state WHERE tenant_id=? AND published_by_party_id=? "
-        "ORDER BY published_at DESC LIMIT 1",
-        (session.tenant_id, session.auth_member_id),
+        "SELECT * FROM finance_workbook_state WHERE tenant_id=? "
+        f"AND owner_scope IN ({placeholders}) "
+        f"AND visibility_scope IN ({placeholders}) "
+        "AND (sensitivity != 'privileged' OR owner_scope=?) "
+        "ORDER BY published_at DESC, workbook_name LIMIT 1",
+        (session.tenant_id, *scopes, *scopes, f"private:{session.auth_member_id}"),
     ).fetchone()
-    workbook = dict(workbook_row) if workbook_row is not None else None
+    workbook = filter_one(
+        session, dict(workbook_row) if workbook_row is not None else None
+    )
     if workbook is not None:
         try:
             workbook["validation_failures"] = json.loads(

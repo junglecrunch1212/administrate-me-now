@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from adminme.events.envelope import EventEnvelope
 from adminme.finance.publication import (
@@ -61,6 +61,10 @@ async def import_publication(
             or p["owner_id"] != session.auth_member_id
         ):
             raise PublicationError("publication_owner_authority_required")
+        if datetime.fromisoformat(p["accepted_at"]) > datetime.now(
+            timezone.utc
+        ) + timedelta(minutes=5):
+            raise PublicationError("publication_future_clock")
         event_key = _key(p)
         existing = await runtime.event_log.get_by_idempotency(
             session.tenant_id, event_key

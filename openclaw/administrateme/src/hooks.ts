@@ -13,7 +13,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { rememberSelfReply, registerSelfReplies, bindReminderTool } from "./self-replies.js";
 import { TransportError } from "./transport.js";
 import { provenanceFromServiceTool, SERVICE_PRIVATE_TOOL_NAMES } from "./service-private.js";
-import { bindFinanceTurn, FINANCE_TOOLS } from "./finance-turns.js";
+import { bindFinanceTurn, FINANCE_TOOLS, registerFinanceTurns } from "./finance-turns.js";
 
 type BridgeMarker = {
   consent?: unknown;
@@ -22,6 +22,7 @@ type BridgeMarker = {
 };
 
 export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): void {
+  registerFinanceTurns(api, runtime);
   registerSelfReplies(api, runtime);
   api.on(
     "before_tool_call",

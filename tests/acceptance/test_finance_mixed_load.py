@@ -19,8 +19,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from adminme.demo import FIXTURE_MEMBER_ID, canonical_seed_events
+from adminme.openclaw_topology import member_agent_id
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 
@@ -55,10 +57,41 @@ def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
         settings,
         finance_publications_enabled=True,
         finance_model_members=frozenset({FIXTURE_MEMBER_ID}),
+        member_chat_enabled_members=frozenset({FIXTURE_MEMBER_ID}),
     )
     app = create_application(settings)
+    phase = ["warmup"]
+    server_core_latencies: dict[str, list[float]] = {}
+
+    class CoreTimingMiddleware:
+        """Test-only server timing; raw client latency remains the release gate."""
+
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http" or scope.get("path") not in {
+                "/api/core/v1/what-now",
+                "/api/core/v1/commitments/active",
+            }:
+                await self.app(scope, receive, send)
+                return
+            measured_phase = phase[0]
+            started = time.perf_counter()
+
+            async def measured_send(message: Message) -> None:
+                if message["type"] == "http.response.start":
+                    server_core_latencies.setdefault(measured_phase, []).append(
+                        time.perf_counter() - started
+                    )
+                await send(message)
+
+            await self.app(scope, receive, measured_send)
+
+    app.add_middleware(CoreTimingMiddleware)
     with TestClient(app) as client:
         runtime = app.state.runtime
+        finance_actor, finance_session = runtime.member_chat_binding(FIXTURE_MEMBER_ID)
         assert client.portal is not None
 
         async def seed() -> None:
@@ -87,13 +120,13 @@ def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             nonlocal calls
             calls += 1
             provenance = {
-                "actor_id": "fixture-actor",
-                "agent_id": "fixture-agent",
-                "session_key": "fixture-session",
+                "actor_id": finance_actor,
+                "agent_id": member_agent_id(FIXTURE_MEMBER_ID),
+                "session_key": finance_session,
                 "session_id": "fixture-session",
-                "channel_id": "discord",
-                "account_id": "fixture-account",
-                "message_id": f"fixture-message-{calls}",
+                "channel_id": "administrateme-portal",
+                "account_id": "member-portal",
+                "message_id": f"finance-run:fixture-message-{calls}",
                 "correlation_id": f"fixture-call-{calls}",
                 "call_kind": "tool",
                 "openclaw_version": OPENCLAW_VERSION,
@@ -154,9 +187,12 @@ def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
         for index in range(20):
             core_call(index)
             finance_call()
+        phase[0] = "baseline_before"
         baseline = [core_call(index) for index in range(SAMPLES)]
         mixed: list[float] = []
         finance: list[float] = []
+        contention_control: list[float] = []
+        phase[0] = "finance_mixed"
         with ThreadPoolExecutor(max_workers=2) as pool:
             for index in range(SAMPLES):
                 barrier = threading.Barrier(2)
@@ -173,11 +209,38 @@ def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                 core_future = pool.submit(parallel_core)
                 mixed.append(core_future.result(timeout=10))
                 finance.append(finance_future.result(timeout=10))
+            # Diagnostic only: identical concurrent TestClient dispatch with a
+            # cheap existing HTTP request instead of finance. This measures
+            # shared-client/portal contention plus that lightweight route;
+            # it does NOT replace or relax the sequential baseline gate.
+            phase[0] = "contention_control"
+            for index in range(SAMPLES):
+                barrier = threading.Barrier(2)
+
+                def parallel_control() -> None:
+                    barrier.wait(timeout=10)
+                    response = client.get("/api/system/live")
+                    assert response.status_code == 200, response.text
+
+                def parallel_core() -> float:
+                    barrier.wait(timeout=10)
+                    return core_call(index)
+
+                control_future = pool.submit(parallel_control)
+                core_future = pool.submit(parallel_core)
+                contention_control.append(core_future.result(timeout=10))
+                control_future.result(timeout=10)
+        phase[0] = "baseline_after"
         after = [core_call(index) for index in range(SAMPLES)]
         # Use the slower bracketing baseline to avoid claiming a regression
         # merely because the runner warmed up or drifted during the measurement.
         baseline_p95 = max(_p95(baseline), _p95(after))
         mixed_p95 = _p95(mixed)
+        server_baseline_p95 = max(
+            _p95(server_core_latencies["baseline_before"]),
+            _p95(server_core_latencies["baseline_after"]),
+        )
+        server_mixed_p95 = _p95(server_core_latencies["finance_mixed"])
         report: dict[str, Any] = {
             "contract": "synthetic-light-finance-mixed-load-v1",
             "python": platform.python_version(),
@@ -190,6 +253,15 @@ def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             "baseline_after_p95_ms": round(_p95(after) * 1000, 3),
             "mixed_core_p95_ms": round(mixed_p95 * 1000, 3),
             "regression_ratio": mixed_p95 / baseline_p95,
+            "diagnostic_control_core_p95_ms": round(_p95(contention_control) * 1000, 3),
+            "diagnostic_control_regression_ratio": _p95(contention_control)
+            / baseline_p95,
+            "diagnostic_server_baseline_core_p95_ms": round(
+                server_baseline_p95 * 1000, 3
+            ),
+            "diagnostic_server_mixed_core_p95_ms": round(server_mixed_p95 * 1000, 3),
+            "diagnostic_server_regression_ratio": server_mixed_p95
+            / server_baseline_p95,
             "heavy_worker_validated": False,
             "reminder_delivery_validated": False,
             "large_ledger_validated": False,

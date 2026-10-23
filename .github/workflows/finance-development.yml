@@ -32,13 +32,24 @@ jobs:
           node-version: '24.19.0'
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev
+      - name: Generate synthetic lifecycle contract in hosted environment
+        run: poetry run python scripts/generate_event_lifecycle_catalog.py --output "${{ runner.temp }}/finance-event-lifecycle-catalog.json"
+      - name: Retain lifecycle contract for reviewed source update
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-event-lifecycle-catalog
+          path: ${{ runner.temp }}/finance-event-lifecycle-catalog.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Finance synthetic process and numerical checks
         run: >-
           poetry run pytest -q --runxfail
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
+          tests/unit/test_finance_admission.py
           tests/unit/test_finance_workflows.py
           tests/unit/test_finance_calculators.py
+          tests/unit/daemons/test_adapter_supervisor.py
           tests/unit/test_projection_money.py
           tests/unit/test_xlsx_finance_workbook.py
           tests/acceptance/test_finance_publications.py

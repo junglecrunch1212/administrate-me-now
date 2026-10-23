@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -16,10 +17,36 @@ from decimal import Decimal, DecimalException, ROUND_HALF_UP, localcontext
 from typing import Annotated, Any, Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    model_validator,
+)
 
 MAX_MINOR = 10**12
 MAX_RESULT_MINOR = 9_000_000_000_000_000
+
+
+def _iso_date(value: Any) -> Any:
+    if type(value) is date or (
+        isinstance(value, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)
+    ):
+        return value
+    raise ValueError("explicit_iso_date_required")
+
+
+def _confirmed(value: Any) -> bool:
+    if value is not True:
+        raise ValueError("explicit_confirmation_required")
+    return True
+
+
+IsoDate = Annotated[date, BeforeValidator(_iso_date)]
+Confirmed = Annotated[Literal[True], BeforeValidator(_confirmed)]
 Money = Annotated[int, Field(strict=True, ge=0, le=MAX_MINOR)]
 PositiveMoney = Annotated[int, Field(strict=True, gt=0, le=MAX_MINOR)]
 SignedMoney = Annotated[int, Field(strict=True, ge=-MAX_MINOR, le=MAX_MINOR)]
@@ -92,8 +119,8 @@ def _rate(value: str, *, minimum: Decimal = Decimal(0)) -> Decimal:
 
 class CashEvent(Contract):
     event_id: Identifier
-    earliest_date: date
-    latest_date: date
+    earliest_date: IsoDate
+    latest_date: IsoDate
     direction: Literal["inflow", "outflow"]
     amount_minor: Money
 
@@ -107,10 +134,10 @@ class CashEvent(Contract):
 class CashLadderInput(CurrencyInput):
     opening_cash_minor: Money
     reserve_floor_minor: Money
-    opening_reconciled: Literal[True]
-    mandatory_outflows_complete: Literal[True]
-    start_date: date
-    end_date: date
+    opening_reconciled: Confirmed
+    mandatory_outflows_complete: Confirmed
+    start_date: IsoDate
+    end_date: IsoDate
     timezone: Annotated[str, Field(min_length=1, max_length=64)]
     timing_basis: Literal["explicit_settlement_dates"]
     events: Annotated[list[CashEvent], Field(max_length=100)]
@@ -180,7 +207,7 @@ class ReserveInput(CurrencyInput):
     liquid_cash_minor: Money
     monthly_reference_spending_minor: PositiveMoney
     chosen_reserve_floor_minor: Money
-    liquidity_confirmed: Literal[True]
+    liquidity_confirmed: Confirmed
     reference_basis: Literal["chosen_essential_spending", "accepted_ongoing_cost"]
 
 
@@ -543,7 +570,7 @@ class Position(Contract):
 
 
 class PortfolioInput(CurrencyInput):
-    valuation_date: date
+    valuation_date: IsoDate
     coverage: Literal["listed_partial", "complete_confirmed"]
     positions: Annotated[list[Position], Field(min_length=1, max_length=100)]
 
@@ -677,9 +704,9 @@ class SupportInput(CurrencyInput):
     support_intent: Literal[
         "gift", "optional_reserve", "documented_loan", "reimbursement"
     ]
-    period_start: date
-    period_end: date
-    mandatory_cash_requirements_complete: Literal[True]
+    period_start: IsoDate
+    period_end: IsoDate
+    mandatory_cash_requirements_complete: Confirmed
 
     @model_validator(mode="after")
     def ordered_period(self) -> SupportInput:
@@ -774,7 +801,7 @@ class CreditLine(Contract):
 
 
 class CreditInput(CurrencyInput):
-    report_date: date
+    report_date: IsoDate
     lines: Annotated[list[CreditLine], Field(min_length=1, max_length=50)]
     coverage: Literal["listed_partial", "complete_confirmed"]
 
@@ -816,8 +843,8 @@ class RegisterItem(Contract):
     kind: Literal["asset", "liability", "lease", "optional_reserve"]
     listed_value_minor: Money | None
     ownership_share: DecimalText
-    liquid: bool
-    valuation_date: date | None
+    liquid: StrictBool
+    valuation_date: IsoDate | None
 
     @model_validator(mode="after")
     def valid_share(self) -> RegisterItem:
@@ -830,7 +857,7 @@ class RegisterItem(Contract):
 
 
 class NetWorthInput(CurrencyInput):
-    as_of_date: date
+    as_of_date: IsoDate
     items: Annotated[list[RegisterItem], Field(min_length=1, max_length=100)]
     coverage: Literal["listed_partial", "complete_confirmed"]
 
@@ -895,10 +922,10 @@ class RollForwardInput(CurrencyInput):
     accepted_inflows_minor: Money
     accepted_outflows_minor: Money
     stated_closing_minor: SignedMoney
-    opening_reconciled: Literal[True]
-    flows_complete: Literal[True]
-    period_start: date
-    period_end: date
+    opening_reconciled: Confirmed
+    flows_complete: Confirmed
+    period_start: IsoDate
+    period_end: IsoDate
     basis: Literal["cash_movement"]
 
     @model_validator(mode="after")

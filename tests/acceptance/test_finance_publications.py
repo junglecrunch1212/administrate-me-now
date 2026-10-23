@@ -183,3 +183,125 @@ def test_paused_recovery_cannot_be_cleared_or_ingested(tmp_path):
                 client.portal.call(
                     import_publication, app.state.runtime, owner, changed
                 )
+
+
+def test_dated_books_horizons_are_preserved_and_expandable(tmp_path):
+    configured = settings(tmp_path)
+    p = json.loads(
+        (FIXTURE.parent / "accepted-publication.dated.synthetic.json").read_text()
+    )
+    p["tenant_id"] = configured.instance.tenant_id
+    # This formerly collided with the summary metric identifier at projection time.
+    p["cash_projection"]["scenarios"][0]["cash_events"][0]["cash_event_id"] = (
+        "7-closing_minor"
+    )
+    p["content_sha256"] = content_hash(p)
+    owner = build_internal_session("member-synthetic", "principal", p["tenant_id"])
+    app = create_application(configured)
+    with TestClient(app) as client:
+        assert client.portal
+        runtime = app.state.runtime
+        client.portal.call(import_publication, runtime, owner, p)
+
+        async def query(report, scenario, horizon):
+            return query_publication(
+                runtime.projections.connection("money"),
+                owner,
+                p["book_id"],
+                p["publication_id"],
+                report,
+                scenario_id=scenario,
+                horizon_days=horizon,
+            )
+
+        for days in (7, 30, 90, 180, 365):
+            current = client.portal.call(query, "cash_projection", "current", days)
+            expected = client.portal.call(query, "cash_projection", "expected", days)
+            assert [m["value_minor"] for m in current["metrics"]] == [40000, 40000]
+            assert [m["value_minor"] for m in expected["metrics"]] == [70000, 40000]
+            assert expected["metrics"][0]["first_shortage_date"] == "2026-01-03"
+            assert expected["report"]["engine_authority"] == "accepted_books"
+            assert expected["report"]["opening_liquid_minor"] == 100000
+            assert expected["report"]["opening_reconciled"] is True
+            assert expected["report"]["mandatory_flow_coverage"] == "complete"
+            assert expected["report"]["chosen_floor_minor"] == 50000
+            assert (
+                expected["report"]["period_end"] == expected["metrics"][0]["period_end"]
+            )
+            assert expected["report"]["horizon_days"] == days
+        events = client.portal.call(query, "cash_events", "expected", 7)["metrics"]
+        assert [m["value_minor"] for m in events] == [-60000, 30000]
+        assert all(m["cash_event_is_actual"] is False for m in events)
+        current_events = client.portal.call(query, "cash_events", "current", 7)[
+            "metrics"
+        ]
+        assert current_events[0]["metric_id"] == "cash-event-current-7-closing_minor"
+        incomplete = copy.deepcopy(p)
+        incomplete["cash_projection"]["opening_reconciled"] = False
+        incomplete["content_sha256"] = content_hash(incomplete)
+        with pytest.raises(PublicationError, match="missing_input_verdict"):
+            validate_publication(incomplete)
+        # One unavailable horizon must not inherit another horizon's readiness.
+        p["prior_publication_id"] = p["publication_id"]
+        p["publication_id"] = "publication-dated-2"
+        horizon = p["cash_projection"]["scenarios"][0]["horizons"][0]
+        horizon.update(
+            closing_minor=None,
+            minimum_minor=None,
+            first_shortage_date=None,
+            first_surplus_date=None,
+            release_state="unavailable",
+            required_evidence=["dated_payment_confirmation"],
+        )
+        p["content_sha256"] = content_hash(p)
+        client.portal.call(import_publication, runtime, owner, p)
+        unavailable = client.portal.call(query, "cash_projection", "current", 7)
+        assert unavailable["state"] == "missing_evidence"
+        assert unavailable["report"]["period_end"] == "2026-01-08"
+        assert (
+            "dated_payment_confirmation" in unavailable["report"]["required_evidence"]
+        )
+        assert (
+            client.portal.call(query, "cash_projection", "current", 30)["state"]
+            == "qualified"
+        )
+
+
+@pytest.mark.parametrize(
+    "case", ["uncited_event", "future_opening", "metric_collision"]
+)
+def test_dated_export_evidence_and_identity_gate(case):
+    p = json.loads(
+        (FIXTURE.parent / "accepted-publication.dated.synthetic.json").read_text()
+    )
+    if case == "uncited_event":
+        p["cash_projection"]["scenarios"][0]["cash_events"][0]["evidence_ids"] = []
+    elif case == "future_opening":
+        p["cash_projection"]["as_of_date"] = "2027-01-01"
+    else:
+        p["reports"][0]["metrics"][0]["metric_id"] = (
+            "cash-summary-current-7-closing_minor"
+        )
+    p["content_sha256"] = content_hash(p)
+    with pytest.raises(PublicationError):
+        validate_publication(p)
+
+
+@pytest.mark.parametrize(
+    "case", ["wrong_basis", "future_source", "source_order", "future_actual"]
+)
+def test_publication_semantic_clocks_and_bases(case):
+    p = publication()
+    if case == "wrong_basis":
+        p["reports"][0]["basis"] = "cash_movement"
+        p["reports"][0]["metrics"][0]["basis"] = "cash_movement"
+    elif case == "future_source":
+        p["source_coverage"][0]["observed_at"] = "2026-02-01T12:00:00Z"
+    elif case == "source_order":
+        p["source_coverage"][0]["accepted_at"] = "2026-01-29T12:00:00Z"
+    elif case == "future_actual":
+        p["reports"][0]["period_end"] = "2026-02-01"
+        p["reports"][0]["metrics"][0]["period_end"] = "2026-02-01"
+    p["content_sha256"] = content_hash(p)
+    with pytest.raises(PublicationError):
+        validate_publication(p)

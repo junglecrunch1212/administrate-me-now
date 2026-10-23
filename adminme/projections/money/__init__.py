@@ -79,6 +79,21 @@ class MoneyProjection(Projection):
                 conn.execute(
                     f"ALTER TABLE finance_goals ADD COLUMN {name} {declaration}"
                 )
+        # Historical rows lack the envelope's authority. Deny them until
+        # replay restores their actual scopes; a publisher ID is not a grant.
+        workbook_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(finance_workbook_state)")
+        }
+        for name, declaration in {
+            "owner_scope": "TEXT NOT NULL DEFAULT ''",
+            "visibility_scope": "TEXT NOT NULL DEFAULT ''",
+            "sensitivity": "TEXT NOT NULL DEFAULT 'privileged'",
+        }.items():
+            if name not in workbook_columns:
+                conn.execute(
+                    f"ALTER TABLE finance_workbook_state ADD COLUMN {name} {declaration}"
+                )
 
 
 __all__ = ["MoneyProjection"]

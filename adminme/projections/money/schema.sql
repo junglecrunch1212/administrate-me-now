@@ -185,6 +185,10 @@ CREATE TABLE IF NOT EXISTS finance_workbook_state (
     published_by_party_id    TEXT NOT NULL,
     validation_state         TEXT NOT NULL CHECK (validation_state IN ('valid','rejected')),
     validation_failures_json TEXT NOT NULL DEFAULT '[]',
+    owner_scope              TEXT NOT NULL DEFAULT '',
+    visibility_scope         TEXT NOT NULL DEFAULT '',
+    sensitivity              TEXT NOT NULL DEFAULT 'privileged'
+                             CHECK (sensitivity IN ('normal','sensitive','privileged')),
     last_event_id            TEXT NOT NULL,
     PRIMARY KEY (tenant_id, workbook_name)
 );

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+from datetime import date, timedelta
 from typing import Any
 from adminme.finance.publication import PublicationError
 from adminme.lib.session import Session
@@ -80,6 +81,8 @@ def query_publication(
     report_id: str,
     offset: int = 0,
     limit: int = 50,
+    scenario_id: str | None = None,
+    horizon_days: int | None = None,
 ) -> dict[str, Any]:
     if (
         isinstance(limit, bool)
@@ -96,8 +99,24 @@ def query_publication(
         "balance_sheet",
         "scenarios",
         "quality",
+        "cash_projection",
+        "cash_events",
     }:
         raise PublicationError("finance_report_unknown")
+    if scenario_id is not None and scenario_id not in {"current", "expected", "chosen"}:
+        raise PublicationError("finance_scenario_unknown")
+    if horizon_days is not None and (
+        type(horizon_days) is not int or horizon_days not in {7, 30, 90, 180, 365}
+    ):
+        raise PublicationError("finance_horizon_unknown")
+    if (scenario_id is not None or horizon_days is not None) and report_id not in {
+        "cash_projection",
+        "cash_events",
+    }:
+        raise PublicationError("finance_filter_invalid")
+    if report_id == "cash_events":
+        scenario_id = scenario_id or "current"
+        horizon_days = horizon_days or 90
     p = _metadata(conn, session, book_id, publication_id)
     if p is None:
         return {
@@ -107,6 +126,19 @@ def query_publication(
             "provider_effect_count": 0,
         }
     report = next((r for r in p["reports"] if r["report_id"] == report_id), None)
+    if report is not None and horizon_days is not None:
+        report = {
+            **report,
+            "source_report_period": {
+                "start": report["period_start"],
+                "end": report["period_end"],
+            },
+            "period_end": (
+                date.fromisoformat(report["period_start"])
+                + timedelta(days=horizon_days)
+            ).isoformat(),
+            "horizon_days": horizon_days,
+        }
     if report is None or report["release_state"] == "unavailable":
         return {
             "state": "missing_evidence",
@@ -114,14 +146,33 @@ def query_publication(
             "metrics": [],
             "provider_effect_count": 0,
         }
+    filters = ""
+    parameters: list[Any] = []
+    if scenario_id is not None:
+        filters += " AND json_extract(metric_json,'$.scenario_id')=?"
+        parameters.append(scenario_id)
+    if horizon_days is not None:
+        if report_id == "cash_projection":
+            filters += " AND json_extract(metric_json,'$.horizon_days')=?"
+            parameters.append(horizon_days)
+        else:
+            end = (
+                date.fromisoformat(report["period_start"])
+                + timedelta(days=horizon_days)
+            ).isoformat()
+            filters += " AND json_extract(metric_json,'$.earliest_date')<=?"
+            parameters.append(end)
     rows = conn.execute(
-        "SELECT metric_json FROM finance_publication_metrics WHERE tenant_id=? AND owner_id=? AND book_id=? AND publication_id=? AND report_id=? ORDER BY ordinal LIMIT ? OFFSET ?",
+        "SELECT metric_json FROM finance_publication_metrics WHERE tenant_id=? AND owner_id=? AND book_id=? AND publication_id=? AND report_id=?"
+        + filters
+        + " ORDER BY ordinal LIMIT ? OFFSET ?",
         (
             session.tenant_id,
             _owner(session),
             book_id,
             publication_id,
             report_id,
+            *parameters,
             limit + 1,
             offset,
         ),
@@ -133,8 +184,20 @@ def query_publication(
         metric.pop("revision_ids", None)
         metric.pop("owner_id", None)
         metrics.append(metric)
+    if report_id == "cash_projection" and metrics:
+        report["release_state"] = (
+            "unavailable"
+            if all(m["quality"] == "unavailable" for m in metrics)
+            else "qualified"
+        )
+        report["required_evidence"] = sorted(
+            {"current_source_freshness"}
+            | {item for m in metrics for item in m.get("required_evidence", [])}
+        )
     return {
-        "state": report["release_state"],
+        "state": "missing_evidence"
+        if report["release_state"] == "unavailable"
+        else report["release_state"],
         "publication_id": publication_id,
         "content_hash": p["content_sha256"],
         "source_clock_summary": p["source_clock_summary"],
