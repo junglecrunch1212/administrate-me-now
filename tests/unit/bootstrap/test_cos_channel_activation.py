@@ -750,6 +750,83 @@ def test_legacy_observation_compatibility_never_widens_other_inputs(
         _observation_control_bytes(controller.config_dir, path.name)
 
 
+@pytest.mark.parametrize("outcome", ["accepted", "wrong_owner", "settlement_failure"])
+@pytest.mark.parametrize("read_write", [False, True])
+def test_google_connection_activation_checks_owner_before_live_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, read_write: bool
+) -> None:
+    from adminme.adapters.member_google_connections import CONFIG_KEY, binding_digest
+    from tests.acceptance.test_member_google_connections import google_configuration
+
+    controller, request, original = _controller(tmp_path, monkeypatch)
+    google = google_configuration(tmp_path / "google-source", read_write=read_write)
+    # Reuse the operation's enrolled service entry; add only existing member
+    # records to both predecessor and request, as a real retained deployment has.
+    original["adapters"] = [
+        google["adapters"][0],
+        original["adapters"][1],
+        *google["adapters"][2:],
+    ]
+    for entry in original["adapters"]:
+        entry["enabled"] = False
+    _write(controller.config_dir / "adapters.json", original)
+    requested = copy.deepcopy(request.adapter_config)
+    requested["adapters"] = [
+        google["adapters"][0],
+        requested["adapters"][1],
+        *google["adapters"][2:],
+    ]
+    for entry in requested["adapters"]:
+        if entry["config"].get("member_id") == MEMBER_A:
+            entry["enabled"] = True
+    requested[CONFIG_KEY] = google[CONFIG_KEY]
+    for selection in requested[CONFIG_KEY]["selections"]:
+        selection["binding_sha256"] = binding_digest(
+            next(
+                e for e in requested["adapters"] if e["id"] == selection["adapter_id"]
+            ),
+            access=selection["access"],
+        )
+        if outcome == "wrong_owner":
+            selection["owner_authorization_sha256"] = "f" * 64
+    changed = request.model_copy(update={"adapter_config": requested})
+    before = (controller.config_dir / "adapters.json").read_bytes()
+    if outcome == "wrong_owner":
+        with pytest.raises(CoSActivationError, match="exact authorization"):
+            controller.activate(changed, enable_live=False)
+        assert (controller.config_dir / "adapters.json").read_bytes() == before
+        assert not controller.journal_path.exists()
+    elif outcome == "settlement_failure":
+        attempts = 0
+
+        def settle(_release: Path) -> dict[str, Any]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise CoSActivationError("selected source failed its handshake")
+            return {"status": "healthy"}
+
+        monkeypatch.setattr(controller, "_settle", settle)
+        with pytest.raises(CoSActivationError, match="handshake"):
+            controller.activate(changed, enable_live=False)
+        restored = json.loads((controller.config_dir / "adapters.json").read_text())
+        assert restored == json.loads(before)
+        assert CONFIG_KEY not in restored
+        assert not controller.journal_path.exists()
+    else:
+        result = controller.activate(changed, enable_live=False)
+        assert result["personal_channel_polling"] is True
+        installed = json.loads((controller.config_dir / "adapters.json").read_text())
+        selected = [
+            e for e in installed["adapters"] if e["config"].get("member_id") == MEMBER_A
+        ]
+        assert len(selected) == 3 and all(e["enabled"] for e in selected)
+        for entry in selected:
+            writable = read_write and entry["kind"] != "messaging-gmail-api"
+            assert entry["config"]["read_only"] is not writable
+        assert installed["adapters"][-1]["enabled"] is False
+
+
 @pytest.mark.parametrize("choice", [None, False, True])
 @pytest.mark.parametrize("prior", [False, True])
 def test_standing_owner_reply_activation_is_explicit_retained_and_revocable(
@@ -809,8 +886,12 @@ def test_standing_owner_reply_activation_is_explicit_retained_and_revocable(
 
 
 @pytest.mark.parametrize("settlement_fails", [False, True])
+@pytest.mark.parametrize("timed_reminders", [False, True])
 def test_standing_reply_operation_publishes_both_grants_or_restores_both(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settlement_fails: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settlement_fails: bool,
+    timed_reminders: bool,
 ) -> None:
     from adminme.cos_self_replies import self_reply_binding
     from adminme.openclaw_topology import member_agent_id
@@ -859,6 +940,7 @@ def test_standing_reply_operation_publishes_both_grants_or_restores_both(
             "prepared_openclaw_config": prepared,
             "cos_imsg_guard_config": guard,
             "allow_owner_self_replies": True,
+            "allow_owner_self_reminders": True if timed_reminders else None,
             "sender_proofs": [*request.sender_proofs, proof],
             "recipient_entries": [
                 *(request.recipient_entries or []),
@@ -893,7 +975,15 @@ def test_standing_reply_operation_publishes_both_grants_or_restores_both(
             ]
             == expected
         )
+        assert host["plugins"]["entries"]["administrateme"]["config"].get(
+            "scheduledSelfReminderBindings", []
+        ) == (expected if timed_reminders else [])
+        if timed_reminders:
+            assert host["cron"]["triggers"]["enabled"] is True
         assert host["models"] == previous["models"]
+        assert host["plugins"]["entries"]["administrateme"]["hooks"] == {
+            "allowConversationAccess": True
+        }
         receipt = json.loads(
             (controller.config_dir / "cos-channel-operation.json").read_text()
         )

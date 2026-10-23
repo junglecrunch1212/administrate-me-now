@@ -11,6 +11,7 @@ const DEFAULTS: PluginConfig = {
   modelSessionPrefix: "adminme:",
   dmScope: "per_account_channel_peer",
   standingSelfReplyBindings: [],
+  scheduledSelfReminderBindings: [],
   memberAgentIds: [],
   bindingFingerprints: [],
   uniqueAgents: true,
@@ -94,6 +95,12 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
       new Set(replies).size !== replies.length) {
     throw new Error("Standing self replies require distinct exact binding fingerprints");
   }
+  const reminders = raw.scheduledSelfReminderBindings ?? [];
+  if (!Array.isArray(reminders) || reminders.length > 20 ||
+      reminders.some((value: unknown) => typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value) || !replies.includes(value)) ||
+      new Set(reminders).size !== reminders.length) {
+    throw new Error("Scheduled self reminders require distinct enabled private reply bindings");
+  }
   const memberAgentIds = stringArray(raw.memberAgentIds);
   const bindingFingerprints = stringArray(raw.bindingFingerprints);
   if (memberAgentIds.some((value) => !/^adminme-[0-9a-f]{16}$/.test(value))) {
@@ -122,6 +129,7 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
         : DEFAULTS.modelSessionPrefix,
     dmScope: "per_account_channel_peer",
     standingSelfReplyBindings: replies,
+    scheduledSelfReminderBindings: reminders,
     memberAgentIds,
     bindingFingerprints,
     uniqueAgents: new Set(memberAgentIds).size === memberAgentIds.length,

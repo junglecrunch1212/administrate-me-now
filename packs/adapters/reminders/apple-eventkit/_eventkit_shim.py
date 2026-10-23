@@ -74,7 +74,9 @@ class EKEventStoreLike(Protocol):
     def fetch_reminders(
         self, *, list_identifier: str | None = None
     ) -> list[EKReminderLike]: ...
-    def fetch_lists(self) -> list[ReminderListRecord]: ...
+    def fetch_lists(
+        self, *, list_identifiers: tuple[str, ...] | None = None
+    ) -> list[ReminderListRecord]: ...
     def list_name_for_identifier(self, list_identifier: str) -> str: ...
     def create_list(self, *, name: str, color: str | None = None) -> str: ...
     def update_list(
@@ -213,13 +215,26 @@ def _ensure_access(store: Any) -> None:
         )
 
 
-def _cgcolor_hex(value: Any) -> str | None:
-    if value is None:
-        return None
+def _calendar_color_hex(calendar: Any) -> str | None:
     try:
-        from Quartz import CGColorGetComponents
+        # Register Quartz CF types before EventKit returns its CGColor. Without
+        # this, PyObjC can expose an opaque pointer instead of a managed color.
+        from Quartz import CGColorGetComponents, CGColorGetNumberOfComponents
 
-        components = list(CGColorGetComponents(value) or [])
+        value = _call(calendar, "CGColor")
+        if value is None:
+            return None
+
+        # PyObjC returns an objc.varlist over a C array, not a sized Python
+        # sequence. Iterating it can read past the allocation and crash the
+        # entire bridge. Keep the color alive and read only its declared size.
+        count = CGColorGetNumberOfComponents(value)
+        if count not in (2, 4):
+            return None
+        native_components = CGColorGetComponents(value)
+        if native_components is None:
+            return None
+        components = [native_components[index] for index in range(count)]
     except Exception:  # pragma: no cover - Quartz/PyObjC only
         return None
     if len(components) == 2:
@@ -488,23 +503,45 @@ class PyObjCEventStore:
         self._store.fetchRemindersMatchingPredicate_completion_(predicate, callback)
         if not completed.wait(30):
             raise TimeoutError("EventKit reminder fetch timed out")
-        return [self._record(item) for item in result]
+        return [
+            self._record(item)
+            for item in result
+            if list_identifier is None
+            or str(_call(_call(item, "calendar"), "calendarIdentifier") or "")
+            == list_identifier
+        ]
 
-    def fetch_lists(self) -> list[ReminderListRecord]:
+    def fetch_lists(
+        self, *, list_identifiers: tuple[str, ...] | None = None
+    ) -> list[ReminderListRecord]:
         from EventKit import EKEntityTypeReminder
 
+        # An enrolled bridge reads only its selected containers. Resolve those
+        # IDs before reading list names/colors, rather than enumerating every
+        # list and relying on central ingest to reject private metadata later.
+        calendars = (
+            self._store.calendarsForEntityType_(EKEntityTypeReminder) or []
+            if list_identifiers is None
+            else [
+                self._store.calendarWithIdentifier_(identifier)
+                for identifier in list_identifiers
+            ]
+        )
         default = self._store.defaultCalendarForNewReminders()
         default_id = str(_call(default, "calendarIdentifier") or "")
         return [
             ReminderListRecord(
                 calendarIdentifier=str(_call(calendar, "calendarIdentifier") or ""),
                 title=str(_call(calendar, "title") or ""),
-                color=_cgcolor_hex(_call(calendar, "CGColor")),
+                color=_calendar_color_hex(calendar),
                 is_default=str(_call(calendar, "calendarIdentifier") or "")
                 == default_id,
             )
-            for calendar in (
-                self._store.calendarsForEntityType_(EKEntityTypeReminder) or []
+            for calendar in calendars
+            if calendar is not None
+            and (
+                list_identifiers is None
+                or str(_call(calendar, "calendarIdentifier") or "") in list_identifiers
             )
         ]
 

@@ -10,7 +10,7 @@ import { PLUGIN_ID, SIDE_EFFECT_TOOL_NAMES, type BridgeEventKind } from "./contr
 import { provenanceFromMessage } from "./provenance.js";
 import { prepareApproval } from "./approval.js";
 import type { PluginRuntime } from "./runtime.js";
-import { rememberSelfReply, registerSelfReplies } from "./self-replies.js";
+import { rememberSelfReply, registerSelfReplies, bindReminderTool } from "./self-replies.js";
 import { TransportError } from "./transport.js";
 
 type BridgeMarker = {
@@ -33,16 +33,27 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
            event.params.channel === "imessage" || event.params.channel === "bluebubbles")) {
         return { block: true, blockReason: "Reply normally for an authorized private self reply; other sends require exact AdministrateMe approval." };
       }
+      if (event.toolName === "administrateme_self_reminder") {
+        if (!bindReminderTool(runtime, {
+          runId: typeof context.runId === "string" ? context.runId : undefined,
+          sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,
+          agentId: typeof context.agentId === "string" ? context.agentId : undefined,
+        }, typeof context.toolCallId === "string" ? context.toolCallId : event.toolCallId)) {
+          return { block: true, blockReason: "A reminder requires this turn's acknowledged private member request." };
+        }
+        return;
+      }
       if (!SIDE_EFFECT_TOOL_NAMES.has(event.toolName)) return;
       if (event.toolName === "administrateme_review" && event.params.action === "inspect") return;
       if (event.toolName === "administrateme_policy_proposal" && event.params.action === "inspect") {
         return;
       }
       const approval = prepareApproval(runtime, event.toolName, event.params);
-      if (event.toolName === "administrateme_cos_response") {
+      if (event.toolName === "administrateme_cos_response" ||
+          event.toolName === "administrateme_execute_pending_provider_action") {
         runtime.cosApprovals?.remember(event.params, {
           ...context, toolCallId: context.toolCallId ?? event.toolCallId,
-        }, approval.receiptId);
+        }, approval.receiptId, event.toolName);
       }
       return {
         params: approval.params,

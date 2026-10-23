@@ -43,7 +43,7 @@ export default {
           await readFile(process.env.ADMINME_APPROVAL_PROBE_SEEDS, "utf8"),
         );
         for (const row of rows) {
-          relay.remember(row.params, row.context, row.receipt);
+          relay.remember(row.params, row.context, row.receipt, row.toolName);
         }
         // Registered after the production service: this marker proves its
         // startup hook returned. The hosted probe independently requires

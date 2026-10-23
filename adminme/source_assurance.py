@@ -572,8 +572,13 @@ async def audit_source_assurance(
         for event in cos_metadata
         if event["type"] == COS_APPROVED
         and (event.get("payload") or {}).get("authorization_method")
-        == "standing_self_reply"
-        for key in ("standing_authorization_event_id", "source_message_event_id")
+        in {"standing_self_reply", "requested_self_reminder"}
+        for key in (
+            "standing_authorization_event_id",
+            "source_message_event_id",
+            "reminder_event_id",
+            "reminder_binding_event_id",
+        )
     } - {""}
     cos_events: list[dict[str, Any]] = []
     for event in cos_metadata:
@@ -584,6 +589,10 @@ async def audit_source_assurance(
                 cos_standing_references
                 and event["type"]
                 in {"cos.channels.activated", "cos.channels.deactivated"}
+            )
+            or (
+                event["type"] == "cos.reply.reminder_cancelled"
+                and payload.get("reminder_event_id") in cos_standing_references
             )
             or (cos_ids and event["type"] == "settings.cos_response_allowlist_changed")
             or payload.get("operation") == "cos.response.send"

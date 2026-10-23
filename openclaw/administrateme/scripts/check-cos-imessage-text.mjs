@@ -4,6 +4,7 @@
  * account configuration, Messages database or channel send is constructed.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -63,7 +64,7 @@ try {
   await writeFile(selfReplyModule, ts.transpileModule(selfReplySource, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
   }).outputText);
-  const { escapeReplyText, replyParts, rememberSelfReply, registerSelfReplies } = await import(pathToFileURL(selfReplyModule).href);
+  const { escapeReplyText, replyParts, rememberSelfReply, registerSelfReplies, bindReminderTool, takeReminderInput } = await import(pathToFileURL(selfReplyModule).href);
   // Exercise the actual pinned inbound mapper, whose optional runId is absent.
   const hookSdk = await import(pathToFileURL(requirePinned.resolve("openclaw/plugin-sdk/hook-runtime")).href);
   const canonical = hookSdk.deriveInboundMessageHookContext({
@@ -77,17 +78,66 @@ try {
   const crypto = await import("node:crypto");
   const agent = "adminme-0123456789abcdef";
   const binding = crypto.createHash("sha256").update(JSON.stringify(["cos-self-reply-v1", agent, "imessage", "fixture", incoming.senderId])).digest("hex");
-  let handler;
+  // Use the pinned host's real registrar, not a permissive api.on stub. The
+  // source-install test must exercise the same non-bundled plugin capability
+  // check that runs during an ordinary Gateway startup.
+  const { createJiti } = requirePinned("jiti");
+  // Internal host modules use workspace aliases that are deliberately not
+  // public package exports. Resolve all of them from this exact source pin's
+  // own tsconfig, just as its source build does; do not stub a missing module.
+  const jiti = createJiti(path.join(sourceRoot, "package.json"), {
+    tsconfigPaths: path.join(sourceRoot, "tsconfig.json"),
+  });
+  const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
+  const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
+  const preparedPolicies = JSON.parse(execFileSync("python3", ["-c", `
+import json
+from bootstrap.cos_reply_hooks import configure_reply_hook
+entry = {"hooks": {"allowPromptInjection": False}}
+configure_reply_hook(entry, ["a" * 64])
+enabled = dict(entry["hooks"])
+configure_reply_hook(entry, [])
+print(json.dumps([enabled, entry["hooks"]]))
+`], { cwd: repository, encoding: "utf8" }));
+  function nativeRegistration(policy) {
+    const state = createPluginRegistryState({ runtime: {}, logger: {}, activateGlobalSideEffects: false });
+    const registrar = createToolHookRegistrars(state);
+    const record = { id: "administrateme", origin: "config", enabled: true, explicitlyEnabled: true,
+      source: selfReplyModule, hookCount: 0 };
+    return { state, on: (name, fn, options) => registrar.registerTypedHook(record, name, fn, options, policy) };
+  }
   let sent = 0;
   const runtime = { transport: { config: {memberAgentIds: [agent], standingSelfReplyBindings: [binding]},
     request: async (endpoint, value) => endpoint.endsWith("/self-reply") ? {transport_dispatch: {
       channel: "imessage", account_id: "fixture", recipient: incoming.senderId, body: value.body, approval_event_id: "approval-fixture",
     }} : {status: "sent"} } };
-  const api = { config: {}, on: (_name, fn) => {handler = fn;}, logger: {warn() {}, info() {}, error() {}},
+  const admitted = nativeRegistration(preparedPolicies[0]);
+  const api = { config: {}, on: admitted.on, logger: {warn() {}, info() {}, error() {}},
     runtime: {channel: {outbound: {loadAdapter: async () => ({sendText: async () => {sent++;}})}}} };
+  for (const policy of [undefined, {allowConversationAccess: false}, preparedPolicies[1]]) {
+    const denied = nativeRegistration(policy);
+    registerSelfReplies({...api, on: denied.on}, runtime);
+    assert.equal(denied.state.registry.typedHooks.length, 0, "Pinned host accepted a reply hook without conversation access");
+    assert.ok(denied.state.registry.diagnostics.some((row) => row.message.includes("allowConversationAccess")));
+  }
   registerSelfReplies(api, runtime);
+  assert.deepEqual(admitted.state.registry.typedHooks.map((row) => row.hookName).sort(), ["agent_end", "before_agent_reply"], "Activated reply hooks are blocked by the pinned host");
+  const handler = admitted.state.registry.typedHooks.find((row) => row.hookName === "agent_end").handler;
   rememberSelfReply(runtime, {actor_id: incoming.senderId, account_id: "fixture", channel_id: "imessage",
     message_id: incoming.messageId, session_key: incoming.sessionKey}, incoming.runId, Promise.resolve("receipt-fixture"), incoming.content);
+  const requestHook = admitted.state.registry.typedHooks.find((row) => row.hookName === "before_agent_reply").handler;
+  const reminderContext = {runId: "reminder-run", agentId: agent, sessionKey: incoming.sessionKey};
+  const { buildReplyPromptEnvelope } = await jiti.import(path.join(sourceRoot, "src/auto-reply/reply/prompt-prelude.ts"));
+  const envelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: incoming.content,
+    hasUserBody: true, inboundUserContext: "", isBareSessionReset: false, startupAction: "new",
+    systemEventBlocks: ["Synthetic host status context"] });
+  for (const cleanedBody of [incoming.content, envelope.queuedBody]) {
+    await requestHook({cleanedBody}, reminderContext);
+    assert.equal(bindReminderTool(runtime, reminderContext, "reminder-call"), true);
+    assert.equal((await takeReminderInput(runtime, "reminder-call", reminderContext)).source_message_event_id, "receipt-fixture");
+  }
+  await requestHook({cleanedBody: `${incoming.content}\n\nA different current request.`}, reminderContext);
+  assert.equal(bindReminderTool(runtime, reminderContext, "reminder-call"), false);
   // This protected transport metadata is preserved by the pinned Codex user
   // snapshot. Its reasoning mirrors are assistant rows without a phase tag.
   await handler({success: true, runId: "agent-generated", messages: [
@@ -110,7 +160,7 @@ try {
     assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
     assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
   }
-  console.log(`Verified ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw formatter.`);
+  console.log(`Verified native reply-hook admission/revocation and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

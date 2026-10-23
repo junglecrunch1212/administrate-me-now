@@ -138,3 +138,137 @@ def test_capability_request_cache_is_revisioned_and_inert(tmp_path: Path) -> Non
     assert mutation.current["installs_software"] is False
     assert mutation.current["grants_authority"] is False
     assert mutation.current["provider_effects"] is False
+
+
+def _apple_catalog_runtime(
+    monkeypatch,
+    *,
+    provider="apple_calendar",
+    enabled=True,
+    observation=False,
+    settled=True,
+    permission=True,
+):
+    from types import SimpleNamespace
+    import adminme.apple_service_permissions as service
+    import adminme.capability_catalog as catalog_module
+
+    catalog = load_catalog(REPO_ROOT)
+    catalog["items"] = [
+        row
+        for row in catalog["items"]
+        if row.get("request_key") == provider
+        and row["source_kind"] == "bridge_manifest"
+    ]
+    monkeypatch.setattr(catalog_module, "load_catalog", lambda _root: catalog)
+    member = "catalog-owner"
+    capability = {
+        "state": "settled" if settled else "observing",
+        "last_successful_observation": "2035-01-01T00:00:00Z" if settled else None,
+    }
+    wizard = {"state": "settling", "capability_states": {provider: capability}}
+    calls = []
+
+    def options(_runtime, owner, source):
+        calls.append((owner, source))
+        if not permission:
+            raise ValueError("Native permission has not been verified")
+        return {"enrollment": {"enrollment_id": "catalog-enrollment"}, "scopes": []}
+
+    def grant(_runtime, owner, source):
+        assert owner == member and source == provider
+        return (
+            {
+                "event_id": "catalog-write-receipt",
+                "operations": [
+                    "create_note" if provider == "apple_notes" else "create_event"
+                ],
+            }
+            if enabled
+            else None
+        )
+
+    monkeypatch.setattr(service, "permission_options", options)
+    monkeypatch.setattr(service, "service_permission", grant)
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(repository_root=REPO_ROOT, bridge_enrollments={}),
+        settings_control=SimpleNamespace(
+            bridge_request_for=lambda owner: wizard if owner == member else None
+        ),
+        projections=None,
+        started=True,
+        _observation_active=observation,
+        effective_openclaw_state=lambda: "healthy",
+    )
+    session = SimpleNamespace(auth_member_id=member, view_member_id=member)
+    return runtime, session, calls
+
+
+def test_self_service_catalog_reads_do_not_depend_on_observation_mode(
+    monkeypatch,
+) -> None:
+    from adminme.capability_catalog import compose_member_catalog
+
+    runtime, session, _calls = _apple_catalog_runtime(
+        monkeypatch, enabled=False, observation=False, settled=False
+    )
+    item = compose_member_catalog(runtime, session, settings_state={})["items"][0]
+    assert item["account_setup"] == "paired"
+    assert item["provider_permission"] == "verified"
+    assert item["runtime_health"] == "active"
+    assert item["freshness"] == "unknown"  # An empty calendar is not an observed event.
+    assert item["effective"]["read_available"] is True
+    assert item["effective"]["execute_available"] is False
+    assert item["verbs"]["execute"] == "unsupported"
+    assert item["bridge_state"]["write_permission"] == "disabled"
+    assert item["verification"]["last_verified_result"] is None
+
+
+def test_self_service_catalog_write_grant_is_separate_from_observation_pause(
+    monkeypatch,
+) -> None:
+    from adminme.capability_catalog import compose_member_catalog
+
+    for provider in ("apple_calendar", "apple_reminders", "apple_notes"):
+        for observation in (False, True):
+            with monkeypatch.context() as patch:
+                runtime, session, _calls = _apple_catalog_runtime(
+                    patch, provider=provider, observation=observation
+                )
+                item = compose_member_catalog(runtime, session, settings_state={})[
+                    "items"
+                ][0]
+                assert item["effective"]["read_available"] is True
+                assert item["freshness"] == "current"
+                assert item["verbs"]["execute"] == "ask_every_time"
+                assert item["effective"]["execute_available"] is (not observation)
+                assert (
+                    item["administrateme_authority"]["state"]
+                    == "owner_write_grant_approval_required"
+                )
+                assert (
+                    item["administrateme_authority"]["provider_permission_event_id"]
+                    == "catalog-write-receipt"
+                )
+                assert item["openclaw"]["approval_required_for_side_effects"] is True
+                assert item["verification"]["terminal_result_support"] is True
+                assert item["verification"]["last_verified_result"] is None
+
+
+def test_self_service_catalog_unverified_and_view_as_do_not_claim_authority(
+    monkeypatch,
+) -> None:
+    from adminme.capability_catalog import compose_member_catalog
+
+    runtime, session, calls = _apple_catalog_runtime(monkeypatch, permission=False)
+    item = compose_member_catalog(runtime, session, settings_state={})["items"][0]
+    assert item["effective"]["read_available"] is False
+    assert item["effective"]["execute_available"] is False
+    calls.clear()
+    session.view_member_id = "another-catalog-owner"
+    item = compose_member_catalog(runtime, session, settings_state={})["items"][0]
+    assert calls == []
+    assert item["bridge_state"] is None
+    assert item["effective"]["read_available"] is False
+    assert item["effective"]["execute_available"] is False
+    assert item["administrateme_authority"]["provider_permission_event_id"] is None

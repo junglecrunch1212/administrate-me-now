@@ -1,6 +1,6 @@
 # ADR-0013 — Simple GitHub delivery
 
-Status: accepted; amended by owner direction on 2026-10-22
+Status: accepted; amended by owner direction on 2026-10-22 and 2026-10-23
 
 Date: 2026-08-25
 
@@ -54,16 +54,32 @@ A known in-scope blocker calls for implementation, not another offer to help.
 Record a failed release and its recovery briefly in the same task. Completing
 one outcome does not make later user-added work a reason to reopen it.
 
-This is a policy redraft, not a CI or updater implementation. Existing protected
-checks and automated updater prerequisites still execute. The selector has only
-documentation, bridge-helper and system-wide scopes, and the central updater
-still imposes its existing backup/settlement/Doctor requirements. Implement
-narrower paths through protected changes with focused gate/contract tests;
-never bypass controls or treat a prose amendment as a passing result.
+This is a policy redraft, not a CI or updater implementation. Read the current
+selector/workflows and GitHub protection for enforced scopes and gates; the
+acceptance contract records the remaining updater limitations. Narrower paths
+need protected changes with focused gate/contract tests. Never bypass controls
+or treat a prose amendment as a passing result.
+
+## Small deliverables amendment — 2026-10-23
+
+The three repair tasks demonstrate useful scope correction, not measured token
+or time savings. See the acceptance contract's
+[observed lessons](ACCEPTANCE-CONTRACT.md#small-deliverables-and-observed-lessons).
+Policy should turn a short owner request into the next usable outcome, proof
+and recovery path without asking the owner to approve ordinary implementation
+choices. Preserve the whole ambition as a short sequence; ship each independent
+outcome through its authorized stages before adding unrelated scope. One branch
+and PR apply per deliverable, not to every future feature added to one chat.
+
+A failed attempt changes the next reproduction and fix; it does not automatically
+expand every check. Keep irreversible contracts together with the outcome,
+recover promptly, and retain schema-aware history when an older binary is unsafe.
+Verify the effective running tools, grants and instructions, not merely the
+merged source. Replace obsolete guidance instead of accumulating process layers.
 
 ## Supersession
 
-This ADR supersedes ADR-0009 and all active G-001 process clauses. It retires the Outcome Harness and the proposed, unmerged G-002 and ADR-0012 recovery processes. The 2026-10-22 amendment also supersedes conflicting blanket validation, readiness and evidence obligations in earlier standing guidance, this ADR, acceptance amendments and runbooks. Product behavior and runtime authorization contracts remain intact. Historical Git commits, closed pull requests, and past deployment receipts remain factual records but are not instructions for current work.
+This ADR supersedes ADR-0009 and all active G-001 process clauses. It retires the Outcome Harness and the proposed, unmerged G-002 and ADR-0012 recovery processes. The 2026-10-22 and 2026-10-23 amendments also supersede conflicting blanket validation, readiness and evidence obligations in earlier standing guidance, this ADR, acceptance amendments and runbooks. Product behavior and runtime authorization contracts remain intact. Historical Git commits, closed pull requests, and past deployment receipts remain factual records but are not instructions for current work.
 
 ## Consequences
 

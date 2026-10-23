@@ -35,6 +35,8 @@ const expectedTools = [
   "administrateme_notification_result",
   "administrateme_cos_response",
   "administrateme_standing_order",
+  "administrateme_self_reminder",
+  "administrateme_self_reminder_fire",
 ];
 
 function assert(condition, message) {

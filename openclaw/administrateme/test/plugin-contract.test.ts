@@ -186,7 +186,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(23);
+    expect([...runtime.tools]).toHaveLength(25);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(17);
     expect(runtime.gateways.has("administrateme.cosPermissions.preflight")).toBe(true);
@@ -336,7 +336,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(23);
+    expect([...runtime.tools]).toHaveLength(25);
     expect(runtime.services).toHaveLength(0);
   });
 
@@ -547,24 +547,31 @@ describe("native OpenClaw contract fixture", () => {
     expect(decide.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
-  it.each(["allow-once", "deny"])("relays only exact native CoS approval with an explicit signed %s decision", async (decision) => {
+  it.each([
+    ["administrateme_cos_response", "allow-once"], ["administrateme_cos_response", "deny"],
+    ["administrateme_execute_pending_provider_action", "allow-once"], ["administrateme_execute_pending_provider_action", "deny"],
+  ])("relays only exact native %s approval with an explicit signed %s decision", async (toolName, decision) => {
     const runtime = fakeApi();
     const service = runtime.services.find((value) => value.id === "administrateme-cos-approval-relay");
     await service?.start();
     const native = fixtureApprovalRuntimes.at(-1)!;
     const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
     const context = { sessionKey: "agent:adminme-a:portal-a", agentId: "adminme-a", toolCallId: "call-a" };
-    const toolParams = { request_id: "reply-a", approval_event_id: "event-private-a" };
-    await hook({ toolName: "administrateme_cos_response", params: toolParams }, context);
+    const apple = toolName === "administrateme_execute_pending_provider_action";
+    const toolParams = apple
+      ? { domain_approval_event_id: "event-private-a" }
+      : { request_id: "reply-a", approval_event_id: "event-private-a" };
+    await hook({ toolName, params: toolParams }, context);
     const now = Date.now();
     const record: PluginApprovalRequest = {
       id: "plugin:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMs: now, expiresAtMs: now + 120_000,
-      request: { pluginId: "administrateme", toolName: "administrateme_cos_response",
+      request: { pluginId: "administrateme", toolName,
         toolCallId: "call-a", agentId: context.agentId, sessionKey: context.sessionKey,
         allowedDecisions: ["allow-once", "deny"] },
     };
     for (const mismatch of [
-      { pluginId: "other" }, { toolName: "exec" }, { toolCallId: "other-call" },
+      { pluginId: "other" }, { toolName: "exec" },
+      { toolName: apple ? "administrateme_cos_response" : "administrateme_execute_pending_provider_action" }, { toolCallId: "other-call" },
       { agentId: "other-agent" }, { sessionKey: "other-session" }, { allowedDecisions: ["allow-always"] },
     ]) {
       expect(native.adapter.shouldHandle({ ...record, request: { ...record.request, ...mismatch } })).toBe(false);
@@ -583,6 +590,9 @@ describe("native OpenClaw contract fixture", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.domain_approval_id).toBe("event-private-a");
     expect(rows[0]?.receipt_id).toBeUndefined();
+    expect(rows[0]?.kind).toBe(apple ? "provider_action" : "cos_response");
+    expect(rows[0]?.tool_name).toBe(toolName);
+    expect(rows[0]?.request_fingerprint).toBe(approvalRequestFingerprint(toolParams));
     expect(native.calls).toEqual([]);
     await resolve({ params: { ...ticket("resolve"), signature: "0".repeat(64) }, client: null, respond });
     expect(respond.mock.lastCall?.[0]).toBe(false);
@@ -712,27 +722,58 @@ describe("native OpenClaw contract fixture", () => {
     await service.stop?.();
   });
 
-  it("waits for receipt publication even when the pinned host does not await onResolution", async () => {
+  it.each([
+    { name: "administrateme_cos_response", path: "/tools/cos-response",
+      params: { request_id: "publication-race", approval_event_id: "approved-private" } },
+    { name: "administrateme_execute_pending_provider_action", path: "/tools/execute-pending-provider-action",
+      params: { domain_approval_event_id: "approved-private" } },
+  ])("$name waits for receipt publication when the pinned host does not await onResolution", async ({ name, path, params }) => {
     const runtime = fakeApi();
-    const params = { request_id: "publication-race", approval_event_id: "approved-private" };
     const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
-    const gated = await hook({ toolName: "administrateme_cos_response", params }, {}) as {
+    const gated = await hook({ toolName: name, params }, {}) as {
       params: Record<string, unknown>;
       requireApproval: { onResolution(decision: string): Promise<void> };
     };
     let complete!: (value: Response) => void;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { complete = resolve; }));
     const publication = gated.requireApproval.onResolution("allow-once");
-    const tool = runtime.tools.get("administrateme_cos_response")!(toolContext()) as AnyAgentTool;
+    const tool = runtime.tools.get(name)!(toolContext()) as AnyAgentTool;
     const execution = tool.execute("call-publication-race", gated.params);
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/approvals/resolve");
     complete(jsonResponse({ accepted: true }));
     await publication;
     await execution;
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]?.[0]).toContain("/tools/cos-response");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain(path);
   });
+
+  it.each(["administrateme_cos_response", "administrateme_execute_pending_provider_action"])(
+    "%s refuses dispatch when its exact receipt publication fails", async (name) => {
+      const runtime = fakeApi();
+      const params = name === "administrateme_cos_response"
+        ? { request_id: "publication-failure", approval_event_id: "approved-private" }
+        : { domain_approval_event_id: "approved-private" };
+      const hook = runtime.hooks.get("before_tool_call")![0]!.handler;
+      const gated = await hook({ toolName: name, params }, {}) as {
+        params: Record<string, unknown>;
+        requireApproval: { onResolution(decision: string): Promise<void> };
+      };
+      let fail!: (reason: Error) => void;
+      fetchMock.mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => { fail = reject; }));
+      const publication = gated.requireApproval.onResolution("allow-once");
+      const tool = runtime.tools.get(name)!(toolContext()) as AnyAgentTool;
+      const execution = tool.execute("call-publication-failure", gated.params);
+      const outcomes = Promise.allSettled([publication, execution]);
+      await Promise.resolve();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      fail(new Error("Fixture approval acknowledgement unavailable"));
+      expect((await outcomes).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toContain("/approvals/resolve");
+    },
+  );
 
   it("reports notification delivery through the typed result seam", async () => {
     const runtime = fakeApi();

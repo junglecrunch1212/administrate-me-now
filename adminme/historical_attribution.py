@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from adminme.bridge_history import BridgeHistory, SOURCE_ADAPTERS
+from adminme.apple_service_history import apple_command_owner_matches
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
@@ -55,21 +56,36 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         return False
     approval = approved.get("payload") or {}
     scope = f"private:{member}"
-    standing = approval.get("authorization_method") == "standing_self_reply"
+    standing = approval.get("authorization_method") in {
+        "standing_self_reply",
+        "requested_self_reminder",
+    }
     if standing:
         from adminme.cos_response_assurance import _standing_valid
 
         references = [
             await event_log.get(approval.get(key, ""))
-            for key in ("standing_authorization_event_id", "source_message_event_id")
+            for key in (
+                "standing_authorization_event_id",
+                "source_message_event_id",
+                "reminder_event_id",
+                "reminder_binding_event_id",
+            )
+            if approval.get(key)
         ]
+        if approval.get("reminder_event_id"):
+            reminder = await event_log.get(approval["reminder_event_id"])
+            if reminder is not None:
+                references.append(
+                    await event_log.get(reminder["payload"]["activation_event_id"])
+                )
         if not _standing_valid(
             approved, {row["event_id"]: row for row in references if row is not None}
         ):
             return False
     return bool(
         attempt.get("schema_version") == 1
-        and approved.get("schema_version") in ({2} if standing else {1, 2})
+        and approved.get("schema_version") in ({2, 3} if standing else {1, 2, 3})
         and all(
             row.get("source_adapter") == "openclaw-plugin"
             and row.get("source_account_id") == "cos-response"
@@ -378,6 +394,11 @@ async def audit_historical_attribution(
             if event_type == "triage.intent.submitted"
             else None
         )
+        apple_command = (
+            await event_log.get(str(event["event_id"]))
+            if event_type == "external_sync.write_requested"
+            else None
+        )
         bindings = bindings_by_account.get(account.casefold(), [])
         matching_bindings = [
             binding for binding in bindings if owner_scope == binding.owner_scope
@@ -394,6 +415,18 @@ async def audit_historical_attribution(
             # matching when its member/private correlation is malformed.
             if await _cos_response_owner_matches(event_log, str(event["event_id"])):
                 binding_state = "internal_cos_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif apple_command is not None and (
+            apple_command.get("payload", {}).get("provider") == "apple_notes"
+            or (apple_command.get("payload", {}).get("payload") or {}).get(
+                "apple_service_permission"
+            )
+        ):
+            if await apple_command_owner_matches(
+                event_log, apple_command, through=watermark or ""
+            ):
+                binding_state = "internal_apple_service_member_source_reconciled"
                 workspace = "personal"
                 attributed += 1
         elif submission is not None and (

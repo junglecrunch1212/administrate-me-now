@@ -54,7 +54,7 @@ def policy_from_config(value: dict[str, Any]) -> CosAcquisitionPolicy | None:
 
 
 def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
-    """Permit one enrolled service inbox; never load a member-owned adapter."""
+    """Permit the service inbox and separately authorized read-only sources."""
 
     from adminme.adapters.disposable_test_acquisition import (
         CONFIG_KEY as TEST_CONFIG_KEY,
@@ -135,10 +135,17 @@ def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         or not config["trusted_sender_routes"]
     ):
         raise ValueError("CoS Gmail requires reviewed member sender routes")
+    from adminme.adapters.member_google_connections import (
+        selected_entries,
+    )
+
+    member_sources = selected_entries(result)
     for item in entries:
         if not isinstance(item, dict):
             raise ValueError("CoS acquisition adapter inventory is malformed")
-        if item is not entry:
+        if item.get("id") in member_sources:
+            item["config"] = member_sources[item["id"]]["config"]
+        elif item is not entry:
             item["enabled"] = False
     # A member's explicit connection pause wins. Settings cannot enable a
     # different adapter because this restriction is reapplied by the loader.

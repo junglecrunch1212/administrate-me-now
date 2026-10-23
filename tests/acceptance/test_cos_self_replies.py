@@ -131,7 +131,9 @@ def _activate(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> dict[str, 
 
 
 def _inbound(
-    client: TestClient, native_id: str = "native-standing-message"
+    client: TestClient,
+    native_id: str = "native-standing-message",
+    text: str = "Please explain your capabilities.",
 ) -> dict[str, Any]:
     provenance = {
         "actor_id": PHONE,
@@ -151,7 +153,7 @@ def _inbound(
         json={
             "provenance": provenance,
             "request_id": native_id,
-            "text": "Please explain your capabilities.",
+            "text": text,
             "consent": True,
             "submission_gesture": "dedicated_intake",
         },

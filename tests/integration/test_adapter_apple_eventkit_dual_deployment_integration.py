@@ -46,9 +46,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -56,6 +58,7 @@ import pytest
 import yaml
 
 import adminme.events.schemas.adapters  # noqa: F401 — capability evidence schema
+import adminme.events.schemas.reminders  # noqa: F401 — reminder mirror schema
 from adminme.events.envelope import EventEnvelope
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
@@ -64,7 +67,7 @@ from adminme.lib.instance_config import load_instance_config
 from adminme.lib.pack_registry.validator import validate_adapter_pack
 from adminme.products.bridge.app import create_app
 from adminme.products.bridge.auth import DictMemberIdResolver
-from adminme_bridge.adapters.base import AdapterStatus
+from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
 from adminme_bridge.adapters.sinks import EmitResult
 from adminme_bridge.config import BridgeConfig
 from adminme_bridge.connector_packs import reminders_apple_eventkit_bridge
@@ -346,7 +349,11 @@ async def central_rig(tmp_path: Path):
             client=http,
         )
         try:
-            yield {"log": log, "ingest": ingest}
+            yield {
+                "log": log,
+                "ingest": ingest,
+                "bridge_record": app.state.bridge_enrollments["m1@example.ts.net"],
+            }
         finally:
             await bus.stop()
             await log.close()
@@ -473,3 +480,212 @@ def test_apple_eventkit_bridge_connector_pack_module_exports_wrapper() -> None:
     # (``"reminders"`` per
     # ``adminme/lib/adapters/external_state_mirror_base.py``).
     assert AppleEventKitBridgeAdapter.family == "reminders"
+
+
+@pytest.mark.parametrize(
+    "alarm_kind",
+    [
+        "none",
+        "absolute",
+        "absolute_with_offset",
+        "absolute_string",
+        "absolute_null",
+        "relative",
+        "location",
+    ],
+)
+async def test_selected_reminders_acquire_and_reach_ingest_without_other_lists(
+    central_rig: dict[str, Any], monkeypatch: pytest.MonkeyPatch, alarm_kind: str
+) -> None:
+    """Real wrapper/adapter/ingest: an unselected list cannot abort selected items."""
+    adapter_class = wrapper_mod._load_central_adapter_class()
+    shim = sys.modules[adapter_class.__module__]._shim_mod
+    queried_lists: list[str] = []
+    absolute_at = datetime(
+        2026,
+        5,
+        21,
+        9,
+        15,
+        30,
+        123456,
+        tzinfo=timezone(timedelta(hours=5, minutes=30)),
+    )
+    native_alarms: list[Any] = []
+    if alarm_kind in {"absolute", "absolute_with_offset"}:
+        native_alarms = [
+            SimpleNamespace(
+                absoluteDate=(
+                    SimpleNamespace(
+                        timeIntervalSince1970=lambda: absolute_at.timestamp()
+                    )
+                    if alarm_kind == "absolute"
+                    else absolute_at
+                )
+            )
+        ]
+    elif alarm_kind == "relative":
+        native_alarms = [SimpleNamespace(relativeOffset=-900)]
+    elif alarm_kind == "location":
+        native_alarms = [
+            SimpleNamespace(
+                structuredLocation=SimpleNamespace(
+                    title="Fixture location",
+                    geoLocation=SimpleNamespace(
+                        coordinate=SimpleNamespace(latitude=0.0, longitude=0.0)
+                    ),
+                    radius=125.0,
+                ),
+                proximity=1,
+            )
+        ]
+    native_item = SimpleNamespace(
+        calendarItemIdentifier="selected-item",
+        calendar=SimpleNamespace(calendarIdentifier="test-list"),
+        title="Selected reminder",
+        notes=None,
+        priority=0,
+        isCompleted=True,
+        completionDate=datetime(2026, 5, 20, 12, tzinfo=timezone.utc),
+        lastModifiedDate=datetime(2026, 5, 20, 12, tzinfo=timezone.utc),
+        alarms=native_alarms,
+    )
+    # Convert the same NSDate/relative/location shapes used by the real native
+    # shim, then carry that record through the production HTTP JSON boundary.
+    selected_item = shim.PyObjCEventStore.__new__(shim.PyObjCEventStore)._record(
+        native_item
+    )
+    if alarm_kind in {"absolute_string", "absolute_null"}:
+        selected_item.alarms = [
+            {
+                "kind": "absolute",
+                "absolute_at": absolute_at.isoformat()
+                if alarm_kind == "absolute_string"
+                else None,
+                "relative_offset_seconds": None,
+                "location": None,
+                "proximity": "none",
+            }
+        ]
+
+    class Unselected:
+        calendarIdentifier = "unselected-list"
+        list_identifier = "unselected-list"
+
+        def __getattr__(self, name: str) -> Any:
+            pytest.fail(f"unselected provider content was read: {name}")
+
+    class SelectedStore:
+        def fetch_lists(self, *, list_identifiers: tuple[str, ...]) -> list[Any]:
+            assert list_identifiers == ("test-list",)
+            return [
+                SimpleNamespace(calendarIdentifier="test-list", title="Personal"),
+                Unselected(),
+            ]
+
+        def list_name_for_identifier(self, identifier: str) -> str:
+            assert identifier == "test-list"
+            return "Personal"
+
+        def fetch_reminders(self, *, list_identifier: str) -> list[Any]:
+            assert list_identifier == "test-list", "native query must be bounded"
+            queried_lists.append(list_identifier)
+            return [Unselected(), selected_item]
+
+    def adapter_factory(*, config: dict[str, Any]) -> Any:
+        return adapter_class(
+            config=config,
+            ek_event_store_factory=SelectedStore,
+            max_outbound_cycles=0,
+            max_inbound_cycles=0,
+        )
+
+    monkeypatch.setattr(
+        wrapper_mod, "_load_central_adapter_class", lambda: adapter_factory
+    )
+    configuration_hash = hashlib.sha256(
+        json.dumps(
+            {REMINDERS_PACK: _reminders_pack_config()},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    wrapper = AppleEventKitBridgeAdapter(internal_config=_reminders_pack_config())
+    await wrapper.start(
+        ctx=BridgeContext(
+            member_id="m1",
+            ingest_client=central_rig["ingest"],
+            correlation_id_factory=lambda: "selected-source-regression",
+            now_factory=lambda: datetime.now(timezone.utc),
+            enrollment_id=ENROLLMENT_ID,
+            configuration_sha256=configuration_hash,
+        )
+    )
+    internal = wrapper._internal
+    try:
+        # This standalone ingress fixture does not run the Settings capability
+        # projector. Prove it refuses reads before authorization, then model
+        # the enrolled read grant bound to the actual authentication event.
+        authenticated = [row async for row in central_rig["log"].read_since()]
+        assert len(authenticated) == 1
+        assert authenticated[0]["type"] == "adapter.authenticated"
+        with pytest.raises(RuntimeError, match="bridge_pack_contract_denied"):
+            await internal._inbound_poll_once(ctx=internal._ctx)
+        assert len([row async for row in central_rig["log"].read_since()]) == 1
+        central_rig["bridge_record"].update(
+            authorized_packs=[REMINDERS_PACK],
+            pack_capability_states={REMINDERS_PACK: "attested"},
+            provider_capability_state="attested",
+            capability_attestations={
+                REMINDERS_PACK: {"event_id": authenticated[0]["event_id"]}
+            },
+        )
+        # The first selected list used to be emitted, then an unselected list's
+        # central refusal aborted the cycle before any reminder could arrive.
+        assert await internal._inbound_poll_once(ctx=internal._ctx) == 1
+        assert await internal._inbound_poll_once(ctx=internal._ctx) == 0
+        rows = [row async for row in central_rig["log"].read_since()]
+        content = [row for row in rows if not row["type"].startswith("adapter.")]
+        assert [row["type"] for row in content] == [
+            "list.created",
+            "reminder.list_item.synced",
+            "list_item.added",
+        ]
+        assert all(row["owner_scope"] == "private:m1" for row in rows)
+        assert all(row["source_account_id"] == PROVIDER_ACCOUNT for row in rows)
+        assert all(
+            (
+                row["payload"].get("list_external_id")
+                or row["payload"].get("list_identifier")
+            )
+            == "test-list"
+            for row in content
+        )
+        assert content[-1]["payload"]["item_external_id"] == "selected-item"
+        assert content[-1]["payload"]["completed"] is True
+        assert content[-1]["payload"]["completion_at"] == "2026-05-20T12:00:00Z"
+        stored_alarms = content[-1]["payload"]["alarms"]
+        if alarm_kind in {"absolute", "absolute_with_offset"}:
+            assert len(stored_alarms) == 1
+            assert stored_alarms[0]["kind"] == "absolute"
+            stored_at = datetime.fromisoformat(
+                stored_alarms[0]["absolute_at"].replace("Z", "+00:00")
+            )
+            assert stored_at == absolute_at
+            assert stored_at.microsecond == 123456
+            assert isinstance(selected_item.alarms[0]["absolute_at"], datetime)
+        else:
+            assert stored_alarms == selected_item.alarms
+        assert queried_lists == ["test-list", "test-list"]
+        assert not any(row["type"] == "adapter.error" for row in rows)
+
+        # Filtering belongs on the edge; the independent ingress refusal must
+        # remain in place if a transport sends an unselected container anyway.
+        bad_list = dict(content[0]["payload"], list_external_id="unselected-list")
+        with pytest.raises(RuntimeError, match="bridge_pack_contract_denied"):
+            await internal._append(
+                ctx=internal._ctx, event_type="list.created", payload=bad_list
+            )
+        assert len([row async for row in central_rig["log"].read_since()]) == len(rows)
+    finally:
+        await wrapper.stop()

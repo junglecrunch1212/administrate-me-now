@@ -33,6 +33,7 @@ from bootstrap.candidate_readiness import (
     load_pending_attestation_for_activation,
 )
 from bootstrap.communication_intake import (
+    APPLE_SERVICE_WRITE_CONTRACT,
     INSPECTION_MAX_SECONDS,
     CommunicationIntakeInspectionError,
     required_instance_policies,
@@ -214,6 +215,7 @@ def validate_candidate(
     approve_runtime_migration: bool = False,
     allow_openclaw_rollback: bool = False,
     required_communication_intake_policies: frozenset[str] = frozenset(),
+    required_apple_service_write_contracts: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Fail before any service or active-release mutation on incompatibility."""
     candidate = candidate.resolve()
@@ -284,6 +286,9 @@ def validate_candidate(
         incoming,
         required_policies=required_communication_intake_policies,
     )
+    apple_service_write_contracts = _require_apple_service_write_compatibility(
+        incoming, required_contracts=required_apple_service_write_contracts
+    )
     return {
         "compatible": True,
         "openclaw_version": active_claw["version"],
@@ -296,7 +301,40 @@ def validate_candidate(
         "lockfile": "poetry.lock",
         "runtime_migration": runtime_changes or None,
         "communication_intake_policies": communication_intake_policies,
+        "apple_service_write_contracts": apple_service_write_contracts,
     }
+
+
+def _require_apple_service_write_compatibility(
+    incoming: dict[str, Any], *, required_contracts: frozenset[str]
+) -> list[str]:
+    """Only the selected target must preserve retained Apple command semantics.
+
+    Support alone does not activate a state boundary, so a read-only predecessor
+    can receive an initial upgrade or pre-grant rollback. After the first durable
+    permission/action receipt, even revocation cannot authorize an unaware target:
+    it could misreport an attempted write as suppressed or lose a Notes result.
+    """
+    application = incoming.get("administrateme", {})
+    supported = (
+        application.get("supported_apple_service_write_contracts", [])
+        if isinstance(application, dict)
+        else None
+    )
+    if (
+        not isinstance(supported, list)
+        or any(not isinstance(value, str) or not value for value in supported)
+        or any(not isinstance(value, str) or not value for value in required_contracts)
+    ):
+        raise UpgradeError("target Apple service write capability is invalid")
+    if required_contracts - set(supported):
+        raise UpgradeError(
+            "target release cannot preserve retained Apple write authority and "
+            "result history; release mutation refused. Keep a supporting release "
+            "and revoke service writes while outstanding results settle; do not "
+            "restore a pre-permission backup"
+        )
+    return sorted(required_contracts)
 
 
 class UpgradeManager:
@@ -1676,21 +1714,31 @@ class UpgradeManager:
         approve_runtime_migration: bool = False,
         allow_openclaw_rollback: bool = False,
     ) -> dict[str, Any]:
+        required = self._required_intake_policies()
         return validate_candidate(
             candidate,
             active_root=active_root,
             approve_runtime_migration=approve_runtime_migration,
             allow_openclaw_rollback=allow_openclaw_rollback,
-            required_communication_intake_policies=self._required_intake_policies(),
+            required_communication_intake_policies=required
+            - {APPLE_SERVICE_WRITE_CONTRACT},
+            required_apple_service_write_contracts=required
+            & {APPLE_SERVICE_WRITE_CONTRACT},
         )
 
     def _require_instance_intake_compatibility(
         self, active: Path, incoming: Path
     ) -> None:
+        required = self._required_intake_policies()
+        incoming_versions = load_versions(incoming)
         _require_communication_intake_compatibility(
             load_versions(active),
-            load_versions(incoming),
-            required_policies=self._required_intake_policies(),
+            incoming_versions,
+            required_policies=required - {APPLE_SERVICE_WRITE_CONTRACT},
+        )
+        _require_apple_service_write_compatibility(
+            incoming_versions,
+            required_contracts=required & {APPLE_SERVICE_WRITE_CONTRACT},
         )
 
     def _preflight_keychain_access(self, candidate: Path) -> None:

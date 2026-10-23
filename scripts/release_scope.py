@@ -1,13 +1,14 @@
 """Deterministic component selection and exact-revision protected CI gates.
 
-Only reviewed helper packaging has a component contract. Everything outside
-that contract falls back to the unchanged system release validation. GitHub
+Reviewed components have explicit contracts. Everything outside those
+contracts falls back to unchanged system release validation. GitHub
 labels, supplied path lists and previous runs cannot authorize a smaller gate.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from bootstrap.source_identity import load_git_tree
+from bootstrap.source_identity import GitTreeEntry, load_git_tree
 from bootstrap.member_bridge_component import (
     HELPER_COMPONENT_PATHS,
     NON_RUNTIME_PROSE_DIRECTORY,
@@ -39,11 +40,130 @@ HELPER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_member_bridge_helper_app.py",
         "tests/unit/bootstrap/test_member_bridge_helper_diagnostics.py",
         "tests/unit/bootstrap/test_member_bridge_permission_controller.py",
+        "tests/unit/bootstrap/test_member_bridge_launch.py",
+        "tests/acceptance/test_member_bridge_launch_runtime.py",
         "tests/acceptance/test_member_bridge_installer_runtime.py",
         "tests/acceptance/test_member_bridge_permission_recovery.py",
     }
 )
-SCOPES = frozenset({"documentation", "bridge-helper", "system-wide"})
+ENROLLMENT_INGEST_PATH = "adminme/products/bridge/routers/ingest.py"
+GOOGLE_MODULE = "adminme/adapters/member_google_connections.py"
+GOOGLE_WIRING = "scripts/google_connection_wiring.json"
+GOOGLE_SHARED_PATHS = frozenset(
+    {
+        "adminme/adapters/cos_channel_acquisition.py",
+        "adminme/adapters/disposable_test_acquisition.py",
+        "adminme/deployment_readiness.py",
+        "adminme/runtime/application.py",
+        "adminme/settings_control.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/versions.json",
+    }
+)
+GOOGLE_TEST_PATHS = frozenset(
+    {
+        "tests/acceptance/test_member_google_connections.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/test_cos_channel_operation.py",
+    }
+)
+COS_RECOVERY_CONTROLLER = "bootstrap/cos_channel_activation.py"
+COS_RECOVERY_HISTORY = "bootstrap/cos_recovery_history.py"
+COS_RECOVERY_COMPONENT_PATHS = frozenset(
+    {
+        COS_RECOVERY_CONTROLLER,
+        COS_RECOVERY_HISTORY,
+        "bootstrap/member_bridge_component.py",
+    }
+)
+COS_RECOVERY_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/bootstrap/test_cos_recovery_history.py",
+        "tests/unit/bootstrap/test_cos_recovery_history_operation.py",
+        "tests/unit/bootstrap/test_member_bridge_component.py",
+    }
+)
+BRIDGE_RUNTIME_PATHS = frozenset(
+    {
+        "bootstrap/member_bridge_runtime_repair.py",
+        "bootstrap/install-member-bridge.sh",
+        "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+        "packs/adapters/calendaring/apple-calendar/adapter.py",
+        "tests/unit/adapters/calendaring/test_apple_calendar_native_dates.py",
+        "tests/acceptance/test_apple_calendar_native_date_readback.py",
+        "tests/unit/bootstrap/test_member_bridge_runtime_repair.py",
+        "tests/unit/adapters/reminders/test_eventkit_color_bounds.py",
+        "tests/unit/adapters/reminders/test_eventkit_selected_sources.py",
+        "tests/integration/test_adapter_apple_eventkit_dual_deployment_integration.py",
+        "packs/adapters/reminders/apple-eventkit/adapter.py",
+        "tests/acceptance/test_eventkit_color_native.py",
+        "tests/acceptance/test_member_bridge_installer_runtime.py",
+        "tests/acceptance/test_member_bridge_launch_runtime.py",
+    }
+)
+COS_REMINDER_PATHS = frozenset(
+    {
+        ".github/workflows/cos-reply-development.yml",
+        "adminme/cos_response_assurance.py",
+        "adminme/events/schemas/cos_reminders.py",
+        "adminme/historical_attribution.py",
+        "adminme/products/openclaw/cos_reminders.py",
+        "adminme/products/openclaw/cos_self_replies.py",
+        "adminme/runtime/application.py",
+        "adminme/source_assurance.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/openclaw/programs/requested_workflows.md",
+        "docs/refactor/evidence/event-lifecycle-catalog.json",
+        "openclaw/administrateme/openclaw.plugin.json",
+        "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
+        "openclaw/administrateme/scripts/check-self-reminder-gateway.mjs",
+        "openclaw/administrateme/scripts/validate-contract.mjs",
+        "openclaw/administrateme/src/config.ts",
+        "openclaw/administrateme/src/contract.ts",
+        "openclaw/administrateme/src/hooks.ts",
+        "openclaw/administrateme/src/index.ts",
+        "openclaw/administrateme/src/self-reminders.ts",
+        "openclaw/administrateme/src/self-replies.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/agent-harness-runtime.d.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/agent-harness-runtime.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
+        "openclaw/administrateme/test/plugin-contract.test.ts",
+        "openclaw/administrateme/test/self-reminders.test.ts",
+        "openclaw/administrateme/tsconfig.json",
+        "openclaw/administrateme/vitest.config.ts",
+        "openclaw/administrateme/workspace/AGENTS.md",
+        "scripts/acceptance/cos-reminder-release.sh",
+        "scripts/acceptance/openclaw-source-install.sh",
+        "tests/acceptance/test_cos_self_reminders.py",
+        "tests/acceptance/test_cos_self_replies.py",
+        "tests/fixtures/openclaw_self_reminder_probe.mjs",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+    }
+)
+COS_REMINDER_REQUIRED_PATHS = frozenset(
+    {
+        "adminme/products/openclaw/cos_reminders.py",
+        "adminme/events/schemas/cos_reminders.py",
+        "openclaw/administrateme/src/self-reminders.ts",
+        "openclaw/administrateme/scripts/check-self-reminder-gateway.mjs",
+        "tests/acceptance/test_cos_self_reminders.py",
+        "tests/fixtures/openclaw_self_reminder_probe.mjs",
+        "scripts/acceptance/cos-reminder-release.sh",
+    }
+)
+SCOPES = frozenset(
+    {
+        "documentation",
+        "bridge-helper",
+        "bridge-enrollment",
+        "bridge-runtime",
+        "google-connections",
+        "cos-recovery-history",
+        "cos-reminders",
+        "system-wide",
+    }
+)
 CONTRACT = "administrateme-component-release-v1"
 
 
@@ -91,6 +211,11 @@ def choose_scope(
     *,
     interfaces_equal: bool,
     path_modes: dict[str, set[str]],
+    enrollment_interfaces_equal: bool = False,
+    google_interfaces_equal: bool = False,
+    cos_recovery_interfaces_equal: bool = False,
+    bridge_runtime_interfaces_equal: bool = False,
+    cos_reminder_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -98,13 +223,219 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    if (
+        bridge_runtime_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in BRIDGE_RUNTIME_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path)
+            == {"100755" if path == "bootstrap/install-member-bridge.sh" else "100644"}
+            for status, path in changes
+        )
+        and any(
+            path
+            in {
+                "bootstrap/member_bridge_runtime_repair.py",
+                "packs/adapters/reminders/apple-eventkit/adapter.py",
+                "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+                "packs/adapters/calendaring/apple-calendar/adapter.py",
+            }
+            for _, path in changes
+        )
+    ):
+        return "bridge-runtime"
+    if (
+        cos_reminder_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in COS_REMINDER_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path) == {_cos_reminder_mode(path)}
+            for status, path in changes
+        )
+        and any(path in COS_REMINDER_REQUIRED_PATHS for _, path in changes)
+    ):
+        return "cos-reminders"
+    recovery_allowed = (
+        COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    )
+    if (
+        cos_recovery_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in recovery_allowed or _prose(path))
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(
+            path in {COS_RECOVERY_CONTROLLER, COS_RECOVERY_HISTORY}
+            for _, path in changes
+        )
+    ):
+        return "cos-recovery-history"
+    google_allowed = (
+        GOOGLE_SHARED_PATHS
+        | GOOGLE_TEST_PATHS
+        | POLICY_PATHS
+        | {GOOGLE_MODULE, GOOGLE_WIRING}
+    )
+    if (
+        google_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in google_allowed or _prose(path))
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(
+            path == GOOGLE_MODULE or path in GOOGLE_SHARED_PATHS for _, path in changes
+        )
+    ):
+        return "google-connections"
     allowed = set(HELPER_COMPONENT_PATHS) | POLICY_PATHS | HELPER_TEST_PATHS
     if interfaces_equal and all(
         status in {"A", "M"} and (path in allowed or _prose(path))
         for status, path in changes
     ):
         return "bridge-helper"
+    if (
+        enrollment_interfaces_equal
+        and ("M", ENROLLMENT_INGEST_PATH) in changes
+        and all(
+            path_modes.get(path)
+            == {"100755" if path == "bootstrap/install-member-bridge.sh" else "100644"}
+            for _status, path in changes
+        )
+        and all(
+            (status == "M" and path == ENROLLMENT_INGEST_PATH)
+            or (status in {"A", "M"} and (path in allowed or _prose(path)))
+            for status, path in changes
+        )
+    ):
+        return "bridge-enrollment"
     return "system-wide"
+
+
+def _enrollment_interface_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # Hash immutable Git blob IDs and modes, never a caller's supplied path
+    # list or a mutable checkout. Unknown tracked paths remain runtime inputs.
+    # Shared coordinator/history/schema/auth/storage/lock/runtime/dependency
+    # bytes are deliberately outside this single-route component boundary.
+    # Unrelated test/CI blobs are also fixed so an exact-parent test merge
+    # cannot introduce unreviewed paths absent from the head diff.
+    allowed = set(HELPER_COMPONENT_PATHS) | POLICY_PATHS | HELPER_TEST_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if entry.path != ENROLLMENT_INGEST_PATH
+        and (
+            is_runtime_input(entry.path, mode=entry.mode)
+            or (entry.path not in allowed and not _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _bridge_runtime_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    allowed = BRIDGE_RUNTIME_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode
+            == (
+                "100755"
+                if entry.path == "bootstrap/install-member-bridge.sh"
+                else "100644"
+            )
+            and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # Only this closed controller/history/compatibility edit set may differ.
+    # Every other tracked byte and mode, including tests and unknown inputs,
+    # stays frozen across the protected base, head, and exact-parent test merge.
+    allowed = COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _cos_reminder_mode(path: str) -> str:
+    return (
+        "100755"
+        if path == "scripts/acceptance/openclaw-source-install.sh"
+        else "100644"
+    )
+
+
+def _cos_reminder_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # The reviewed reply/timer boundary is closed. Storage, crypto, dependencies,
+    # unrelated runtime and tests remain identical in base, head and test merge.
+    allowed = COS_REMINDER_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == _cos_reminder_mode(entry.path)
+            and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def google_dependency_fingerprint(repository: Path, revision: str) -> str:
+    """Exclude the Google module and only its exact tested integration edits.
+
+    This is a CI scope boundary, not a retained-helper compatibility assertion.
+    Every other runtime byte and mode, including all bridge code, stays bound.
+    The protected worker separately tests the complete immutable Google candidate.
+    """
+    contract = json.loads(
+        (Path(__file__).parent / "google_connection_wiring.json").read_text()
+    )
+    if (
+        contract.get("contract") != "google-connection-wiring-v1"
+        or set(contract["paths"]) != GOOGLE_SHARED_PATHS
+    ):
+        raise ValueError("invalid Google integration boundary")
+    entries, _ = load_git_tree(repository, revision)
+    inventory = {}
+    for entry in entries:
+        path = entry.path
+        if (
+            path in {GOOGLE_MODULE, GOOGLE_WIRING} | POLICY_PATHS
+            or _prose(path)
+            or path.startswith(("tests/", "bridge/tests/", ".github/"))
+        ):
+            continue
+        identity = entry.object_id
+        if path in GOOGLE_SHARED_PATHS:
+            source = _git(repository, "show", f"{revision}:{path}")
+            for pair in contract["paths"][path]:
+                before, after = pair["before"], pair["after"]
+                if not before or not after or before == after:
+                    raise ValueError("invalid Google integration edit")
+                if source.count(after) == 1:
+                    source = source.replace(after, before, 1)
+            identity = hashlib.sha256(source.encode()).hexdigest()
+        inventory[path] = {"mode": entry.mode, "identity": identity}
+    return hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
 
 
 def select_scope(
@@ -149,8 +480,36 @@ def select_scope(
         ):
             raise ValueError("unsafe or unsupported diff entry")
     path_modes: dict[str, set[str]] = {}
+    enrollment_fingerprints: dict[str, str] = {}
+    enrollment_route_present: dict[str, bool] = {}
+    recovery_fingerprints: dict[str, str] = {}
+    bridge_runtime_fingerprints: dict[str, str] = {}
+    recovery_sources_present: dict[str, bool] = {}
+    reminder_fingerprints: dict[str, str] = {}
+    reminder_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
+        reminder_fingerprints[revision] = _cos_reminder_dependency_fingerprint(entries)
+        reminder_sources_present[revision] = (
+            revision == base
+            or COS_REMINDER_REQUIRED_PATHS
+            <= {entry.path for entry in entries if entry.mode == "100644"}
+        )
+        enrollment_fingerprints[revision] = _enrollment_interface_fingerprint(entries)
+        recovery_fingerprints[revision] = _cos_recovery_dependency_fingerprint(entries)
+        bridge_runtime_fingerprints[revision] = _bridge_runtime_dependency_fingerprint(
+            entries
+        )
+        required_recovery_paths = COS_RECOVERY_COMPONENT_PATHS - (
+            {COS_RECOVERY_HISTORY} if revision == base else set()
+        )
+        recovery_sources_present[revision] = required_recovery_paths <= {
+            entry.path for entry in entries if entry.mode == "100644"
+        }
+        enrollment_route_present[revision] = any(
+            entry.path == ENROLLMENT_INGEST_PATH and entry.mode == "100644"
+            for entry in entries
+        )
         for entry in entries:
             path_modes.setdefault(entry.path, set()).add(entry.mode)
     base_fingerprint = runtime_interface_fingerprint(repository, base)
@@ -160,6 +519,27 @@ def select_scope(
         changes,
         interfaces_equal=base_fingerprint == head_fingerprint == checkout_fingerprint,
         path_modes=path_modes,
+        enrollment_interfaces_equal=(
+            all(enrollment_route_present.values())
+            and len(set(enrollment_fingerprints.values())) == 1
+        ),
+        google_interfaces_equal=len(
+            {
+                google_dependency_fingerprint(repository, revision)
+                for revision in {base, head, checkout}
+            }
+        )
+        == 1,
+        bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
+        == 1,
+        cos_reminder_interfaces_equal=(
+            all(reminder_sources_present.values())
+            and len(set(reminder_fingerprints.values())) == 1
+        ),
+        cos_recovery_interfaces_equal=(
+            all(recovery_sources_present.values())
+            and len(set(recovery_fingerprints.values())) == 1
+        ),
     )
     return {
         "contract": CONTRACT,
@@ -169,6 +549,9 @@ def select_scope(
         "head_sha": head,
         "checkout_sha": checkout,
         "interface_sha256": checkout_fingerprint,
+        "enrollment_interface_sha256": enrollment_fingerprints[checkout],
+        "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
+        "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -179,12 +562,22 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
     selected = {
         "documentation": "documentation-validation",
         "bridge-helper": "bridge-helper-validation",
+        "bridge-enrollment": "bridge-development",
+        "bridge-runtime": "bridge-development",
+        "google-connections": "google-connections-validation",
+        "cos-recovery-history": "cos-recovery-history-validation",
+        "cos-reminders": "cos-reminder-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",
     }[scope]
     workers: tuple[str, ...] = ("release-scope", selected)
-    if platform == "macos" and scope != "documentation":
+    if platform == "macos" and scope in {
+        "bridge-helper",
+        "bridge-enrollment",
+        "bridge-runtime",
+        "system-wide",
+    }:
         workers += ("bridge-installed-runtime",)
     return workers
 

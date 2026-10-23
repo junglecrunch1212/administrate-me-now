@@ -208,6 +208,7 @@ export type OpenClawPluginApi = {
   ) => void;
   registerService: (service: OpenClawPluginService) => void;
   on: {
+    (hook: "before_agent_reply", handler: (event: { cleanedBody: string }, context: PluginHookAgentContext) => void | Promise<void>, options?: { eligibleTriggers?: readonly ["user", ...Array<"user" | "cron" | "heartbeat">] }): void;
     (
       hook: "agent_end",
       handler: (event: { runId?: string; messages: unknown[]; success: boolean; error?: string; durationMs?: number }, context: PluginHookAgentContext) => void | Promise<void>,

@@ -2622,7 +2622,9 @@ def test_materializer_timeout_reaps_child_and_publisher_removes_stage(
     )
     fake_git.chmod(0o700)
     monkeypatch.setattr(source_identity, "SYSTEM_GIT_EXECUTABLE", fake_git)
-    monkeypatch.setattr(source_identity, "_MATERIALIZATION_TIMEOUT_SECONDS", 0.2)
+    # Let the hosted runner start the child before testing its forced reap.
+    # The outer five-second assertion still proves bounded cleanup of sleep 1000.
+    monkeypatch.setattr(source_identity, "_MATERIALIZATION_TIMEOUT_SECONDS", 2.0)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
     stub_uninitialized_intake(monkeypatch, paths)
     started = time.monotonic()

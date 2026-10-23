@@ -7,6 +7,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -220,3 +221,73 @@ def test_pending_operation_holds_replies_until_commit(
     assert read_receipt(config_dir, allow_verification=True) == receipt
     journal.unlink()
     assert read_receipt(config_dir) == receipt
+
+
+@pytest.mark.parametrize("selected_count", [0, 3])
+def test_readonly_google_diagnostics_preserve_independent_cos_authority(
+    selected_count: int,
+) -> None:
+    inputs = _inputs()
+    inputs.update(
+        cos_acquisition_configured=True,
+        member_google_source_count=selected_count,
+    )
+    result = evaluate_deployment_readiness(**inputs)
+    evidence = result["dimensions"]["cos_channel_operation"]["evidence"]
+    assert evidence["personal_channel_polling"] is (selected_count > 0)
+    assert evidence["member_google_source_count"] == selected_count
+    assert evidence["live_authorized"] is False
+    inputs["observation_active"] = False
+    assert (
+        evaluate_deployment_readiness(**inputs)["dimensions"]["cos_channel_operation"][
+            "state"
+        ]
+        == "blocked"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("access", [None, False, True])
+async def test_runtime_rejects_a_standing_grant_with_blocked_native_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, access: bool | None
+) -> None:
+    from adminme.cos_channel_operation import runtime_live_authorization
+
+    config, receipt, _log = _fixture(tmp_path)
+    receipt["activation"]["self_reply_bindings"] = ["f" * 64]
+    config_dir = tmp_path / "state/config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "cos-channel-operation.json").write_text(json.dumps(receipt))
+    (config_dir / "cos-imsg-guard.json").write_text("{}")
+    gateway_path = tmp_path / "state/openclaw/runtime/openclaw.json"
+    gateway_path.parent.mkdir(parents=True)
+    plugin = {} if access is None else {"hooks": {"allowConversationAccess": access}}
+    gateway_path.write_text(
+        json.dumps({"plugins": {"entries": {"administrateme": plugin}}})
+    )
+    monkeypatch.setattr(
+        "adminme.cos_channel_operation.policy_from_config",
+        lambda _config: SimpleNamespace(imessage_channel_id="fixture-channel"),
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_imessage.validate_prepared_channel", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_imessage.verify_guard_files", lambda *_a, **_k: None
+    )
+
+    async def durable_authority(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"authorized": True}
+
+    monkeypatch.setattr(
+        "adminme.cos_channel_operation.live_authorization", durable_authority
+    )
+    runtime = SimpleNamespace(
+        event_log=None,
+        settings=SimpleNamespace(
+            adapter_config=config,
+            repository_root=tmp_path,
+            instance=SimpleNamespace(config_dir=config_dir, tenant_id="tenant-fixture"),
+        ),
+    )
+    assert (await runtime_live_authorization(runtime))["authorized"] is (access is True)

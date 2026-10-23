@@ -130,30 +130,37 @@ def _archive(repository: Path, revision: str, destination: Path) -> str:
     return hashlib.sha256(destination.read_bytes()).hexdigest()
 
 
+def _cos_overlay_payload(path: str, *, candidate: bool) -> bytes | None:
+    old_sha, new_sha = PERMISSION_RECOVERY_COS_OVERLAY[path]
+    expected_sha = new_sha if candidate else old_sha
+    if expected_sha is None:
+        return None
+    # This fixture proves a closed historical pair, not today's working tree.
+    # Later unrelated changes must neither replace the reviewed bytes nor force
+    # new production exemptions just to construct this synthetic repository.
+    revision = (
+        PERMISSION_RECOVERY_COS_CENTRAL_COMMIT
+        if candidate
+        else PERMISSION_RECOVERY_COS_RETAINED_COMMIT
+    )
+    payload = subprocess.run(
+        ["/usr/bin/git", "-C", str(ROOT), "show", f"{revision}:{path}"],
+        env=sanitized_git_environment(),
+        capture_output=True,
+        check=True,
+        timeout=30,
+    ).stdout
+    assert hashlib.sha256(payload).hexdigest() == expected_sha
+    return payload
+
+
 def _write_cos_overlay(repository: Path, *, candidate: bool) -> None:
-    for path, (old_sha, new_sha) in PERMISSION_RECOVERY_COS_OVERLAY.items():
+    for path in PERMISSION_RECOVERY_COS_OVERLAY:
         target = repository / path
-        if candidate:
-            payload = (ROOT / path).read_bytes()
-            assert hashlib.sha256(payload).hexdigest() == new_sha
-        elif old_sha is None:
+        payload = _cos_overlay_payload(path, candidate=candidate)
+        if payload is None:
             target.unlink(missing_ok=True)
             continue
-        else:
-            payload = subprocess.run(
-                [
-                    "/usr/bin/git",
-                    "-C",
-                    str(ROOT),
-                    "show",
-                    f"{PERMISSION_RECOVERY_COS_RETAINED_COMMIT}:{path}",
-                ],
-                env=sanitized_git_environment(),
-                capture_output=True,
-                check=True,
-                timeout=30,
-            ).stdout
-            assert hashlib.sha256(payload).hexdigest() == old_sha
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
         target.chmod(0o644)
@@ -260,7 +267,9 @@ def test_exact_hosted_gateway_probe_pair_is_independent_and_retains_old_archive(
         }
     ]
     assert ("reviewed_central_overlay" in inspected.compatibility) is with_cos
-    assert len(differences) == (24 if with_cos else 1)
+    assert len(differences) == (
+        len(PERMISSION_RECOVERY_COS_OVERLAY) + 1 if with_cos else 1
+    )
     assert inspected.compatibility["required_central_release_commit"] == candidate
     assert (
         inspected.compatibility["required_central_protocol"]
@@ -349,8 +358,8 @@ def test_complete_reviewed_cos_overlay_preserves_exact_retained_archive(
     tmp_path: Path,
 ) -> None:
     repository, retained, candidate = _cos_overlay_repository(tmp_path)
-    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 23
-    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 4
+    assert len(PERMISSION_RECOVERY_COS_OVERLAY) == 32
+    assert sum(old is None for old, _ in PERMISSION_RECOVERY_COS_OVERLAY.values()) == 8
     assert all(is_runtime_input(path) for path in PERMISSION_RECOVERY_COS_OVERLAY)
     assert runtime_interface_fingerprint(
         repository, candidate
@@ -432,7 +441,18 @@ def test_reviewed_cos_overlay_rejects_unknown_bytes_in_every_source_pair(
 
 
 @pytest.mark.parametrize(
-    "path", ["adminme/cos_channel_operation.py", "adminme/cos_self_replies.py"]
+    "path",
+    [
+        "adminme/cos_channel_operation.py",
+        "adminme/cos_self_replies.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/cos_reply_hooks.py",
+        "adminme/adapters/member_google_connections.py",
+        "adminme/settings_control.py",
+        "bootstrap/versions.json",
+        "scripts/google_connection_wiring.json",
+        "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
+    ],
 )
 @pytest.mark.parametrize("defect", ["missing", "mode", "old_coordinate"])
 def test_reviewed_cos_overlay_rejects_partial_group_and_candidate_mode_drift(
@@ -476,7 +496,9 @@ def test_reviewed_cos_overlay_requires_the_exact_retained_group(
     elif defect == "missing":
         target.unlink()
     else:
-        target.write_bytes((ROOT / path).read_bytes())
+        payload = _cos_overlay_payload(path, candidate=True)
+        assert payload is not None
+        target.write_bytes(payload)
     retained = _commit(repository)
     _write_cos_overlay(repository, candidate=True)
     candidate = _commit(repository)

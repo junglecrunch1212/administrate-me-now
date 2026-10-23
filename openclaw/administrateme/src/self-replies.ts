@@ -31,6 +31,29 @@ export function rememberSelfReply(runtime: PluginRuntime, provenance: Provenance
     binding, capturedAt: Date.now(), runId, text });
 }
 
+const reminderTurns = new WeakMap<PluginRuntime, Map<string, Inbound>>();
+const reminderCalls = new WeakMap<PluginRuntime, Map<string, Inbound>>();
+
+export function bindReminderTool(runtime: PluginRuntime, context: { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined }, callId: string | undefined): boolean {
+  if (!callId || !context.runId) return false;
+  const input = reminderTurns.get(runtime)?.get(context.runId);
+  if (!input || input.provenance.session_key !== context.sessionKey || input.provenance.agent_id !== context.agentId || Date.now() - input.capturedAt > 3_600_000) return false;
+  let calls = reminderCalls.get(runtime);
+  if (!calls) { calls = new Map(); reminderCalls.set(runtime, calls); }
+  if (calls.size > 100) calls.clear();
+  calls.set(callId, input);
+  return true;
+}
+
+export async function takeReminderInput(runtime: PluginRuntime, callId: string, context: { sessionKey?: string; agentId?: string }) {
+  const input = reminderCalls.get(runtime)?.get(callId);
+  reminderCalls.get(runtime)?.delete(callId);
+  if (!input || input.provenance.session_key !== context.sessionKey || input.provenance.agent_id !== context.agentId || Date.now() - input.capturedAt > 3_600_000) throw new Error("No current private reminder request");
+  const sourceId = await input.sourceId;
+  if (!sourceId) throw new Error("Reminder request was not durably acknowledged");
+  return { provenance: input.provenance, source_message_event_id: sourceId, host_binding: input.binding };
+}
+
 function record(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }
@@ -107,10 +130,29 @@ export function escapeReplyText(text: string): string {
 }
 
 export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRuntime): void {
+  api.on("before_agent_reply", (event, context) => {
+    if (!context.runId || !context.sessionKey) return;
+    let turns = reminderTurns.get(runtime);
+    if (!turns) { turns = new Map(); reminderTurns.set(runtime, turns); }
+    for (const [key, value] of turns) if (Date.now() - value.capturedAt > 3_600_000) turns.delete(key);
+    const inbox = pending.get(runtime);
+    const matches = inbox && [...inbox.values()].filter((input) =>
+      input.provenance.session_key === context.sessionKey && input.provenance.agent_id === context.agentId &&
+      (!input.runId || input.runId === context.runId) && Date.now() - input.capturedAt <= 3_600_000 &&
+      // The pinned host may prepend status/media context separated by a blank
+      // line. The exact current private text must remain the complete suffix;
+      // a mention elsewhere in history or a retrieved result is insufficient.
+      (input.text.trim() === event.cleanedBody.trim() ||
+       event.cleanedBody.trim().endsWith(`\n\n${input.text.trim()}`)));
+    const input = matches?.length === 1 ? matches[0] : undefined;
+    turns.delete(context.runId);
+    if (input && context.agentId === input.provenance.agent_id && turns.size < 100) turns.set(context.runId, input);
+  }, { eligibleTriggers: ["user"] });
   api.on("agent_end", async (event, context: PluginHookAgentContext) => {
     const inbox = pending.get(runtime);
     const session = context.sessionKey;
     const runId = event.runId ?? context.runId;
+    if (runId) reminderTurns.get(runtime)?.delete(runId);
     if (!session || !inbox || !event.success) return;
     const matches = matchInputs(inbox, event.messages, session, runId);
     const input = matches.at(-1)?.[1];

@@ -24,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -40,14 +41,18 @@ jobs:
         run: >-
           poetry run pytest -p no:cacheprovider --runxfail -q -ra
           --basetemp="$RUNNER_TEMP/cos-reply-tests"
+          tests/acceptance/test_cos_self_reminders.py
           tests/acceptance/test_cos_self_replies.py
           tests/acceptance/test_cos_response_execution.py
           tests/acceptance/test_forwarded_channel_intake.py
           tests/unit/test_cos_channel_operation.py
           tests/unit/test_cos_response_assurance.py
+          tests/unit/test_source_assurance.py
           tests/unit/test_historical_attribution.py
           tests/unit/test_lifecycle_catalog.py
           tests/unit/bootstrap/test_cos_channel_activation.py
+          tests/unit/bootstrap/test_cos_reply_hooks.py
+          tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py
       - name: Validate native hook, guard and configuration contracts
         if: '!cancelled()'
@@ -79,12 +84,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.19.0'
-      - name: Exercise the authenticated pinned sender with synthetic text
+      - name: Exercise native hook admission and the pinned sender with synthetic text
         run: |
           npm ci --prefix openclaw/administrateme --ignore-scripts
           bash bootstrap/install-openclaw-source.sh --instance-root "$RUNNER_TEMP/cos-source" --python "$(command -v python)"
           commit=$(python -c 'import json; print(json.load(open("bootstrap/versions.json"))["openclaw"]["commit"])')
           node openclaw/administrateme/scripts/check-cos-imessage-text.mjs "$RUNNER_TEMP/cos-source/app/openclaw/$commit"
+          node openclaw/administrateme/scripts/check-self-reminder-gateway.mjs "$RUNNER_TEMP/cos-source/app/openclaw/$commit"
 
   pinned-gateway:
     if: github.event.pull_request.draft

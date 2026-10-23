@@ -122,6 +122,9 @@ from adminme.service_identities import (
     cos_message_channel_for_account,
     validate_service_identity_config,
 )
+from adminme.adapters.member_google_connections import (
+    selected_entries as selected_google_entries,
+)
 from adminme.deployment_readiness import evaluate_deployment_readiness
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
@@ -135,6 +138,12 @@ from adminme.products.comms.main import router as comms_router
 from adminme.products.core.main import router as core_router
 from adminme.products.member.main import router as member_router
 from adminme.products.member.cos import router as member_cos_router
+from adminme.products.member.apple_service_settings import (
+    router as apple_service_settings_router,
+)
+from adminme.products.member.apple_notes_commands import (
+    router as apple_notes_commands_router,
+)
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw.main import router as openclaw_router
 from adminme.products.openclaw.cos_responses import (
@@ -825,7 +834,8 @@ class AdministrateMeRuntime:
             settings.repository_root, settings.instance.instance_dir
         )
         self.settings_control = SettingsControlStore(
-            settings.instance.config_dir / "settings-control.json"
+            settings.instance.config_dir / "settings-control.json",
+            adapter_config=settings.adapter_config,
         )
         deployment_binding = settings.host_topology.get("deployment_binding")
         self.bridge_enrollment = BridgeEnrollmentCoordinator(
@@ -919,6 +929,9 @@ class AdministrateMeRuntime:
             await self.settings_control.replay_bridge_enrollment_events(self.event_log)
             await self.settings_control.replay_message_reply_control_events(
                 self.event_log
+            )
+            await self.settings_control.replay_apple_service_permission_events(
+                self.event_log, tenant_id=self.settings.instance.tenant_id
             )
             self.source_policy_shadow = SourcePolicyShadowEvaluator(
                 self.events,
@@ -3208,6 +3221,7 @@ class AdministrateMeRuntime:
             committer is not None and committer.pending
         ):
             host_topology = {**host_topology, "deployment_binding": {}}
+        google_source_ids = selected_google_entries(self.settings.adapter_config)
         return evaluate_deployment_readiness(
             required=self.settings.deployment_evidence_required,
             host_topology=host_topology,
@@ -3228,6 +3242,10 @@ class AdministrateMeRuntime:
             cos_live_authorization=self._cos_live_authorization,
             cos_acquisition_configured="cos_channel_acquisition"
             in self.settings.adapter_config,
+            member_google_source_count=sum(
+                adapter_id in google_source_ids
+                for adapter_id in (self.adapters.inventory() if self.adapters else {})
+            ),
         )
 
     async def diagnostics(self, *, refresh_capabilities: bool = True) -> dict[str, Any]:
@@ -3925,9 +3943,14 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     from adminme.products.openclaw.cos_self_replies import router as self_reply_router
 
     app.include_router(cos_response_router)
+    from adminme.products.openclaw.cos_reminders import router as reminder_router
+
     app.include_router(self_reply_router)
+    app.include_router(reminder_router)
     app.include_router(member_router)
     app.include_router(member_cos_router)
+    app.include_router(apple_service_settings_router)
+    app.include_router(apple_notes_commands_router)
     app.include_router(system_router)
     return app
 

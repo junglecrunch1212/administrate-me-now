@@ -32,6 +32,16 @@ from adminme.adapters.cos_channel_acquisition import (
     authorized_member_bridge_packs,
     member_bridge_capability_ceiling,
 )
+from adminme.apple_service_permissions import (
+    EVENT_TYPE as APPLE_PERMISSION_EVENT,
+    PACKS as APPLE_SERVICE_PACKS,
+    PROVIDERS as APPLE_SERVICE_PROVIDERS,
+    command_permission,
+    command_proof,
+    permission_marker,
+    validate_command_scope,
+    write_policy,
+)
 from adminme.bridge_source_contract import validate_member_source_coordinates
 from adminme.bridge_authorization import (
     BRIDGE_PACK_POLICIES,
@@ -76,6 +86,7 @@ router = APIRouter(prefix="/api/bridge", tags=["bridge"])
 ENROLLMENT_HEADER = "X-AdministrateMe-Bridge-Enrollment"
 PERMISSION_RECOVERY_CONTRACT = "administrateme-bridge-permission-recovery-v1"
 PERMISSION_STATE_HEADER = "X-AdministrateMe-Bridge-State-SHA256"
+INITIAL_START_RECOVERY_HEADER = "X-AdministrateMe-Bridge-Initial-Start-Recovery"
 
 
 class BatchIngestRequest(BaseModel):
@@ -434,10 +445,70 @@ async def _enforce_terminal_result(
         if isinstance(provider, str)
         else None
     )
+    if (
+        provider == "apple_notes"
+        and APPLE_SERVICE_PACKS[provider] in authorization.packs
+    ):
+        policy = write_policy(provider)
     expected_account = (
         authorization.provider_account_for(policy.pack) if policy is not None else None
     )
+    # A completed attempt is audited under its immutable original grant even
+    # after revocation. This lookup grants no new dispatch authority.
+    event_log = getattr(request.app.state, "event_log", None)
+    original = (
+        await event_log.get(payload.get("command_event_id"))
+        if event_log is not None and isinstance(payload.get("command_event_id"), str)
+        else None
+    )
+    original_payload = original.get("payload", {}) if isinstance(original, dict) else {}
+    original_body = original_payload.get("payload") or {}
+    marker = (
+        original_body.get("apple_service_permission")
+        if isinstance(original_body, dict)
+        else None
+    )
+    historical_grant = None
+    if provider in APPLE_SERVICE_PROVIDERS and isinstance(marker, dict):
+        grant_event = (
+            await event_log.get(marker.get("event_id"))
+            if event_log is not None and isinstance(marker.get("event_id"), str)
+            else None
+        )
+        if (
+            isinstance(grant_event, dict)
+            and grant_event.get("type") == APPLE_PERMISSION_EVENT
+            and grant_event.get("tenant_id") == envelope.tenant_id
+            and grant_event.get("owner_scope") == envelope.owner_scope
+            and grant_event.get("visibility_scope") == envelope.visibility_scope
+        ):
+            grant_payload = grant_event.get("payload", {})
+            if (
+                grant_payload.get("enabled") is True
+                and grant_payload.get("member_id") == authorization.member_id
+                and grant_event.get("actor_identity") == authorization.member_id
+            ):
+                historical_grant = {
+                    **grant_payload["coordinates"],
+                    "event_id": grant_event["event_id"],
+                    "revision": grant_payload["revision"],
+                    "coordinates_sha256": grant_payload["coordinates_sha256"],
+                }
+                try:
+                    validate_command_scope(historical_grant, original_payload)
+                    if (
+                        permission_marker(historical_grant) != marker
+                        or historical_grant["enrollment_id"]
+                        != authorization.enrollment_id
+                    ):
+                        historical_grant = None
+                except (ValueError, KeyError):
+                    historical_grant = None
+        if historical_grant is not None:
+            expected_account = historical_grant["provider_account_id"]
     violations: list[str] = []
+    if (provider == "apple_notes" or marker is not None) and historical_grant is None:
+        violations.append("original_apple_service_permission")
     if policy is None:
         violations.append("provider")
     if envelope.source_adapter != "adminme-bridge-command-dispatcher":
@@ -489,6 +560,8 @@ async def _enforce_terminal_result(
                 violations.append(f"payload.{key}")
         if command.get("owner_scope") != envelope.owner_scope:
             violations.append("command_owner_scope")
+        if command.get("tenant_id") != envelope.tenant_id:
+            violations.append("command_tenant_id")
         if policy is not None and policy.container_key is not None:
             request_body = requested.get("payload")
             container = (
@@ -496,8 +569,12 @@ async def _enforce_terminal_result(
                 if isinstance(request_body, dict)
                 else None
             )
-            allowed = authorization.pack_config.get(policy.pack, {}).get(
-                "allowed_container_ids", []
+            allowed = (
+                historical_grant["allowed_container_ids"]
+                if historical_grant is not None
+                else authorization.pack_config.get(policy.pack, {}).get(
+                    "allowed_container_ids", []
+                )
             )
             if container is None or container not in allowed:
                 violations.append("command_container")
@@ -539,12 +616,15 @@ def _container_from_payload(payload: dict[str, Any], policy: Any) -> str | None:
     elif policy.container_key == "target_list_identifier":
         value = (
             payload.get("target_list_identifier")
+            or payload.get("target_list_id")
             or payload.get("destination_list_external_id")
             or payload.get("list_external_id")
             or payload.get("list_identifier")
         )
     elif policy.container_key == "container_external_id":
         value = payload.get("container_external_id")
+    elif policy.container_key == "folder_external_id":
+        value = payload.get("folder_external_id")
     elif policy.container_key == "protected_source_id":
         value = payload.get("protected_source_id")
     else:
@@ -1332,6 +1412,193 @@ async def _initial_permission_retry_capabilities(
     )
 
 
+async def _initial_start_recovery(
+    runtime: Any, current: dict[str, Any], record: dict[str, Any], through: str
+) -> dict[str, dict[str, str]]:
+    """Prove a never-observed initial start, without resetting its permission.
+
+    This is only central evidence. The sealed helper must independently prove
+    the failed local start rolled back and no daemon or unknown operation is
+    outstanding. Previously observing sources never acquire this continuation.
+    """
+
+    member = str(current["member_id"])
+    tenant = runtime.settings.instance.tenant_id
+    request_id = current["request_id"]
+    if (
+        record.get("status") != "active"
+        or record.get("acquisition_policy") != MEMBER_BRIDGE_ACQUISITION_CONTRACT
+        or current.get("state")
+        not in {"degraded", "capabilities_testing", "partially_active", "settling"}
+        or current.get("observation_only") is not True
+        or current.get("writes_authorized") is not False
+    ):
+        return {}
+    rows: list[dict[str, Any]] = []
+    async for event in runtime.event_log.read_since(
+        through=through,
+        owner_scope=f"private:{member}",
+        types=[*LIFECYCLE_TYPES, SOURCE_AUTHORIZED],
+    ):
+        rows.append(event)
+        if len(rows) > 4096:
+            return {}
+    history = BridgeHistory(runtime.event_log, rows)
+    try:
+        # Use the established immutable lifecycle/source validator. No synthetic
+        # source event is needed to advance its audit cursor to this snapshot.
+        for event in rows:
+            if event["type"] == SOURCE_AUTHORIZED:
+                await history._authorize(event)
+            else:
+                history._lifecycle(event)
+        replay = history.states.get(tenant, {}).get("bridge_requests", {}).get(member)
+        if (tenant, member) in history.invalid or replay != current:
+            return {}
+        relevant = [
+            event
+            for event in rows
+            if event.get("payload", {}).get("request_id") == request_id
+        ]
+        if any(
+            event["type"] == "settings.bridge_enrollment_controlled"
+            for event in relevant
+        ):
+            return {}
+        result: dict[str, dict[str, str]] = {}
+        for capability in ("apple_calendar", "apple_reminders", "apple_notes"):
+            capability_row = current["capability_states"].get(capability) or {}
+            if capability_row.get("state") != "degraded":
+                continue
+            pack = str(CAPABILITIES[capability]["pack"])
+            policy = BRIDGE_PACK_POLICIES[pack]
+            config = record.get("pack_config", {}).get(pack)
+            if (
+                not isinstance(config, dict)
+                or pack not in record.get("configured_packs", [])
+                or pack not in record.get("authorized_packs", [])
+                or pack not in record.get("enabled_packs", [])
+                or record.get("pack_capability_states", {}).get(pack)
+                != (
+                    "attested"
+                    if policy.requires_capability_attestation
+                    else "not_required"
+                )
+            ):
+                continue
+            progress = [
+                event
+                for event in relevant
+                if event["type"] == "bridge.enrollment_progressed"
+                and event["payload"].get("capability_id") == capability
+            ]
+            states = [event["payload"].get("capability_state") for event in progress]
+            if "permission_verified" not in states:
+                continue
+            start = states.index("permission_verified")
+            chain = progress[start:]
+            if (
+                states[start:]
+                != [
+                    "permission_verified",
+                    "adapter_authenticated",
+                    "observation_starting",
+                    "degraded",
+                ]
+                or any(
+                    state
+                    not in {
+                        "requested",
+                        "implementation_available",
+                        "permission_required",
+                        "permission_denied",
+                        "prerequisite_missing",
+                    }
+                    for state in states[:start]
+                )
+                or chain[-1]["payload"].get("reason") != "local_capability_test_failed"
+                or any(
+                    event.get("source_adapter") != "member-bridge-enrollment-helper"
+                    or event["payload"].get("reported_by") != "target_helper"
+                    or event["payload"].get("signature_verified") is not True
+                    or event["payload"].get("device_identity_sha256")
+                    != record.get("device_identity_sha256")
+                    for event in chain
+                )
+            ):
+                continue
+            authorities = [
+                event
+                for event in relevant
+                if event["type"] == SOURCE_AUTHORIZED
+                and event["payload"].get("capability_id") == capability
+            ]
+            if len(authorities) != 1:
+                continue
+            authority = authorities[0]
+            receipt = authority["payload"]
+            if (
+                history.grants.get((tenant, member, pack)) != authority
+                or not chain[2]["event_id"]
+                < authority["event_id"]
+                < chain[3]["event_id"]
+                or receipt["pack_config"] != config
+                or any(
+                    receipt[key] != record.get(key)
+                    for key in (
+                        "request_id",
+                        "enrollment_id",
+                        "member_id",
+                        "instance_id",
+                        "release_commit",
+                        "capability_set_sha256",
+                        "device_identity_sha256",
+                    )
+                )
+                or receipt["enrollment_event_id"] != record.get("event_id")
+                or receipt["authentication_event_id"]
+                != (record.get("capability_attestations", {}).get(pack) or {}).get(
+                    "event_id"
+                )
+            ):
+                continue
+            observed = False
+            count = 0
+            async for event in runtime.event_log.read_attribution_metadata_since(
+                cursor=receipt["enrollment_event_id"],
+                through=through,
+                types=sorted(
+                    policy.event_types - {"adapter.authenticated", "adapter.error"}
+                ),
+            ):
+                count += 1
+                if count > 4096 or (
+                    event.get("owner_scope") == f"private:{member}"
+                    and event.get("source_adapter") == policy.source_adapter
+                ):
+                    observed = True
+                    break
+            if observed:
+                continue
+            configuration_sha = hashlib.sha256(canonical_bytes(config)).hexdigest()
+            result[capability] = {
+                "configured_source_sha256": configuration_sha,
+                "proof_sha256": hashlib.sha256(
+                    canonical_bytes(
+                        {
+                            "contract": "administrateme-bridge-initial-start-recovery-v1",
+                            "source_authority": authority,
+                            "initial_start_history": chain,
+                            "current_state": _permission_state(current),
+                        }
+                    )
+                ).hexdigest(),
+            }
+        return result
+    except (KeyError, TypeError, ValueError):
+        return {}
+
+
 @router.get("/enrollment/status")
 async def enrollment_status(
     request: Request, request_id: str = Query(min_length=8, max_length=120)
@@ -1405,6 +1672,9 @@ async def enrollment_status(
                 runtime, current, record, through
             ),
             "permission_retry_capabilities": await _initial_permission_retry_capabilities(
+                runtime, current, record, through
+            ),
+            "initial_start_recovery": await _initial_start_recovery(
                 runtime, current, record, through
             ),
             "content_exposed": False,
@@ -1484,6 +1754,35 @@ async def _enrollment_progress_locked(
             ) from exc
     if wizard.get("state") != body.previous_state:
         raise _progress_stale_before_mutation(body, reason="previous_state_mismatch")
+    recovery_proof = request.headers.get(INITIAL_START_RECOVERY_HEADER)
+    initial_start = (
+        transport_record.get("acquisition_policy") == MEMBER_BRIDGE_ACQUISITION_CONTRACT
+        and body.capability_id in {"apple_calendar", "apple_reminders", "apple_notes"}
+        and body.capability_state == "observation_starting"
+        and ((wizard.get("capability_states") or {}).get(body.capability_id) or {}).get(
+            "state"
+        )
+        == "degraded"
+    )
+    if initial_start or recovery_proof is not None:
+        through = await runtime.event_log.latest_event_id()
+        eligible = (
+            await _initial_start_recovery(runtime, wizard, transport_record, through)
+            if through is not None and initial_start
+            else {}
+        )
+        if (
+            recovery_proof is None
+            or not re.fullmatch(r"[0-9a-f]{64}", recovery_proof)
+            or body.state != body.previous_state
+            or body.pack_config is not None
+            or body.capability_event_id is not None
+            or recovery_proof
+            != eligible.get(str(body.capability_id), {}).get("proof_sha256")
+        ):
+            raise _progress_stale_before_mutation(
+                body, reason="initial_start_recovery_unavailable"
+            )
     try:
         if body.state != body.previous_state or body.capability_id is None:
             validate_enrollment_transition(body.previous_state, body.state)
@@ -1899,6 +2198,8 @@ async def pending_commands(
         if (policy := BRIDGE_PACK_POLICIES[pack]).provider is not None
         and policy.write_operations
     }
+    if APPLE_SERVICE_PACKS["apple_notes"] in authorization.packs:
+        allowed.add("apple_notes")
     selected = (
         allowed
         if providers is None
@@ -1917,12 +2218,73 @@ async def pending_commands(
     async for event in event_log.read_since(
         owner_scope=owner_scope, types=["external_sync.write_requested"]
     ):
+        if event.get("tenant_id") != (_expected_tenant_id(request) or "tenant-default"):
+            continue
         payload = event["payload"]
         command_policy = authorization.policy_for_provider(
             str(payload.get("provider") or "")
         )
+        apple_grant = None
+        apple_authorization_denied = False
+        if payload.get("provider") in APPLE_SERVICE_PROVIDERS and (
+            payload.get("provider") == "apple_notes"
+            or "apple_service_permission" in (payload.get("payload") or {})
+        ):
+            # Unmarked retained Calendar/Reminders commands still pass the
+            # original scope checks below and receive a read-only suppressed
+            # terminal. Marker-bearing commands, even malformed ones, must not
+            # acquire that no-effect result: the edge may hold an attempt.
+            runtime = getattr(request.app.state, "runtime", None)
+            if runtime is None:
+                continue
+            try:
+                apple_grant = command_permission(runtime, member_id, payload)
+            except (ValueError, KeyError):
+                # Keep an attempted command reachable for its cached terminal
+                # receipt. An unattempted stale command is explicitly denied at
+                # the edge, never released by a later grant.
+                marker = (payload.get("payload") or {}).get("apple_service_permission")
+                grant_event = (
+                    await event_log.get(marker["event_id"])
+                    if isinstance(marker, dict)
+                    and isinstance(marker.get("event_id"), str)
+                    else None
+                )
+                if (
+                    not isinstance(grant_event, dict)
+                    or grant_event.get("type") != APPLE_PERMISSION_EVENT
+                    or grant_event.get("tenant_id") != event.get("tenant_id")
+                    or grant_event.get("owner_scope") != owner_scope
+                    or grant_event.get("actor_identity") != member_id
+                ):
+                    continue
+                previous = grant_event.get("payload", {})
+                if (
+                    previous.get("enabled") is not True
+                    or previous.get("member_id") != member_id
+                ):
+                    continue
+                apple_grant = {
+                    **previous["coordinates"],
+                    "event_id": grant_event["event_id"],
+                    "revision": previous["revision"],
+                    "coordinates_sha256": previous["coordinates_sha256"],
+                }
+                try:
+                    validate_command_scope(apple_grant, payload)
+                    if (
+                        permission_marker(apple_grant) != marker
+                        or apple_grant["enrollment_id"] != authorization.enrollment_id
+                    ):
+                        continue
+                except (ValueError, KeyError):
+                    continue
+                apple_authorization_denied = True
+            command_policy = write_policy(str(payload["provider"]))
         expected_account = (
-            authorization.provider_account_for(command_policy.pack)
+            apple_grant["provider_account_id"]
+            if apple_grant is not None
+            else authorization.provider_account_for(command_policy.pack)
             if command_policy
             else None
         )
@@ -1942,8 +2304,12 @@ async def pending_commands(
                     else {},
                     command_policy,
                 )
-                in authorization.pack_config.get(command_policy.pack, {}).get(
-                    "allowed_container_ids", []
+                in (
+                    apple_grant["allowed_container_ids"]
+                    if apple_grant is not None
+                    else authorization.pack_config.get(command_policy.pack, {}).get(
+                        "allowed_container_ids", []
+                    )
                 )
             )
         ):
@@ -1952,6 +2318,11 @@ async def pending_commands(
                     "event_id": event["event_id"],
                     "schema_version": event.get("schema_version", 1),
                     **payload,
+                    **(
+                        {"apple_authorization_denied": True}
+                        if apple_authorization_denied
+                        else {}
+                    ),
                 }
             )
             if len(commands) >= limit:
@@ -2019,7 +2390,17 @@ async def pending_commands(
     observation_active = True if observation is None else await observation.is_active()
     if (observation_active or acquisition_read_only) and commands:
         sink = _get_event_sink(request)
+        permitted_apple_commands = []
         for command in commands:
+            if command.get("provider") in APPLE_SERVICE_PROVIDERS and (
+                command.get("payload") or {}
+            ).get("apple_service_permission"):
+                # The edge may already hold an attempted or completed receipt.
+                # Observation must not invent a no-effect terminal for it.
+                if observation_active:
+                    command["apple_authorization_denied"] = True
+                permitted_apple_commands.append(command)
+                continue
             now = EventEnvelope.now_utc_iso()
             is_v2 = int(command.get("schema_version") or 1) >= 2
             result_payload: dict[str, Any] = {
@@ -2079,7 +2460,7 @@ async def pending_commands(
                     payload=result_payload,
                 )
             )
-        commands = []
+        commands = permitted_apple_commands
     return {
         "commands": commands,
         "count": len(commands),
@@ -2089,3 +2470,68 @@ async def pending_commands(
 
 
 __all__ = ["router", "BatchIngestRequest"]
+
+
+class AppleCommandAuthorizationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    event_id: str = Field(min_length=1, max_length=240)
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@router.post("/commands/{command_id}/apple-authorization")
+async def authorize_apple_command(
+    command_id: str, body: AppleCommandAuthorizationRequest, request: Request
+) -> dict[str, Any]:
+    """Recheck current permission at the edge immediately before an attempt."""
+    identity = resolve_tailscale_identity(request)
+    member_id = resolve_member_id(identity, _get_resolver(request))
+    _member_source_acquisition(request, identity)
+    authorization = _active_authorization(request, identity)
+    runtime = getattr(request.app.state, "runtime", None)
+    if authorization is None or authorization.member_id != member_id or runtime is None:
+        raise HTTPException(403, "Apple bridge authority is unavailable")
+    event_log = getattr(request.app.state, "event_log", None)
+    if event_log is None:
+        raise HTTPException(503, "Apple command history is unavailable")
+    event = await event_log.get(body.event_id)
+    if (
+        not isinstance(event, dict)
+        or event.get("type") != "external_sync.write_requested"
+        or event.get("schema_version") != 2
+        or event.get("tenant_id") != runtime.settings.instance.tenant_id
+        or event.get("owner_scope") != f"private:{member_id}"
+        or event.get("visibility_scope") != f"private:{member_id}"
+        or event.get("payload", {}).get("command_id") != command_id
+    ):
+        raise HTTPException(404, "Apple command not found")
+    if (
+        await event_log.get_by_idempotency(
+            event["tenant_id"], f"external-sync-result:{command_id}"
+        )
+        is not None
+    ):
+        raise HTTPException(409, "Apple command already has a terminal result")
+    command = {
+        "event_id": event["event_id"],
+        "schema_version": event["schema_version"],
+        **event["payload"],
+    }
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        await runtime.settings_control.replay_apple_service_permission_events(
+            event_log, tenant_id=runtime.settings.instance.tenant_id
+        )
+        observation = getattr(runtime, "observation", None)
+        if observation is None or await observation.is_active():
+            raise HTTPException(409, "Observation mode suppresses Apple writes")
+        try:
+            proof = command_proof(runtime, member_id, command)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        grant = proof["grant"]
+        if (
+            grant["enrollment_id"] != authorization.enrollment_id
+            or grant["configuration_sha256"] != body.configuration_sha256
+        ):
+            raise HTTPException(403, "The Apple bridge configuration changed")
+        return {"authorization": proof}

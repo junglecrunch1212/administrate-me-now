@@ -79,6 +79,10 @@ node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.m
   "$TEST_ROOT/app/openclaw/$openclaw_commit"
 node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
   "$TEST_ROOT/app/openclaw/$openclaw_commit" "$TEST_ROOT/permission-helper.json"
+if [[ "${1:-}" == --self-reminder ]]; then
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-self-reminder-gateway.mjs" \
+    "$TEST_ROOT/app/openclaw/$openclaw_commit"
+fi
 
 PYTHONPATH="$REPOSITORY_ROOT" "$python_bin" - "$TEST_ROOT" <<'PY'
 import sys

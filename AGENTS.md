@@ -1,10 +1,10 @@
 # AdministrateMe engineering instructions
 
-This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; executable behavior and tests decide whether a change works. The v2 reconciliation in `docs/refactor/` governs product architecture. The fast-delivery policy below, directed by the owner on 2026-10-22, supersedes conflicting release, testing, readiness and reporting requirements in older instructions, change orders and runbooks. Historical delivery procedures are not current authority.
+This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; executable behavior and tests decide whether a change works. The v2 reconciliation in `docs/refactor/` governs product architecture. The owner-directed fast-delivery policy of 2026-10-22, refined on 2026-10-23, supersedes conflicting release, testing, readiness and reporting requirements in older instructions, change orders and runbooks. Historical delivery procedures are not current authority.
 
 ## Working rules
 
-- Start each change from current protected `main`, use one `codex/` branch and one pull request, and preserve unrelated changes. Never rewrite published history, force-push, or push directly to `main`.
+- Start each independently deliverable change from current protected `main`, using one `codex/` branch and one pull request. Continue an existing open repair PR instead of duplicating it. An ambitious request may need a sequence of small PRs in the same task. Preserve unrelated changes; never rewrite published history, force-push, or push directly to `main`.
 - The implementation task may use bounded subagents for implementation, testing, research, or advisory review. A separate user-created review task, exact-head review artifact, staged label, or prescribed authorization phrase is not required.
 - GitHub is the delivery control plane: fix blocking failures on the same branch, pass the applicable protected checks, and merge through the pull request. Resolve findings that affect the requested outcome or a protected invariant; unrelated improvements do not block delivery. Normal commits do not start a new review ceremony.
 - Accept owner authorization in ordinary language. One request may authorize both merge and deployment; do not ask again when it already does. A request only to merge does not authorize deployment.
@@ -21,16 +21,31 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 
 ## Shape tasks around usable outcomes
 
-Turn a natural-language request into the smallest complete user outcome in one
-to three sentences: preserve the requested capabilities, name the visible proof
-of success and the recovery path. State reasonable assumptions and proceed;
-this is a short working plan, not another form or approval gate.
+Use policy to improve the working prompt without making the owner rewrite it.
+In one to three sentences, state the first complete usable outcome, how to prove
+it, and how to recover. Preserve the full request and existing authorization;
+state reasonable assumptions and proceed. For a larger ambition, name a short
+sequence of outcomes and detail only the next one. This is not a form, planning
+round, new chat, or approval gate. Examples and observed lessons are in
+[the acceptance contract](docs/refactor/ACCEPTANCE-CONTRACT.md#small-deliverables-and-observed-lessons).
 
+- Slice by usable behavior and recoverability. Prefer one connected account,
+  one working reply path, or one service's complete approved action through
+  read-back. Keep the UI, permission, audit and recovery needed for that outcome
+  together. A schema, API or permission toggle alone is not a usable feature;
+  a necessary enabling change must name the outcome it unlocks.
+- When a proposed fix adds another service, device, runtime, permission class,
+  persistent format or deployment component, split it into a later deliverable
+  unless it is essential to the current outcome. Keep requested later work
+  visible; do not silently drop it, call partial work complete, or build a
+  general workflow framework for one bounded need. Continue authorized slices
+  without asking for permission again at each milestone.
 - Diagnose before rebuilding. For a broken connection, inspect authentication,
   granted scope, enabled policy, acquisition and visible data using supported
   read-only diagnostics. Prefer an existing reconnect/configuration operation
-  when it achieves the request. Introduce code only for an established defect
-  or missing capability; explain that boundary before expanding the work.
+  when it achieves the request. Check complete permitted tool compositions
+  before declaring a missing named tool fatal. Introduce code only for an
+  established defect or missing capability; explain that boundary briefly.
 - Use permission already given. A request to reconnect a named account authorizes
   its supported reconnection within the requested scope; it does not require a
   second permission just to choose that narrow path. Preserve authorized read
@@ -38,7 +53,9 @@ this is a short working plan, not another form or approval gate.
   unavoidable OAuth/device consent, or an operation not yet authorized. If new
   code/deployment authority is unclear, prepare a concrete bounded repair and
   ask once for the remaining authority, including its recovery. A diagnostic
-  question alone is not deployment or send authorization.
+  question alone is not deployment or send authorization. Another adult owns
+  their own account/device consent. Choosing a narrow implementation within an
+  authorized outcome needs no additional permission.
 - Verify the user's outcome: authenticated sync and visible permitted data for
   connections; a real authorized response path for replies; resumed acquisition
   for a bridge. Login success, a saved setting, passing CI or generic health is
@@ -49,12 +66,18 @@ this is a short working plan, not another form or approval gate.
   deployment conflict before making one task wait for another. Prepare code and
   checks concurrently, serialize conflicting live mutations, and reuse unchanged
   component evidence. Do not modify another task's component to clear unrelated
-  CI. Read progress as needed; messaging another chat still needs authorization.
+  CI. Combine already-ready compatible changes only when this avoids a real
+  shared maintenance cycle; do not wait for unrelated features or device consent.
+  Use one monitor and one operator for a shared release, without duplicate
+  polling. Read progress as needed; messaging another chat needs authorization.
 - Fix necessary in-scope blockers instead of ending with an offer to do so.
   Preserve the full requested result when slicing work; do not silently reduce
   it to read-only access or a code-only deliverable. Close each completed outcome
   clearly. Later user-added work becomes the current bounded outcome without
-  reopening completed milestones or requiring a new chat.
+  reopening completed milestones or requiring a new chat. When a failure or
+  request changes the plan, update these few outcome sentences rather than
+  expanding a permanent checklist. Read only the affected contract and relevant
+  evidence; replace obsolete policy instead of accumulating overlapping rules.
 
 ## Deployment safety
 
@@ -70,6 +93,16 @@ returning to an already-broken predecessor cannot establish success. Preserve
 the healthiest supported state and use the failure to target the next fix.
 Prepare artifacts and checks before starting short-lived handoffs or asking for
 manual device consent; honor actual expiry without repeatedly wasting its window.
+For a state or sending change, decide before enablement whether recovery is a
+binary rollback or feature revocation on the new schema-aware runtime. Include
+that boundary in the slice; retained history may make an older binary unsafe.
+Use a bounded affected-workflow check with a concrete failure signal. On failure,
+recover first and reproduce the observed cause in isolation; do not retry the
+same release, refresh consent or restart broad suites without new evidence.
+Verify effective runtime tools, hooks, grants and installed instructions where
+the change depends on them. A merged template or saved configuration does not
+prove that the running agent loaded it. Restore already-authorized operation
+after maintenance through the supported activation path, preserving exact grants.
 
 Existing automated updater safeguards remain enforced until changed and tested through a protected PR. Prose does not implement a shorter updater path or authorize bypassing its checks. Identify any such coupling once as an implementation gap instead of inventing repeated manual validation around it.
 
@@ -135,23 +168,16 @@ selected scope in hosted CI or an authorized disposable lab.
 
 ## CI implementation boundary
 
-The intended default is scoped validation for ordinary reversible changes.
-Current `scripts/release_scope.py` implements only `documentation`,
-`bridge-helper` and `system-wide`; most other code still falls back to the full
-workers. Inspect current GitHub protection to identify required statuses;
-workflow names and older prose do not create additional merge gates. On
-2026-10-22, the required status is `deterministic-consistency`. Relevant platform
-checks still follow the affected contract, but an unrelated unrequired aggregate
-need not delay release. Do not report that this policy alone changes CI.
-
-Implement narrower gates through ordinary protected PRs with focused positive
-and negative selection tests. Each selected required check must actually pass;
-missing, failed, cancelled, stale or unexpectedly skipped evidence cannot
-become success. Keep branch protection and truthful results. A broad fallback
-caused solely by a missing scoped path is a CI limitation to fix, not a reason
-to demand extra manual suites. When legitimate scoped-gate work is within the
-authorized repair, implement and test it instead of merely offering it. Preserve useful running checks and other
-tasks' ownership. Policy-only edits need static checks.
+Read `scripts/release_scope.py` and current GitHub protection for implemented
+scopes and required statuses; do not maintain a competing list in prompts.
+Unknown inputs still use the protected fallback. A missing scope is an
+implementation gap to fix through a protected PR with positive and negative
+selection tests, not an excuse to bypass protection or add manual full suites.
+Each selected result must actually pass; missing, failed, cancelled, stale or
+unexpectedly skipped evidence is not success. Preserve useful unrequired runs,
+but do not wait for unrelated aggregates after required and affected checks pass.
+Policy-only edits need static checks and no central deployment. Executable
+updater and CI requirements remain enforced until legitimately changed.
 
 ## Definition of done
 

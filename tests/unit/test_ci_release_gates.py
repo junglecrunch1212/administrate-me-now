@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,18 @@ import yaml
 
 from scripts.release_scope import (
     CONTRACT,
+    COS_REMINDER_PATHS,
+    COS_REMINDER_REQUIRED_PATHS,
+    BRIDGE_RUNTIME_PATHS,
+    _bridge_runtime_dependency_fingerprint,
+    COS_RECOVERY_COMPONENT_PATHS,
+    COS_RECOVERY_CONTROLLER,
+    COS_RECOVERY_HISTORY,
+    COS_RECOVERY_TEST_PATHS,
+    ENROLLMENT_INGEST_PATH,
+    GOOGLE_MODULE,
+    GOOGLE_SHARED_PATHS,
+    google_dependency_fingerprint,
     choose_scope,
     required_workers,
     select_scope,
@@ -72,8 +86,11 @@ def _proof(scope: str) -> dict[str, Any]:
 
 
 def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
-    needs = {
-        worker: {"result": "success", "outputs": {"validated_sha": SHA}}
+    needs: dict[str, Any] = {
+        worker: {
+            "result": "success",
+            "outputs": {"validated_sha": proof["checkout_sha"]},
+        }
         for worker in required_workers(proof["scope"], platform)
     }
     needs["release-scope"]["outputs"].update(
@@ -82,7 +99,19 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
     return needs
 
 
-@pytest.mark.parametrize("scope", ["documentation", "bridge-helper", "system-wide"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "documentation",
+        "bridge-helper",
+        "bridge-enrollment",
+        "bridge-runtime",
+        "google-connections",
+        "cos-recovery-history",
+        "cos-reminders",
+        "system-wide",
+    ],
+)
 @pytest.mark.parametrize("platform", ["linux", "macos"])
 def test_scope_gate_requires_exact_corresponding_success(
     scope: str, platform: str
@@ -110,8 +139,14 @@ def test_scope_gate_requires_exact_corresponding_success(
 
 
 @pytest.mark.parametrize("defect", ["draft", "scope", "interface", "contract"])
-def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None:
-    proof = _proof("bridge-helper")
+@pytest.mark.parametrize(
+    "scope",
+    ["bridge-helper", "bridge-enrollment", "cos-recovery-history", "cos-reminders"],
+)
+def test_gate_refuses_development_or_reinterpreted_evidence(
+    defect: str, scope: str
+) -> None:
+    proof = _proof(scope)
     needs = _needs(proof, "macos")
     if defect == "draft":
         proof["draft"] = True
@@ -143,6 +178,8 @@ def test_gate_refuses_development_or_reinterpreted_evidence(defect: str) -> None
             False,
             "system-wide",
         ),
+        ([("A", "bootstrap/member_bridge_launch.py")], True, "bridge-helper"),
+        ([("M", "bootstrap/member_bridge_launch.py")], False, "system-wide"),
         ([("M", "scripts/release_scope.py")], True, "bridge-helper"),
         ([("M", HELPER), ("M", PROSE)], True, "bridge-helper"),
         ([("M", HELPER)], False, "system-wide"),
@@ -195,6 +232,85 @@ def test_prose_scope_requires_regular_non_executable_git_modes(modes: set[str]) 
     )
 
 
+@pytest.mark.parametrize(
+    ("changes", "equal", "modes", "expected"),
+    [
+        ([("M", ENROLLMENT_INGEST_PATH)], True, {"100644"}, "bridge-enrollment"),
+        (
+            [("M", ENROLLMENT_INGEST_PATH), ("M", HELPER), ("A", PROSE)],
+            True,
+            {"100644"},
+            "bridge-enrollment",
+        ),
+        ([("M", ENROLLMENT_INGEST_PATH)], False, {"100644"}, "system-wide"),
+        ([("A", ENROLLMENT_INGEST_PATH)], True, {"100644"}, "system-wide"),
+        ([("D", ENROLLMENT_INGEST_PATH)], True, {"100644"}, "system-wide"),
+        ([("T", ENROLLMENT_INGEST_PATH)], True, {"100644"}, "system-wide"),
+        ([("M", ENROLLMENT_INGEST_PATH)], True, {"100755"}, "system-wide"),
+        ([("M", ENROLLMENT_INGEST_PATH)], True, {"100644", "100755"}, "system-wide"),
+        ([("M", ENROLLMENT_INGEST_PATH)], True, set(), "system-wide"),
+        (
+            [("M", ENROLLMENT_INGEST_PATH), ("M", "new-runtime.py")],
+            True,
+            {"100644"},
+            "system-wide",
+        ),
+        (
+            [("M", ENROLLMENT_INGEST_PATH), ("M", "tests/unreviewed.py")],
+            True,
+            {"100644"},
+            "system-wide",
+        ),
+        (
+            [("M", ENROLLMENT_INGEST_PATH), ("D", HELPER)],
+            True,
+            {"100644"},
+            "system-wide",
+        ),
+        ([("M", HELPER)], True, {"100644"}, "system-wide"),
+    ],
+)
+def test_enrollment_scope_has_an_explicit_narrow_route_contract(
+    changes: list[tuple[str, str]], equal: bool, modes: set[str], expected: str
+) -> None:
+    path_modes = {
+        path: {"100755" if path == HELPER else "100644"} for _, path in changes
+    }
+    path_modes[ENROLLMENT_INGEST_PATH] = modes
+    assert (
+        choose_scope(
+            changes,
+            interfaces_equal=False,
+            enrollment_interfaces_equal=equal,
+            path_modes=path_modes,
+        )
+        == expected
+    )
+
+
+def test_enrollment_scope_cannot_be_inferred_from_full_interface_flag() -> None:
+    assert (
+        choose_scope(
+            [("M", ENROLLMENT_INGEST_PATH)],
+            interfaces_equal=True,
+            path_modes={ENROLLMENT_INGEST_PATH: {"100644"}},
+        )
+        == "system-wide"
+    )
+
+
+def test_enrollment_gate_requires_native_package_worker_on_macos() -> None:
+    assert required_workers("bridge-enrollment", "linux") == (
+        "release-scope",
+        "bridge-development",
+    )
+    assert required_workers("bridge-enrollment", "macos") == (
+        "release-scope",
+        "bridge-development",
+        "bridge-installed-runtime",
+    )
+
+
 def _git(repository: Path, *arguments: str) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     return subprocess.run(
@@ -223,7 +339,12 @@ def repository(tmp_path: Path) -> tuple[Path, str]:
     _git(path, "config", "user.name", "Fixture author")
     _git(path, "config", "user.email", "fixture@example.invalid")
     _commit(path, "adminme/runtime.py", "RETAINED = True\n")
+    helper = path / HELPER
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_text("#!/bin/bash\nexit 0\n")
+    helper.chmod(0o755)
     _commit(path, HELPER, "#!/bin/bash\nexit 0\n")
+    _commit(path, ENROLLMENT_INGEST_PATH, "RETAINED_INGEST = True\n")
     return path, _commit(path, PROSE, "# Synthetic bridge contract\n")
 
 
@@ -293,6 +414,148 @@ def test_selector_uses_prose_modes_from_both_git_endpoints(
     )
 
 
+def test_enrollment_selector_uses_immutable_route_and_outside_interfaces(
+    repository: tuple[Path, str],
+) -> None:
+    path, base = repository
+    _commit(path, HELPER, "#!/bin/bash\nexit 1\n")
+    head = _commit(path, ENROLLMENT_INGEST_PATH, "RETAINED_INGEST = False\n")
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "bridge-enrollment"
+    assert len(proof["enrollment_interface_sha256"]) == 64
+    assert {item["path"] for item in proof["changes"]} == {
+        HELPER,
+        ENROLLMENT_INGEST_PATH,
+    }
+    verify_gate(proof, _needs(proof, "macos"), platform="macos")
+    draft = select_scope(path, _event(base, head, draft=True), checkout_sha=head)
+    assert draft["scope"] == "bridge-enrollment"
+    with pytest.raises(ValueError, match="development-only"):
+        verify_gate(draft, _needs(draft, "macos"), platform="macos")
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "adminme/bridge_enrollment.py",
+        "adminme/bridge_history.py",
+        "adminme/events/log.py",
+        "adminme/events/schemas/bridge.py",
+        "adminme/products/bridge/auth.py",
+        "adminme/runtime/application.py",
+        "adminme/locks.py",
+        "bootstrap/bridge_enrollment.py",
+        "bridge/adminme_bridge/enrollment_helper.py",
+        "pyproject.toml",
+        "poetry.lock",
+        "bridge/poetry.lock",
+        "new-runtime.py",
+    ],
+)
+def test_enrollment_selector_rejects_shared_dependencies_and_unknown_paths(
+    repository: tuple[Path, str],
+    other: str,
+) -> None:
+    path, _base = repository
+    base = _commit(path, other, "RETAINED = True\n")
+    _commit(path, ENROLLMENT_INGEST_PATH, "RETAINED_INGEST = False\n")
+    head = _commit(path, other, "RETAINED = False\n")
+    event = _event(base, head)
+    event.update(
+        enrollment_interfaces_equal=True, changed_paths=[ENROLLMENT_INGEST_PATH]
+    )
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("change", ["add", "delete", "executable"])
+def test_enrollment_selector_requires_existing_regular_route_at_both_endpoints(
+    repository: tuple[Path, str],
+    change: str,
+) -> None:
+    path, base = repository
+    route = path / ENROLLMENT_INGEST_PATH
+    if change in {"add", "delete"}:
+        _git(path, "rm", "--", ENROLLMENT_INGEST_PATH)
+        _git(path, "commit", "-m", "Remove synthetic route")
+        head = _git(path, "rev-parse", "HEAD")
+        if change == "add":
+            base = head
+            head = _commit(path, ENROLLMENT_INGEST_PATH, "NEW_ROUTE = True\n")
+    else:
+        route.chmod(0o755)
+        head = _commit(path, ENROLLMENT_INGEST_PATH, "CHANGED_ROUTE = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "none",
+        "blob",
+        "mode",
+        "unknown",
+        "unknown-test",
+        "unknown-ci",
+        "missing-route",
+        "executable-route",
+    ],
+)
+def test_enrollment_selector_checks_exact_test_merge_runtime_objects(
+    repository: tuple[Path, str],
+    drift: str,
+) -> None:
+    path, base = repository
+    _git(path, "checkout", "-b", "enrollment")
+    head = _commit(path, ENROLLMENT_INGEST_PATH, "RETAINED_INGEST = False\n")
+    if drift == "blob":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY_RUNTIME_DRIFT = True\n")
+    elif drift == "mode":
+        (path / "adminme/runtime.py").chmod(0o755)
+    elif drift == "unknown":
+        (path / "merge-only-runtime.py").write_text("UNREVIEWED = True\n")
+    elif drift in {"unknown-test", "unknown-ci"}:
+        unexpected = path / (
+            "tests/unreviewed.py"
+            if drift == "unknown-test"
+            else ".github/unreviewed.yml"
+        )
+        unexpected.parent.mkdir(parents=True, exist_ok=True)
+        unexpected.write_text("UNREVIEWED = True\n")
+    elif drift == "missing-route":
+        (path / ENROLLMENT_INGEST_PATH).unlink()
+    elif drift == "executable-route":
+        (path / ENROLLMENT_INGEST_PATH).chmod(0o755)
+    _git(path, "add", "-A")
+    tree = _git(path, "write-tree")
+    # Correct parents do not imply an unchanged merge tree. A conflict result
+    # must not smuggle shared runtime bytes into this component scope.
+    merge = _git(
+        path,
+        "commit-tree",
+        tree,
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("bridge-enrollment" if drift == "none" else "system-wide")
+    assert proof["checkout_sha"] == merge
+    if drift == "none":
+        needs = _needs(proof, "macos")
+        verify_gate(proof, needs, platform="macos")
+        needs["bridge-development"]["outputs"]["validated_sha"] = head
+        with pytest.raises(ValueError, match="revision"):
+            verify_gate(proof, needs, platform="macos")
+
+
 def test_non_pr_runs_require_complete_system_validation(
     repository: tuple[Path, str],
 ) -> None:
@@ -333,6 +596,10 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "release-scope",
         "documentation-validation",
         "bridge-helper-validation",
+        "bridge-development",
+        "google-connections-validation",
+        "cos-recovery-history-validation",
+        "cos-reminder-validation",
         system,
     }
     if platform == "macos":
@@ -401,6 +668,7 @@ def test_helper_scope_requires_native_integrity_recovery_and_retained_compatibil
         "test_member_bridge_helper_app.py",
         "test_member_bridge_helper_diagnostics.py",
         "test_member_bridge_permission_controller.py",
+        "test_member_bridge_launch.py",
         "test_member_bridge_permission_recovery.py",
         "test_member_bridge_progress_synchronization.py",
         "test_cos_member_bridge_acquisition.py",
@@ -474,7 +742,10 @@ def test_bridge_development_includes_strict_readiness_composition(
 
 def test_packaged_installation_requires_all_real_platform_cases() -> None:
     job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
-    assert job["if"] == "${{ needs.release-scope.outputs.scope != 'documentation' }}"
+    assert (
+        job["if"]
+        == '${{ contains(fromJSON(\'["bridge-helper","bridge-enrollment","bridge-runtime","system-wide"]\'), needs.release-scope.outputs.scope) }}'
+    )
     assert job["runs-on"] == "macos-26"
     install = next(
         step
@@ -494,3 +765,768 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
     assert "suites) == 3" in install["run"]
     assert '("skipped", "failures", "errors")' in install["run"]
     assert job["steps"][-1]["id"] == "validated"
+
+
+def test_packaged_gate_requires_real_sealed_launchd_and_rejects_skips() -> None:
+    job = _workflow("macos-bootstrap.yml")["jobs"]["bridge-installed-runtime"]
+    step = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Validate sealed launch lifecycle against real macOS launchd"
+    )
+    assert "if" not in step
+    assert step["env"]["ADMINME_RUN_BRIDGE_LAUNCH_RUNTIME"] == "1"
+    commands = step["run"]
+    assert "test_member_bridge_launch_runtime.py" in commands
+    assert "== 2" in commands
+    assert '("skipped", "failures", "errors")' in commands
+    assert job["steps"][-1]["id"] == "validated"
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_enrollment_worker_requires_complete_affected_contract_and_final_binding(
+    filename: str,
+    protected: str,
+    platform: str,
+    system: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["bridge-development"]
+    assert (
+        job["if"]
+        == "${{ needs.release-scope.outputs.scope == 'bridge-enrollment' || needs.release-scope.outputs.scope == 'bridge-runtime' || (github.event.pull_request.draft && needs.release-scope.outputs.scope == 'system-wide') }}"
+    )
+    assert job["outputs"] == {"validated_sha": "${{ steps.validated.outputs.sha }}"}
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    assert 'test "$actual_sha" = "$GITHUB_SHA"' in job["steps"][-1]["run"]
+    assert all("continue-on-error" not in step for step in job["steps"])
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    for boundary in (
+        "test_self_service_member_bridge_enrollment.py",
+        "tests/unit/adapters/calendaring",
+        "tests/acceptance/test_apple_calendar_native_date_readback.py",
+        "test_member_bridge_permission_recovery.py",
+        "test_member_bridge_progress_synchronization.py",
+        "test_member_bridge_knowledge_vertical_slice.py",
+        "test_cos_member_bridge_acquisition.py",
+        "test_member_bridge_historical_attribution.py",
+        "test_bridge_readiness_transition.py",
+        "test_apple_messages_bridge_ingestion.py",
+        "tests/unit/products/bridge",
+        "tests/integration/test_bridge_ingest_roundtrip.py",
+        "tests/integration/test_bridge_state_mirror_onramp.py",
+        "tests/unit/test_bridge_authorization.py",
+        "tests/unit/test_bridge_release_identity.py",
+        "tests/unit/bootstrap/test_bridge_enrollment.py",
+        "tests/unit/bootstrap/test_member_bridge_launch.py",
+        "tests/unit/bootstrap/test_member_bridge_component.py",
+        "tests/unit/bootstrap/test_source_identity.py",
+    ):
+        assert boundary in commands
+    assert "--runxfail" in commands
+    assert "poetry -C bridge run pytest" in commands
+    assert '--junitxml="${RUNNER_TEMP}/bridge-enrollment.xml"' in commands
+    assert '--junitxml="${RUNNER_TEMP}/bridge-package.xml"' in commands
+    assert "scripts/verify_invariants.sh" in commands
+    checker = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Require complete bridge enrollment evidence"
+    )
+    assert "if" not in checker
+    check = checker["run"]
+    for required in (
+        '"${RUNNER_TEMP}/bridge-enrollment.xml"',
+        '"${RUNNER_TEMP}/bridge-package.xml"',
+        "k in s.attrib and s.attrib[k].isdigit()",
+        'tests > 0 and len(list(root.iter("testcase"))) == tests',
+        "int(s.attrib[k]) == 0",
+        "not any(list(root.iter(k))",
+        '("skipped", "failure", "error")',
+    ):
+        assert required in check
+    native = (
+        "test_builds_reviewed_document_helper_without_secret_or_remote_execution",
+        "test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback",
+        "test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation",
+    )
+    if platform == "linux":
+        for case in native:
+            assert "not " + case in commands
+        assert commands.count("-k ") == 1
+    else:
+        assert "-k " not in commands
+        browser = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Validate enrollment browser behavior"
+        )
+        assert "if" not in browser
+        assert browser["env"]["ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY"] == "1"
+        assert "test:gate7" in browser["run"]
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+@pytest.mark.parametrize("report", ["enrollment", "package"])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "none",
+        "missing",
+        "missing-attribute",
+        "noninteger",
+        "empty",
+        "zero",
+        "skipped-count",
+        "skipped-element",
+        "failure-count",
+        "failure-element",
+        "error-element",
+        "wrong-count",
+    ],
+)
+def test_actual_enrollment_junit_gate_rejects_incomplete_evidence(
+    filename: str,
+    report: str,
+    defect: str,
+    tmp_path: Path,
+) -> None:
+    steps = _workflow(filename)["jobs"]["bridge-development"]["steps"]
+    checker = next(
+        step
+        for step in steps
+        if step.get("name") == "Require complete bridge enrollment evidence"
+    )
+    # Execute the workflow's actual parser in isolated CI, so a future workflow
+    # edit cannot make a malformed or partially skipped report pass unnoticed.
+    script = checker["run"].split("<<'PY_CHECK'\n", 1)[1].rsplit("\nPY_CHECK", 1)[0]
+    valid = '<testsuites><testsuite tests="1" skipped="0" failures="0" errors="0"><testcase name="fixture"/></testsuite></testsuites>'
+    paths = {name: tmp_path / f"{name}.xml" for name in ("enrollment", "package")}
+    for path in paths.values():
+        path.write_text(valid)
+    invalid = valid
+    if defect == "missing":
+        paths[report].unlink()
+    else:
+        if defect == "missing-attribute":
+            invalid = valid.replace(' errors="0"', "")
+        elif defect == "noninteger":
+            invalid = valid.replace('failures="0"', 'failures="unknown"')
+        elif defect == "empty":
+            invalid = "<testsuites/>"
+        elif defect == "zero":
+            invalid = '<testsuites><testsuite tests="0" skipped="0" failures="0" errors="0"/></testsuites>'
+        elif defect == "skipped-count":
+            invalid = valid.replace('skipped="0"', 'skipped="1"')
+        elif defect == "failure-count":
+            invalid = valid.replace('failures="0"', 'failures="1"')
+        elif defect.endswith("-element"):
+            element = defect.removesuffix("-element")
+            invalid = valid.replace(
+                '<testcase name="fixture"/>',
+                f'<testcase name="fixture"><{element}/></testcase>',
+            )
+        elif defect == "wrong-count":
+            invalid = valid.replace('tests="1"', 'tests="2"')
+        paths[report].write_text(invalid)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(paths["enrollment"]), str(paths["package"])],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert (result.returncode == 0) is (defect == "none")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        HELPER,
+        "bootstrap/member_bridge_launch.py",
+        "tests/unit/test_ci_release_gates.py",
+        ".github/workflows/macos-bootstrap.yml",
+    ],
+)
+@pytest.mark.parametrize("bad_modes", [{"100644", "100755"}, {"120000"}, set()])
+def test_enrollment_component_modes_cannot_change_or_be_unknown(
+    path: str, bad_modes: set[str]
+) -> None:
+    assert (
+        choose_scope(
+            [("M", ENROLLMENT_INGEST_PATH), ("M", path)],
+            interfaces_equal=False,
+            enrollment_interfaces_equal=True,
+            path_modes={ENROLLMENT_INGEST_PATH: {"100644"}, path: bad_modes},
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "path,mode",
+    [
+        (HELPER, "100644"),
+        ("bootstrap/member_bridge_launch.py", "100755"),
+        ("tests/unit/test_ci_release_gates.py", "100755"),
+        (".github/workflows/macos-bootstrap.yml", "100755"),
+    ],
+)
+def test_enrollment_component_requires_expected_regular_file_mode(
+    path: str, mode: str
+) -> None:
+    assert (
+        choose_scope(
+            [("M", ENROLLMENT_INGEST_PATH), ("M", path)],
+            interfaces_equal=False,
+            enrollment_interfaces_equal=True,
+            path_modes={ENROLLMENT_INGEST_PATH: {"100644"}, path: {mode}},
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("shared_path", sorted(GOOGLE_SHARED_PATHS))
+def test_google_scope_accepts_only_exact_wiring_and_unchanged_dependencies(
+    repository: tuple[Path, str], shared_path: str
+) -> None:
+    path, _initial = repository
+    contract = json.loads((ROOT / "scripts/google_connection_wiring.json").read_text())
+    pair = contract["paths"][shared_path][0]
+    baseline = pair["before"] + "\n# Unrelated retained behavior\n"
+    base = _commit(path, shared_path, baseline)
+    _commit(path, GOOGLE_MODULE, "# Google connection implementation\n")
+    head = _commit(path, shared_path, baseline.replace(pair["before"], pair["after"]))
+    assert google_dependency_fingerprint(path, base) == google_dependency_fingerprint(
+        path, head
+    )
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "google-connections"
+    )
+    # A shared filename is not a blanket exemption: even an adjacent edit fails closed.
+    changed = _commit(
+        path,
+        shared_path,
+        baseline.replace(pair["before"], pair["after"])
+        + "# Unreviewed runtime change\n",
+    )
+    assert (
+        select_scope(path, _event(base, changed), checkout_sha=changed)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "poetry.lock",
+        "bootstrap/upgrade.py",
+        "adminme/bridge_enrollment.py",
+        "bridge/adminme_bridge/daemon.py",
+    ],
+)
+def test_google_scope_never_exempts_dependency_or_bridge_changes(
+    repository: tuple[Path, str], changed: str
+) -> None:
+    path, base = repository
+    _commit(path, GOOGLE_MODULE, "# Google component\n")
+    head = _commit(path, changed, "# Changed dependency\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,modes", [("D", {"100644"}), ("T", {"100644", "120000"}), ("M", {"100755"})]
+)
+def test_google_scope_rejects_removed_or_executable_inputs(
+    status: str, modes: set[str]
+) -> None:
+    assert (
+        choose_scope(
+            [(status, GOOGLE_MODULE)],
+            interfaces_equal=False,
+            path_modes={GOOGLE_MODULE: modes},
+            google_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_google_release_requires_production_packaged_privacy_recovery_and_types(
+    filename: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["google-connections-validation"]
+    assert (
+        job["if"] == "${{ needs.release-scope.outputs.scope == 'google-connections' }}"
+    )
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    for required in (
+        "test_member_google_connections.py",
+        "test_cos_channel_activation.py",
+        "test_governance.py",
+        "test_b03_google_tasks_create_production.py",
+        "test_cos_self_replies.py",
+        "test_cos_response_execution.py",
+        "--runxfail",
+        "('skipped', 'failures', 'errors')",
+        "suites) > 0",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+    ):
+        assert required in commands
+    assert job["steps"][-1]["id"] == "validated"
+    assert "bridge-installed-runtime" not in required_workers(
+        "google-connections", "macos"
+    )
+
+
+def _recovery_candidate(repository: Path) -> tuple[str, str]:
+    _commit(repository, COS_RECOVERY_CONTROLLER, "RETAINED_CONTROLLER = True\n")
+    base = _commit(
+        repository, "bootstrap/member_bridge_component.py", "RETAINED_CONTRACT = True\n"
+    )
+    _commit(repository, COS_RECOVERY_CONTROLLER, "RECOVERY_CONTROLLER = True\n")
+    return base, _commit(repository, COS_RECOVERY_HISTORY, "PRESERVE_HISTORY = True\n")
+
+
+def test_recovery_scope_binds_new_module_and_closed_edit_set_to_immutable_sources(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, _ = _recovery_candidate(path)
+    for allowed in (
+        "bootstrap/member_bridge_component.py",
+        *sorted(COS_RECOVERY_TEST_PATHS),
+        "scripts/release_scope.py",
+        PROSE,
+    ):
+        head = _commit(path, allowed, "# Reviewed recovery contract\n")
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-recovery-history"
+    assert len(proof["cos_recovery_dependency_sha256"]) == 64
+    assert {item["path"] for item in proof["changes"]} >= COS_RECOVERY_COMPONENT_PATHS
+    for platform in ("linux", "macos"):
+        assert required_workers(proof["scope"], platform) == (
+            "release-scope",
+            "cos-recovery-history-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "adminme/runtime/application.py",
+        "adminme/events/log.py",
+        "adminme/events/schemas/cos_channels.py",
+        "bootstrap/candidate_readiness.py",
+        "bootstrap/backup_restore.py",
+        "bootstrap/upgrade.py",
+        "bootstrap/source_identity.py",
+        "adminme/locks.py",
+        "poetry.lock",
+        "new-runtime.py",
+        "tests/unreviewed.py",
+    ],
+)
+def test_recovery_scope_never_exempts_shared_or_unknown_dependencies(
+    repository: tuple[Path, str], other: str
+) -> None:
+    path, _ = repository
+    _commit(path, other, "RETAINED = True\n")
+    base, _ = _recovery_candidate(path)
+    head = _commit(path, other, "CHANGED = True\n")
+    event = _event(base, head)
+    event.update(
+        cos_recovery_interfaces_equal=True, changed_paths=[COS_RECOVERY_HISTORY]
+    )
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("path", sorted(COS_RECOVERY_COMPONENT_PATHS))
+@pytest.mark.parametrize("defect", ["removed", "executable"])
+def test_recovery_component_requires_all_regular_sources(
+    repository: tuple[Path, str], path: str, defect: str
+) -> None:
+    repository_path, _ = repository
+    base, _ = _recovery_candidate(repository_path)
+    if defect == "removed":
+        _git(repository_path, "rm", "--", path)
+    else:
+        (repository_path / path).chmod(0o755)
+        _git(repository_path, "add", "--", path)
+    _git(repository_path, "commit", "-m", "Unsafe recovery fixture")
+    head = _git(repository_path, "rev-parse", "HEAD")
+    assert (
+        select_scope(repository_path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "drift", ["none", "runtime", "mode", "unknown-test", "missing-history"]
+)
+def test_recovery_scope_checks_exact_test_merge_tree(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    base, head = _recovery_candidate(path)
+    if drift == "runtime":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY_CHANGE = True\n")
+    elif drift == "mode":
+        (path / "adminme/runtime.py").chmod(0o755)
+    elif drift == "unknown-test":
+        target = path / "tests/merge_only.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("UNREVIEWED = True\n")
+    elif drift == "missing-history":
+        (path / COS_RECOVERY_HISTORY).unlink()
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent recovery merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == (
+        "cos-recovery-history" if drift == "none" else "system-wide"
+    )
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_recovery_worker_requires_affected_persistence_and_compatibility_contracts(
+    filename: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["cos-recovery-history-validation"]
+    assert job["if"] == (
+        "${{ needs.release-scope.outputs.scope == 'cos-recovery-history' }}"
+    )
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    for required in (
+        "test_cos_recovery_history.py",
+        "test_cos_recovery_history_operation.py",
+        "test_cos_channel_activation.py",
+        "test_cos_live_maintenance.py",
+        "test_candidate_readiness.py",
+        "test_htr10_export.py",
+        "test_member_bridge_component.py",
+        "test_streaming_backup_round_trip_and_wrong_key_cleanup",
+        "test_interrupted_activation_restores_exact_predecessor_bytes",
+        "test_transactional_activation_orders_fresh_rehearsal_before_selectors",
+        "test_production_upgrade_controller_must_be_the_reviewed_candidate",
+        "test_ci_release_gates.py",
+        "--runxfail",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+    ):
+        assert required in commands
+    assert '--junitxml="$RUNNER_TEMP/cos-recovery-history.xml"' in commands
+    assert "test_member_google_connections.py" not in commands
+    assert "test:gate7" not in commands
+    assert "scripts/acceptance/release-candidate.sh" not in commands
+    assert "ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME" not in commands
+    assert commands.count("-k ") == 1
+    assert "not test_sealed_component_reuses_exact_old_runtime" in commands
+    assert "and not test_sealed_mixed_release_keeps_exact_paired_archive" in commands
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+@pytest.mark.parametrize(
+    "defect",
+    ["none", "missing", "empty", "missing-count", "skipped", "failure", "wrong-count"],
+)
+def test_actual_recovery_junit_gate_rejects_missing_or_partial_evidence(
+    filename: str, defect: str, tmp_path: Path
+) -> None:
+    steps = _workflow(filename)["jobs"]["cos-recovery-history-validation"]["steps"]
+    checker = next(
+        step
+        for step in steps
+        if step.get("name") == "Require complete recovery history evidence"
+    )
+    assert "if" not in checker
+    script = checker["run"].split("<<'PY_CHECK'\n", 1)[1].rsplit("\nPY_CHECK", 1)[0]
+    report = tmp_path / "recovery.xml"
+    payload = '<testsuites><testsuite tests="1" skipped="0" failures="0" errors="0"><testcase name="fixture"/></testsuite></testsuites>'
+    if defect == "empty":
+        payload = "<testsuites/>"
+    elif defect == "missing-count":
+        payload = payload.replace(' errors="0"', "")
+    elif defect in {"skipped", "failure"}:
+        payload = payload.replace(
+            '<testcase name="fixture"/>',
+            f'<testcase name="fixture"><{defect}/></testcase>',
+        )
+    elif defect == "wrong-count":
+        payload = payload.replace('tests="1"', 'tests="2"')
+    if defect != "missing":
+        report.write_text(payload)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(report)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) is (defect == "none")
+
+
+@pytest.mark.parametrize(
+    "runtime_path",
+    [
+        "bootstrap/member_bridge_runtime_repair.py",
+        "packs/adapters/reminders/apple-eventkit/_eventkit_shim.py",
+        "packs/adapters/reminders/apple-eventkit/adapter.py",
+        "packs/adapters/calendaring/apple-calendar/adapter.py",
+    ],
+)
+def test_bridge_runtime_scope_is_closed_to_reviewed_repair_and_dependencies(
+    runtime_path,
+):
+    changes = [
+        ("M", runtime_path),
+        ("A", "tests/unit/adapters/reminders/test_eventkit_selected_sources.py"),
+        ("A", "tests/unit/adapters/calendaring/test_apple_calendar_native_dates.py"),
+        ("A", "tests/acceptance/test_apple_calendar_native_date_readback.py"),
+        (
+            "M",
+            "tests/integration/test_adapter_apple_eventkit_dual_deployment_integration.py",
+        ),
+    ]
+    modes = {path: {"100644"} for _, path in changes}
+    assert (
+        choose_scope(
+            changes,
+            interfaces_equal=False,
+            path_modes=modes,
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "bridge-runtime"
+    )
+    assert (
+        choose_scope(changes, interfaces_equal=False, path_modes=modes) == "system-wide"
+    )
+    for extra in (
+        "adminme/events/log.py",
+        "bridge/poetry.lock",
+        "adminme/bridge_authorization.py",
+        "adminme/events/schemas/lists.py",
+        "bridge/adminme_bridge/adapters/sinks.py",
+        "tests/unreviewed.py",
+        "bootstrap/arbitrary.py",
+        "adminme/projections/calendars/queries.py",
+        "packs/adapters/calendaring/google-calendar/adapter.py",
+    ):
+        assert (
+            choose_scope(
+                changes + [("M", extra)],
+                interfaces_equal=False,
+                path_modes={**modes, extra: {"100644"}},
+                bridge_runtime_interfaces_equal=True,
+            )
+            == "system-wide"
+        )
+    assert (
+        choose_scope(
+            changes,
+            interfaces_equal=False,
+            path_modes={**modes, changes[0][1]: {"120000"}},
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+    assert (
+        choose_scope(
+            [("D", runtime_path), *changes[1:]],
+            interfaces_equal=False,
+            path_modes=modes,
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+    assert (
+        choose_scope(
+            changes[1:],
+            interfaces_equal=False,
+            path_modes=modes,
+            bridge_runtime_interfaces_equal=True,
+        )
+        == "system-wide"
+    )
+
+
+def test_bridge_runtime_fingerprint_binds_every_unreviewed_byte_and_mode():
+    from bootstrap.source_identity import GitTreeEntry
+
+    def entry(path, blob="a" * 40, mode="100644"):
+        return GitTreeEntry(path=path, mode=mode, object_id=blob)
+
+    base = (entry("adminme/events/log.py"),)
+    changed = (entry("adminme/events/log.py", "b" * 40),)
+    assert _bridge_runtime_dependency_fingerprint(
+        base
+    ) != _bridge_runtime_dependency_fingerprint(changed)
+    for path in BRIDGE_RUNTIME_PATHS:
+        mode = "100755" if path.endswith(".sh") else "100644"
+        assert _bridge_runtime_dependency_fingerprint(
+            base
+        ) == _bridge_runtime_dependency_fingerprint((*base, entry(path, mode=mode)))
+        assert _bridge_runtime_dependency_fingerprint(
+            base
+        ) != _bridge_runtime_dependency_fingerprint((*base, entry(path, mode="120000")))
+
+
+def _reminder_candidate(repository: Path) -> tuple[str, str]:
+    base = _git(repository, "rev-parse", "HEAD")
+    for path in sorted(COS_REMINDER_REQUIRED_PATHS):
+        head = _commit(repository, path, "# Synthetic reminder boundary\n")
+    return base, head
+
+
+def test_reminder_scope_checks_closed_sources_and_normal_protected_workers(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, head = _reminder_candidate(path)
+    for allowed in sorted(COS_REMINDER_PATHS - COS_REMINDER_REQUIRED_PATHS):
+        head = _commit(path, allowed, "# Reviewed reminder boundary\n")
+        if allowed == "scripts/acceptance/openclaw-source-install.sh":
+            (path / allowed).chmod(0o755)
+            _git(path, "add", allowed)
+            _git(path, "commit", "-m", "Retain executable script mode")
+            head = _git(path, "rev-parse", "HEAD")
+    # Mutable checkout claims cannot narrow the immutable candidate.
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-reminders"
+    assert len(proof["cos_reminder_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("cos-reminders", platform) == (
+            "release-scope",
+            "cos-reminder-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "adminme/events/log.py",
+        "adminme/session.py",
+        "bootstrap/upgrade.py",
+        "bootstrap/backup_restore.py",
+        "bootstrap/versions.json",
+        "poetry.lock",
+        "openclaw/administrateme/package-lock.json",
+        "bridge/adminme_bridge/main.py",
+        "tests/unreviewed.py",
+        "unreviewed-runtime.py",
+    ],
+)
+def test_reminder_scope_requires_broad_checks_for_unrelated_dependencies(
+    repository: tuple[Path, str],
+    other: str,
+) -> None:
+    path, _ = repository
+    _commit(path, other, "RETAINED = True\n")
+    base, _ = _reminder_candidate(path)
+    head = _commit(path, other, "CHANGED = True\n")
+    event = _event(base, head)
+    event.update(cos_reminder_interfaces_equal=True, changed_paths=[])
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize(
+    "drift", ["none", "runtime", "mode", "missing-test", "unknown-test"]
+)
+def test_reminder_scope_checks_the_exact_merge_tree(
+    repository: tuple[Path, str],
+    drift: str,
+) -> None:
+    path, _ = repository
+    base, head = _reminder_candidate(path)
+    if drift == "runtime":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY = True\n")
+    elif drift == "mode":
+        (path / "adminme/runtime.py").chmod(0o755)
+    elif drift == "missing-test":
+        (path / "tests/acceptance/test_cos_self_reminders.py").unlink()
+    elif drift == "unknown-test":
+        (path / "tests/unreviewed.py").write_text("UNREVIEWED = True\n")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent reminder merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("cos-reminders" if drift == "none" else "system-wide")
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_reminder_release_worker_requires_the_real_affected_checks(
+    filename: str,
+    protected: str,
+    platform: str,
+    system: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["cos-reminder-validation"]
+    assert job["if"] == "${{ needs.release-scope.outputs.scope == 'cos-reminders' }}"
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert f"bash scripts/acceptance/cos-reminder-release.sh {platform}" in commands
+    script = (ROOT / "scripts/acceptance/cos-reminder-release.sh").read_text()
+    for required in (
+        "set -euo pipefail",
+        '"${GITHUB_ACTIONS:-}" == true',
+        "--runxfail",
+        "test_cos_self_reminders.py",
+        "test_cos_self_replies.py",
+        "test_cos_response_execution.py",
+        "test_cos_response_allowlist_settings.py",
+        "test_cos_identity_delegation_kernel.py",
+        "test_member_cos_approval.py",
+        "test_cos_response_assurance.py",
+        "test_source_assurance.py",
+        "test_historical_attribution.py",
+        "test_schema_registry.py",
+        "test_cos_channel_activation.py",
+        "test_ci_release_gates.py",
+        "npm run check",
+        "npm test",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+        "openclaw-source-install.sh --self-reminder",
+    ):
+        assert required in script
+    native = (ROOT / "scripts/acceptance/openclaw-source-install.sh").read_text()
+    assert '"${1:-}" == --self-reminder' in native
+    assert "check-self-reminder-gateway.mjs" in native
+    assert "check-cos-approval-gateway.mjs" in native
+    assert "check-cos-imessage-text.mjs" in native

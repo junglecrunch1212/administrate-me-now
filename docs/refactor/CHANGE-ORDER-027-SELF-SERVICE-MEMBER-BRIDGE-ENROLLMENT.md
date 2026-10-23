@@ -203,16 +203,23 @@ The explicit builder option `--runtime-compatibility-contract
 bridge-permission-recovery-v1` supports this mixed central/helper repair. It permits
 only regular-file modifications of the fixed central enrollment router and
 the exact reviewed old/new source pair for the central coordinator fix, plus the
-closed `cos-standing-replies-457-v1` central overlay. The overlay is a single
-coherent group of 23 exact path/presence/mode/hash pairs from retained public
+closed `cos-standing-replies-457-hooks-458-v1` central overlay. The overlay is a single
+coherent group of 24 exact path/presence/mode/hash pairs from retained public
 release `043ac68915b185be4ada771f6893a4d69c3f994b` to the reviewed PR457 central
-sources at `d9dffba31bc96edfc4fbcbd5f09f6bf15fb89c21`. Its four added central
+sources plus the PR458 native reply-hook correction at
+`6035a997614b52f537bb9ce91d24d01464d878a2`. Its five added central
 files must be absent from the retained archive. Partial mixtures, unknown bytes,
 mode drift and any other dependency or edge-contract change fail closed. This
 does not establish a generic central-code exclusion or change release scope.
+The PR458 revision replaces only the three exact changed CoS source coordinates
+and adds the grant-derived native hook policy module; no updated central bytes
+enter the retained edge archive. Current helper builds require the complete
+updated group. Older immutable helpers retain their own versioned manifests.
+Focused compatibility checks reject unknown bytes on either side and incomplete
+hook-policy groups before packaged clean/interrupted installation is accepted.
 A separate `hosted-gateway-startup-probe-456-v1` exact regular-file hash pair
 covers the hosted approval probe's pinned disabled-heartbeat startup check.
-It is recorded independently of the unchanged PR457 group, remains a runtime
+It is recorded independently of the CoS source group, remains a runtime
 input for default compatibility and CI, and is never copied over the retained
 archive. Its corrected bytes execute only in the isolated hosted probe.
 The exact coordinator
@@ -255,6 +262,26 @@ adapter attestation or observation startup. The retained adapter-authentication
 idempotency contract does not establish fresh authority for a later same-source
 reauthorization. Such a source is reported as unsupported before new permission,
 configuration or proof mutations; the helper must not attempt it and fail later.
+A separate initial-start continuation preserves an already verified source whose
+first local daemon start rolled back. It is not permission retry or active-source
+reauthorization. The central snapshot must prove one original signed permission,
+attestation and observation-start chain ending in the exact degraded receipt,
+unchanged source authority and coordinates, no prior observation or activation,
+and no intervening owner control. The recovery POST rechecks that proof under the
+source-admission lock before consuming its nonce or appending any event; an
+observation arriving after the snapshot invalidates it even without wizard drift.
+
+The sealed helper requires the entire local selection stopped and absent from
+launchd, no surviving daemon, no enabled pack, and no unresolved command journal.
+It rechecks these prerequisites after explicit native continuation consent,
+continues the single failed start first, and retains that source's permission and
+configuration. Multiple ambiguous start recoveries, an already enabled source,
+prior activation, revocation and unknown outcomes remain blocked. The retained
+runtime and original signed progress writer are unchanged. The helper-owned
+launch adapter synchronizes unloading, startup and confirmed-stop rollback;
+unknown cleanup never restores configuration underneath a possibly live process.
+Actual admitted observations and projection settlement still establish usability.
+
 Cancelling a native permission dialog or source picker stops subsequent prompts
 without recording a false missing-prerequisite or degraded-source fact.
 
@@ -411,3 +438,54 @@ history. `tests/acceptance/test_bridge_readiness_transition.py` covers the guard
 index/readiness transaction, exact restart recovery and refusal of unrelated
 configuration drift. These remain isolated hosted proofs, not live enrollment
 or member-device permission evidence.
+
+
+### Contained EventKit runtime repair (2026-10-22)
+
+MODERNIZE the Apple Reminders native color boundary: register Quartz before
+reading the EventKit color and use its explicit component count. Unsized PyObjC
+arrays must never be enumerated. Isolated macOS acceptance exercises real Quartz
+colors through the production list reader, without querying or writing a store.
+
+PRESERVE the existing enrollment, source configuration, proof key, cursor state,
+private ownership and read-only ceiling during a contained runtime repair.
+`install-member-bridge.sh --prepare-runtime-only` prepares a new immutable release
+and dependencies without consuming a handoff or starting a service. The prepared
+release's `bootstrap.member_bridge_runtime_repair` command requires the exact
+stopped, disabled predecessor and an unchanged edge/dependency/state interface.
+It switches the launch definition and release pointer under the existing helper
+and launch locks, observes one stable process for 30 seconds, and records the
+original enrollment release separately from the new execution release.
+
+The operation retains private predecessor snapshots and transition history.
+Known failures roll back to the original **stopped** state. The same prepared
+command with `--rollback-operation <operation-id> --expected-candidate <commit>
+--bridge-root <root>` restores that state after a later regression. Unknown
+launch outcomes retain the selected candidate and the existing recovery block;
+they never authorize a second start. Original receipts, configuration and events
+are not replaced by a new enrollment. A successful process start is not source
+acceptance: require actual permitted Calendar, Reminders and Notes acquisition
+through the member surface after activation. Provider-write tests remain separate.
+
+The bounded `bridge-runtime` PR scope checks the exact repair, installer, native
+color reader, bridge integration, privacy/authorization and launch/recovery
+contracts. Unlisted paths, dependency changes and mode changes select the system
+gate. Native installation tests now package the candidate runtime, because a
+color-reader change cannot honestly claim the retained runtime is unchanged.
+
+### Selected Reminders acquisition repair (2026-10-22)
+
+PRESERVE the enrolled read ceiling before native acquisition and all source
+emissions. The Reminders bridge resolves only approved list identifiers and
+fetches their reminders, so an unrelated list cannot abort the permitted sync
+with a central container denial. Unselected list metadata and reminder content
+stay on the member device. The central admission rules remain unchanged.
+
+The contained runtime repair also supports a successor to an already repaired
+runtime while preserving the original enrollment identity. Only the reviewed
+Reminders adapter and native shim may differ; source configuration, dependency,
+credential, history and all other edge interfaces remain fixed. Both the original
+and already-deployed CoS schema overlay are recognized for the predecessor.
+The same preparation, stopped replacement, settlement and exact-operation
+rollback contract applies. An intentionally empty selected calendar is not
+proof of a read failure; report zero records without inventing a provider write.

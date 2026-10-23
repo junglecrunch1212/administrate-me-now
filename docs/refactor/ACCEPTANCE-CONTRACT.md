@@ -1,8 +1,9 @@
 # Release acceptance contract
 
-## Fast delivery policy — 2026-10-22
+## Fast delivery policy — 2026-10-23
 
-Owner-directed **SUPERSEDE/MODERNIZE** amendment to AC-21. The owner accepts
+Owner-directed **SUPERSEDE/MODERNIZE** amendment to AC-21, refining the
+2026-10-22 policy from observed deliveries. The owner accepts
 occasional reversible runtime and workflow failures to ship faster and spend
 less time and tokens on process. This section and [AGENTS.md](../../AGENTS.md)
 override conflicting blanket release, readiness, deployment-validation and
@@ -45,19 +46,132 @@ every result. Reuse genuine results, not an unverified cache entry. Parallelize
 independent checks, preserve useful running work and avoid duplicate runs.
 Candidate behavior tests stay in hosted CI or an authorized disposable lab.
 
-## Outcome-driven selection examples
+## Small deliverables and observed lessons
 
-These examples shape work; they add no mandatory task template. Diagnose the
-installed behavior first, state the smallest complete outcome briefly, and use
-the owner's existing authorization. Only a missing decision or actual authority
-boundary needs a question. Prepare the concrete repair and unavoidable manual
-steps before asking. Do not treat unrelated cleanup as a release dependency.
+Policy improves a working prompt by converting intent into an outcome, a
+specific proof and a recoverable next action. The owner should not have to
+supply an implementation plan or approve the agent's choice of a narrow path.
+Preserve the full request, split its delivery, and ask only for an unresolved
+choice or genuinely missing authority. These examples are reconstructed from
+the task records reviewed on 2026-10-23; they are not a controlled measurement
+of time or token savings. Repository changes substantiate the implementation;
+private task evidence substantiates the reported live outcomes.
 
-| Request | First useful outcome and focused proof | Keep outside the critical path |
+| Task | Observed change in how the work was shaped | Result and lesson for the next request |
 |---|---|---|
-| Restore existing Google connections; Gmail read-only with extraction off | Verify whether authentication already works, then distinguish runtime acquisition policy from OAuth failure. Restore the selected account's requested Calendar/Tasks capabilities and Gmail restriction. Cover policy admission, member/account isolation, extraction suppression and unchanged write governance; verify actual sync and member-visible data. | Apple helper work, repeated sign-in for valid credentials, changing other accounts or disabling CoS as a shortcut. |
-| Repair missing CoS replies | Trace receipt, generation, actual pinned Gateway hook registration/configuration and terminal delivery. Test standing-grant activation, revocation and recipient/privacy enforcement through that real boundary. Verify a fresh authorized exchange after deployment; distinguish provider acceptance from observed delivery. | Treating healthy services or an internally generated answer as a delivered reply; unrelated whole-application regressions. |
-| Replace automatic obligation intake with member-forwarded intake | Ship the requested forwarding/extraction/Triage path with ownership, dedupe and disabled automatic mining verified. Close that outcome when usable. If bridge setup is later requested, its separate outcome is resumed authorized acquisition for each selected service through the packaged helper and real service manager. | Reopening completed intake work for later setup requests, repeated permission prompts before the artifact is ready, or requiring fresh enrollment when supported recovery preserves it. |
+| Fix Google connections safely | Valid credentials moved the diagnosis from repeated OAuth to acquisition policy. The task preserved Gmail read-only/no extraction and Calendar/Tasks write capability, implemented a protected Google scope in [PR 455](https://github.com/junglecrunch1212/administrate-me-now/pull/455), and prepared activation while coordinating the one actual central-release dependency. | Sync and member-visible data were verified. Blank sync timestamps and unavailable individual Gmail records were disclosed without reopening working reconnection. Google initially waited on Apple enrollment; coordination removed the unrelated consent dependency. The remaining recovery-history defect required [PR 461](https://github.com/junglecrunch1212/administrate-me-now/pull/461), not more sign-in attempts. |
+| Troubleshoot CoS nonresponse | The task distinguished receipt/generation from delivery. A saved standing grant did not enable the pinned host's reply hook; [PR 458](https://github.com/junglecrunch1212/administrate-me-now/pull/458) fixed that real boundary. The replacement policy explicitly removed an unnecessary member-browser round and waiting for an unrelated macOS aggregate after affected native checks and actual protected checks passed. | A fresh owner message received one audited reply, and the owner confirmed receipt. Generic readiness had been an inadequate proxy. Check hook admission, exact grants, recipient restrictions and terminal delivery early; stop reopening a completed reply repair for subsequent features. |
+| Refactor obligation intake workflow | The original forwarded-intake/CoS outcome completed before the owner added bridge setup, then Apple writes and Settings. Later work used bounded helper repairs (for example, [PR 464](https://github.com/junglecrunch1212/administrate-me-now/pull/464)) and a separate write capability ([PR 465](https://github.com/junglecrunch1212/administrate-me-now/pull/465)); [PR 467](https://github.com/junglecrunch1212/administrate-me-now/pull/467) corrected native Calendar date handling. | Intake remained complete while bridge reading and then authorized service writes were verified. An empty selected calendar was reported as unverified event transfer, not repaired by inventing data. Packaged startup, native provider values and expiring device handoffs caused real failures and repeated work. Split by service/outcome earlier, preserve enrollment and working reads, and request short-lived access only once the exact replacement and checks are ready. |
+
+Useful working prompts derived from those cases:
+
+- **Reconnect:** Restore the named account's existing Calendar/Tasks capabilities
+  and Gmail read-only access with extraction off. Diagnose authentication versus
+  acquisition policy first; finish when permitted data syncs and is visible.
+  Preserve other integrations and recover through the supported configuration
+  or release operation if this repair regresses them.
+- **Reply:** Restore one ordinary private reply through the existing grant.
+  Reproduce the pinned host hook/permission failure, then verify one fresh
+  authorized exchange and its terminal audit. Keep new reminder or channel
+  features separate; restore the known working reply state on regression.
+- **Forwarded intake and expansion:** First make one authorized forward reach
+  extraction and Triage with automatic personal-inbox mining off. Deliver new
+  bridge reading next, then a complete approved action for each requested Apple
+  service, with destination selection, read-back and authorized cleanup. Keep
+  unfinished requested services visible without blocking completed ones.
+
+These are examples of the agent's working scope, not extra text the owner must
+paste. A short request such as "reconnect my Google data" is enough when the
+account, intended capabilities and authority are already established. Unresolved
+account or scope choices still need clarification; a convenient read-only
+substitute must never silently replace requested read/write functionality.
+
+### Rules for selecting the next deliverable
+
+Choose a complete user behavior that can be verified and recovered independently.
+A whole feature may cross UI, API, permission and audit layers; those necessary
+pieces belong together. An enabling compatibility change can ship first when it
+has its own concrete proof and unlocks a named next outcome. Avoid horizontal
+slices that leave the user with a button that cannot finish its action.
+
+Keep a short ordered list of requested outcomes in the existing task. Detail
+only the current one. New services, devices, permissions, persistent formats or
+deployment components trigger a scope review: include only what the current
+outcome actually needs; sequence the rest. One PR per independently shippable
+change does not mean one user-created chat or permission ceremony per PR.
+Continue through authorized work, close each milestone and report the remaining
+scope honestly. Do not stop at the first small slice and call the ambition done.
+
+Coordinate only real shared contracts and live mutation conflicts. Combine
+already-ready compatible changes when one update saves disruption, but do not
+make a repaired account wait for another service's permission prompt. Keep one
+operator and monitor for shared activation, and prepare independent work in
+parallel within the existing authorization. Prefer component installation when
+compatible. A prose-only policy merge requires no central runtime deployment.
+
+### Learn from failure without expanding every release
+
+A bounded smoke test must target the production boundary that failed: real hook
+registration, packaged service startup, native provider read-back, or loaded
+agent tools/instructions. Name the failure signal and supported recovery before
+activation. A new regression calls for prompt recovery, one redacted failure
+record, a focused reproduction and a corrected release. Do not repeat an
+unchanged failed attempt, reopen unrelated completed work, refresh consent while
+still building, or restart every suite after a local correction.
+
+The later reminder repair ([PR 466](https://github.com/junglecrunch1212/administrate-me-now/pull/466))
+provided two additional lessons. The updater left existing workspace instructions
+unchanged, so the reviewed policy needed its documented workspace installation;
+a merged template was not a loaded policy. Its activation request also had to
+explicitly restore the already-authorized reply grant after observation mode.
+Verify effective installed state, and prepare restoration of existing operation
+alongside the new feature rather than discovering it during downtime. The
+reminder release's timer/catalog checks were not evidence of an actual timed
+message: that delivery remained unverified in this task's deployment record.
+
+Recovery is not always an older binary. After new send-authorization history is
+written, an older runtime may not understand it. Use an independently reversible
+feature or permission switch on the schema-aware runtime where required; keep
+ordinary replies/reads usable and retain append-only receipts. Test this changed
+recovery boundary before enabling effects. Reversible runtime failures are
+acceptable; disclosure, lost history, duplicate sends and unknown effects are
+not made harmless by a rollback plan.
+
+Keep policy short and evidence-driven. Replace a recurring wrong assumption with
+one rule or regression; do not add a checklist for every incident. Future process
+improvement should use existing task/CI timestamps to identify repeated waits,
+retries and consent rounds, not create new telemetry, reports or claim unmeasured
+savings. This follows the [OpenAI guidance on updating AGENTS.md](https://learn.chatgpt.com/docs/customization/overview#when-to-update-agentsmd):
+correct repeated mistakes, give reading directions and pair instructions with
+executable enforcement.
+
+## Bridge enrollment release scope
+
+The narrowly bounded `bridge-enrollment` scope is a **SUPERSEDE** of the earlier
+blanket system-suite requirement for localized ingress/controller recovery,
+under the owner-directed risk-based release policy in `AGENTS.md`. It allows
+only a regular-file modification of the existing bridge ingress module, helper
+component resources, explicitly listed tests/policy and governing prose. Fixed
+Git fingerprints must prove that all other runtime inputs are identical across
+base, head and test merge: shared coordinator/history, event schemas/storage,
+authorization policies, composition, dependency locks and updater remain outside
+this scope. Unknown paths, additions/deletions of ingress, mode drift or any
+outside-runtime difference require system-wide validation.
+
+Its final workers execute the complete ingress and edge security/data contract:
+owner/device binding, all source families including Messages, single/batch
+admission serialized with revocation, signed permission/start continuation,
+stale refusal before nonce/index/event effects, historical attribution/replay,
+projection and readiness settlement, restart and rollback, uncertainty and
+provider-write denial. Both platforms require strict zero-skip JUnit evidence
+for the selected contract and bridge package; Linux explicitly excludes only the
+three native helper packaging cases that macOS executes. macOS also requires
+member enrollment browser acceptance and the three actual packaged installation
+and two real sealed launchd cases. Final exact-revision aggregate checks cannot
+accept a draft or missing, skipped, failed, cancelled or stale worker result.
+This scope is a central release and retains the guarded updater, fresh encrypted
+backup/restore rehearsal, Doctor and real member acceptance. It does not change
+retained-edge compatibility or weaken deployment authorization.
 
 Check the exact failure boundary early: a hook-registration refusal needs the
 real pinned host contract; failed first startup needs packaged service-start
@@ -108,27 +222,30 @@ reversible software failure, but cannot undo a disclosure, lost history or send.
 
 ## Current enforcement and implementation gap
 
-This policy-only redraft changes no workflow, selector, runtime or updater.
-`scripts/release_scope.py` currently recognizes only `documentation`,
-`bridge-helper` and `system-wide`; most other code and some prose paths still
-fall back to full validation. Current draft results also do not satisfy release
-gates. Inspect actual GitHub protection rather than assuming every aggregate
-is mandatory: on 2026-10-22, `deterministic-consistency` is the required status;
-`credential-free-rehearsal` is not a required merge status. Required platform
-coverage still follows the affected contract. Preserve useful unrequired runs,
-but do not wait for an unrelated aggregate once required and affected checks
-pass. The central updater's existing backup, settlement, Doctor and synthetic-
-proof prerequisites remain enforced. Prose does not remove executable controls.
+This policy-only update changes no workflow, selector, runtime or updater.
+The implemented scope inventory lives in `scripts/release_scope.py`, with workers
+in `.github/workflows/administrateme-consistency.yml` and
+`.github/workflows/macos-bootstrap.yml`. Google, CoS recovery/reminders and bridge
+paths now have scoped implementations; the old three-scope description is stale.
+Inspect current code and GitHub protection rather than copying a scope/status
+list into every prompt. On 2026-10-23 the required merge status remained
+`deterministic-consistency`; affected platform contracts still need their checks.
+An unrelated unrequired aggregate is not an extra gate.
 
-Bring narrower selection, genuine evidence reuse and bounded updater checks
-into protected PRs with focused positive and negative gate/contract tests.
-Selection must use actual changed inputs and relevant contracts. Every selected
-required result must be a real success; missing, failed, cancelled, stale,
-partial or unexpectedly skipped results cannot approve release. Keep protection
-and truthful status. A broad fallback caused by a missing scoped path is an
-implementation limitation to fix, not an instruction to add manual full suites.
-Policy prose needs static validation; executable gate changes need their
-focused tests. Existing behavior-specific contracts below apply when affected.
+The supported central updater still enforces backup, settlement, Doctor and
+synthetic-proof prerequisites. The reminder rollout reused the valid rehearsal
+already produced by its observation transition, but still incurred the updater's
+own work. Prose cannot remove that coupling. Unknown paths still use the protected
+fallback; never replace a missing, failed, cancelled, stale or skipped required
+result with a claimed pass.
+
+Remaining implementation improvements should themselves be separate deliverables:
+reuse compatible preparation/recovery evidence in the supported updater, make
+workspace-policy installation part of the supported update when relevant, and
+prepare exact restoration/enablement requests before maintenance. Each needs its
+own affected positive/negative compatibility and recovery proof before use. They
+are not prerequisites for unrelated product releases, and this policy update
+does not implement or authorize new live operations for them.
 
 Retired-provider history amendment (2026-10-20), **MODERNIZE** under CO-031:
 `tests/acceptance/test_retired_provider_history.py` must prove historical

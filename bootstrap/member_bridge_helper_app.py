@@ -43,6 +43,7 @@ def _helper_launcher(
     archive_sha256: str,
     *,
     permission_controller_sha256: str,
+    launch_controller_sha256: str,
     component_commit: str | None = None,
 ) -> bytes:
     """Render the sealed launcher; no runtime diagnostic or UI override exists."""
@@ -53,6 +54,7 @@ def _helper_launcher(
         or not re.fullmatch(r"[0-9a-f]{40}", component_commit)
         or not re.fullmatch(r"[0-9a-f]{64}", archive_sha256)
         or not re.fullmatch(r"[0-9a-f]{64}", permission_controller_sha256)
+        or not re.fullmatch(r"[0-9a-f]{64}", launch_controller_sha256)
     ):
         raise ValueError("helper launcher requires exact source coordinates")
     template = r"""#!/bin/bash
@@ -66,6 +68,8 @@ RESOURCES="$CONTENTS_DIR/Resources"
 INSTALLER="$RESOURCES/install-member-bridge.sh"
 PERMISSION_CONTROLLER="$RESOURCES/member_bridge_permission_controller.py"
 PERMISSION_CONTROLLER_SHA256=@CONTROLLER_SHA256@
+LAUNCH_CONTROLLER="$RESOURCES/member_bridge_launch.py"
+LAUNCH_CONTROLLER_SHA256=@LAUNCH_CONTROLLER_SHA256@
 RELEASE_ARCHIVE="$RESOURCES/administrateme-reviewed-release.tar"
 EXPECTED_COMMIT=@COMMIT@
 HELPER_COMPONENT_COMMIT=@COMPONENT_COMMIT@
@@ -171,14 +175,17 @@ verify_permission_controller() {
   local actual_hash
   [[ -f "$PERMISSION_CONTROLLER" && ! -L "$PERMISSION_CONTROLLER" && -O "$PERMISSION_CONTROLLER" ]] || return 1
   actual_hash="$(/usr/bin/shasum -a 256 "$PERMISSION_CONTROLLER")" || return 1
-  [[ "${actual_hash%% *}" == "$PERMISSION_CONTROLLER_SHA256" ]]
+  [[ "${actual_hash%% *}" == "$PERMISSION_CONTROLLER_SHA256" ]] || return 1
+  [[ -f "$LAUNCH_CONTROLLER" && ! -L "$LAUNCH_CONTROLLER" && -O "$LAUNCH_CONTROLLER" ]] || return 1
+  actual_hash="$(/usr/bin/shasum -a 256 "$LAUNCH_CONTROLLER")" || return 1
+  [[ "${actual_hash%% *}" == "$LAUNCH_CONTROLLER_SHA256" ]]
 }
 
 run_permissions() {
   local operation="$1" controller_exit=0 result_outcome
   PHASE="permission_setup"
   verify_permission_controller || fail_closed
-  "$release_python" -I "$PERMISSION_CONTROLLER" --runtime-root "$release_root" --expected-runtime-commit "$EXPECTED_COMMIT" --expected-central-commit "$HELPER_COMPONENT_COMMIT" --bridge-root "$BRIDGE_ROOT" --operation "$operation" >"$PERMISSION_RESULT_FILE" 2>"$LOG_FILE" || controller_exit="$?"
+  "$release_python" -I "$PERMISSION_CONTROLLER" --runtime-root "$release_root" --expected-runtime-commit "$EXPECTED_COMMIT" --expected-central-commit "$HELPER_COMPONENT_COMMIT" --bridge-root "$BRIDGE_ROOT" --launch-controller "$LAUNCH_CONTROLLER" --launch-controller-sha256 "$LAUNCH_CONTROLLER_SHA256" --operation "$operation" >"$PERMISSION_RESULT_FILE" 2>"$LOG_FILE" || controller_exit="$?"
   # The exact sealed controller validates its bounded, content-free result.
   # Neither exception text nor unvalidated controller output is retained.
   verify_permission_controller || fail_closed
@@ -275,6 +282,7 @@ run_permissions initial
         .replace("@COMPONENT_COMMIT@", shlex.quote(component_commit))
         .replace("@ARCHIVE_SHA256@", shlex.quote(archive_sha256))
         .replace("@CONTROLLER_SHA256@", shlex.quote(permission_controller_sha256))
+        .replace("@LAUNCH_CONTROLLER_SHA256@", shlex.quote(launch_controller_sha256))
         .encode("utf-8")
     )
 
@@ -287,6 +295,7 @@ class HelperAppBuild:
     helper_component_commit: str
     installer_sha256: str
     permission_controller_sha256: str
+    launch_controller_sha256: str
     release_archive_sha256: str
     document_extension: str
     provider_effects: bool = False
@@ -453,6 +462,15 @@ end run
     permission_controller_sha256 = hashlib.sha256(
         permission_controller.read_bytes()
     ).hexdigest()
+    launch_controller = resources / "member_bridge_launch.py"
+    atomic_write(
+        launch_controller,
+        inputs.component_payloads["bootstrap/member_bridge_launch.py"],
+    )
+    os.chmod(launch_controller, 0o600)
+    launch_controller_sha256 = hashlib.sha256(
+        launch_controller.read_bytes()
+    ).hexdigest()
     release_archive = resources / "administrateme-reviewed-release.tar"
     archived = subprocess.run(
         [
@@ -540,6 +558,7 @@ end run
         release_archive_sha256,
         component_commit=component_commit,
         permission_controller_sha256=permission_controller_sha256,
+        launch_controller_sha256=launch_controller_sha256,
     )
     executable = resources / "bridge-helper-launcher.sh"
     atomic_write(executable, launcher)
@@ -562,6 +581,8 @@ end run
         "installer_sha256": installer_sha256,
         "permission_controller_path": "Contents/Resources/member_bridge_permission_controller.py",
         "permission_controller_sha256": permission_controller_sha256,
+        "launch_controller_path": "Contents/Resources/member_bridge_launch.py",
+        "launch_controller_sha256": launch_controller_sha256,
         "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
         "release_archive_path": "Contents/Resources/administrateme-reviewed-release.tar",
         "release_archive_sha256": release_archive_sha256,
@@ -620,6 +641,7 @@ end run
         helper_component_commit=component_commit,
         installer_sha256=installer_sha256,
         permission_controller_sha256=permission_controller_sha256,
+        launch_controller_sha256=launch_controller_sha256,
         release_archive_sha256=release_archive_sha256,
         document_extension="adminmebridge",
     )
