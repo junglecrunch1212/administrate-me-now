@@ -427,3 +427,38 @@ def test_publication_change_during_later_receipt_reads_blocks_earlier_result(
 
         with pytest.raises(FinanceDisclosureError, match="publication_changed"):
             client.portal.call(verify)
+
+
+@pytest.mark.parametrize("report_id", ["actuals", "owner_choices"])
+def test_authority_revoked_during_async_finance_read_cannot_receive_result(
+    tmp_path, monkeypatch, report_id
+):
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        grant = _grant_cos(client, "async-finance-read")
+        publication, _ = import_fixture(client)
+        runtime = client.app.state.runtime
+        original = runtime.projections.read
+        changed = False
+
+        async def read_then_revoke(name, query):
+            nonlocal changed
+            value = await original(name, query)
+            if name == "money" and not changed:
+                changed = True
+                await revoke(runtime, grant)
+            return value
+
+        monkeypatch.setattr(runtime.projections, "read", read_then_revoke)
+        response = _post(
+            client,
+            "query",
+            "async-read-revocation",
+            book_id=publication["book_id"],
+            publication_id=publication["publication_id"],
+            report_id=report_id,
+            limit=1,
+        )
+        assert changed
+        assert response.status_code == 403, response.text
+        assert "publication_id" not in response.text
+        assert "choices" not in response.text and "metrics" not in response.text

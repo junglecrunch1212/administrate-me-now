@@ -166,3 +166,13 @@ screenshot was inspected. Mixed load still failed: baseline 4.357 ms versus
 16.863/16.972 ms. The next diagnostic records server response time separately
 from client latency to locate the remaining contention. The original client
 10% assertion remains unchanged; instrumentation is not a performance fix.
+
+At `1dd86ded`, the purchase response passed its native budget check; the only
+functional failure was a stale caption assertion after clarifying workbook
+goals (696 other tests passed). Native (96) and Chrome checks passed. The
+diagnostic measured core server p95 1.809 ms baseline versus 2.054 ms mixed,
+while raw client p95 was 4.200 versus 5.115 ms (1.217878, still failed). Finance
+reads are next moved to the existing asynchronous projection read API: one
+coherent worker callback instead of synchronous per-statement calls from the
+HTTP loop. New tests revoke authority during that awaited read and require
+final delivery to refuse its result.

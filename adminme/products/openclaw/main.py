@@ -4380,10 +4380,11 @@ async def finance_status(
             if blocked:
                 result.update(blocked)
             else:
-                publication = publication_status(
-                    runtime.projections.connection("money"),
-                    session,
-                    book_id=body.book_id,
+                publication = await runtime.projections.read(
+                    "money",
+                    lambda conn: publication_status(
+                        conn, session, book_id=body.book_id
+                    ),
                 )
                 result["state"] = publication["state"]
                 result["publication"] = {
@@ -4442,11 +4443,11 @@ async def finance_status(
                     item = capability(body.capability_id)
                     models = calculator_metadata()
                     evidence = (
-                        publication_readiness_context(
-                            runtime.projections.connection("money"),
-                            session,
-                            body.capability_id,
-                            book_id=body.book_id,
+                        await runtime.projections.read(
+                            "money",
+                            lambda conn: publication_readiness_context(
+                                conn, session, body.capability_id, book_id=body.book_id
+                            ),
                         )
                         if not blocked
                         else {"dependencies": {}, "report_availability": []}
@@ -4565,25 +4566,31 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                 if body.report_id == "owner_choices":
                     if body.scenario_id is not None or body.horizon_days is not None:
                         raise ValueError("finance_choice_filter_invalid")
-                    result = query_choices(
-                        runtime.projections.connection("money"),
-                        session,
-                        body.book_id,
-                        body.publication_id,
-                        offset=body.offset,
-                        limit=body.limit,
+                    result = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_choices(
+                            conn,
+                            session,
+                            body.book_id,
+                            body.publication_id,
+                            offset=body.offset,
+                            limit=body.limit,
+                        ),
                     )
                 else:
-                    result = query_publication(
-                        runtime.projections.connection("money"),
-                        session,
-                        book_id=body.book_id,
-                        publication_id=body.publication_id,
-                        report_id=body.report_id,
-                        offset=body.offset,
-                        limit=body.limit,
-                        scenario_id=body.scenario_id,
-                        horizon_days=body.horizon_days,
+                    result = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_publication(
+                            conn,
+                            session,
+                            book_id=body.book_id,
+                            publication_id=body.publication_id,
+                            report_id=body.report_id,
+                            offset=body.offset,
+                            limit=body.limit,
+                            scenario_id=body.scenario_id,
+                            horizon_days=body.horizon_days,
+                        ),
                     )
         except FinanceBudgetError as exc:
             result = {"state": "temporarily_unavailable", "reason": exc.code}

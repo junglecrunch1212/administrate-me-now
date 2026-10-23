@@ -1100,7 +1100,7 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         for copy in (
             "Cash flow plan",
             "Scenario lab",
-            "Goals and capital plans",
+            "Workbook goals and capital plans",
             "Observed asset and liability inputs",
             "Source and model health",
         ):
