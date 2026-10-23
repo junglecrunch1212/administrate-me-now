@@ -1464,6 +1464,24 @@ def test_reminder_scope_checks_closed_sources_and_normal_protected_workers(
         verify_gate(proof, _needs(proof, platform), platform=platform)
 
 
+@pytest.mark.parametrize("broader_change", [False, True])
+def test_reminder_work_link_uses_focused_scope_without_widening_storage(
+    repository: tuple[Path, str], broader_change: bool
+) -> None:
+    path, _ = repository
+    _reminder_candidate(path)
+    base = _commit(path, "adminme/cos_reminder_work.py", "# Existing work link\n")
+    head = _commit(path, "adminme/cos_reminder_work.py", "# Reviewed work link\n")
+    if broader_change:
+        head = _commit(path, "adminme/events/log.py", "# Broader persistence change\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == ("system-wide" if broader_change else "cos-reminders")
+    assert (
+        "tests/acceptance/test_cos_service_private_work.py"
+        in (ROOT / "scripts/acceptance/cos-reminder-release.sh").read_text()
+    )
+
+
 @pytest.mark.parametrize("extra", ["none", "dependency", "unknown", "mode", "deleted"])
 def test_attribution_only_repair_uses_existing_worker_without_relaxing_boundary(
     repository: tuple[Path, str], extra: str
