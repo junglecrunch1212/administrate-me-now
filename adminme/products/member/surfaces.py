@@ -275,6 +275,38 @@ def people_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
     return accounts
 
 
+def apple_calendar_destinations(runtime: Any, session: Session) -> list[dict[str, Any]]:
+    """Owner write grants are destinations, never fabricated provider facts."""
+    from adminme.apple_service_permissions import permission_options, service_permission
+
+    member = session.auth_member_id
+    if member != session.view_member_id:
+        return []
+    grant = service_permission(runtime, member, "apple_calendar")
+    if grant is None:
+        return []
+    options = permission_options(runtime, member, "apple_calendar")
+    return [
+        {
+            "rule_id": f"apple-permission:{grant['event_id']}:{scope['id']}",
+            "subject_member_id": member,
+            "source_member_id": member,
+            "provider": "apple_calendar",
+            "provider_account_id": grant["provider_account_id"],
+            "calendar_external_id": scope["container_id"],
+            "calendar_name": scope["label"],
+            "write_target": True,
+            "write_events": True,
+            "enabled": True,
+            "destination_kind": "personal",
+            "authority_source": "owner_service_permission",
+            "last_event_id": grant["event_id"],
+        }
+        for scope in options["scopes"]
+        if scope["container_id"] in grant["allowed_container_ids"]
+    ]
+
+
 def reminder_accounts(
     runtime: Any,
     member_id: str,
@@ -359,6 +391,38 @@ def reminder_accounts(
                 if configured_container
                 else []
             ),
+        }
+
+    from adminme.apple_service_permissions import service_permission
+
+    grant = service_permission(runtime, member_id, "apple_reminders")
+    if grant is not None:
+        contract = PROVIDER_CONTRACTS["apple_reminders"]
+        account_id = grant["provider_account_id"]
+        names = {
+            str(row["list_external_id"]): row.get("list_name")
+            for row in projected_lists
+            if row.get("provider") == "apple_reminders"
+            and row.get("provider_account_id") == account_id
+        }
+        accounts[("apple_reminders", account_id)] = {
+            "id": f"bridge:{grant['enrollment_id']}:reminders-apple-eventkit-bridge",
+            "provider": "apple_reminders",
+            "provider_account_id": account_id,
+            "label": "Apple Reminders",
+            "runtime": "member_bridge",
+            "state": "observation_only" if runtime._observation_active else "writable",
+            "operations": list(grant["operations"]),
+            "native": contract["native"],
+            "limitations": contract["limitations"],
+            "approvals_required": True,
+            "configured_containers": [
+                {
+                    "list_external_id": value,
+                    "list_name": names.get(value) or "Selected reminder list",
+                }
+                for value in grant["allowed_container_ids"]
+            ],
         }
 
     for row in [*projected_lists, *projected_items]:
@@ -795,6 +859,7 @@ def build_surface(
             tz_name=runtime.settings.instance.timezone,
         )
         calendar_cockpit = compose_calendar_cockpit(
+            write_permissions=apple_calendar_destinations(runtime, session),
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,
             as_of=now,
@@ -1094,6 +1159,7 @@ def build_surface(
             calendar_conn, session, member_id=member
         )
         calendar_destinations = compose_calendar_cockpit(
+            write_permissions=apple_calendar_destinations(runtime, session),
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,
             as_of=now,
@@ -1140,6 +1206,7 @@ def build_surface(
             except (TypeError, ValueError):
                 pass
             item["calendar_preview"] = preview_calendar_candidate(
+                write_permissions=apple_calendar_destinations(runtime, session),
                 member_id=member,
                 timezone_name=runtime.settings.instance.timezone,
                 as_of=now,
@@ -1705,6 +1772,7 @@ def build_surface(
         ).isoformat()
         base["calendar_today"] = now.astimezone(zone).date().isoformat()
         base["cockpit"] = compose_calendar_cockpit(
+            write_permissions=apple_calendar_destinations(runtime, session),
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,
             as_of=now,

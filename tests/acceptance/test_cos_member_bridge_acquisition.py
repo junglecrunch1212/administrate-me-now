@@ -525,10 +525,15 @@ def _assert_denied_batch_is_atomic(
     )
 
 
-async def _queue_calendar_command(runtime: Any) -> str:
+async def _queue_calendar_command(
+    runtime: Any, permission_marker: dict[str, Any] | None = None
+) -> str:
     account = (
         "provider-account:"
         + hashlib.sha256(b"fixture-apple_calendar-account").hexdigest()[:32]
+    )
+    command_id = "fixture-read-only-bridge-command" + (
+        "-invalid-marker" if permission_marker is not None else ""
     )
     return await runtime.events.write(
         EventEnvelope(
@@ -542,9 +547,9 @@ async def _queue_calendar_command(runtime: Any) -> str:
             owner_scope=f"private:{MEMBER_A}",
             visibility_scope=f"private:{MEMBER_A}",
             sensitivity="normal",
-            idempotency_key="fixture-read-only-bridge-command",
+            idempotency_key=command_id,
             payload={
-                "command_id": "fixture-read-only-bridge-command",
+                "command_id": command_id,
                 "member_id": MEMBER_A,
                 "provider": "apple_calendar",
                 "provider_account_id": account,
@@ -552,6 +557,11 @@ async def _queue_calendar_command(runtime: Any) -> str:
                 "payload": {
                     "calendar_external_id": "fixture-apple_calendar-container",
                     "summary": "This retained command must never leave the host",
+                    **(
+                        {"apple_service_permission": permission_marker}
+                        if permission_marker is not None
+                        else {}
+                    ),
                 },
                 "requested_at": NOW,
                 "domain_approval_event_id": "fixture-retained-domain-approval",
@@ -755,6 +765,9 @@ def test_cos_overlay_allows_exact_member_bridge_without_candidate_mining_or_writ
             "credential-free CoS-live/read-only-member-bridge acceptance",
         )
         command_event_id = client.portal.call(_queue_calendar_command, runtime)
+        # A malformed modern marker cannot fall back to legacy suppression or
+        # gain permission. Only the retained unmarked command gets a terminal.
+        client.portal.call(_queue_calendar_command, runtime, {})
         pending = client.get(
             "/api/bridge/commands?providers=apple_calendar", headers=headers
         )

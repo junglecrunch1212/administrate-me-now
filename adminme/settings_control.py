@@ -298,6 +298,7 @@ class SettingsControlStore:
             "capability_request_revisions": {},
             "message_reply_controls": {},
             "message_reply_control_revisions": {},
+            "apple_service_permissions": {},
         }
 
     def read(self) -> dict[str, Any]:
@@ -381,6 +382,9 @@ class SettingsControlStore:
             value["schema_version"] = self.SCHEMA_VERSION
             value["message_reply_controls"] = {}
             value["message_reply_control_revisions"] = {}
+        # Additive cache of independently audited write grants. Enrollment and
+        # its original read-only configuration remain immutable.
+        value.setdefault("apple_service_permissions", {})
         if not isinstance(value.get("revision"), int):
             raise RuntimeError("Settings control journal revision is invalid")
         for key in (
@@ -396,6 +400,7 @@ class SettingsControlStore:
             "capability_request_revisions",
             "message_reply_controls",
             "message_reply_control_revisions",
+            "apple_service_permissions",
         ):
             if not isinstance(value.get(key), dict):
                 raise RuntimeError(f"Settings control journal {key} is invalid")
@@ -1334,6 +1339,65 @@ class SettingsControlStore:
         _atomic_json(self.path, state)
         return count
 
+    def apply_apple_service_permission_event(
+        self, payload: dict[str, Any], *, event_id: str
+    ) -> SettingsMutation:
+        """Apply a durable owner-bound permission receipt; never grant first."""
+        state = self.read()
+        mutation = self._apply_apple_service_permission(state, payload, event_id)
+        state["revision"] += 1
+        _atomic_json(self.path, state)
+        return mutation
+
+    @staticmethod
+    def _apply_apple_service_permission(
+        state: dict[str, Any], payload: dict[str, Any], event_id: str
+    ) -> SettingsMutation:
+        from adminme.events.schemas.apple_service_permissions import (
+            AppleServicePermissionControlledV1,
+        )
+
+        value = AppleServicePermissionControlledV1.model_validate(payload).model_dump(
+            mode="json"
+        )
+        member = value["member_id"]
+        provider = value["provider"]
+        rows = state.setdefault("apple_service_permissions", {}).setdefault(member, {})
+        previous = copy.deepcopy(rows.get(provider) or {})
+        if value["revision"] != int(previous.get("revision", 0)) + 1:
+            raise ValueError("Apple service permission revision is not consecutive")
+        if not event_id:
+            raise ValueError("Apple service permission needs its durable receipt")
+        current = {**value, "event_id": event_id}
+        rows[provider] = current
+        return SettingsMutation(previous, copy.deepcopy(current), value["revision"])
+
+    async def replay_apple_service_permission_events(
+        self, event_log: Any, *, tenant_id: str
+    ) -> int:
+        """Rebuild grants from private append-only receipts, including revocations."""
+        state = self.read()
+        state["apple_service_permissions"] = {}
+        count = 0
+        async for event in event_log.read_since(
+            types=["settings.apple_service_permission_controlled"]
+        ):
+            if event.get("tenant_id") != tenant_id:
+                continue
+            payload = event.get("payload") or {}
+            member = payload.get("member_id")
+            if (
+                event.get("owner_scope") != f"private:{member}"
+                or event.get("visibility_scope") != f"private:{member}"
+                or event.get("actor_identity") != member
+                or payload.get("changed_by_member_id") != member
+            ):
+                raise RuntimeError("Apple service permission owner binding is invalid")
+            self._apply_apple_service_permission(state, payload, event["event_id"])
+            count += 1
+        _atomic_json(self.path, state)
+        return count
+
     def effective_source_policy_v2(
         self,
         owner_principal_id: str,
@@ -1828,12 +1892,17 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         record = source["record"]
         config = source["config"]
         capability = source["capability"]
+        from adminme.apple_service_permissions import service_permission
+
+        grant = service_permission(runtime, member_id, str(meta["provider"]))
         rows.append(
             {
                 "id": source["connection_id"],
                 "provider": meta["provider"],
                 "provider_label": meta["label"],
-                "label": f"{meta['label']} (read-only)",
+                "label": str(meta["label"])
+                if grant
+                else f"{meta['label']} (read-only)",
                 "account_hint": config.get("provider_account_id"),
                 "product": meta["product"],
                 "workspace": "personal",
@@ -1858,15 +1927,18 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
                 else "not_running",
                 "permissions": {
                     "read": list(meta["read"]),
-                    "write": [],
+                    "write": list(grant["operations"]) if grant else [],
                     "credential_reference_present": False,
-                    "write_capability_source": "none_cos_member_bridge_read_only",
+                    "write_capability_source": "owner_service_permission"
+                    if grant
+                    else "none_cos_member_bridge_read_only",
                 },
                 "safety": {
-                    "observation_only": True,
-                    "human_gate_required": False,
-                    "openclaw_approval_required": False,
-                    "writes_execute": False,
+                    "observation_only": not bool(grant)
+                    or bool(runtime._observation_active),
+                    "human_gate_required": bool(grant),
+                    "openclaw_approval_required": bool(grant),
+                    "writes_execute": bool(grant) and not runtime._observation_active,
                 },
                 "last_sync_at": source["last_sync_at"],
                 "error": capability.get("reason"),

@@ -1218,6 +1218,12 @@ async def _append_provider_action_confirmation(
                 409, "request id conflicts with a prior provider action"
             )
         return str(prior["event_id"]), True
+    from adminme.apple_service_permissions import bind_command_permission
+
+    try:
+        bind_command_permission(runtime, session.auth_member_id, command_payload)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     now = EventEnvelope.now_utc_iso()
     event_id = await runtime.events.write(
         EventEnvelope(
@@ -1644,6 +1650,14 @@ def _require_configured_external_route(
             422, "the Google provider route is not configured for this member"
         )
     if provider in {"apple_calendar", "apple_reminders", "apple_contacts"}:
+        from adminme.apple_service_permissions import service_permission
+
+        grant = service_permission(runtime, target_member, provider)
+        if grant is not None and (
+            grant["provider_account_id"] == provider_account_id
+            and container_external_id in grant["allowed_container_ids"]
+        ):
+            return
         matches = []
         for record in runtime.settings.bridge_enrollments.values():
             if not isinstance(record, dict):
@@ -1679,6 +1693,17 @@ def _require_reviewed_calendar_destination(
 ) -> None:
     """Fail closed unless provider capability and member policy approve the route."""
 
+    # The explicit owner-reviewed Apple destination grant also covers an empty
+    # calendar; an event observation must not be required before its first write.
+    if provider == "apple_calendar":
+        from adminme.apple_service_permissions import service_permission
+
+        grant = service_permission(runtime, target_member, provider)
+        if grant is not None and (
+            grant["provider_account_id"] == provider_account_id
+            and calendar_external_id in grant["allowed_container_ids"]
+        ):
+            return
     if runtime.projections is None:
         raise HTTPException(503, "calendar projection unavailable")
     row = (

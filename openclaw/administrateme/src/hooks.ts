@@ -49,10 +49,11 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
         return;
       }
       const approval = prepareApproval(runtime, event.toolName, event.params);
-      if (event.toolName === "administrateme_cos_response") {
+      if (event.toolName === "administrateme_cos_response" ||
+          event.toolName === "administrateme_execute_pending_provider_action") {
         runtime.cosApprovals?.remember(event.params, {
           ...context, toolCallId: context.toolCallId ?? event.toolCallId,
-        }, approval.receiptId);
+        }, approval.receiptId, event.toolName);
       }
       return {
         params: approval.params,

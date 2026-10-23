@@ -860,7 +860,14 @@ async def _consume_openclaw_approval(
         )
     except ApprovalReceiptError as exc:
         raise HTTPException(403, str(exc)) from exc
-    consumed_at = EventEnvelope.now_utc_iso()
+    if receipt.consumed_at_ms is None:
+        raise HTTPException(503, "OpenClaw approval consumption is unavailable")
+    # Preserve the store's exact first consumption, including same-binding
+    # recovery. A new whole-second timestamp can precede millisecond issuance
+    # or misrepresent an approval recovered after its original consumption.
+    consumed_at = datetime.fromtimestamp(
+        receipt.consumed_at_ms / 1000, tz=timezone.utc
+    ).isoformat()
     event_id, _ = await _append(
         runtime,
         session,
@@ -3075,6 +3082,25 @@ async def _execute_pending_provider_action(
             "participant_fingerprint"
         ):
             raise HTTPException(409, "Messages participants changed")
+    from adminme.apple_service_permissions import (
+        command_permission,
+        requires_service_permission,
+    )
+
+    pending_command = {
+        "member_id": session.auth_member_id,
+        "provider": payload["provider"],
+        "provider_account_id": payload["provider_account_id"],
+        "operation": payload["operation"],
+        "payload": dict(payload.get("command_payload") or {}),
+    }
+    if requires_service_permission(
+        runtime, session.auth_member_id, str(payload["provider"])
+    ) or pending_command["payload"].get("apple_service_permission"):
+        try:
+            command_permission(runtime, session.auth_member_id, pending_command)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
     request_fingerprint = str(payload["request_fingerprint"])
     approval_event_id = await _consume_openclaw_approval(
         request,

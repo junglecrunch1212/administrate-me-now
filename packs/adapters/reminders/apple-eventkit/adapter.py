@@ -792,6 +792,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             or self._config.get("target_list_identifier")
             or ""
         )
+        if payload.get("apple_service_permission"):
+            allowed = payload.get("apple_service_allowed_container_ids")
+            if not isinstance(allowed, list) or target_list_id not in allowed:
+                raise ValueError(
+                    "Apple Reminders write destination is outside the current permission"
+                )
         if operation.kind == "create_reminder":
             reminder = ek_store.build_reminder(
                 list_identifier=target_list_id,
@@ -809,6 +815,11 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             reminder = ek_store.reminder_with_identifier(target_id)
             if reminder is None:
                 raise LookupError(f"EventKit reminder not found: {target_id}")
+            if (
+                payload.get("apple_service_permission")
+                and getattr(reminder, "list_identifier", None) != target_list_id
+            ):
+                raise ValueError("Apple Reminder moved outside its approved source")
             expected_revision = payload.get("expected_provider_revision")
             actual_modified = getattr(reminder, "last_modified_at", None)
             actual_revision = (
@@ -850,6 +861,11 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         event_log = self._observation_event_log
 
         async def _do_save() -> None:
+            from adminme.apple_service_permissions import (
+                require_unexpired_native_authorization,
+            )
+
+            require_unexpired_native_authorization(payload)
             # ``save(_:commit:)`` per docs/reference/apple-eventkit/create.md
             # — ``commit=True`` flushes immediately rather than batching
             # for a later ``commit()`` call. Each outbound write is its

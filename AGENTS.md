@@ -2,6 +2,43 @@
 
 This repository is a household-scale, local-first, event-sourced platform. Treat documentation and comments as evidence; executable behavior and tests decide whether a change works. The v2 reconciliation in `docs/refactor/` governs product architecture. Historical delivery procedures are not current authority.
 
+## Owner-directed fast delivery policy (2026-10-22)
+
+This policy supersedes conflicting blanket release/readiness requirements below
+and in older runbooks. Default to implement, run focused checks, ship when
+authorized, observe, and roll back on regression. Ordinary reversible changes
+do not require exhaustive assurance or separate review/readiness ceremonies.
+
+- Scope checks to affected behavior and dependencies. Test changed permission,
+  identity, privacy, credentials, sending, persistence, and recovery contracts;
+  do not rerun unchanged safety contracts. Broaden only for concrete shared
+  effects or irreversible risk. Reuse genuine passing evidence when relevant
+  source, artifacts, locks, toolchain, and interfaces match.
+- Keep protected PR delivery and truthful checks. Inspect current GitHub
+  protection; never forge a pass, remove protection, or bypass executable gates.
+  Narrow CI paths must be implemented through normal reviewed PRs with positive
+  and negative tests. Existing broader gates remain enforced until changed.
+- Use an immutable protected-main artifact and supported updater/component
+  installer with a known predecessor and concrete rollback. Reuse valid recovery
+  evidence within its freshness limits; persistence/recovery changes require
+  fresh compatibility checks. Independent components do not require central
+  maintenance or redeployment. After release verify bounded health and the
+  actual affected workflow; member rendering changes need member-device review.
+- Preserve ownership/isolation, encryption, append-only history, credentials,
+  recipient restrictions, independent approvals, and audited effects. Candidate
+  behavior tests run only in isolated CI or an authorized disposable lab. Never
+  edit an installed release or live state to make checks pass.
+- Accept ordinary-language authorization. One request may authorize merge and
+  deployment; do not ask again. Merge alone does not authorize deployment,
+  enrollment, writes, migration, native permissions, or unrelated live repairs.
+- Diagnose first and preserve requested read/write capabilities. Prepare artifacts
+  before short-lived handoffs or unavoidable OAuth/device consent. Resolve
+  in-scope blockers, serialize shared runtime mutations, and preserve unrelated
+  work. Provider-write tests need permission; another adult owns their consent.
+- Report checked, merged, deployed, and verified usable distinctly. A saved
+  setting or generic health cannot prove the requested outcome. Recover promptly
+  after a failed release; an unchanged original fault remains incomplete.
+
 ## Working rules
 
 - Start each change from current protected `main`, use one `codex/` branch and one pull request, and preserve unrelated changes. Never rewrite published history, force-push, or push directly to `main`.

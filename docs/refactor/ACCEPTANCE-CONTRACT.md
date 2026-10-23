@@ -1,3 +1,11 @@
+> Current owner policy (2026-10-22): the fast delivery policy in `AGENTS.md`
+> supersedes blanket validation/readiness ceremonies in this document. Select
+> checks for changed contracts and actual protected gates, reuse valid evidence,
+> and verify the requested workflow. Privacy, ownership, encryption, append-only
+> history, credential handling, independent approvals, and audited effects remain
+> mandatory. Executable updater/CI guards remain enforced until legitimately
+> updated through a protected PR.
+
 # Release acceptance contract
 
 Targeted development amendment (2026-10-21), **MODERNIZE** for AC-21 under
