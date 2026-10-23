@@ -142,10 +142,8 @@ def _run_git(
                 [process.stdout], [], [], min(0.1, remaining)
             )
             if not readable:
-                if process.poll() is not None and not _process_group_exists(
-                    process.pid
-                ):
-                    break
+                # Git may exit after select times out, leaving unread bytes in
+                # the pipe. Only EOF ends this bounded drain, never exit alone.
                 continue
             chunk = os.read(process.stdout.fileno(), 64 * 1024)
             if not chunk:
@@ -230,10 +228,8 @@ def _run_git_tree_records(repository: Path, commit: str) -> tuple[bytes, ...]:
                 [process.stdout], [], [], min(0.1, remaining)
             )
             if not readable:
-                if process.poll() is not None and not _process_group_exists(
-                    process.pid
-                ):
-                    break
+                # Git may exit after select times out, leaving unread bytes in
+                # the pipe. Only EOF ends this bounded drain, never exit alone.
                 continue
             chunk = os.read(process.stdout.fileno(), 64 * 1024)
             if not chunk:
