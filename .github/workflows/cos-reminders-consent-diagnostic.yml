@@ -1,0 +1,45 @@
+name: Isolated Reminders consent diagnosis
+
+on:
+  push:
+    branches: [codex/cos-reminders-consent-callback]
+
+permissions:
+  contents: read
+
+jobs:
+  consent-boundary:
+    runs-on: macos-15
+    timeout-minutes: 12
+    env:
+      ADMINME_TEST_MODE: '1'
+      ADMINME_ISOLATED_CONSENT_DIAGNOSTIC: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - name: Install locked isolated environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+      - name: Observe real consent request and callback stages
+        run: >-
+          poetry run pytest -p no:cacheprovider -s -q
+          --basetemp="$RUNNER_TEMP/consent-diagnostic"
+          tests/diagnostics/test_cos_reminders_consent_macos.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: isolated-consent-diagnostic
+          path: |
+            ${{ runner.temp }}/consent-diagnostic/**/diagnostic.jsonl
+            ${{ runner.temp }}/consent-diagnostic/**/sample.txt
+            ${{ runner.temp }}/consent-diagnostic/**/tcc.log
+            ${{ runner.temp }}/consent-diagnostic/**/result.json
+          if-no-files-found: error
+          retention-days: 3
