@@ -4048,10 +4048,11 @@ function financeChoicesCard(books) {
   }
   async function save(path, body, submit = null) {
     if (busy) return; busy = true; if (submit) submit.disabled = true; status.textContent = "Saving your explicit choice…";
+    const notice = submit?.closest("form")?.querySelector(".choice-save-status"); if (notice) notice.textContent = status.textContent;
     try {
       await api(endpoint + path, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) });
       closeActionDialog(); await load();
-    } catch (error) { status.textContent = `${error.message} Save is unconfirmed. Retry this same choice or refresh to inspect saved choices.`; }
+    } catch (error) { status.textContent = `${error.message} Save is unconfirmed. Retry this same choice or refresh to inspect saved choices.`; if (notice) notice.textContent = status.textContent; }
     finally { busy = false; if (submit) submit.disabled = false; }
   }
   add.addEventListener("click", () => {
@@ -4064,7 +4065,8 @@ function financeChoicesCard(books) {
     const priority = select(["unranked", "essential", "preferred", "optional"], "Choose a priority");
     const submit = text("button", "Save my goal", "button button-primary"); submit.type = "submit";
     const requestId = crypto.randomUUID(); const goalId = crypto.randomUUID(); let pending = null;
-    form.append(field("Goal name", label), field("Goal type", kind), field("Target in USD (optional)", amount), field("Target date (optional)", due), field("Priority", priority), submit);
+    const notice = text("p", "", "choice-save-status"); notice.setAttribute("role", "status");
+    form.append(field("Goal name", label), field("Goal type", kind), field("Target in USD (optional)", amount), field("Target date (optional)", due), field("Priority", priority), submit, notice);
     form.addEventListener("submit", (event) => {
       event.preventDefault(); if (busy) return;
       if (!pending) {
@@ -4084,7 +4086,8 @@ function financeChoicesCard(books) {
     dimension.addEventListener("change", () => { const replacement = select(preferenceOptions[dimension.value] || [], "Choose your preference"); option.replaceChildren(...replacement.childNodes); });
     const submit = text("button", "Save my preference", "button button-primary"); submit.type = "submit";
     const requestId = crypto.randomUUID(); let pending = null; let selectedDimension = null;
-    form.append(field("Topic", dimension), field("Your explicit choice", option), submit);
+    const notice = text("p", "", "choice-save-status"); notice.setAttribute("role", "status");
+    form.append(field("Topic", dimension), field("Your explicit choice", option), submit, notice);
     form.addEventListener("submit", (event) => {
       event.preventDefault(); if (busy) return;
       if (!pending) { selectedDimension = dimension.value; const prior = current.items.find((item) => item.kind === "preference" && item.record.dimension === selectedDimension); pending = { request_id: requestId, book_id: books.book_id, publication_id: current.publication.publication_id, expected_event_id: prior?.event_id || null, selected_option_id: option.value }; dimension.disabled = true; option.disabled = true; }
