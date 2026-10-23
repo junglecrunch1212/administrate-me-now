@@ -57,6 +57,7 @@ export function registerSelfReminderTools(api: OpenClawPluginApi, runtime: Plugi
     async execute(id, params) {
       const input = await takeReminderInput(runtime, id, context);
       if (params.action === "status") {
+        if (typeof params.reminder_event_id !== "string") throw new Error("Invalid reminder reference");
         const result = await runtime.transport.request<RecordValue>(`${BASE}/status`, { ...input, body: "Check requested reminder", reminder_event_id: params.reminder_event_id });
         const { job_id: jobId, ...receipt } = result;
         if (result.status !== "waiting") return toolResult(receipt);
