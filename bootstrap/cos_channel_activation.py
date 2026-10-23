@@ -29,6 +29,10 @@ from adminme.adapters.cos_channel_acquisition import (
     policy_from_config,
     restrict_cos_adapter_config,
 )
+from adminme.adapters.cos_google_workspace import (
+    selected_entries as selected_workspace_entries,
+    validate_authorized_change as validate_workspace_change,
+)
 from adminme.adapters.member_google_connections import (
     Access,
     connection_config,
@@ -357,6 +361,8 @@ def prepare_configuration(
         raise CoSActivationError(
             "the CoS overlay does not preserve the original selection"
         )
+    selected_workspace = selected_workspace_entries(requested)
+    prior_workspace = selected_workspace_entries(previous)
     original_ids = [
         entry.get("id")
         for entry in previous.get("adapters", [])
@@ -374,10 +380,11 @@ def prepare_configuration(
         )
         or len(set(original_ids)) != len(original_ids)
         or len(set(requested_ids)) != len(requested_ids)
-        or set(original_ids) != set(requested_ids)
+        or not set(original_ids) <= set(requested_ids)
+        or not (set(requested_ids) - set(original_ids)) <= selected_workspace.keys()
     ):
         raise CoSActivationError(
-            "channel activation cannot add or remove adapter records"
+            "channel activation can add only exact CoS Google sources and cannot remove records"
         )
     result = restrict_cos_adapter_config(requested)
     selected_google = selected_entries(result)
@@ -397,6 +404,17 @@ def prepare_configuration(
                 config.get("permission_scope") or []
             ):
                 raise CoSActivationError("live Gmail requires an enrolled send grant")
+        elif entry.get("id") in selected_workspace:
+            if entry["id"] in original_ids and entry["id"] not in prior_workspace:
+                before = next(
+                    item for item in previous["adapters"] if item["id"] == entry["id"]
+                )
+                if before.get("config") != config or before.get("kind") != entry.get(
+                    "kind"
+                ):
+                    raise CoSActivationError(
+                        "cannot repurpose an existing adapter as a CoS Google source"
+                    )
         else:
             before = next(
                 item
@@ -1985,6 +2003,11 @@ class CoSChannelActivator:
                     original,
                     request.adapter_config,
                     owner_member_id=request.owner_member_id,
+                    owner_authorization_sha256=request.owner_authorization_sha256,
+                )
+                validate_workspace_change(
+                    original,
+                    request.adapter_config,
                     owner_authorization_sha256=request.owner_authorization_sha256,
                 )
             except ValueError as exc:

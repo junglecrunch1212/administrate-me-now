@@ -139,12 +139,19 @@ def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         selected_entries,
     )
 
+    from adminme.adapters.cos_google_workspace import (
+        selected_entries as service_entries,
+    )
+
     member_sources = selected_entries(result)
+    service_sources = service_entries(result)
     for item in entries:
         if not isinstance(item, dict):
             raise ValueError("CoS acquisition adapter inventory is malformed")
         if item.get("id") in member_sources:
             item["config"] = member_sources[item["id"]]["config"]
+        elif item.get("id") in service_sources:
+            pass  # Preserve the exact selected service source and an explicit pause.
         elif item is not entry:
             item["enabled"] = False
     # A member's explicit connection pause wins. Settings cannot enable a

@@ -811,3 +811,73 @@ scope does not assert compatibility for a retained helper or waive an actual
 deployment prerequisite. Member-device browser
 verification is read-only acceptance after authorized activation, not a place
 to test candidate code.
+
+### CoS account Calendar and Tasks acquisition
+
+`cos-google-workspace-v1` MODERNIZES the delegation-only service-source setup:
+CoS may use her actual Google account through separate installed-app OAuth grants
+for `calendar-read` and `tasks-read`. This PRESERVES the CoS service principal,
+service-private facts, the existing Gmail read/send grant, member credentials,
+selected member access, and the guarded activation/recovery process. It does not
+impersonate a member or grant Calendar/Tasks writes. Drive, Contacts and provider
+write workflows remain later deliverables; this acquisition slice is not a claim
+that the complete CoS Google workspace is ready.
+
+After deploying the protected release, enroll each required purpose with
+`python -m bootstrap.google_oauth <private-client-file> --cos-service --purpose
+calendar-read` (then `tasks-read`). The default `--cos-service` behavior remains
+Gmail read/send. Each workspace purpose uses its own Keychain name and receipt;
+it never overwrites the mail/member secret or requests incremental grant union.
+The scopes are the corresponding `calendar.readonly` or `tasks.readonly` plus
+`userinfo.email` to prove the consented account without granting Gmail access.
+Broader, incomplete and mismatched-account grants fail before secret storage.
+Google account consent is still necessary; administrative app approval does not
+replace it. Revoking an entire OAuth application at Google may affect all its
+purpose grants, so recovery pauses a source rather than revoking unrelated tokens.
+
+Verify the intended CoS browser profile and the site's actual account before
+opening the private authorization URL. Never fall back to a member profile or
+copy session credentials. Keep account coordinates, authorization URL, OAuth
+client file, selection and output private and outside Git. The expected account
+is entered locally, and the helper verifies Google's returned identity.
+
+Prepare a private JSON `CoSGoogleSelection` with `adapter_id`, `purpose`,
+`provider_account_id`, `resource_id`, `credential_reference` and the existing
+owner-authorized operation's `owner_authorization_sha256`. Use the provider's
+exact existing calendar/task-list ID, not `primary`, `@default`, a name or `*`.
+Run `python -m bootstrap.cos_google_workspace --selection <private-selection>
+--previous-config <private-adapters-copy> --output <new-private-prepared-config>`.
+The command refreshes the exact purpose token, rechecks the actual Google account,
+reads the exact resource metadata and at most one source item, then writes a new
+0600 preparation file. Calendar ownership must be `owner`; a shared member
+calendar is not relabeled CoS-owned. No resource is created, no provider write
+occurs, and active configuration is untouched. Repeat using the prior prepared
+file as input to add the other purpose. No source contents appear in its summary.
+
+Use the resulting inventory as `ActivationRequest.adapter_config` for the existing
+`bootstrap.cos_channel_activation` command. Its authorizing household principal
+and receipt must cover new/changed sources; it admits only the exact selected
+CoS adapters and retains all existing adapter records. Existing member selections,
+Gmail route/send controls, observation containment, backup and rollback still
+apply. Do not edit active configuration by hand. A new or changed Gmail recipient,
+member account, write scope or resource cannot be smuggled into this setup.
+
+The visible outcome is successful Calendar/Tasks acquisition with service-private
+facts after activation, not just a stored token or successful preparation. Check
+those configured adapter states and new source facts within the bounded activation
+window. On regression use the guarded operation's recovery; to revoke acquisition,
+remove the exact selection or pause its adapter through an owner-authorized
+activation. Retain the adapter record and append-only history. An older runtime
+will keep these unrecognized CoS sources disabled under its acquisition ceiling.
+
+Identity and scope references: [Google userinfo](https://developers.google.com/resources/api-libraries/documentation/oauth2/v2/python/latest/oauth2_v2.userinfo.html)
+and [Google OAuth scopes](https://developers.google.com/identity/protocols/oauth2/scopes).
+
+The `cos-google-workspace` release scope reuses the existing protected Google
+connections worker on both Linux and macOS. It runs separate-purpose enrollment,
+credential substitution and scope rejection, guarded setup/activation, actual
+Calendar/Tasks adapter polling into the encrypted event log, existing member/mail
+regressions, supervisor recovery, affected pack validators and type checks. The
+selector requires the component and its proof files as regular files in the head
+and actual merge tree, and binds every unrelated byte and mode; dependency,
+bridge, runtime, persistence or unknown-file changes retain system validation.
