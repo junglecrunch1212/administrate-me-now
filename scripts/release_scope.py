@@ -227,6 +227,7 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "openclaw/administrateme/src/provenance.ts",
         "openclaw/administrateme/src/service-private.ts",
         "openclaw/administrateme/workspace/service-private/AGENTS.md",
+        "openclaw/administrateme/workspace/service-private/IDENTITY.md",
         "openclaw/administrateme/scripts/validate-contract.mjs",
         COS_SERVICE_WORK_NATIVE_INSTALL,
     }
