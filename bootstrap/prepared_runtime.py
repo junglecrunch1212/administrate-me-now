@@ -47,6 +47,7 @@ def runtime_artifact_fingerprint(release: Path) -> str:
     count = 0
     size = 0
     inventory: dict[str, tuple[int, ...]] = {}
+    interpreters: dict[Path, tuple[int, ...]] = {}
 
     def record(row: list[str | int]) -> None:
         nonlocal count
@@ -95,6 +96,7 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                             or interpreter.st_mode & 0o022
                         ):
                             raise PreparedRuntimeError("prepared interpreter is unsafe")
+                        interpreters[resolved] = _coordinate(interpreter)
                         content = hashlib.sha256()
                         while chunk := os.read(fd, 1024 * 1024):
                             size += len(chunk)
@@ -199,6 +201,11 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                 finally:
                     for descriptor in reversed(descriptors):
                         os.close(descriptor)
+            for interpreter, coordinate in interpreters.items():
+                if _coordinate(interpreter.lstat()) != coordinate:
+                    raise PreparedRuntimeError(
+                        "prepared interpreter changed during inventory"
+                    )
             for relative, coordinate in inventory.items():
                 if (
                     _coordinate(os.stat(relative, dir_fd=root, follow_symlinks=False))
