@@ -10,14 +10,20 @@ from fastapi.testclient import TestClient
 import pytest
 
 from adminme.cos_response_assurance import AUDIT_TYPES, cos_provider_effect_counts
+from adminme.cos_reminder_work import CONSUMER, reminder_work_id
+from adminme.cos_self_replies import self_reply_session
 from adminme.events.envelope import EventEnvelope
 from adminme.historical_attribution import _cos_response_owner_matches
 from adminme.openclaw_topology import member_agent_id
 from adminme.runtime.application import create_application
+from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 from tests.acceptance.test_cos_self_replies import _activate, _inbound, _send, ENDPOINT
 from tests.acceptance.test_cos_response_execution import (
     A,
+    B,
     AUTH,
+    HEADERS,
+    IMESSAGE_ACCOUNT,
     _settings,
     _events,
     _provider_assurance,
@@ -25,6 +31,42 @@ from tests.acceptance.test_cos_response_execution import (
 
 BASE = "/api/openclaw/v1/cos-reminders"
 JOB = "isolated-reminder-timer"
+
+
+def receipt(
+    client: TestClient, request: dict[str, Any], reminder_id: str
+) -> dict[str, Any]:
+    result = client.post(
+        BASE + "/status",
+        headers=AUTH,
+        json={
+            **{key: value for key, value in request.items() if key != "due_at"},
+            "reminder_event_id": reminder_id,
+        },
+    )
+    assert result.status_code == 200, result.text
+    return result.json()
+
+
+def work(client: TestClient, readback: dict[str, Any]) -> dict[str, Any]:
+    runtime = client.app.state.runtime
+    event_id = (
+        readback["terminal_event_id"]
+        or readback["cancellation_event_id"]
+        or readback["binding_event_id"]
+        or readback["reminder_event_id"]
+    )
+    client.portal.call(runtime.wait_for_subscriber, CONSUMER, event_id)
+    row = (
+        runtime.projections.connection("tasks")
+        .execute(
+            "SELECT * FROM tasks WHERE tenant_id=? AND task_id=?",
+            (runtime.settings.instance.tenant_id, readback["task_id"]),
+        )
+        .fetchone()
+    )
+    assert row is not None
+    return dict(row)
 
 
 def enable(client: TestClient) -> None:
@@ -91,6 +133,21 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
         authority = _activate(client, monkeypatch)
         enable(client)
         request, callback, due = prepare(client)
+        initial_receipt = receipt(client, request, callback["reminder_event_id"])
+        initial_work = work(client, initial_receipt)
+        assert initial_receipt["status"] == "waiting"
+        assert initial_work["status"] == "deferred"
+        assert (
+            initial_work["owner_scope"] == f"service-private:{COS_SERVICE_PRINCIPAL_ID}"
+        )
+        assert initial_work["owner_member_id"] is None
+        assert initial_work["owner_party_id"] == COS_PARTY_ID
+        assert initial_work["created_by"] == COS_SERVICE_PRINCIPAL_ID
+        assert request["body"] not in json.dumps(initial_work)
+        assert (
+            json.loads(initial_work["source_authorities_json"])[0]["source_event_id"]
+            == callback["reminder_event_id"]
+        )
         repeated = client.post(BASE + "/prepare", headers=AUTH, json=request)
         assert repeated.json()["reminder_event_id"] == callback["reminder_event_id"]
         assert (
@@ -141,6 +198,17 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
             json={"claim_id": claim.json()["claim_id"], "status": terminal_status},
         )
         assert terminal.status_code == 200, terminal.text
+        terminal_receipt = receipt(client, request, callback["reminder_event_id"])
+        terminal_work = work(client, terminal_receipt)
+        assert terminal_receipt["status"] == terminal_status
+        assert terminal_receipt["automatic_retry_allowed"] is False
+        assert terminal_work["status"] == (
+            "done" if terminal_status == "sent" else "waiting_on"
+        )
+        assert terminal_work["completed_by"] is None
+        assert terminal_work["completed_by_party_id"] == (
+            COS_PARTY_ID if terminal_status == "sent" else None
+        )
         repeated = client.post(BASE + "/fire", headers=AUTH, json=callback)
         assert repeated.status_code == 200, repeated.text
         assert repeated.json()["status"] == terminal_status
@@ -173,6 +241,24 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
                 cos_provider_effect_counts(changed)["approval_correlation_missing"] > 0
             )
     with TestClient(create_application(settings)) as client:
+        recovered = work(
+            client, receipt(client, request, callback["reminder_event_id"])
+        )
+        assert recovered["status"] == terminal_work["status"]
+        created = client.portal.call(
+            _events, client.app.state.runtime, ["task.created"]
+        )
+        assert (
+            len(
+                [
+                    event
+                    for event in created
+                    if event["payload"]["task_id"]
+                    == reminder_work_id(callback["reminder_event_id"])
+                ]
+            )
+            == 1
+        )
         repeated = client.post(BASE + "/fire", headers=AUTH, json=callback)
         assert repeated.status_code == 200, repeated.text
         assert repeated.json()["status"] == terminal_status
@@ -213,6 +299,12 @@ def test_reminder_denies_revoked_wrong_or_stale_execution(
             cancel["reminder_event_id"] = callback["reminder_event_id"]
             response = client.post(BASE + "/cancel", headers=AUTH, json=cancel)
             assert response.status_code == 200, response.text
+            assert (
+                work(client, receipt(client, request, callback["reminder_event_id"]))[
+                    "status"
+                ]
+                == "cancelled"
+            )
         elif change == "host":
             path = (
                 client.app.state.runtime.settings.instance.config_dir.parent
@@ -277,3 +369,99 @@ def test_new_timed_permission_is_opt_in_and_source_content_cannot_be_replaced(
             "session_key": f"agent:{member_agent_id(A)}:cron:{JOB}:trigger",
         }
         assert client.post(BASE + "/fire", json=callback).status_code == 401
+
+
+def test_member_reminder_receipt_is_exact_scoped_and_survives_send_revocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    other_actor = "+12025550102"  # fixture:tenant_data:ok
+    settings.openclaw_actor_identities[f"imessage|{IMESSAGE_ACCOUNT}|{other_actor}"] = B
+    with TestClient(create_application(settings)) as client:
+        _activate(client, monkeypatch)
+        enable(client)
+        request, callback, _ = prepare(client)
+        result = receipt(client, request, callback["reminder_event_id"])
+        recorded = work(client, result)
+        other_grant = client.post(
+            "/api/member/v1/cos/delegations",
+            headers={"Tailscale-User-Login": "response-b.example.test"},
+            json={
+                "request_id": "other-receipt-read",
+                "context_scope": "member_private",
+                "permissions": ["read_context"],
+            },
+        )
+        assert other_grant.status_code in {200, 201}, other_grant.text
+        other = {
+            **{key: value for key, value in request.items() if key != "due_at"},
+            "reminder_event_id": callback["reminder_event_id"],
+            "provenance": {
+                **request["provenance"],
+                "actor_id": other_actor,
+                "agent_id": member_agent_id(B),
+                "session_key": self_reply_session(B, IMESSAGE_ACCOUNT, other_actor),
+            },
+        }
+        assert (
+            client.post(BASE + "/status", headers=AUTH, json=other).status_code == 404
+        )
+        assert (
+            client.post(
+                "/api/openclaw/v1/tools/service-private-state",
+                headers=AUTH,
+                json={
+                    "provenance": request["provenance"],
+                    "task_id": result["task_id"],
+                },
+            ).status_code
+            == 403
+        )
+        assert set(result) == {
+            "reminder_event_id",
+            "task_id",
+            "status",
+            "due_at",
+            "job_id",
+            "source_message_event_id",
+            "binding_event_id",
+            "cancellation_event_id",
+            "approval_event_id",
+            "terminal_event_id",
+            "automatic_retry_allowed",
+        }
+        path = settings.instance.config_dir.parent / "openclaw/runtime/openclaw.json"
+        config = json.loads(path.read_text())
+        config["plugins"]["entries"]["administrateme"]["config"][
+            "scheduledSelfReminderBindings"
+        ] = []
+        path.write_text(json.dumps(config))
+        assert (
+            receipt(client, request, callback["reminder_event_id"])["status"]
+            == "waiting"
+        )
+        grant_id = json.loads(recorded["source_authorities_json"])[0][
+            "authority_grant_id"
+        ]
+        revoked = client.request(
+            "DELETE",
+            f"/api/member/v1/cos/delegations/{grant_id}",
+            headers=HEADERS,
+            json={"request_id": "reminder-grant-revoke", "reason": "fixture"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        denied = client.post(
+            BASE + "/status",
+            headers=AUTH,
+            json={
+                **{key: value for key, value in request.items() if key != "due_at"},
+                "reminder_event_id": callback["reminder_event_id"],
+            },
+        )
+        assert denied.status_code == 403
+        assert (
+            client.portal.call(
+                client.app.state.runtime.event_log.get, callback["reminder_event_id"]
+            )
+            is not None
+        )
