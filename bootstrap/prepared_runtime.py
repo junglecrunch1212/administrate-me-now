@@ -78,10 +78,14 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                 target = os.readlink(name, dir_fd=descriptor)
                 resolved = (release / path).resolve(strict=True)
                 if not resolved.is_relative_to(release.resolve()):
-                    if (
+                    interpreter_alias = (
                         re.fullmatch(r"\.venv/bin/python(?:3(?:\.[0-9]+)?)?", path)
-                        is None
-                    ):
+                        is not None
+                        or path == ".venv/bin/\U0001d70bthon"
+                    )
+                    if not interpreter_alias or resolved != (
+                        release / ".venv/bin/python"
+                    ).resolve(strict=True):
                         raise PreparedRuntimeError(
                             "prepared dependency link leaves its release"
                         )
