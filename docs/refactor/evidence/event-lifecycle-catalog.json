@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 360,
-    "technical_event_types": 287,
+    "technical_event_schemas": 365,
+    "technical_event_types": 291,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -12981,6 +12981,180 @@
     },
     {
       "additional_properties": false,
+      "event_type": "cos.reply.reminder_authorized",
+      "family": "external_write",
+      "properties": {
+        "approval_event_id": {
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "authorization_method": {
+          "const": "requested_self_reminder",
+          "default": "requested_self_reminder",
+          "title": "Authorization Method",
+          "type": "string"
+        },
+        "authorized_at": {
+          "title": "Authorized At",
+          "type": "string"
+        },
+        "automatic_retry_allowed": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry Allowed",
+          "type": "boolean"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "reminder_binding_event_id": {
+          "title": "Reminder Binding Event Id",
+          "type": "string"
+        },
+        "reminder_event_id": {
+          "title": "Reminder Event Id",
+          "type": "string"
+        },
+        "self_reply_binding": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Self Reply Binding",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "title": "Source Message Event Id",
+          "type": "string"
+        },
+        "standing_authorization_event_id": {
+          "title": "Standing Authorization Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "approval_event_id",
+        "standing_authorization_event_id",
+        "source_message_event_id",
+        "self_reply_binding",
+        "reminder_event_id",
+        "reminder_binding_event_id",
+        "content_fingerprint",
+        "authorized_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reply.reminder_bound",
+      "family": "external_write",
+      "properties": {
+        "job_id": {
+          "pattern": "^[a-zA-Z0-9_-]{1,120}$",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "reminder_event_id": {
+          "title": "Reminder Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "reminder_event_id",
+        "job_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reply.reminder_cancelled",
+      "family": "external_write",
+      "properties": {
+        "cancelled_at": {
+          "title": "Cancelled At",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "reminder_event_id": {
+          "title": "Reminder Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "reminder_event_id",
+        "cancelled_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reply.reminder_requested",
+      "family": "external_write",
+      "properties": {
+        "activation_event_id": {
+          "title": "Activation Event Id",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "due_at": {
+          "title": "Due At",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provenance": {
+          "additionalProperties": true,
+          "title": "Provenance",
+          "type": "object"
+        },
+        "requested_at": {
+          "title": "Requested At",
+          "type": "string"
+        },
+        "self_reply_binding": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Self Reply Binding",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "title": "Source Message Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "source_message_event_id",
+        "self_reply_binding",
+        "activation_event_id",
+        "provenance",
+        "body",
+        "due_at",
+        "requested_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "cos.response.approved",
       "family": "external_write",
       "properties": {
@@ -13221,6 +13395,179 @@
         "expires_at"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.response.approved",
+      "family": "external_write",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "string"
+        },
+        "authorization_method": {
+          "default": "exact",
+          "enum": [
+            "exact",
+            "standing_self_reply",
+            "requested_self_reminder"
+          ],
+          "title": "Authorization Method",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "channel": {
+          "enum": [
+            "email",
+            "imessage"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-plain-text-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_account_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "recipient": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Recipient",
+          "type": "string"
+        },
+        "reminder_binding_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reminder Binding Event Id"
+        },
+        "reminder_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reminder Event Id"
+        },
+        "reply_index": {
+          "default": 0,
+          "maximum": 15,
+          "minimum": 0,
+          "title": "Reply Index",
+          "type": "integer"
+        },
+        "self_reply_binding": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Reply Binding"
+        },
+        "service_channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Service Channel Id",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Message Event Id"
+        },
+        "standing_authorization_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Standing Authorization Event Id"
+        },
+        "subject": {
+          "maxLength": 300,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "member_id",
+        "channel",
+        "service_channel_id",
+        "provider_account_id",
+        "recipient",
+        "subject",
+        "body",
+        "content_fingerprint",
+        "policy_event_id",
+        "policy_revision",
+        "approved_at",
+        "expires_at"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,

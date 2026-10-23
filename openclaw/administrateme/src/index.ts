@@ -6,6 +6,7 @@ import { registerDashboard } from "./dashboard.js";
 import { registerHooks } from "./hooks.js";
 import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
+import { registerSelfReminderTools } from "./self-reminders.js";
 import { AdministrateMeTransport } from "./transport.js";
 import { registerCosApprovalRelay } from "./cos-approval-relay.js";
 import { registerCosPermissionPreflight } from "./cos-permission-preflight.js";
@@ -34,6 +35,7 @@ export default definePluginEntry({
     registerDashboard(api, runtime);
     if (registrationMode === "discovery") return;
     registerTools(api, runtime);
+    registerSelfReminderTools(api, runtime);
     if (registrationMode === "tool-discovery") return;
     registerCommands(api, runtime);
     registerHooks(api, runtime);

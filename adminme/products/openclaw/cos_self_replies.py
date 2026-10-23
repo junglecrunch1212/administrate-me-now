@@ -66,7 +66,7 @@ def _host_bindings(runtime: Any) -> list[str]:
 
 
 async def _context(
-    body: SelfReplyRequest, request: Request
+    body: SelfReplyRequest, request: Request, *, scheduled: bool = False
 ) -> tuple[Any, Any, dict[str, Any], str]:
     session = seam._session(request, body.provenance)
     if session.auth_role != "principal":
@@ -117,13 +117,13 @@ async def _context(
         age = (datetime.now(timezone.utc) - submitted).total_seconds()
     except (KeyError, TypeError, ValueError):
         age = -1
-    if not 0 <= age <= 3600:
+    if age < 0 or (not scheduled and age > 3600):
         raise HTTPException(403, "inbound reply authority expired")
     activation = await runtime_live_authorization(
         runtime,
         channel="imessage",
         provider_account_id=p.account_id,
-        requested_at=source["payload"]["submitted_at"],
+        requested_at=None if scheduled else source["payload"]["submitted_at"],
     )
     if not activation.get("authorized") or binding not in activation.get(
         "self_reply_bindings", []

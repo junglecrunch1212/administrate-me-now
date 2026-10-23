@@ -3934,7 +3934,10 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     from adminme.products.openclaw.cos_self_replies import router as self_reply_router
 
     app.include_router(cos_response_router)
+    from adminme.products.openclaw.cos_reminders import router as reminder_router
+
     app.include_router(self_reply_router)
+    app.include_router(reminder_router)
     app.include_router(member_router)
     app.include_router(member_cos_router)
     app.include_router(system_router)

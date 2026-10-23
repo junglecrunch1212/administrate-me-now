@@ -55,21 +55,36 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         return False
     approval = approved.get("payload") or {}
     scope = f"private:{member}"
-    standing = approval.get("authorization_method") == "standing_self_reply"
+    standing = approval.get("authorization_method") in {
+        "standing_self_reply",
+        "requested_self_reminder",
+    }
     if standing:
         from adminme.cos_response_assurance import _standing_valid
 
         references = [
             await event_log.get(approval.get(key, ""))
-            for key in ("standing_authorization_event_id", "source_message_event_id")
+            for key in (
+                "standing_authorization_event_id",
+                "source_message_event_id",
+                "reminder_event_id",
+                "reminder_binding_event_id",
+            )
+            if approval.get(key)
         ]
+        if approval.get("reminder_event_id"):
+            reminder = await event_log.get(approval["reminder_event_id"])
+            if reminder is not None:
+                references.append(
+                    await event_log.get(reminder["payload"]["activation_event_id"])
+                )
         if not _standing_valid(
             approved, {row["event_id"]: row for row in references if row is not None}
         ):
             return False
     return bool(
         attempt.get("schema_version") == 1
-        and approved.get("schema_version") in ({2} if standing else {1, 2})
+        and approved.get("schema_version") in ({2, 3} if standing else {1, 2, 3})
         and all(
             row.get("source_adapter") == "openclaw-plugin"
             and row.get("source_account_id") == "cos-response"

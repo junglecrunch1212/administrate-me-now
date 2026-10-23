@@ -23,6 +23,10 @@ CONTEXT_TYPES = {
     POLICY_EVENT_TYPE,
     "openclaw.approval.received",
     "cos.reply.openclaw_authorized",
+    "cos.reply.reminder_requested",
+    "cos.reply.reminder_bound",
+    "cos.reply.reminder_cancelled",
+    "cos.reply.reminder_authorized",
     "cos.channels.activated",
     "cos.channels.deactivated",
     "triage.intent.submitted",
@@ -61,6 +65,7 @@ def _standing_valid(
     from adminme.cos_self_replies import self_reply_binding
 
     payload = approved.get("payload") or {}
+    scheduled = payload.get("authorization_method") == "requested_self_reminder"
     activation = by_id.get(str(payload.get("standing_authorization_event_id")), {})
     source = by_id.get(str(payload.get("source_message_event_id")), {})
     try:
@@ -79,11 +84,17 @@ def _standing_valid(
         approved_at = _time(payload["approved_at"])
         enabled = _time(grant.enabled_at)
         return bool(
-            payload.get("authorization_method") == "standing_self_reply"
+            payload.get("authorization_method")
+            in {"standing_self_reply", "requested_self_reminder"}
             and payload.get("channel") == "imessage"
             and payload.get("subject") == ""
             and approved.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
-            and approved.get("causation_id") == activation.get("event_id")
+            and approved.get("causation_id")
+            == (
+                payload.get("reminder_event_id")
+                if scheduled
+                else activation.get("event_id")
+            )
             and activation.get("type") == "cos.channels.activated"
             and activation.get("actor_identity") == grant.operator_principal_id
             and activation.get("tenant_id") == approved.get("tenant_id")
@@ -103,14 +114,90 @@ def _standing_valid(
             and submitted is not None
             and approved_at is not None
             and enabled is not None
-            and enabled <= submitted <= approved_at
-            and (approved_at - submitted).total_seconds() <= 3600
+            and submitted <= approved_at
+            and enabled <= (approved_at if scheduled else submitted)
+            and (
+                _reminder_valid(approved, by_id, before=cutoff)
+                if scheduled
+                else (approved_at - submitted).total_seconds() <= 3600
+            )
             and str(activation["event_id"])
             < str(source["event_id"])
             < str(approved["event_id"])
         )
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def _reminder_valid(
+    approved: dict[str, Any], by_id: dict[str, dict[str, Any]], *, before: str
+) -> bool:
+    payload = approved["payload"]
+    reminder = by_id.get(str(payload.get("reminder_event_id")), {})
+    bound = by_id.get(str(payload.get("reminder_binding_event_id")), {})
+    source = by_id.get(str(payload.get("source_message_event_id")), {})
+    saved = reminder.get("payload") or {}
+    origin = by_id.get(str(saved.get("activation_event_id")), {})
+    from adminme.cos_channel_operation import CosChannelActivationV2
+
+    try:
+        origin_grant = CosChannelActivationV2.model_validate(origin.get("payload"))
+    except (TypeError, ValueError):
+        return False
+    origin_enabled = _time(origin_grant.enabled_at)
+    submitted = _time(source.get("payload", {}).get("submitted_at"))
+    requested = _time(saved.get("requested_at"))
+    due = _time(saved.get("due_at"))
+    approved_at = _time(payload.get("approved_at"))
+    return bool(
+        reminder.get("type") == "cos.reply.reminder_requested"
+        and _private(reminder, approved)
+        and reminder.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
+        and reminder.get("causation_id") == source.get("event_id")
+        and saved.get("member_id") == payload.get("member_id")
+        and saved.get("source_message_event_id")
+        == payload.get("source_message_event_id")
+        and origin.get("type") == "cos.channels.activated"
+        and origin.get("tenant_id") == approved.get("tenant_id")
+        and origin.get("actor_identity") == origin_grant.operator_principal_id
+        and saved.get("self_reply_binding") in origin_grant.self_reply_bindings
+        and origin_enabled is not None
+        and submitted is not None
+        and origin_enabled <= submitted
+        and str(origin.get("event_id")) < str(source.get("event_id"))
+        and saved.get("self_reply_binding") == payload.get("self_reply_binding")
+        and saved.get("body") == payload.get("body")
+        and saved.get("provenance", {}).get("account_id")
+        == payload.get("provider_account_id")
+        and saved.get("provenance", {}).get("actor_id") == payload.get("recipient")
+        and bound.get("type") == "cos.reply.reminder_bound"
+        and _private(bound, approved)
+        and bound.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
+        and bound.get("causation_id") == reminder.get("event_id")
+        and bound.get("payload", {}).get("member_id") == payload.get("member_id")
+        and bound.get("payload", {}).get("reminder_event_id")
+        == reminder.get("event_id")
+        and bound.get("payload", {}).get("job_id")
+        and submitted is not None
+        and requested is not None
+        and due is not None
+        and approved_at is not None
+        and 0 <= (requested - submitted).total_seconds() <= 3600
+        and 60 <= (due - requested).total_seconds() <= 366 * 86400
+        and 0 <= (approved_at - due).total_seconds() <= 600
+        and str(source.get("event_id"))
+        < str(reminder.get("event_id"))
+        < str(bound.get("event_id"))
+        < str(approved["event_id"])
+        and not any(
+            event.get("type") == "cos.reply.reminder_cancelled"
+            and event.get("tenant_id") == approved.get("tenant_id")
+            and event.get("payload", {}).get("reminder_event_id")
+            == reminder.get("event_id")
+            and str(event["event_id"]) < before
+            for event in by_id.values()
+        )
+    )
 
 
 def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> bool:
@@ -125,7 +212,8 @@ def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) 
             and payload.get("contract") == RESPONSE_CONTRACT
             and (
                 _standing_valid(approved, by_id)
-                if payload.get("authorization_method") == "standing_self_reply"
+                if payload.get("authorization_method")
+                in {"standing_self_reply", "requested_self_reminder"}
                 else approved.get("actor_identity") == payload.get("member_id")
             )
             and _private(approved, approved)
@@ -179,7 +267,10 @@ def _attempt_valid(
         and str(event["event_id"]) < str(attempt["event_id"])
     ]
     latest = max(preceding, key=lambda event: str(event["event_id"]), default={})
-    if approval.get("authorization_method") == "standing_self_reply":
+    if approval.get("authorization_method") in {
+        "standing_self_reply",
+        "requested_self_reminder",
+    }:
         return bool(
             _standing_valid(approved, by_id, before=str(attempt["event_id"]))
             and _private(attempt, approved)
@@ -193,7 +284,12 @@ def _attempt_valid(
             == latest.get("event_id")
             and payload.get("automatic_retry_allowed") is False
             and attempt.get("causation_id") == openclaw_id
-            and openclaw.get("type") == "cos.reply.openclaw_authorized"
+            and openclaw.get("type")
+            == (
+                "cos.reply.reminder_authorized"
+                if approval.get("authorization_method") == "requested_self_reminder"
+                else "cos.reply.openclaw_authorized"
+            )
             and openclaw.get("causation_id") == approved.get("event_id")
             and receipt.get("approval_event_id") == approved.get("event_id")
             and all(
@@ -205,6 +301,8 @@ def _attempt_valid(
                     "source_message_event_id",
                     "self_reply_binding",
                     "authorization_method",
+                    "reminder_event_id",
+                    "reminder_binding_event_id",
                 )
             )
             and receipt.get("automatic_retry_allowed") is False

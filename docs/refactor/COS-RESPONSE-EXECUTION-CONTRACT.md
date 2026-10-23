@@ -237,3 +237,47 @@ and mirror identity to avoid silent correlation failure or disclosure of
 reasoning. Source assurance loads the exact standing grant and input references
 plus activation changes; metadata-only collection otherwise loses the authority
 chain even after a valid native send.
+
+## Requested private timed reminders
+
+MODERNIZE the existing private self-reply seam: an explicit member request may
+bind one exact text and aware future time to that member's own enrolled iMessage
+endpoint. `administrateme_self_reminder` composes encrypted intent, an OpenClaw
+one-shot script timer and the existing guarded sender. It does not create a
+second scheduler, permit arbitrary scripts, enable generic `message`, or extend
+the transient one-hour reply window. A provider reminder/calendar alert alone
+is not completion of a requested timed text.
+
+Future self reminders are opt-in. The supported channel activation request's
+`allow_owner_self_reminders` field changes only that owner's exact existing
+reply bindings. `scheduledSelfReminderBindings` is the independent host ceiling;
+the durable authenticated member request supplies the exact domain intent.
+Existing recipient policy, current delegation, channel activation, observation,
+final native claim, terminal audit and no-automatic-resend behavior remain.
+Routine activation preserves the host ceiling only for retained reply bindings.
+The stored request survives a restart and ordinary reactivation; current revoked
+permissions still prevent its effect. Cancellation withdraws the request itself.
+
+The timer stores an opaque event reference, never the message or recipient. Its
+single permitted callback resolves only the bound member/agent/job/session and
+may deliver from the due time through ten minutes late. A missed window stays
+unsent. Unknown contact is never retried. Domain cancellation happens before
+best-effort timer cleanup. Confirmation requires native enabled-job readback;
+a prepared record, registration timeout or callback proposal is not scheduled.
+
+Validate the production API through request, restart, due-time enforcement,
+revocation, cancellation, exact native admission and terminal history. The
+isolated pinned-Gateway probe checks actual scoped timer creation, persistent
+restart, script tool context and one completion without a model or provider.
+It is not proof of a live iMessage delivery.
+
+Rollout has two bounded stages in one protected artifact: deploy with future
+reminders disabled and verify existing replies, then explicitly enable the
+owner's requested reminder permission. Before new reminder records exist, the
+ordinary predecessor remains the binary rollback. After use, retain the new
+schema-aware artifact and withdraw the new permission through supported channel
+activation (`allow_owner_self_reminders: false`); cancel pending requests before
+restoring the permission. Do not blindly downgrade a live log containing v3
+response approvals to a predecessor that cannot audit that authorization method.
+Verify existing reply behavior in the permission-off configuration with retained
+reminder receipts before treating that configuration as the recovery checkpoint.
