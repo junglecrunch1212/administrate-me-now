@@ -128,6 +128,11 @@ def restrict_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
 
     # Reject an orphaned connection grant, even without a test policy.
     google_policy(value)
+    from adminme.adapters.cos_google_workspace import (
+        policy_from_config as workspace_policy,
+    )
+
+    workspace_policy(value)
     if COS_CONFIG_KEY in value:
         return restrict_cos_adapter_config(value)
     policy = policy_from_adapter_config(value)
