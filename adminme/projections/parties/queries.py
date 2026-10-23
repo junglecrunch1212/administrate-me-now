@@ -116,15 +116,29 @@ def resolve_service_delegation(
     context_member_id: str | None,
     owner_party_id: str | None = None,
 ) -> ServiceRequestContext:
-    """Resolve exactly one unexpired grant with its exact approval quorum."""
+    """Resolve one current grant and its exact quorum in one SQL snapshot.
+
+    The correlated aggregation includes zero and extra approvals; it never
+    filters approvals down to the required members. No authority is cached.
+    """
 
     rows = conn.execute(
         """
-        SELECT * FROM service_delegation_grants
-         WHERE tenant_id=? AND service_principal_id=? AND context_scope=?
-           AND context_member_id IS ? AND owner_party_id IS ?
-           AND revoked_at IS NULL
-         ORDER BY grant_id
+        SELECT g.*,
+               COALESCE((
+                   SELECT json_group_array(ordered.approved_by_member_id)
+                     FROM (
+                         SELECT a.approved_by_member_id
+                           FROM service_delegation_approvals a
+                          WHERE a.tenant_id=g.tenant_id AND a.grant_id=g.grant_id
+                          ORDER BY a.approved_by_member_id
+                     ) AS ordered
+               ), '[]') AS approving_member_ids_json
+          FROM service_delegation_grants g
+         WHERE g.tenant_id=? AND g.service_principal_id=? AND g.context_scope=?
+           AND g.context_member_id IS ? AND g.owner_party_id IS ?
+           AND g.revoked_at IS NULL
+         ORDER BY g.grant_id
         """,
         (
             tenant_id,
@@ -140,14 +154,7 @@ def resolve_service_delegation(
         if _is_expired(row.get("expires_at")):
             continue
         required = tuple(json.loads(str(row["required_approvals_json"])))
-        approved = tuple(
-            str(approval[0])
-            for approval in conn.execute(
-                "SELECT approved_by_member_id FROM service_delegation_approvals "
-                "WHERE tenant_id=? AND grant_id=? ORDER BY approved_by_member_id",
-                (tenant_id, row["grant_id"]),
-            ).fetchall()
-        )
+        approved = tuple(json.loads(str(row["approving_member_ids_json"])))
         if set(required) == set(approved):
             matches.append((row, tuple(sorted(approved))))
     if len(matches) != 1:

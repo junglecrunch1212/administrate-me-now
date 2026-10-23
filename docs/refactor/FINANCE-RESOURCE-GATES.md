@@ -144,3 +144,16 @@ Final authority, publication, choice and audience checks remain synchronous
 immediately before disclosure; no grant is cached across requests. Tests revoke
 authority, transport and portal bindings during awaited reads/writes. The
 10% gate remains unchanged and unmet until a genuine passing run.
+
+
+The retained diagnostic at `ab3bcfb4` again failed the raw gate: 3.737 ms
+baseline versus 4.744 ms loaded (1.269451), with 251 admitted calls. The 720
+functional checks, 96 native checks and synthetic desktop flow passed. The
+separate CPU profile is diagnostic only. Across 50 finance calls it attributed
+132 ms cumulative time to 201 delegation resolutions; projection statement
+work was the largest measured domain cost. The next candidate resolves each
+current grant and its entire approval quorum in one SQL snapshot, preserving
+extra-approval rejection, tenant/scope predicates, ambiguity and expiry checks.
+Final authority remains freshly queried; no grant or approval is cached. Shared
+identity-kernel acceptance and targeted crossed-approval regressions accompany
+this change. See the [diagnostic run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40038039931).

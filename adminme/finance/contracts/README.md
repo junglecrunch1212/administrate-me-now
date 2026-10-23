@@ -84,6 +84,11 @@ Books-produced planning views; it will not reproduce their forecasting math.
 Exact field mapping and supported combinations remain pending the independent
 mapper's review, so v2 publications are not yet admitted.
 
+The extension will be a separately versioned dated-projection export anchored
+to the exact accepted accounting publication ID and content hash. Projection
+verification cannot advance accounting acceptance or clear recovery holds.
+An accounting-only v1 publication may continue to omit `cash_projection`.
+
 The extension must retain these separate coordinates:
 
 | Coordinate | Distinction to preserve |
@@ -94,8 +99,8 @@ The extension must retain these separate coordinates:
 | Result | Source-produced lower/upper ranges and their missing endpoints, not an invented scalar |
 | Status | Explicitly conditional `INCOMPLETE` planning estimates remain distinguishable from released safety conclusions |
 
-Implementation will add a versioned schema/hash and explicit validator dispatch,
-preserve immutable publication/event version provenance and predecessor checks,
+Implementation will add a versioned schema/hash and distinct validator,
+preserve immutable projection/event version provenance and predecessor checks,
 and expose distinct bounded planning-view queries and rendered qualifications.
 Only declared source combinations will be indexed; no cross product or sum of
 views is inferred. Conditional planning values must not be relabeled ready,
@@ -109,3 +114,22 @@ exclusion, current-grant checks and bounded results. Private financial values,
 Sheet identifiers and live data are excluded from fixtures and logs. Exporter
 adoption requires review of the exact new schema/hash after that mapping and
 those tests exist; this plan authorizes no private import or activation.
+
+The detailed review additionally requires the exact source-selected Plan case,
+engine/input digests, next-day start and local inclusive/exclusive date bounds.
+Modeled net funding replaces observed base only in the funding view; bank paths
+remain invariant. Annual gross already includes bonuses. Unknown provider
+clocks, thresholds and encumbrances retain nulls with reasons. Estimate,
+completeness and safety states remain independent: reserve breach, negative
+bank cash and a particular checking-account shortage are different signals,
+and a positive remainder is not available surplus.
+
+The native export has 12 contexts, five horizons and 3,215 combined detail
+events. A protected manifest and bounded pagination must preserve the full
+coverage, with explicit measure/context and payment/account routes. Card
+purchases cannot become bank debits; settlement cash/debt legs, neutral
+internal transfers, provisions and eventual bills must retain the producer's
+inclusion semantics without counting a flow twice in one measure. These counts
+are integration requirements, not permission to copy private source rows.
+Exact native field mappings and the 12 context tuples still need a reviewed
+source mapping; this adapter must not invent their Cartesian product.

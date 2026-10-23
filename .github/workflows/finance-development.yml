@@ -53,6 +53,7 @@ jobs:
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
           tests/unit/test_finance_readiness.py
+          tests/unit/test_finance_delegation_snapshot.py
           tests/unit/test_finance_admission.py
           tests/unit/test_finance_workflows.py
           tests/unit/test_finance_calculators.py
@@ -66,6 +67,7 @@ jobs:
           tests/acceptance/test_finance_choices.py
           tests/acceptance/test_member_chat_subscription.py
           tests/acceptance/test_cos_self_replies.py
+          tests/acceptance/test_cos_identity_delegation_kernel.py
           tests/acceptance/test_gate7_household_experience.py
       - name: Static checks
         if: always()
