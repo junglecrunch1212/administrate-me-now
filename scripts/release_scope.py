@@ -62,6 +62,8 @@ BRIDGE_SETUP_REQUIRED = (
             "adminme/products/member/bridge_setup.py",
             "adminme/tailscale_local.py",
             "bootstrap/member_bridge_distribution.py",
+            "bootstrap/member_bridge_runtime_repair.py",
+            "tests/unit/bootstrap/test_member_bridge_runtime_repair.py",
             "bootstrap/member_bridge_helper_app.py",
             "bootstrap/member_bridge_permission_controller.py",
             "bootstrap/install-member-bridge.sh",
