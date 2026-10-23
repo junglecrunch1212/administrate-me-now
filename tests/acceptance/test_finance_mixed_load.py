@@ -80,6 +80,96 @@ def _serve(root: Path, listener: socket.socket, ready) -> None:
     )
 
 
+async def _finance_call(
+    client, actor: str, session: str, number: int
+) -> tuple[bool, float]:
+    calculation = number % 2 == 0
+    payload: dict[str, Any] = {
+        "provenance": {
+            "actor_id": actor,
+            "agent_id": member_agent_id(FIXTURE_MEMBER_ID),
+            "session_key": session,
+            "session_id": "fixture-session",
+            "channel_id": "administrateme-portal",
+            "account_id": "member-portal",
+            "message_id": f"finance-run:fixture-{number}",
+            "correlation_id": f"fixture-{number}",
+            "call_kind": "tool",
+            "openclaw_version": OPENCLAW_VERSION,
+            "openclaw_commit": OPENCLAW_COMMIT,
+        }
+    }
+    if calculation:
+        payload.update(
+            calculator_id="reserve_coverage",
+            version="1",
+            hypothetical=True,
+            inputs={
+                "currency": "USD",
+                "liquid_cash_minor": 120000,
+                "monthly_reference_spending_minor": 30000,
+                "chosen_reserve_floor_minor": 60000,
+                "liquidity_confirmed": True,
+                "reference_basis": "chosen_essential_spending",
+            },
+        )
+    started = time.perf_counter()
+    response = await client.post(
+        "/api/openclaw/v1/tools/finance-" + ("calculate" if calculation else "status"),
+        headers={"Authorization": f"Bearer {SECRET}"},
+        json=payload,
+    )
+    elapsed = time.perf_counter() - started
+    assert response.status_code == 200, response.text
+    if calculation:
+        assert response.json()["values"]["reference_months_covered"] == "4.000000", (
+            response.text
+        )
+    else:
+        assert "publication" in response.json(), response.text
+    return calculation, elapsed
+
+
+def _client(url: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=url,
+        timeout=10,
+        transport=httpx.AsyncHTTPTransport(
+            socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
+        ),
+    )
+
+
+def _finance_load(url: str, actor: str, session: str, ready, stop) -> None:
+    """Independent process/event loop: finance client work cannot delay core timing."""
+
+    async def load():
+        statuses: list[float] = []
+        calculations: list[float] = []
+        async with _client(url) as client:
+            ready.send({"ready": True})
+            start = time.perf_counter()
+            for index in range(800):
+                if stop.is_set():
+                    break
+                calculation, elapsed = await _finance_call(
+                    client, actor, session, index + 100
+                )
+                (calculations if calculation else statuses).append(elapsed)
+                # Ten tool calls/second is a bounded synthetic stress workload.
+                await asyncio.sleep(
+                    max(0, start + (index + 1) * 0.1 - time.perf_counter())
+                )
+        ready.send({"statuses": statuses, "calculations": calculations})
+
+    try:
+        asyncio.run(load())
+    except Exception as exc:
+        ready.send({"error": type(exc).__name__})
+    finally:
+        ready.close()
+
+
 @pytest.mark.skipif(
     os.getenv("ADMINME_FINANCE_BENCHMARK") != "1",
     reason="Opt-in isolated hosted HTTP benchmark; not the family runtime",
@@ -100,6 +190,9 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
     )
     process.start()
     send.close()
+    load_process = None
+    load_receive = None
+    stop_load = context.Event()
     try:
         assert await asyncio.to_thread(receive.poll, 45), (
             "synthetic HTTP server did not start"
@@ -138,54 +231,10 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             async def finance_call() -> float:
                 nonlocal calls
                 calls += 1
-                calculation = calls % 2 == 0
-                payload: dict[str, Any] = {
-                    "provenance": {
-                        "actor_id": actor,
-                        "agent_id": member_agent_id(FIXTURE_MEMBER_ID),
-                        "session_key": session,
-                        "session_id": "fixture-session",
-                        "channel_id": "administrateme-portal",
-                        "account_id": "member-portal",
-                        "message_id": f"finance-run:fixture-{calls}",
-                        "correlation_id": f"fixture-{calls}",
-                        "call_kind": "tool",
-                        "openclaw_version": OPENCLAW_VERSION,
-                        "openclaw_commit": OPENCLAW_COMMIT,
-                    }
-                }
-                if calculation:
-                    payload.update(
-                        calculator_id="reserve_coverage",
-                        version="1",
-                        hypothetical=True,
-                        inputs={
-                            "currency": "USD",
-                            "liquid_cash_minor": 120000,
-                            "monthly_reference_spending_minor": 30000,
-                            "chosen_reserve_floor_minor": 60000,
-                            "liquidity_confirmed": True,
-                            "reference_basis": "chosen_essential_spending",
-                        },
-                    )
-                started = time.perf_counter()
-                response = await finance_client.post(
-                    "/api/openclaw/v1/tools/finance-"
-                    + ("calculate" if calculation else "status"),
-                    headers={"Authorization": f"Bearer {SECRET}"},
-                    json=payload,
+                calculation, elapsed = await _finance_call(
+                    finance_client, actor, session, calls
                 )
-                elapsed = time.perf_counter() - started
-                assert response.status_code == 200, response.text
-                if calculation:
-                    assert (
-                        response.json()["values"]["reference_months_covered"]
-                        == "4.000000"
-                    ), response.text
-                    calculations.append(elapsed)
-                else:
-                    assert "publication" in response.json(), response.text
-                    statuses.append(elapsed)
+                (calculations if calculation else statuses).append(elapsed)
                 return elapsed
 
             async def core_call(index: int) -> float:
@@ -204,29 +253,58 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             for index in range(30):
                 await core_call(index)
                 await finance_call()
-            baseline = [await core_call(i) for i in range(SAMPLES)]
-            mixed = []
-            finance = []
-            for index in range(SAMPLES):
-                # Alternate launch order; neither caller gets an artificial head start.
-                if index % 2:
-                    f, c = await asyncio.gather(finance_call(), core_call(index))
-                else:
-                    c, f = await asyncio.gather(core_call(index), finance_call())
-                mixed.append(c)
-                finance.append(f)
-            after = [await core_call(i) for i in range(SAMPLES)]
+
+            async def core_phase() -> list[float]:
+                values = []
+                start = time.perf_counter()
+                for index in range(SAMPLES):
+                    values.append(await core_call(index))
+                    await asyncio.sleep(
+                        max(0, start + (index + 1) * 0.05 - time.perf_counter())
+                    )
+                return values
+
+            baseline = await core_phase()
+            load_receive, load_send = context.Pipe(duplex=False)
+            load_process = context.Process(
+                target=_finance_load,
+                args=(f"http://127.0.0.1:{port}", actor, session, load_send, stop_load),
+            )
+            load_process.start()
+            load_send.close()
+            assert await asyncio.to_thread(load_receive.poll, 15), (
+                "finance load client did not start"
+            )
+            assert load_receive.recv() == {"ready": True}
+            mixed = await core_phase()
+            stop_load.set()
+            assert await asyncio.to_thread(load_receive.poll, 15), (
+                "finance load client did not settle"
+            )
+            measured = load_receive.recv()
+            assert "error" not in measured, measured
+            statuses = measured["statuses"]
+            calculations = measured["calculations"]
+            assert len(statuses) + len(calculations) >= 100, (
+                "insufficient admitted finance load"
+            )
+            finance = statuses + calculations
+            after = await core_phase()
             baseline_p95 = max(_p95(baseline), _p95(after))
             report = {
-                "contract": "synthetic-light-finance-http-mixed-load-v2",
+                "contract": "synthetic-light-finance-http-mixed-load-v3",
                 "python": platform.python_version(),
                 "samples_per_phase": SAMPLES,
+                "core_requests_per_second": 20,
+                "finance_requests_per_second": 10,
+                "finance_samples": len(finance),
+                "independent_load_processes": True,
                 "cold_status_ms": round(cold_status * 1000, 3),
                 "baseline_before_p95_ms": round(_p95(baseline) * 1000, 3),
                 "baseline_after_p95_ms": round(_p95(after) * 1000, 3),
                 "mixed_core_p95_ms": round(_p95(mixed) * 1000, 3),
                 "regression_ratio": _p95(mixed) / baseline_p95,
-                "warm_status_p95_ms": round(_p95(statuses[1:]) * 1000, 3),
+                "warm_status_p95_ms": round(_p95(statuses) * 1000, 3),
                 "calculation_p95_ms": round(_p95(calculations) * 1000, 3),
                 "mixed_finance_p95_ms": round(_p95(finance) * 1000, 3),
                 "heavy_worker_validated": False,
@@ -239,9 +317,20 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             )
             print(json.dumps(report, sort_keys=True))
             assert _p95(mixed) <= baseline_p95 * 1.10, report
-            assert _p95(statuses[1:]) < 0.100, report
+            assert _p95(statuses) < 0.100, report
             assert _p95(calculations) < 0.500, report
     finally:
+        stop_load.set()
+        if load_process is not None:
+            await asyncio.to_thread(load_process.join, 5)
+            if load_process.is_alive():
+                load_process.terminate()
+                await asyncio.to_thread(load_process.join, 5)
+            if load_process.is_alive():
+                load_process.kill()
+                await asyncio.to_thread(load_process.join, 5)
+        if load_receive is not None:
+            load_receive.close()
         receive.close()
         listener.close()
         process.terminate()

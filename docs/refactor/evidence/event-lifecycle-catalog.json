@@ -16397,6 +16397,19 @@
           "default": null,
           "title": "Publication Id"
         },
+        "result_json": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Json"
+        },
         "result_sha256": {
           "anyOf": [
             {

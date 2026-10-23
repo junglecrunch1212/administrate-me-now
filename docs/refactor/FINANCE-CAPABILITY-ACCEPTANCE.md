@@ -185,8 +185,10 @@ SDK shapes and persistence transform were inspected at commit
 `ce67ffb70e83e5ebb56ea02e814e577153f84f61`; hosted integration and installed-hook
 verification remain separate evidence. Structured finance results are retained
 only in encrypted private domain history, never a shared vector or global memory.
-A marked conversation needs a fresh finance result before another finance
-answer; a reference is not a timeless permission or a substitute for fresh data.
+A marked conversation needs a current finance result before another answer.
+Revocation rejects the previous receipts; a replacement grant permits fresh
+retrieval in the same conversation, without restoring the old receipt authority.
+A reference is not a timeless permission or a substitute for fresh data.
 
 The supported card is intentionally deterministic. Free-form personalized
 recommendations, durable operational workflow integration and authorized app

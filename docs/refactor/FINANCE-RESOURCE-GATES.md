@@ -130,3 +130,13 @@ baseline was 44.044 ms versus 4.113 ms loaded. This approximately 40 ms transpor
 stall is not accepted as performance-isolation evidence. The next harness sets
 TCP_NODELAY explicitly on the supplied listener and both clients to remove
 Nagle/delayed-ACK distortion; all original thresholds remain unchanged.
+
+At `75c81d8c`, explicit TCP_NODELAY removed the inflated baseline: before/after
+core p95 were 3.490/3.503 ms, loaded p95 7.219 ms (ratio 2.061), so the gate
+failed. The v3 harness separates finance and core load generators into distinct
+processes/event loops, preserving the independent HTTP server and socket
+settings. It measures 500 core samples per phase at 20 requests/second with
+10 finance calls/second, requires at least 100 successful finance calls, and
+keeps the same 10% and 100/500 ms assertions. This is a specified synthetic
+load, not household traffic or heavy-worker acceptance. The earlier failures
+remain recorded; no passing performance claim follows from changing a harness.

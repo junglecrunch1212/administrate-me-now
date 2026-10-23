@@ -356,3 +356,28 @@ def test_native_reply_renders_current_result_and_rechecks_at_claim(
             json={key: dispatch[key] for key in ("account_id", "recipient", "body")},
         )
         assert claim.status_code == (403 if revoke_before_claim else 200), claim.text
+
+
+def test_new_grant_requires_fresh_result_without_permanently_blocking_conversation(
+    tmp_path,
+):
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        grant = _grant_cos(client, "original-finance-authority")
+        result = calculate(client, "original-run")
+        assert result.status_code == 200
+        runtime = client.app.state.runtime
+        session = build_internal_session(
+            PRINCIPAL, "principal", runtime.settings.instance.tenant_id
+        )
+        _, key = runtime.member_chat_binding(PRINCIPAL)
+        client.portal.call(revoke, runtime, grant)
+        _grant_cos(client, "replacement-finance-authority")
+
+        async def check(run):
+            await check_disclosure(runtime, session, key, run_id=run, require_run=True)
+
+        with pytest.raises(FinanceDisclosureError):
+            client.portal.call(check, "original-run")
+        fresh = calculate(client, "fresh-run")
+        assert fresh.status_code == 200, fresh.text
+        client.portal.call(check, "fresh-run")

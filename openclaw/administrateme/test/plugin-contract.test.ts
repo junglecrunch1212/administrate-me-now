@@ -1259,6 +1259,19 @@ describe("native OpenClaw contract fixture", () => {
 
 
 describe("private finance transcript boundary", () => {
+  it("registers synchronous redaction before the first finance tool executes", () => {
+    const runtime = fakeApi();
+    const hook = runtime.hooks.get("before_message_write")![0]!.handler;
+    const event = { message: { role: "assistant", content: [
+      { type: "toolCall", id: "first", name: "administrateme_finance_calculate", arguments: { principal_minor: 765432 } },
+    ] } };
+    expect(JSON.stringify(hook(event, { sessionKey: "fixture-private" }))).not.toContain("765432");
+    expect(hook({ message: { role: "assistant", content: [{ type: "text", text: "Ordinary reply" }] } }, { sessionKey: "unrelated" })).toBeUndefined();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    const result = persist({ toolName: "administrateme_finance_calculate", message: { role: "toolResult", content: [{ type: "text", text: '{"amount":765432}' }] } }, {});
+    expect(JSON.stringify(result)).not.toContain("765432");
+    expect(persist({ toolName: "administrateme_what_now", message: { role: "toolResult", content: [] } }, {})).toBeUndefined();
+  });
   it("retains only opaque references, never values, details or source instructions", () => {
     const message = { role: "toolResult", toolCallId: "call", toolName: "administrateme_finance_query",
       timestamp: 1, isError: false, details: { secret: "private fixture" },

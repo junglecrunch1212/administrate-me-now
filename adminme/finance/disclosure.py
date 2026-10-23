@@ -173,8 +173,6 @@ async def record_disclosure(
         f"finance-disclosure:{session_hash}", asyncio.Lock()
     ):
         marker = await _read(runtime, session, _marker_key(session_hash))
-        if marker is not None and marker["authority_sha256"] != authority_hash:
-            raise FinanceDisclosureError("finance_disclosure_clean_session_required")
         now = datetime.now(timezone.utc)
         common = {
             "member_id": session.auth_member_id,
@@ -250,9 +248,10 @@ async def check_disclosure(
 ) -> str | None:
     """Called for history, final portal content, and each native send/claim.
 
-    A historical finance session retains its original exact grant boundary.
-    Regranting a different authority requires a clean conversation, rather
-    than releasing evidence left in the prior conversation after revocation.
+    The durable marker identifies a finance-bearing conversation. Current
+    authority gates access; each run receipt independently binds its exact grant.
+    A new grant can retrieve fresh results but cannot validate old receipts.
+    Transcript hooks retain only opaque references, not reusable finance facts.
     """
     session_hash = _session_digest(session, session_key)
     marker = await _read(runtime, session, _marker_key(session_hash))
@@ -261,8 +260,7 @@ async def check_disclosure(
     receipts: list[dict[str, Any]] = []
     if require_run and run_id is None:
         raise FinanceDisclosureError("finance_disclosure_run_required")
-    expected = marker["authority_sha256"]
-    validate_current_authority(runtime, session, expected)
+    expected = validate_current_authority(runtime, session)
     if run_id is not None:
         if not run_id or len(run_id) > 200:
             raise FinanceDisclosureError("finance_disclosure_run_required")
@@ -301,6 +299,11 @@ async def check_disclosure(
                     raise FinanceDisclosureError("finance_disclosure_model_changed")
         if require_run and not found:
             raise FinanceDisclosureError("finance_disclosure_receipt_required")
+    if any(
+        datetime.fromisoformat(item["expires_at"]) <= datetime.now(timezone.utc)
+        for item in receipts
+    ):
+        raise FinanceDisclosureError("finance_disclosure_receipt_expired")
     rendered = answer_text
     if answer_text is not None:
         from adminme.finance.answers import FinanceAnswerError, verify_answer
