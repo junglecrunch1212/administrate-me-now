@@ -357,6 +357,33 @@ def test_native_requires_private_regular_single_link_request(
     assert not request.with_name("claimed.json").exists()
 
 
+@pytest.mark.parametrize("spelling", ["dot", "parent", "separator", "symlink"])
+def test_native_rejects_noncanonical_request_paths_before_claim(
+    native_app: Path, release: Path, tmp_path: Path, spelling: str
+) -> None:
+    request, _ = _request(tmp_path, release)
+    if spelling == "dot":
+        argument = f"{request.parent}/./request.json"
+    elif spelling == "parent":
+        argument = f"{request.parent}/../private-request/request.json"
+    elif spelling == "separator":
+        argument = f"{request.parent}//request.json"
+    else:
+        alias = tmp_path / "request-alias"
+        alias.symlink_to(request.parent, target_is_directory=True)
+        argument = str(alias / "request.json")
+    completed = subprocess.run(
+        [str(native_app / "Contents/MacOS" / helper.EXECUTABLE), argument],
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode != 0
+    assert request.is_file()
+    assert not request.with_name("claimed.json").exists()
+    assert not request.with_name("result.json").exists()
+
+
 def test_claim_is_single_use_and_existing_result_never_overwritten(
     native_app: Path, release: Path, tmp_path: Path
 ) -> None:
