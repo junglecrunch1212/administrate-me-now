@@ -1103,6 +1103,7 @@ def test_google_release_requires_production_packaged_privacy_recovery_and_types(
         "test_member_google_connections.py",
         "test_cos_google_workspace.py",
         "test_cos_apple_reminders.py",
+        "test_capability_catalog.py",
         "test_adapter_schemas.py",
         "test_lists_schemas.py",
         "packs/adapters/reminders/apple-eventkit/tests",

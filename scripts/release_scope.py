@@ -104,6 +104,7 @@ COS_GOOGLE_WORKSPACE_REQUIRED_PATHS = (
 )
 COS_APPLE_REMINDERS_COMPONENT_PATHS = frozenset(
     {
+        "adminme/capability_catalog.py",
         "adminme/adapters/cos_apple_reminders.py",
         "adminme/adapters/cos_apple_reminders_native.py",
         "adminme/adapters/cos_channel_acquisition.py",
@@ -121,6 +122,7 @@ COS_APPLE_REMINDERS_COMPONENT_PATHS = frozenset(
 )
 COS_APPLE_REMINDERS_TEST_PATHS = frozenset(
     {
+        "tests/unit/test_capability_catalog.py",
         "tests/unit/bootstrap/test_cos_apple_reminders.py",
         "tests/unit/test_provider_bindings.py",
         "tests/unit/bootstrap/test_cos_channel_activation.py",
