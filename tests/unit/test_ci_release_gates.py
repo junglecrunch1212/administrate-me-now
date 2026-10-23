@@ -37,6 +37,12 @@ from scripts.release_scope import (
     COS_RECOVERY_HISTORY,
     COS_RECOVERY_TEST_PATHS,
     ENROLLMENT_INGEST_PATH,
+    MEMBER_GOOGLE_SETTINGS_WIRING,
+    MEMBER_GOOGLE_SETTINGS_CHECK_SCRIPT,
+    MEMBER_GOOGLE_SETTINGS_SHARED_PATHS,
+    MEMBER_GOOGLE_SETTINGS_COMPONENT_PATHS,
+    MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS,
+    _member_google_settings_shared_source,
     GOOGLE_MODULE,
     GOOGLE_SHARED_PATHS,
     COS_GOOGLE_WORKSPACE_COMPONENT_PATHS,
@@ -127,6 +133,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "bridge-setup",
         "google-connections",
         "cos-google-workspace",
+        "member-google-settings",
         "cos-apple-reminders",
         "cos-recovery-history",
         "cos-reminders",
@@ -172,6 +179,7 @@ def test_scope_gate_requires_exact_corresponding_success(
         "updater-delivery",
         "cos-service-work",
         "cos-google-workspace",
+        "member-google-settings",
         "cos-apple-reminders",
     ],
 )
@@ -1097,7 +1105,7 @@ def test_google_release_requires_production_packaged_privacy_recovery_and_types(
     job = _workflow(filename)["jobs"]["google-connections-validation"]
     assert (
         job["if"]
-        == "${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' || needs.release-scope.outputs.scope == 'cos-apple-reminders' }}"
+        == "${{ needs.release-scope.outputs.scope == 'google-connections' || needs.release-scope.outputs.scope == 'cos-google-workspace' || needs.release-scope.outputs.scope == 'member-google-settings' || needs.release-scope.outputs.scope == 'cos-apple-reminders' }}"
     )
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     for required in (
@@ -2576,6 +2584,207 @@ def test_cos_google_workspace_fingerprint_binds_every_other_byte_and_mode() -> N
         ) != _cos_google_workspace_dependency_fingerprint((*base, executable))
 
 
+def _member_google_settings_candidate(repository: Path) -> tuple[str, str]:
+    sources = {}
+    for relative in MEMBER_GOOGLE_SETTINGS_SHARED_PATHS:
+        source = (ROOT / relative).read_text()
+        normalized = _member_google_settings_shared_source(relative, source)
+        assert normalized is not None and normalized[1]
+        sources[relative] = source
+        target = repository / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(normalized[0])
+    _git(repository, "add", "-A")
+    _git(repository, "commit", "-m", "Frozen shared Google Settings dependencies")
+    base = _git(repository, "rev-parse", "HEAD")
+    for relative in MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS:
+        target = repository / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            sources.get(relative, "# Reviewed Google Settings component\n")
+        )
+        target.chmod(0o644)
+    _git(repository, "add", "-A")
+    _git(repository, "commit", "-m", "Self-service Google Settings fixture")
+    return base, _git(repository, "rev-parse", "HEAD")
+
+
+def test_member_google_settings_scope_uses_exact_sources_and_existing_protected_workers(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, head = _member_google_settings_candidate(path)
+    # Mutable checkout content cannot replace the reviewed Git source evidence.
+    (path / "adminme/runtime/application.py").write_text("MUTABLE = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "member-google-settings"
+    assert len(proof["member_google_settings_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("member-google-settings", platform) == (
+            "release-scope",
+            "google-connections-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "poetry.lock",
+        "bootstrap/upgrade.py",
+        "bootstrap/versions.json",
+        "adminme/events/log.py",
+        "adminme/service_identities.py",
+        "bridge/adminme_bridge/daemon.py",
+        "packs/adapters/messaging/gmail/adapter.py",
+        "tests/unreviewed.py",
+    ],
+)
+def test_member_google_settings_never_exempts_unchanged_ownership_storage_or_bridge(
+    repository: tuple[Path, str], extra: str
+) -> None:
+    path, _ = repository
+    base, _ = _member_google_settings_candidate(path)
+    head = _commit(path, extra, "# Outside the tested Google Settings contract\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("shared", sorted(MEMBER_GOOGLE_SETTINGS_SHARED_PATHS))
+def test_member_google_settings_shared_source_freezes_every_unreviewed_byte(
+    repository: tuple[Path, str], shared: str
+) -> None:
+    path, _ = repository
+    base, _ = _member_google_settings_candidate(path)
+    head = _commit(
+        path, shared, (path / shared).read_text() + "\nUNREVIEWED_CHANGE = True\n"
+    )
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "defect", ["none", "missing-proof", "mode", "shared", "unknown-test", "symlink"]
+)
+def test_member_google_settings_checks_exact_test_merge_and_complete_proof(
+    repository: tuple[Path, str], defect: str
+) -> None:
+    path, _ = repository
+    base, head = _member_google_settings_candidate(path)
+    target = path / "tests/acceptance/test_member_google_settings.py"
+    if defect == "missing-proof":
+        target.unlink()
+    elif defect == "mode":
+        target.chmod(0o755)
+    elif defect == "shared":
+        runtime = path / "adminme/runtime/application.py"
+        runtime.write_text(runtime.read_text() + "\nMERGE_ONLY_CHANGE = True\n")
+    elif defect == "unknown-test":
+        (path / "tests/unreviewed.py").write_text("# Outside the test contract\n")
+    elif defect == "symlink":
+        target.unlink()
+        target.symlink_to("test_member_google_readiness_transition.py")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Exact Google Settings test merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    if defect == "symlink":
+        with pytest.raises(SourceIdentityError, match="unsupported object or mode"):
+            select_scope(path, _event(base, head), checkout_sha=merge)
+        return
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == (
+        "member-google-settings" if defect == "none" else "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,modes", [("D", {"100644"}), ("T", {"100644", "120000"}), ("M", {"100755"})]
+)
+def test_member_google_settings_refuses_removed_or_retyped_sources(status, modes):
+    path = "adminme/member_google.py"
+    assert (
+        choose_scope(
+            [(status, path)],
+            interfaces_equal=False,
+            member_google_settings_interfaces_equal=True,
+            path_modes={path: modes},
+        )
+        == "system-wide"
+    )
+
+
+def test_member_google_settings_wiring_contract_is_closed_and_nonempty() -> None:
+    contract = json.loads((ROOT / MEMBER_GOOGLE_SETTINGS_WIRING).read_text())
+    assert contract["contract"] == "member-google-settings-wiring-v1"
+    assert set(contract["paths"]) == MEMBER_GOOGLE_SETTINGS_SHARED_PATHS
+    for path, pairs in contract["paths"].items():
+        assert pairs
+        assert all(
+            pair["before"] and pair["after"] and pair["before"] != pair["after"]
+            for pair in pairs
+        )
+        assert (
+            _member_google_settings_shared_source(path, "not the reviewed integration")
+            is None
+        )
+    assert (
+        MEMBER_GOOGLE_SETTINGS_COMPONENT_PATHS <= MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS
+    )
+
+
+@pytest.mark.parametrize("filename", [row[0] for row in RELEASE_JOBS])
+def test_member_google_settings_workers_run_focused_script_before_exact_sha(filename):
+    job = _workflow(filename)["jobs"]["google-connections-validation"]
+    assert "'member-google-settings'" in job["if"]
+    focused = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Validate member Google Settings and consent"
+    )
+    assert (
+        focused["if"]
+        == "${{ needs.release-scope.outputs.scope == 'member-google-settings' }}"
+    )
+    platform = "macos" if filename == "macos-bootstrap.yml" else "linux"
+    assert focused["run"] == f"bash {MEMBER_GOOGLE_SETTINGS_CHECK_SCRIPT} {platform}"
+    assert "continue-on-error" not in focused
+    assert (
+        focused["env"]["ADMINME_MEMBER_GOOGLE_EVIDENCE_DIR"]
+        == "${{ runner.temp }}/member-google-settings"
+    )
+    for name in (
+        "Validate private Google acquisition, capabilities and guarded recovery",
+        "Validate affected types, privacy and plugin interfaces",
+    ):
+        existing = next(step for step in job["steps"] if step.get("name") == name)
+        assert (
+            existing["if"]
+            == "${{ needs.release-scope.outputs.scope != 'member-google-settings' }}"
+        )
+    assert job["steps"][-1]["id"] == "validated"
+    assert 'test "$actual_sha" = "$GITHUB_SHA"' in job["steps"][-1]["run"]
+    assert not job["steps"][-1].get("if")
+    assert any(
+        step.get("with", {}).get("name", "").startswith("member-google-settings-")
+        and step["with"].get("if-no-files-found") == "error"
+        for step in job["steps"]
+    )
+
+
 def _cos_apple_reminders_candidate(repository: Path) -> tuple[str, str]:
     base = _git(repository, "rev-parse", "HEAD")
     for relative in sorted(COS_APPLE_REMINDERS_REQUIRED_PATHS):
@@ -2749,5 +2958,18 @@ def test_native_boundary_is_visible_before_remaining_macos_suite() -> None:
     native = job["steps"][
         names.index("Prove native Reminders app identity and callback boundary")
     ]
+    assert (
+        native["if"]
+        == "${{ needs.release-scope.outputs.scope != 'member-google-settings' }}"
+    )
+    artifact = next(
+        step
+        for step in job["steps"]
+        if step.get("with", {}).get("name") == "cos-reminders-native-macos"
+    )
+    assert (
+        artifact["if"]
+        == "${{ !cancelled() && needs.release-scope.outputs.scope != 'member-google-settings' }}"
+    )
     assert "cos-reminders-native.xml" in native["run"]
     assert "('skipped', 'failures', 'errors')" in native["run"]

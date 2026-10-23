@@ -257,12 +257,16 @@ class SettingsControlStore:
     def __init__(
         self, path: Path, *, adapter_config: dict[str, Any] | None = None
     ) -> None:
+
+        self.path = Path(path)
+        self.rebind_google_config(adapter_config or {})
+
+    def rebind_google_config(self, adapter_config: dict[str, Any]) -> None:
         from adminme.adapters.member_google_connections import (
             manual_sources,
             selected_entries,
         )
 
-        self.path = Path(path)
         self._manual_google_sources = manual_sources(adapter_config or {})
         self._google_observation_entries = selected_entries(adapter_config or {})
 
@@ -1448,6 +1452,8 @@ class SettingsControlStore:
             policy = policy.model_copy(
                 update={"attention_mode": "manual", "triage_mode": "manual_only"}
             )
+            if selected.get("enabled") is False:
+                policy = policy.model_copy(update={"context_mode": "none"})
             # This exact deployment-authorized override uses the existing audit
             # contract; retained event schemas remain replay-compatible.
             origin = "exact_override"
@@ -1754,8 +1760,22 @@ def compose_connections(runtime: Any, member_id: str) -> list[dict[str, Any]]:
             if isinstance(runtime_row, dict)
             else []
         )
-        if kind == "messaging-gmail-api" and not config.get("enable_writes"):
-            code_write_capabilities = []
+        if kind == "messaging-gmail-api":
+            # Cat-A communication adapters expose send/manage methods, not
+            # the Cat-B/Cat-E write_capabilities attribute. Bind this reviewed
+            # Gmail ceiling to the selected scopes and an actual loaded adapter.
+            code_write_capabilities = (
+                list(meta["write"])
+                if isinstance(runtime_row, dict)
+                and runtime_row.get("adapter_name") == kind
+                and config.get("enable_writes") is True
+                and config.get("read_only") is not True
+                and {
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "https://www.googleapis.com/auth/gmail.send",
+                }.issubset(config.get("permission_scope") or [])
+                else []
+            )
         write_permissions = list(meta["write"]) if code_write_capabilities else []
         rows.append(
             {

@@ -4084,8 +4084,153 @@ function serviceChannelsCard(data) {
   section.append(grid); return section;
 }
 
+const GOOGLE_SERVICE_IDS = ["gmail", "calendar", "tasks"];
+
+function googleConnectionsSettings(data) {
+  const section = document.createElement("section"); section.className = "google-connections";
+  const intro = document.createElement("div"); intro.className = "card";
+  intro.append(text("p", "YOUR GOOGLE ACCOUNTS", "eyebrow"), text("h2", "Connect your Google services"), text("p", "Bring your Gmail, calendars, and tasks into your private AdministrateMe console. Choose reading and writing separately for each service."), text("p", "Personal inbox obligation extraction stays off. Your CoS permissions and what you share with another member remain separate. Each external change still needs the required approvals.", "state-note"));
+  const cosLink = text("a", "Review my CoS permissions", "link-button"); cosLink.href = "/member/settings?section=cos-work"; intro.append(cosLink); section.append(intro);
+  const identity = data.control.identity;
+  const own = identity.can_mutate && identity.authenticated_role === "principal" && Boolean(identity.authenticated_member_id) && !identity.viewing_as && identity.authenticated_member_id === identity.view_member_id && identity.actions_as === identity.authenticated_member_id && identity.reads_as === identity.authenticated_member_id;
+  if (!own) { intro.append(text("p", "Return to your own private view to connect Google or change its permissions.", "review-state")); return section; }
+  const endpoint = "/api/member/v1/settings/google-connections";
+  const pendingKey = `administrateme:google-connection-pending:${identity.authenticated_member_id}`;
+  const requestPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  let pending = null; let busy = false; let loaded = false; let model = null; let authorization = null; let requestState = null; let polls = 0; let pollTimer = null;
+  const callbackRequest = new URLSearchParams(location.search).get("google_request");
+  try {
+    pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null");
+    if (callbackRequest && requestPattern.test(callbackRequest) && !pending) {
+      pending = { request_id: callbackRequest }; sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+    }
+  } catch { pending = { unknown: true }; }
+  const list = document.createElement("div"); list.className = "google-account-list";
+  const add = document.createElement("div"); add.className = "google-add-account";
+  const status = text("p", "Checking your Google connections…", "state-note"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite"); status.tabIndex = -1;
+  const refresh = text("button", "Check Google connection status", "button button-secondary"); refresh.type = "button";
+  const continueLink = text("a", "Continue to Google", "button button-primary"); continueLink.hidden = true; continueLink.referrerPolicy = "no-referrer";
+  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(continueLink, refresh);
+  section.append(list, add, status, actions);
+  function savePending(value) { if (value) sessionStorage.setItem(pendingKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingKey); pending = value; }
+  function serviceSelections(values) { return Object.fromEntries(GOOGLE_SERVICE_IDS.map((id) => [id, { read: values?.[id]?.read === true, write: values?.[id]?.write === true }])); }
+  function safeAuthorization(value) {
+    if (!value?.authorization_url || !value.expires_at || Date.parse(value.expires_at) <= Date.now() || !Number.isFinite(Date.parse(value.expires_at))) return null;
+    try { const url = new URL(value.authorization_url); return url.protocol === "https:" && url.hostname === "accounts.google.com" && !url.port && !url.username && !url.password && url.pathname === "/o/oauth2/v2/auth" ? { href: url.href, expires_at: value.expires_at } : null; } catch { return null; }
+  }
+  function serviceLabel(id) { return model?.services?.find((service) => service.id === id)?.label || { gmail: "Gmail", calendar: "Google Calendar", tasks: "Google Tasks" }[id]; }
+  function permissionChoices(values, prefix, locked) {
+    const group = document.createElement("fieldset"); group.className = "google-service-choices"; group.append(text("legend", "Choose service access"));
+    const controls = new Map();
+    for (const id of GOOGLE_SERVICE_IDS) {
+      const service = model.services.find((item) => item.id === id); if (!service) continue;
+      const row = document.createElement("div"); row.className = "google-service-choice"; row.dataset.service = id;
+      const copy = document.createElement("div"); copy.append(text("strong", service.label), text("small", service.read_description));
+      const choices = document.createElement("div"); choices.className = "google-access-toggles";
+      const read = document.createElement("input"); read.type = "checkbox"; read.name = `${prefix}-${id}-read`; read.checked = values[id]?.read === true;
+      const write = document.createElement("input"); write.type = "checkbox"; write.name = `${prefix}-${id}-write`; write.checked = values[id]?.write === true;
+      const readLabel = document.createElement("label"); readLabel.append(read, text("span", "Read")); read.setAttribute("aria-label", `${service.label} Read`);
+      const writeLabel = document.createElement("label"); writeLabel.append(write, text("span", "Write")); write.setAttribute("aria-label", `${service.label} Write`);
+      const note = text("small", service.write_description || "Changes still require approval.", "google-write-description");
+      function update() { read.disabled = locked; write.disabled = locked || !read.checked; if (!read.checked) write.checked = false; }
+      read.addEventListener("change", update); update(); choices.append(readLabel, writeLabel); row.append(copy, choices, note); group.append(row); controls.set(id, { read, write });
+    }
+    return { node: group, selected: () => Object.fromEntries(GOOGLE_SERVICE_IDS.map((id) => [id, { read: controls.get(id)?.read.checked === true, write: controls.get(id)?.write.checked === true }])) };
+  }
+  function render() {
+    list.replaceChildren(); add.replaceChildren();
+    const locked = busy || !loaded || Boolean(pending);
+    refresh.disabled = busy;
+    continueLink.hidden = busy || !authorization || !pending || Date.parse(authorization.expires_at) <= Date.now();
+    if (!continueLink.hidden) continueLink.href = authorization.href; else continueLink.removeAttribute("href");
+    if (!loaded || !model) return;
+    if (!model.available) add.append(text("p", model.reason || "Google sign-in is not available yet. Check again after setup is completed.", "review-state"));
+    for (const account of model.accounts || []) {
+      const cardNode = document.createElement("article"); cardNode.className = "card google-account"; cardNode.dataset.accountId = account.id;
+      cardNode.append(text("h3", account.email), text("p", `${titleCase(account.workspace)} account`, "state-note"));
+      const states = document.createElement("dl"); states.className = "settings-facts google-service-status";
+      for (const id of GOOGLE_SERVICE_IDS) {
+        const service = account.services[id]; if (!service) continue;
+        states.append(text("dt", serviceLabel(id)), text("dd", `Read ${service.read ? "on" : "off"} · Write ${service.write ? "on · approval required" : "off"} · Setup: ${titleCase(service.setup || "unknown")} · Sync: ${titleCase(service.runtime || "unknown")}`));
+      }
+      cardNode.append(states, text("p", account.cos_context_access ? "CoS has permission to use your private AdministrateMe context. Sharing with another member is still separate." : "To talk with CoS about this account, review your private CoS permissions.", "state-note"));
+      const form = document.createElement("form"); form.className = "google-account-permissions";
+      const choices = permissionChoices(serviceSelections(account.services), account.id, locked);
+      const save = text("button", "Review Google permissions", "button button-primary"); save.type = "submit"; save.disabled = locked;
+      form.append(choices.node, save); form.addEventListener("submit", (event) => { event.preventDefault(); if (!locked && !busy && !pending) review({ account, services: choices.selected() }); }); cardNode.append(form); list.append(cardNode);
+    }
+    const details = document.createElement("details"); details.className = "card google-add-form"; details.open = !(model.accounts || []).length;
+    details.append(text("summary", "Add a Google account"));
+    const form = document.createElement("form"); form.className = "google-connection-form";
+    const email = document.createElement("input"); email.type = "email"; email.name = "google-account-email"; email.required = true; email.autocomplete = "email"; email.disabled = locked || !model.available;
+    const workspace = selectControl([{ value: "personal", label: "Personal" }, { value: "work", label: "Work" }], "personal", ""); workspace.disabled = locked || !model.available;
+    const fields = document.createElement("div"); fields.className = "google-account-fields"; fields.append(field("Google account email", email), field("Account use", workspace));
+    const choices = permissionChoices({ gmail: { read: true }, calendar: { read: true }, tasks: { read: false } }, "new", locked || !model.available);
+    const submit = text("button", "Review Google access", "button button-primary"); submit.type = "submit"; submit.disabled = locked || !model.available;
+    form.append(fields, text("p", "Sign in to this exact Google account on the next screen. Google will ask you to approve only your selected services.", "state-note"), choices.node, submit);
+    form.addEventListener("submit", (event) => { event.preventDefault(); if (busy || pending || !model.available || !email.checkValidity()) return; if (model.accounts.some((account) => account.email.toLowerCase() === email.value.trim().toLowerCase())) { status.textContent = "This Google account is already connected. Use its permission controls above."; status.focus(); return; } const services = choices.selected(); if (!Object.values(services).some((service) => service.read)) { status.textContent = "Choose at least one service to read before connecting Google."; return; } review({ expected_account_id: email.value.trim().toLowerCase(), workspace: workspace.value, services }); }); details.append(form); add.append(details);
+  }
+  async function reconcile() {
+    if (busy) return;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    busy = true; authorization = null; requestState = null; render();
+    let message = "Your Google permissions and each service’s sync status are shown above."; let completion = null;
+    try {
+      if (pending?.request_id) {
+        const result = await api(`${endpoint}/requests/${encodeURIComponent(pending.request_id)}`);
+        if (result.request_id !== pending.request_id) throw new Error("This response did not match your saved Google request.");
+        requestState = result.state;
+        if (result.state === "configured" && result.account_id) { completion = result; }
+        else if (["failed", "cancelled", "expired"].includes(result.state)) { savePending(null); replaceQuery({ google_request: null }); message = result.message || `Google setup ${result.state}. Review your choices before trying again.`; }
+        else { authorization = safeAuthorization(result); message = result.message || (authorization ? "Your choices are ready. Continue to Google to sign in and approve this account." : "Your Google request is still pending. Check its status before starting another request."); }
+      } else if (pending) message = "Your previous Google request cannot be confirmed in this browser. Have the saved request reviewed before making another change.";
+      model = await api(endpoint); loaded = true;
+      if (!Array.isArray(model.services) || !Array.isArray(model.accounts)) throw new Error("Google connection details are incomplete.");
+      if (completion) {
+        const account = model.accounts.find((item) => item.id === completion.account_id);
+        const sameAccount = account && (!pending.account_id || pending.account_id === account.id) && (!pending.body?.expected_account_id || pending.body.expected_account_id === account.email.toLowerCase());
+        if (!sameAccount) throw new Error("The confirmed Google account did not match your saved request.");
+        savePending(null); replaceQuery({ google_request: null }); message = "Your Google permission choice was saved. Check each service’s sync status below; account setup alone does not confirm a successful sync.";
+      }
+      status.textContent = message;
+    } catch (error) { loaded = false; authorization = null; status.textContent = `${error.message} Google connection status is unconfirmed. Changes remain locked; check status again.`; }
+    finally {
+      busy = false; render();
+      if (pending && requestState === "authorizing" && loaded && polls < 6) {
+        polls += 1; pollTimer = setTimeout(() => { if (section.isConnected && !busy) void reconcile(); }, 2000);
+      }
+    }
+  }
+  async function submitChange(change) {
+    if (busy || pending || !loaded) return;
+    try { savePending(change); } catch { status.textContent = "This browser cannot retain your request reference. No Google permission change was requested."; return; }
+    busy = true; authorization = null; render(); closeActionDialog(); status.textContent = "Saving your selected Google access…";
+    try {
+      const result = await api(change.path, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(change.body) });
+      if (result.request_id === change.request_id) authorization = safeAuthorization(result);
+    } catch (error) {
+      if (error.status === 409 && error.body?.detail?.code === "stale_revision") { savePending(null); setBanner("Google permissions changed in another window. Review the current choices before saving again."); }
+      else if (error.status === 409 && error.body?.detail?.code === "account_already_connected") { savePending(null); setBanner("This Google account is already connected. Review its current permission controls."); }
+      // Never replay an uncertain POST. The own-member, immutable request GET
+      // restores the original consent link or confirms its terminal result.
+    } finally { busy = false; await reconcile(); if (section.isConnected) (continueLink.hidden ? status : continueLink).focus(); }
+  }
+  function review(choice) {
+    if (busy || pending || !loaded) return;
+    const content = document.createElement("form"); content.className = "dialog-form google-permission-confirmation";
+    content.append(text("p", `${identity.authenticated_display_name} · ${choice.account?.email || choice.expected_account_id} · ${titleCase(choice.account?.workspace || choice.workspace)}`));
+    const summary = document.createElement("ul"); for (const id of GOOGLE_SERVICE_IDS) { const access = choice.services[id]; summary.append(text("li", `${serviceLabel(id)}: ${access.read ? access.write ? "Read and write" : "Read only" : "Off"}`)); } content.append(summary, text("p", "Google may ask for consent if more access is needed. Reading enables private sync; writing permits approved changes only. This does not share your information with another member or enable automatic obligation extraction.", "state-note"));
+    const cancel = text("button", "Go back", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+    const confirm = text("button", choice.account ? "Save Google permissions" : "Prepare Google sign-in", "button button-primary"); confirm.type = "submit"; content.append(cancel, confirm);
+    content.addEventListener("submit", (event) => { event.preventDefault(); confirm.disabled = true; const requestId = crypto.randomUUID(); const body = choice.account ? { request_id: requestId, expected_revision: choice.account.revision, services: choice.services } : { request_id: requestId, expected_account_id: choice.expected_account_id, workspace: choice.workspace, services: choice.services }; void submitChange({ request_id: requestId, ...(choice.account ? { account_id: choice.account.id } : {}), path: choice.account ? `${endpoint}/${encodeURIComponent(choice.account.id)}/permissions` : `${endpoint}/authorize`, body }); });
+    openActionDialog(choice.account ? "Review Google permission changes" : "Review Google sign-in", content);
+  }
+  continueLink.addEventListener("click", (event) => { if (busy || !authorization || Date.parse(authorization.expires_at) <= Date.now()) { event.preventDefault(); authorization = null; status.textContent = "This Google sign-in link expired. Check your request status before continuing."; render(); } });
+  refresh.addEventListener("click", () => { void reconcile(); }); void reconcile(); return section;
+}
+
 function renderConnections(data) {
-  const fragment = document.createDocumentFragment(); fragment.append(serviceChannelsCard(data), appleServicePermissionLink()); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("h2", "Your personal connections"), text("strong", "Connection truth has four separate axes."), text("p", "These counts and controls cover only your accounts. Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.")); fragment.append(intro);
+  const fragment = document.createDocumentFragment(); fragment.append(googleConnectionsSettings(data), serviceChannelsCard(data), appleServicePermissionLink()); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("h2", "Your personal connections"), text("strong", "Connection truth has four separate axes."), text("p", "These counts and controls cover only your accounts. Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.")); fragment.append(intro);
   if (!data.control.connections.length) fragment.append(text("p", "No reviewed provider connection is configured for this member.", "empty card"));
   else { const grid = document.createElement("div"); grid.className = "settings-card-grid"; for (const connection of data.control.connections) grid.append(connectionCard(connection, data)); fragment.append(grid); }
   const add = document.createElement("section"); add.className = "card settings-add-provider"; add.append(text("h2", "Reviewed provider paths"), text("p", "Only adapters proven by the checked-in capability catalog appear here. Secure account enrollment and member consent stay separate from software availability.")); const list = document.createElement("div"); list.className = "provider-roadmap"; const reviewed = (data.control.capabilities?.items || []).filter((item) => item.source_kind === "adapter_manifest"); for (const item of reviewed) list.append(text("span", `${item.label} · ${titleCase(item.installation)}`, "pill pill-lavender")); if (!reviewed.length) list.append(text("span", "No reviewed central provider path", "pill pill-lavender")); add.append(list); fragment.append(add); return fragment;

@@ -1073,6 +1073,9 @@ class ReconciliationAdmissionEvaluator:
         self._decision_index: dict[tuple[str | None, str], dict[str, Any]] = {}
         self._profile_cache: dict[tuple[str, str], EvidenceProfile] = {}
 
+    def rebind_provider_bindings(self, bindings: tuple[Any, ...]) -> None:
+        self._provider_bindings = bindings
+
     async def _events_of_type(
         self, event_type: str, *, owner_scope: str | None = None
     ) -> list[dict[str, Any]]:

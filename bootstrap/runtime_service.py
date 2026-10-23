@@ -33,6 +33,18 @@ def main() -> None:
     )["references"]
     store = secret_store(paths)
     event_key = store.get(references["event_log"])
+    from bootstrap.member_google_transition import MemberGoogleReadinessTransition
+    from bootstrap.member_google_oauth import load_configuration
+    from adminme.google_oauth_transport import GoogleWebOAuth
+
+    google_transition = MemberGoogleReadinessTransition(paths, event_key)
+    google_transition.recover()
+    oauth_config = load_configuration(paths)
+    google_oauth = (
+        GoogleWebOAuth(store, oauth_config["client_ref"], oauth_config["redirect_uri"])
+        if oauth_config
+        else None
+    )
     bridge_transition = BridgeReadinessTransition(paths, event_key)
     # Resolve an interrupted exact enrollment transaction before any bridge
     # authorization or current readiness snapshot enters runtime memory.
@@ -103,6 +115,8 @@ def main() -> None:
         household_mapping=mapping,
         bridge_enrollments=bridge_enrollments,
         bridge_index_committer=bridge_transition,
+        google_config_committer=google_transition,
+        google_oauth=google_oauth,
         member_roles=roles,
         deterministic_openclaw_fixture=False,
         openclaw_enabled=bool(actor_identities or chat_members),

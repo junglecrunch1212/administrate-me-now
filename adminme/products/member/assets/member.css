@@ -581,6 +581,25 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .connection-axis { min-width: 0; display: grid; gap: .3rem; padding: .55rem; border: 1px solid var(--line); border-radius: var(--radius); background: #fbf8f2; }
 .connection-axis > span, .permission-box > span { color: var(--muted); font-size: .66rem; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
 .connection-axis strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .7rem; }
+/* Google account consent remains separate from service sync and CoS sharing. */
+.google-connections, .google-account-list, .google-connection-form, .google-account-permissions { display: grid; gap: 1rem; min-width: 0; }
+.google-account h3 { overflow-wrap: anywhere; }
+.google-account-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.google-account-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: .8rem; }
+.google-add-form > summary { cursor: pointer; font-weight: 800; min-height: 1.5rem; }
+.google-add-form[open] > summary { margin-bottom: 1rem; }
+.google-service-choices { display: grid; gap: .6rem; padding: .75rem; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); }
+.google-service-choices legend { padding: 0 .3rem; font-weight: 750; }
+.google-service-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.google-service-choice:last-child { border-bottom: 0; }
+.google-service-choice > div:first-child { display: grid; gap: .2rem; }
+.google-service-choice small { color: var(--muted); overflow-wrap: anywhere; }
+.google-write-description { grid-column: 1 / -1; }
+.google-access-toggles { display: flex; gap: .65rem; align-items: start; }
+.google-access-toggles label { display: flex; gap: .35rem; align-items: center; min-height: 2rem; cursor: pointer; font-size: .8rem; }
+.google-access-toggles input { width: 1.1rem; height: 1.1rem; accent-color: var(--teal); }
+@media (max-width: 1000px) { .google-account-list { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .google-account-fields, .google-service-choice { grid-template-columns: 1fr; } .google-access-toggles { gap: 1.5rem; } }
 .permission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
 .permission-box { min-width: 0; padding: .65rem; border-radius: var(--radius); background: #f4efe6; }
 .permission-box ul { display: flex; flex-wrap: wrap; gap: .3rem; list-style: none; margin: .45rem 0 0; padding: 0; }
