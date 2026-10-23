@@ -82,8 +82,8 @@ APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
         "66d9d895be554dba3820cca81c8136678424bfd30bbf86384bdd2370ee738a20",
     ),
     "packs/adapters/calendaring/apple-calendar/adapter.py": (
-        "d508be2822271f8710fbb0843c799662fd49d3f7bfbecc53dab7713b33457e7c",
         "830e04296d6f6a341c08ed324351c6a4cada39bf5e84c6bf5c67e1f3717bea5b",
+        "fd4d07b07f3288ee719cc74a64ce7494e9b4a20c35867a2e7c623641fd00f7e9",
     ),
     "packs/adapters/reminders/apple-eventkit/adapter.py": (
         "c25e284adeaa872292ead2228d0e9b6d2024b837e3adeb09e28779f6bdddaa97",
