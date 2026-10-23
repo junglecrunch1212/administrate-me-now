@@ -138,6 +138,7 @@ COS_REMINDER_PATHS = frozenset(
         "tests/acceptance/test_cos_self_reminders.py",
         "tests/acceptance/test_cos_self_replies.py",
         "tests/fixtures/openclaw_self_reminder_probe.mjs",
+        "tests/unit/test_historical_attribution.py",
         "tests/unit/bootstrap/test_cos_channel_activation.py",
     }
 )
@@ -292,7 +293,13 @@ def choose_scope(
             and path_modes.get(path) == {_cos_reminder_mode(path)}
             for status, path in changes
         )
-        and any(path in COS_REMINDER_REQUIRED_PATHS for _, path in changes)
+        # The existing worker also covers attribution and source assurance;
+        # an isolated audit repair does not need an unrelated reminder edit.
+        and any(
+            path in COS_REMINDER_REQUIRED_PATHS
+            or path == "adminme/historical_attribution.py"
+            for _, path in changes
+        )
     ):
         return "cos-reminders"
     if (

@@ -1438,6 +1438,47 @@ def test_reminder_scope_checks_closed_sources_and_normal_protected_workers(
         verify_gate(proof, _needs(proof, platform), platform=platform)
 
 
+@pytest.mark.parametrize("extra", ["none", "dependency", "unknown", "mode", "deleted"])
+def test_attribution_only_repair_uses_existing_worker_without_relaxing_boundary(
+    repository: tuple[Path, str], extra: str
+) -> None:
+    path, _ = repository
+    _reminder_candidate(path)
+    source = "adminme/historical_attribution.py"
+    regression = "tests/unit/test_historical_attribution.py"
+    _commit(path, "poetry.lock", "# Retained dependencies\n")
+    _commit(path, source, "# Retained attribution behavior\n")
+    base = _commit(path, regression, "# Existing attribution proof\n")
+    _commit(path, source, "# Reviewed manual-member attribution repair\n")
+    head = _commit(path, regression, "# Real authenticated-emitter regression\n")
+    if extra == "dependency":
+        head = _commit(path, "poetry.lock", "# Changed dependencies\n")
+    elif extra == "unknown":
+        head = _commit(path, "tests/unreviewed.py", "# Unreviewed test boundary\n")
+    elif extra in {"mode", "deleted"}:
+        if extra == "mode":
+            (path / source).chmod(0o755)
+        else:
+            (path / source).unlink()
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unsupported attribution source change")
+        head = _git(path, "rev-parse", "HEAD")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == ("cos-reminders" if extra == "none" else "system-wide")
+    if extra == "none":
+        assert {change["path"] for change in proof["changes"]} == {source, regression}
+        for platform in ("linux", "macos"):
+            assert required_workers(proof["scope"], platform) == (
+                "release-scope",
+                "cos-reminder-validation",
+            )
+            verify_gate(proof, _needs(proof, platform), platform=platform)
+        script = (ROOT / "scripts/acceptance/cos-reminder-release.sh").read_text()
+        # Execute the entire file, including newly added production-emitter proof.
+        assert "  tests/unit/test_historical_attribution.py \\" in script.splitlines()
+        assert "  tests/unit/test_source_assurance.py \\" in script.splitlines()
+
+
 @pytest.mark.parametrize(
     "other",
     [
