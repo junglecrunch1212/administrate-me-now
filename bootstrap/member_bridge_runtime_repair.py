@@ -53,6 +53,13 @@ UNCHANGED_TREES = (
 # Exact old/new bytes prevent this component repair from becoming a generic
 # runtime-interface bypass. Refresh a pair only with its affected checks.
 APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
+    # A central-only schema was added after the retained write-aware edge.
+    # Bind that additive file exactly; no bridge command or retained event format
+    # changes when installing the Calendar acquisition repair.
+    "adminme/events/schemas/cos_reminders.py": (
+        None,
+        "f1051aa26ecfc4a5912de3acafc6db4e4cfd0276adf731376b27499e387f76d6",
+    ),
     "adminme/apple_service_permissions.py": (
         None,
         "26a6413a1eb41f51a4276007d1a7f25ec2751fac6d4b76d79f22484f46acfee1",

@@ -307,14 +307,17 @@ def test_acquisition_repair_does_not_allow_other_pack_changes(rig):
     assert not fake.actions("bootstrap")
 
 
+@pytest.mark.parametrize(
+    "relative",
+    ["adminme/apple_service_permissions.py", "adminme/events/schemas/cos_reminders.py"],
+)
 def test_reviewed_write_overlay_requires_exact_bytes_without_changing_read_state(
-    rig, monkeypatch
+    rig, monkeypatch, relative
 ):
     import hashlib
 
     paths, fake, _ = rig
-    relative = "adminme/apple_service_permissions.py"
-    new_bytes = b"reviewed additive permission implementation\n"
+    new_bytes = b"reviewed additive implementation\n"
     monkeypatch.setattr(
         repair,
         "APPLE_SERVICE_WRITE_OVERLAY",
@@ -333,9 +336,12 @@ def test_reviewed_write_overlay_requires_exact_bytes_without_changing_read_state
     assert len(fake.actions("bootstrap")) == 1
 
 
-def test_unreviewed_write_overlay_refuses_before_switch(rig, monkeypatch):
+@pytest.mark.parametrize(
+    "relative",
+    ["adminme/apple_service_permissions.py", "adminme/events/schemas/cos_reminders.py"],
+)
+def test_unreviewed_write_overlay_refuses_before_switch(rig, monkeypatch, relative):
     paths, fake, _ = rig
-    relative = "adminme/apple_service_permissions.py"
     monkeypatch.setattr(
         repair,
         "APPLE_SERVICE_WRITE_OVERLAY",
