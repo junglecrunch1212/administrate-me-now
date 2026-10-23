@@ -53,6 +53,11 @@ UNCHANGED_TREES = (
 # Exact old/new bytes prevent this component repair from becoming a generic
 # runtime-interface bypass. Refresh a pair only with its affected checks.
 APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
+    # The reviewed dispatcher now resolves the ordinary Tailscale app.
+    "adminme/tailscale_local.py": (
+        None,
+        "0450494bb29928b73179028c1b33928ea8cc9b3097ea7725e440209c12b3eda5",
+    ),
     # A central-only schema was added after the retained write-aware edge.
     # Bind that additive file exactly; no bridge command or retained event format
     # changes when installing the Calendar acquisition repair.
@@ -78,7 +83,7 @@ APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
     "bridge/adminme_bridge/main.py": (
         "07836c5334b87b53a5fec80aed9f325c591bd37995a38b71330dcac7ec707159",
-        "55bdf2c6c41e02c4db88bb2f014e7d4d3ba27c31d76c14f8ea5a19ed5dbc1746",
+        "acc990e08309957268dae9d6445b2f34b5f7b95f27640102c55b30218947790a",
     ),
     "bridge/adminme_bridge/ingest_client.py": (
         "1ca09adde4a2c23633bef66ef7f641c6e75b4194ba2e0489bd8bbe704a2f09c0",
@@ -98,6 +103,11 @@ APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
     ),
 }
 
+# The preceding dispatcher already understands durable write attempt/results.
+# Keep it eligible for recovery; this CLI-only change adds no history format.
+RETAINED_WRITE_AWARE_DISPATCHERS = frozenset(
+    {"55bdf2c6c41e02c4db88bb2f014e7d4d3ba27c31d76c14f8ea5a19ed5dbc1746"}
+)
 _DISPATCHER_PATH = "bridge/adminme_bridge/main.py"
 _APPLE_PROVIDERS = frozenset({"apple_calendar", "apple_reminders", "apple_notes"})
 
@@ -214,7 +224,7 @@ def _require_command_history_compatibility(
     if pair is None or not launch._owned(dispatcher):
         raise ValueError("unsupported bridge dispatcher recovery coordinate")
     target_digest = hashlib.sha256(dispatcher.read_bytes()).hexdigest()
-    if target_digest == pair[1]:
+    if target_digest == pair[1] or target_digest in RETAINED_WRITE_AWARE_DISPATCHERS:
         return
     if target_digest != pair[0]:
         raise ValueError("unsupported bridge dispatcher recovery coordinate")
@@ -266,6 +276,8 @@ def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
                 raise ValueError("Apple write overlay file missing or unsafe")
             current_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             accepted = {old_digest, new_digest} if retained else {new_digest}
+            if retained and relative == _DISPATCHER_PATH:
+                accepted.update(RETAINED_WRITE_AWARE_DISPATCHERS)
             if current_digest not in accepted:
                 raise ValueError("unreviewed Apple write overlay difference")
             result[relative] = old_digest or "absent-before-apple-write-overlay"
