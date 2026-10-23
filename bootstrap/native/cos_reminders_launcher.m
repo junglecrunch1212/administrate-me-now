@@ -32,7 +32,13 @@ static BOOL integer(id value) {
 static BOOL absolutePath(id value) {
     if (![value isKindOfClass:NSString.class] || ![value isAbsolutePath] ||
         [value length] > PATH_MAX || [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return NO;
-    return [[value stringByStandardizingPath] isEqualToString:value];
+    // Foundation standardization strips /private from existing macOS temp
+    // paths. Check lexical form only; realpath and O_NOFOLLOW below enforce
+    // filesystem identity without rewriting the caller's canonical path.
+    for (NSString *component in [[value substringFromIndex:1] componentsSeparatedByString:@"/"]) {
+        if (component.length == 0 || [component isEqual:@"."] || [component isEqual:@".."]) return NO;
+    }
+    return YES;
 }
 
 static BOOL unchanged(struct stat a, struct stat b) {
