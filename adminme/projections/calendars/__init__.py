@@ -16,7 +16,8 @@ from adminme.projections.calendars import handlers
 
 class CalendarsProjection(Projection):
     name = "calendars"
-    version = 3
+    version = 4
+    replay_retained_events_on_version_change = True
     subscribes_to = [
         "calendar.event_added",
         "calendar.event_updated",

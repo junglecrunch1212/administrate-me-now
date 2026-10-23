@@ -475,3 +475,17 @@ CREATE TABLE IF NOT EXISTS cos_google_tasks_execution_history_v2 (
     changed_at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, command_id, source_event_id, state)
 );
+
+
+-- Durable metadata-only read receipts prevent retained notes from discarding
+-- source restrictions between tools, policy edits, or process restarts.
+CREATE TABLE IF NOT EXISTS cos_source_read_receipts (
+    tenant_id TEXT NOT NULL,
+    service_principal_id TEXT NOT NULL,
+    session_digest TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    authority_json TEXT NOT NULL,
+    read_rank INTEGER NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, service_principal_id, session_digest, source_event_id)
+);

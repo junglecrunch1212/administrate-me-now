@@ -61,7 +61,8 @@ The service agent exposes exactly:
 - `administrateme_service_private_state`: read work and paginated typed history.
 - `administrateme_service_context`: read bounded task/commitment facts,
   current calendar/contact facts, and mail/note/file metadata across current
-  member/shared/external standing grants.
+  member/shared/external standing grants, plus service-owned acquired Gmail
+  headers and policy-permitted bounded plaintext snippets.
 
 These have standing internal authority and zero provider effects. Existing
 member/private/shared grants and external approval gates remain separate.
@@ -123,8 +124,9 @@ projections, encryption, append-only truth and provider approvals, and
 The later deliverables below are **DEFER** for this slice, not a claim that the
 whole remote-human-CoS ambition is complete.
 
-No destructive storage migration is introduced. Tasks projection v9 adds record kind and source-authority metadata with old-row
-defaults and retained-event replay. The log itself is not rewritten.
+No destructive storage migration is introduced. Tasks projection v10 retains record kind/source metadata and adds an indexed
+metadata-only source-read receipt table, reconstructed from retained audit events.
+Additive task.created v5 and openclaw.tool_call.recorded v3 preserve older meanings. The log itself is not rewritten.
 Old v3/v1 delegation events remain registered and replayable. Focused hosted
 Linux/macOS checks cover principal/scope/schema contracts, process lifecycle,
 pagination, retry conflicts, member canaries, two-head working context, source
@@ -133,7 +135,7 @@ tool boundaries, topology selection and maintenance recovery. CI retains its pro
 revision check and falls back for changes outside the reviewed scope.
 
 Before new events exist, an immutable predecessor may be selected through the
-supported updater. Once v4/v2 history exists, keep a schema-aware runtime and
+supported updater. Once v4/v5 task or v2/v3 audit history exists, keep a schema-aware runtime and
 disable the feature through the supported managed Gateway configuration:
 
 ```sh
@@ -159,10 +161,10 @@ permission, credential or provider destination is changed by implementation.
 
 ## Remaining deliverables
 
-1. Body/content access with trusted explicit-demand evidence, service-self
-   source authority, and provider acquisition not already supported. The bounded
-   standing-context extension below supplies current calendar/contact facts and
-   mail/note/file metadata from already-ingested authorized sources.
+1. Full-body/attachment access with trusted explicit-demand evidence and
+   provider acquisition/current-state indexing not already supported. Own Gmail
+   metadata and policy-permitted plaintext snippets are implemented below; Apple/Drive and wider provider content remain later slices; own Calendar/Tasks
+   current facts are implemented below.
 2. Authorized member instruction → bounded CoS work with explicit provenance
    and audience-aware progress receipts; no automatic private-history copy.
 3. One exact service-owned provider workspace at a time, with supported verbs,
@@ -190,24 +192,74 @@ attachments, arbitrary contact fields and storage references are not exposed.
 
 **PRESERVE:** source ownership, sensitivity, exact authority and
 internal-processing-only restrictions accompany retained notes. Effective
-source policy now includes the existing parent/container inheritance resolver.
-Only typed-fact modes are admitted; snippet permission does not make this tool
-return snippets. Metadata-only, no-context and explicit-demand-only sources are
-withheld until a separately implemented content route can honor those contracts.
+source policy includes the existing parent/container inheritance resolver.
+Delegated sources still admit typed-fact modes only, without provider bodies;
+metadata-only, no-context and explicit-demand-only delegated sources are withheld.
 Retained notes re-read their original event's coordinates and current policy on
-every reuse, without adding a new durable schema. They remain historical notes
-when an underlying observation changes; they are never reintroduced as current
-source facts. Revoked or narrowed authority blocks reuse while preserving history.
+every reuse. They remain historical notes after an observation changes; they
+never become current source facts. Revocation blocks reuse without erasing history.
 
-Focused production-composition cases in
-`tests/acceptance/test_cos_service_working_context.py` cover multi-source notes,
-content exclusions, latest revisions, tombstones, inherited restrictions, replay
-and restart with no provider effects. The existing `cos-service-work` CI scope
-already includes the changed implementation, instructions and acceptance file.
-No new release gate or schema migration is needed. Recover a regression by
-disabling service work through the documented supported control; preserve the
-schema-aware runtime and inherited confidentiality restrictions during repair.
+## Service-owned Gmail and private follow-up
 
-This extension does not enroll provider accounts, fetch Drive files, expose
-full mail/notes contents, or add service-self provider source authority. Those
-remain distinct deliverables in the full CoS request.
+**MODERNIZE:** the same native tool reads the CoS's already-acquired Gmail,
+including ordinary unrouted mail, using exact service ownership rather than a
+member grant. Tenant, service principal, envelope owner/visibility, provider,
+account and workspace must agree. The existing native-message index selects the
+current original event; older revisions cannot be requested as current content.
+No provider call or enrollment is added. Balanced/default policy is `typed_facts`:
+it permits bounded headers, not a body. `metadata_only` returns identifiers/dates;
+`typed_facts_safe_snippet` additionally permits at most 2,000 plaintext characters
+with explicit truncation. `none` and explicit-demand-only modes remain withheld.
+No policy is elevated, no HTML interpreted and no attachment fetched.
+
+New `task.created@5` preserves truthful service-self source authority alongside
+existing exact member/shared/external provenance. The private note inherits the
+highest source sensitivity and the strongest consumed read mode. Typed audit v3
+records source authorities and a one-way digest of the authenticated native run;
+it contains no body or signed session secret. The Tasks projection indexes these
+receipts. A new note inherits every source read in its run (also sources from
+retained notes/history), so omitting IDs or changing policy between read and save
+cannot discard restrictions. A note is bounded to 20 sources; a broader run must
+start a fresh narrowly scoped session before saving. Each new native run already
+has a fresh authenticated nonce. Receipt replay/restart/restore preserves the
+same floor. Narrowed policy or a revoked member grant blocks saved-note reuse;
+restoring sufficient authority allows it again without rewriting history.
+
+Focused production-composition coverage includes own/unrouted mail, wrong owner
+and member identity, mixed privileged provenance, plaintext bounds, policy modes,
+in-run omission/downgrade and derived-note laundering, exact currentness, replay,
+restart and encrypted restore with zero provider effects. The existing focused
+`cos-service-work` checks now also bind the typed audit schema; an unreviewed
+schema still falls back to broader validation. Recovery uses the feature-disable
+command above on a runtime that understands all retained event versions.
+
+This slice does not complete full-body/attachment access, explicit-demand content,
+Apple/Drive/Contacts setup or provider writes. Those remain separate usable deliverables under the full prompt.
+
+
+## Service-owned Calendar and Tasks current context
+
+**MODERNIZE:** the same private context tool reads existing Google Calendar v3
+observations and Google Tasks list v2/item v4 snapshots under exact service-self
+ownership. It returns event titles/times, list names, task titles, due components,
+ordering, completion and source revisions. Google Tasks due dates remain floating
+all-day dates, not a scheduled timestamp or timer. Calendar descriptions, arbitrary
+provider data, task note bodies and attachment contents are not exposed.
+
+Calendars v4 and Lists v5 add separate private current-source pointer tables and
+replay retained events. Original encrypted events still supply content. Native
+keys include tenant, principal, provider, account, container and object. A source
+update supersedes only that exact copy. Explicit tombstones hide deleted events
+and items; list deletion also hides its old children, and recreating a list does
+not resurrect old item snapshots. Partial snapshots never imply deletion. Member
+calendar capacity, lists and canonical tasks remain separate.
+
+Existing source policy and v5 note provenance apply without new grants or model
+flags. Metadata mode excludes titles; typed planning facts do not claim snippet
+access. Acquisition pause and retained-context policy remain distinct. Replay,
+restart and encrypted restore rebuild the private pointers and source receipts.
+The focused hosted check adds the affected calendar/list contracts and real
+producer → production service-route → private follow-up tests. Live usability
+still requires authorized acquisition and native service-tool read-back after
+activation. Recover through the existing service-work feature disable on the
+schema-aware runtime; no provider effect or enrollment is introduced here.

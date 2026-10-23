@@ -189,3 +189,19 @@ CREATE TABLE IF NOT EXISTS calendar_schedule_policies (
     last_event_id           TEXT NOT NULL,
     PRIMARY KEY (tenant_id, member_id)
 );
+
+
+-- Exact current service source pointers; original events retain all content.
+-- This is separate from member calendar capacity and scheduling policy.
+CREATE TABLE IF NOT EXISTS service_calendar_current (
+    tenant_id TEXT NOT NULL,
+    service_principal_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    calendar_external_id TEXT NOT NULL,
+    external_event_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    deleted INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, service_principal_id, provider, provider_account_id,
+                 calendar_external_id, external_event_id)
+);

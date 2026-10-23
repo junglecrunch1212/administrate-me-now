@@ -11,8 +11,8 @@ from adminme.projections.lists import handlers
 
 class ListsProjection(Projection):
     name = "lists"
-    version = 4
-    # v4 adds per-member/account observations for shared Apple list facts.
+    version = 5
+    # v5 adds private service source pointers; v4 added member observations.
     # Replay is required so retained events populate that provenance rather
     # than limiting it to observations received after upgrade.
     replay_retained_events_on_version_change = True

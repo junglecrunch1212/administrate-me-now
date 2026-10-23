@@ -15,10 +15,11 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 9
+    version = 10
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "task.created",
+        "openclaw.tool_call.recorded",
         "task.completed",
         "task.deferred",
         "task.snoozed",

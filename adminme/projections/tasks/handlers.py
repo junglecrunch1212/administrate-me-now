@@ -56,6 +56,7 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     event_type = envelope["type"]
     dispatch = {
         "task.created": apply_task_created,
+        "openclaw.tool_call.recorded": apply_source_read_receipt,
         "task.completed": apply_task_completed,
         "task.deferred": apply_task_deferred,
         "task.snoozed": apply_task_snoozed,
@@ -1643,3 +1644,48 @@ def apply_task_deleted(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             p["task_id"],
         ),
     )
+
+
+def apply_source_read_receipt(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Index only the exact service-private typed audit, preserving mode floors."""
+    p = envelope["payload"]
+    principal = "service-principal:chief-of-staff"
+    scope = f"service-private:{principal}"
+    if (
+        envelope["schema_version"] != 3
+        or envelope["owner_scope"] != scope
+        or envelope["visibility_scope"] != scope
+        or envelope["source_adapter"] != "openclaw-plugin"
+        or envelope["source_account_id"] != principal
+        or p.get("actor_principal_id") != principal
+        or p.get("represented_service_principal_id") != principal
+        or p.get("context_scope") != "service_private"
+        or p.get("authority_grant_id") is not None
+        or p.get("operation")
+        not in {"tools.service-context", "tools.service-private-state"}
+    ):
+        return
+    for source in p["source_read_authorities"]:
+        rank = {"metadata_only": 0, "typed_facts": 1, "typed_facts_safe_snippet": 2}[
+            source.get("read_mode", "typed_facts")
+        ]
+        conn.execute(
+            "INSERT INTO cos_source_read_receipts VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(tenant_id, service_principal_id, session_digest, source_event_id) "
+            "DO UPDATE SET authority_json=json_set(cos_source_read_receipts.authority_json, "
+            "'$.read_mode', json_extract(excluded.authority_json, '$.read_mode')), "
+            "read_rank=excluded.read_rank, "
+            "last_event_id=excluded.last_event_id "
+            "WHERE cos_source_read_receipts.read_rank < excluded.read_rank",
+            (
+                envelope["tenant_id"],
+                principal,
+                p["source_read_session_digest"],
+                source["source_event_id"],
+                json.dumps(source, sort_keys=True),
+                rank,
+                envelope["event_id"],
+            ),
+        )

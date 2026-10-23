@@ -289,6 +289,31 @@ class ServiceSourceAuthority(BaseModel):
         return self
 
 
+class ServiceSelfSourceAuthority(BaseModel):
+    """Exact service-owned source plus the strongest consumed processing mode."""
+
+    model_config = {"extra": "forbid", "frozen": True}
+    source_event_id: str = Field(min_length=1, max_length=240)
+    authority_kind: Literal["service_self"]
+    authority_grant_id: None = None
+    context_scope: Literal["service_private"]
+    context_member_id: None = None
+    owner_party_id: Literal["service-party:chief-of-staff"]
+    source_owner_scope: Literal["service-private:service-principal:chief-of-staff"]
+    source_visibility_scope: Literal["service-private:service-principal:chief-of-staff"]
+    source_sensitivity: Literal["normal", "sensitive", "privileged"]
+    source_adapter: str = Field(min_length=1, max_length=240)
+    source_account_id: str = Field(min_length=1, max_length=500)
+    source_policy_key: str = Field(min_length=1, max_length=240)
+    source_policy_owner_id: Literal["service-principal:chief-of-staff"]
+    source_audience: list[str] = Field(default_factory=list, max_length=0)
+    read_mode: Literal["metadata_only", "typed_facts", "typed_facts_safe_snippet"]
+    restriction: Literal["internal_processing_only"]
+
+
+ServiceWorkSourceAuthority = ServiceSourceAuthority | ServiceSelfSourceAuthority
+
+
 class TaskCreatedV4(BaseModel):
     """Service-self internal work without delegated or provider authority."""
 
@@ -381,6 +406,14 @@ class TaskCreatedV4(BaseModel):
         ):
             raise ValueError("scheduled work must end after it starts")
         return self
+
+
+class TaskCreatedV5(TaskCreatedV4):
+    """Private work may inherit service-self and delegated source restrictions."""
+
+    source_authorities: list[ServiceWorkSourceAuthority] = Field(  # type: ignore[assignment]
+        default_factory=list, max_length=20
+    )
 
 
 class CoSWorkStateChangedV1(BaseModel):
@@ -887,6 +920,7 @@ registry.register("task.created", 1, TaskCreatedV1)
 registry.register("task.created", 2, TaskCreatedV2)
 registry.register("task.created", 3, TaskCreatedV3)
 registry.register("task.created", 4, TaskCreatedV4)
+registry.register("task.created", 5, TaskCreatedV5)
 registry.register("cos.work.state_changed", 1, CoSWorkStateChangedV1)
 registry.register("cos.work.state_changed", 2, CoSWorkStateChangedV2)
 registry.register("task.completed", 1, TaskCompletedV1)

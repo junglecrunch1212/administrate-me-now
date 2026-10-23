@@ -485,13 +485,21 @@ def test_encrypted_restore_preserves_service_work_and_client_restrictions(
         )
         source_id = client.portal.call(runtime.events.write, source)
         client.portal.call(runtime.wait_for_projection, "tasks", source_id)
+        from tests.acceptance.test_cos_service_working_context import _own_mail
+
+        mail_id = _own_mail(client, "backup-service-mail")
+        from tests.acceptance.test_cos_service_planning_context import _emit
+        from tests.acceptance.test_cos_service_working_context import _context
+
+        calendar_id = _emit(client, "calendar.event_added")
+        item_id = _emit(client, "list_item.added")
         create_body = {
             "provenance": _service("backup-service-note"),
             "request_id": "backup-service-note",
             "title": PRIVATE_TITLE,
             "description": "Retain an authorized client follow-up",
             "record_kind": "note",
-            "source_event_ids": [source_id],
+            "source_event_ids": [source_id, mail_id, calendar_id, item_id],
         }
         created = client.post(CREATE, headers=OPENCLAW_HEADERS, json=create_body)
         assert created.status_code == 201, created.text
@@ -520,6 +528,18 @@ def test_encrypted_restore_preserves_service_work_and_client_restrictions(
         assert authority["restriction"] == "internal_processing_only"
         assert authority["source_sensitivity"] == "privileged"
         assert authority["source_policy_key"]
+        own_authority = expected["work"][0]["source_authorities"][1]
+        assert own_authority["source_event_id"] == mail_id
+        assert own_authority["authority_kind"] == "service_self"
+        assert own_authority["authority_grant_id"] is None
+        assert (
+            runtime.projections.connection("tasks")
+            .execute(
+                "SELECT 1 FROM cos_source_read_receipts WHERE source_event_id=?",
+                (mail_id,),
+            )
+            .fetchone()
+        )
         before_events = client.portal.call(_events, runtime)
         assert runtime.fixture_adapter.delivered == []
 
@@ -541,6 +561,22 @@ def test_encrypted_restore_preserves_service_work_and_client_restrictions(
             for event in after_events
             if event["event_id"] in before_by_id
         } == before_by_id
+        assert (
+            runtime.projections.connection("tasks")
+            .execute(
+                "SELECT 1 FROM cos_source_read_receipts WHERE source_event_id=?",
+                (mail_id,),
+            )
+            .fetchone()
+        )
+        assert (
+            _context(
+                client,
+                "restored-planning-sources",
+                source_event_ids=[calendar_id, item_id],
+            ).status_code
+            == 200
+        )
         after = _read(client, "backup-service-after", task_id=task_id)
         assert after["work"] == expected["work"]
         assert after["history"] == expected["history"]
