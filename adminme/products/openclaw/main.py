@@ -4307,7 +4307,12 @@ async def _finance_delivery(
 
     runtime = _runtime(request)
     await _record_tool_call(request, session, body.provenance, operation=operation)
-    # The audit append yields: resolve the effective grant again afterwards.
+    # The audit append yields. Ordinary requests may have arrived meanwhile;
+    # give them priority before resolving the current effective grant again.
+    if not await runtime.finance_admission.yield_to_foreground():
+        from adminme.finance.admission import admission_busy_result
+
+        return admission_busy_result()
     latest = await _finance_session(request, body.provenance)
     # Frozen Session equality includes tenant, actor/view identity, allowed
     # audience via the exact service grant, grant ID, permissions and quorum.
@@ -4346,6 +4351,12 @@ async def _finance_delivery(
                 )
             except FinanceDisclosureError as exc:
                 raise HTTPException(403, str(exc)) from None
+            except FinanceBudgetError as exc:
+                return {
+                    "state": "temporarily_unavailable",
+                    "reason": exc.code,
+                    "provider_effect_count": 0,
+                }
             # Receipt persistence yields. Recheck the transport and exact private
             # audience binding as well as the domain grant checked by the writer.
             _authenticate(request)

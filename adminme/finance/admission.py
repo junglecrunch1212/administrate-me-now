@@ -59,6 +59,32 @@ class FinanceAdmissionGate:
         self._foreground_finished_at = time.monotonic()
         self._changed.set()
 
+    async def yield_to_foreground(self) -> bool:
+        """Let ordinary work finish before resuming a private delivery phase.
+
+        An admitted finance request keeps its FIFO lane while audit I/O yields.
+        A new foreground request may have arrived meanwhile. Reuse the same
+        bounded quiet-period rule before doing more projection work; authority
+        must be freshly checked *after* this await, never before it.
+        """
+        await asyncio.sleep(0)
+        deadline = time.monotonic() + self._wait_seconds
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+            ready_at = self._foreground_finished_at + self._quiet_seconds
+            if self._foreground == 0 and now >= ready_at:
+                return True
+            self._changed.clear()
+            pause = deadline - now
+            if self._foreground == 0:
+                pause = min(pause, ready_at - now)
+            try:
+                await asyncio.wait_for(self._changed.wait(), timeout=pause)
+            except TimeoutError:
+                pass
+
     @asynccontextmanager
     async def slot(self, actor: tuple[str, str]) -> AsyncIterator[bool]:
         """After authentication, admit one light request or yield false.

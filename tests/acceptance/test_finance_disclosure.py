@@ -530,3 +530,34 @@ def test_authority_change_after_receipt_snapshot_blocks_release(
         assert changed
         assert response.status_code == 403, response.text
         assert "values" not in response.text and "answer_ref" not in response.text
+
+
+def test_finance_receipt_yields_to_new_foreground_then_rechecks_authority(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    from adminme.finance import disclosure
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        grant = _grant_cos(client, "foreground-revocation")
+        original = disclosure._append
+        foreground = []
+
+        async def append_with_new_foreground(runtime, session, key, payload):
+            await original(runtime, session, key, payload)
+            if payload["kind"] == "run":
+                runtime.finance_admission.foreground_started()
+
+                async def finish_foreground():
+                    try:
+                        await asyncio.sleep(0.01)
+                        await revoke(runtime, grant)
+                    finally:
+                        runtime.finance_admission.foreground_finished()
+
+                foreground.append(asyncio.create_task(finish_foreground()))
+
+        monkeypatch.setattr(disclosure, "_append", append_with_new_foreground)
+        response = calculate(client, "foreground-revoked")
+        assert response.status_code == 403, response.text
+        assert "120000" not in response.text and foreground[0].done()

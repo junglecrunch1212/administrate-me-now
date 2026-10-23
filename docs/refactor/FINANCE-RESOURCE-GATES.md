@@ -15,8 +15,13 @@ responses still traverse the existing audit path; private data is not read
 before admission, and current domain authority is resolved after waiting. Cancellation
 and failures release the lane. Non-finance requests never acquire this lane.
 Ordinary responses retain priority through their final body send; SSE releases
-at headers so long chat streams cannot block their own tools. This is bounded HTTP admission, not preemption of synchronous
-Python or proof of reserved Gateway/model capacity.
+at headers so long chat streams cannot block their own tools. An admitted
+finance request yields again after tool audit and disclosure-receipt persistence
+when ordinary work has arrived meanwhile. Each yield uses the same bounded
+quiet interval and wait cap, retains the finance FIFO lane, and occurs before
+a fresh authorization read. A timeout returns no private values. This is bounded
+HTTP admission, not preemption of synchronous Python or proof of reserved
+Gateway/model capacity.
 
 `adminme.finance.budgets` admits work using tenant, resolved actor, audience,
 authenticated session and inbound message identity. Missing identity refuses

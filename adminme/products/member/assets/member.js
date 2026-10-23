@@ -4009,6 +4009,8 @@ function financePlanningCard(books) {
   const request = (report, extra = {}) => api(`/api/member/v1/finance/planning?${new URLSearchParams({ book_id: books.book_id, report_id: report, ...(projectionId ? { projection_id: projectionId } : {}), ...extra })}`);
   const exact = (value, currency) => value == null ? "Unknown" : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)} ${currency} minor units`;
   const range = (values, currency) => values ? `${exact(values[0], currency)} to ${exact(values[1], currency)}` : "Unknown";
+  const incomeLabel = (basis) => basis === "OBSERVED_BASE_ONLY" ? "Observed income only" : "Modeled net funding (not payroll)";
+  const openingLabel = (basis) => basis === "verified_unrestricted" ? "Verified unrestricted opening" : "Hypothetical observed opening";
   async function events(offset, generation) {
     const answer = await request("planning_events", { context_id: contextSelect.value, horizon_days: horizonSelect.value, offset: String(offset) });
     if (generation !== requestNumber || !section.isConnected) return;
@@ -4033,27 +4035,33 @@ function financePlanningCard(books) {
       if (generation !== requestNumber || !section.isConnected) return;
       const c = answer.context; const h = answer.summary;
       status.textContent = `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash subset" : "Cash-equivalent funding — not bank cash"} · ${h.completeness_state} · ${h.estimate_state}`;
-      content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${c.income_basis} · ${c.opening_basis}`, "state-note"));
+      content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${incomeLabel(c.income_basis)} · ${openingLabel(c.opening_basis)}`, "state-note"));
       content.append(text("p", `${h.start_inclusive} inclusive to ${h.end_exclusive} exclusive · ${c.timezone}. Cash safety: ${h.safety_state === "SOURCE_VERIFIED" ? "historically verified by source; current safety unverified" : "not established"}.`, "state-note"));
       const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
       for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], ["Minimum range", h.minimum], ["Encumbered range", h.encumbered], ["Cash-in range", h.cash_in], ["Cash-out range", h.cash_out]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", range(value, c.currency))); stats.append(item); }
       content.append(stats, text("p", "These measures cannot be added. Positive remainder is not available surplus. Modeled net funding is not payroll or guaranteed bank income.", "state-note"));
+      content.append(text("p", `Reserve threshold: ${exact(h.reserve_threshold, c.currency)}. Checking threshold: ${exact(h.checking_threshold, c.currency)}.`, "state-note"));
       for (const [label, value] of [["Reserve breach", h.reserve_breach], ["Negative bank cash", h.negative_bank_cash], ["Checking shortage", h.checking_shortage]]) content.append(text("p", `${label}: ${value == null ? "Unknown" : value ? "Yes" : "No"}.`, "state-note"));
       for (const [label, key] of [["Minimum date", "minimum_date"], ["First negative date", "first_negative_date"], ["First zero-crossing date", "first_zero_crossing_date"], ["First reserve-breach date", "first_reserve_breach_date"]]) { const dated = h[key]; content.append(text("p", `${label}: ${dated.date || `Unknown (${titleCase(dated.unknown_reason)})`}.`, "state-note")); }
       const references = document.createElement("div"); references.className = "finance-gap-details";
-      async function reference(report, referenceId, target) {
-        const info = await request(report, { context_id:c.context_id, horizon_days:String(h.days), ...(referenceId ? {reference_id:referenceId} : {}) });
+      async function reference(report, referenceId, target, offset = 0) {
+        const info = await request(report, { context_id:c.context_id, horizon_days:String(h.days), offset:String(offset), ...(referenceId ? {reference_id:referenceId} : {}) });
         if (generation !== requestNumber || !section.isConnected) return;
         target.replaceChildren();
         for (const record of info.records || []) {
           if (report === "planning_gaps") {
             target.append(text("p", record.explanation), text("p", `Required input: ${record.required_input}`), text("p", `When: ${titleCase(record.timing)}`, "state-note"));
-            for (const evidenceId of record.evidence_ids) { const evidence = text("button", "Evidence details", "button button-quiet"); evidence.type = "button"; evidence.addEventListener("click", () => { void reference("planning_evidence", evidenceId, target).catch(() => { target.textContent = "Evidence details are unavailable in this private context."; }); }); target.append(evidence); }
+            for (const evidenceId of record.evidence_ids) { const evidence = text("button", "Evidence details", "button button-quiet"); evidence.type = "button"; const evidenceBody = document.createElement("div"); evidence.addEventListener("click", () => { void reference("planning_evidence", evidenceId, evidenceBody).catch(() => { evidenceBody.textContent = "Evidence details are unavailable in this private context."; }); }); target.append(evidence, evidenceBody); }
           } else {
             if (record.description) target.append(text("p", record.description));
             if (record.source_content_state === "not_included") target.append(text("p", "Source content is not included; this is its protected reference and declared hash.", "state-note"));
             target.append(text("pre", JSON.stringify(record, null, 2), "notes-body"));
           }
+        }
+        for (const [label, next] of [["Previous references", offset > 0 ? Math.max(0, offset - 50) : null], ["Next references", info.next_offset]]) {
+          if (next == null) continue;
+          const button = text("button", label, "button button-quiet"); button.type = "button";
+          button.addEventListener("click", () => { button.disabled = true; void reference(report, referenceId, target, next).catch(() => { button.disabled = false; status.textContent = "Reference details could not be loaded."; }); }); target.append(button);
         }
       }
       for (const condition of h.conditions) {
@@ -4078,7 +4086,7 @@ function financePlanningCard(books) {
       if (!section.isConnected) return;
       if (!index.contexts?.length) { status.textContent = "No verified dated projection is available. Accounting acceptance alone does not establish a forecast."; return; }
       projectionId = index.projection.id;
-      for (const c of index.contexts) { const option = text("option", `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash" : "Funding, not bank cash"} · ${titleCase(c.scenario_id)} · ${c.income_basis} · ${c.opening_basis} · ${c.plan_case_id}`); option.value = c.context_id; contextSelect.append(option); }
+      for (const c of index.contexts) { const option = text("option", `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash" : "Funding, not bank cash"} · ${titleCase(c.scenario_id)} · ${c.income_basis === "OBSERVED_BASE_ONLY" ? "Observed income" : "Modeled funding"} · ${c.opening_basis === "verified_unrestricted" ? "Verified opening" : "Hypothetical opening"} · ${c.plan_case_id}`); option.value = c.context_id; contextSelect.append(option); }
       controls.hidden = false; await load();
     } catch { status.textContent = "Dated projections are unavailable in the current private session."; }
   })();

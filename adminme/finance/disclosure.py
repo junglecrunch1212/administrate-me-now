@@ -252,6 +252,13 @@ async def record_disclosure(
                     ).isoformat(),
                 },
             )
+        # Persistence yields to the event loop. Finish any ordinary request
+        # before the final synchronous authorization query; nothing awaits
+        # between that query and the caller's final transport/privacy checks.
+        if not await runtime.finance_admission.yield_to_foreground():
+            from adminme.finance.budgets import FinanceBudgetError
+
+            raise FinanceBudgetError("finance_core_capacity_busy")
         validate_current_authority(runtime, session, authority_hash)
 
 

@@ -172,3 +172,32 @@ async def test_ordinary_response_keeps_priority_through_body_send():
     assert observed == [False, False]
     async with gate.slot(("fixture", "member")) as admitted:
         assert admitted
+
+
+async def test_active_finance_delivery_yields_to_new_foreground_without_losing_lane():
+    gate = FinanceAdmissionGate(quiet_seconds=0)
+    async with gate.slot(("fixture", "member-a")) as admitted:
+        assert admitted
+        gate.foreground_started()
+        resumed = asyncio.create_task(gate.yield_to_foreground())
+        await asyncio.sleep(0)
+        assert not resumed.done()
+        gate.foreground_finished()
+        assert await asyncio.wait_for(resumed, timeout=1)
+        assert gate._active
+    assert not gate._active
+
+
+async def test_delivery_yield_deadline_and_cancellation_preserve_capacity():
+    gate = FinanceAdmissionGate(quiet_seconds=0, wait_seconds=0.001)
+    gate.foreground_started()
+    assert not await gate.yield_to_foreground()
+    waiting = asyncio.create_task(gate.yield_to_foreground())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    gate.foreground_finished()
+    assert await gate.yield_to_foreground()
+    async with gate.slot(("fixture", "member-a")) as admitted:
+        assert admitted

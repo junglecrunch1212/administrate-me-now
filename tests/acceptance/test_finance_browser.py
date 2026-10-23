@@ -244,6 +244,21 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                 "document.querySelector('.finance-planning').textContent.includes('800 USD minor units to 801 USD minor units') && document.querySelector('.finance-planning').textContent.includes('Minimum date: 2026-03-08')"
             )
             await evaluate(
+                "document.querySelector('.finance-gap-details details').open=true"
+            )
+            await wait_for(
+                "document.querySelector('.finance-gap-details').textContent.includes('Required input:')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-gap-details button')).find(b=>b.textContent==='Evidence details').click()"
+            )
+            await wait_for(
+                "document.querySelector('.finance-gap-details').textContent.includes('Source content is not included') && document.querySelector('.finance-gap-details').textContent.includes('Required input:')"
+            )
+            await evaluate(
+                "document.querySelector('.finance-gap-details details').open=false"
+            )
+            await evaluate(
                 "document.querySelector('.finance-planning').scrollIntoView({block:'start'})"
             )
             planning_shot = await call("Page.captureScreenshot", {"format": "png"})
