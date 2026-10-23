@@ -13,11 +13,13 @@ import { auditCosPrivatePermissions } from "./cos-private-permissions.mjs";
 import { auditSettingsChannelStatus } from "./settings-channel-status.mjs";
 import { auditBridgeEnrollment } from "./bridge-enrollment.mjs";
 import { auditAppleServicePermissions } from "./apple-service-permissions.mjs";
+import { auditGoogleConnections } from "./google-connections.mjs";
 
 const bridgeEnrollmentOnly = process.env.ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY === "1";
 const appleServicesOnly = process.env.ADMINME_GATE7_APPLE_SERVICES_ONLY === "1";
-if (bridgeEnrollmentOnly && appleServicesOnly) throw new Error("Choose one focused member browser mode");
-const expectedFailures = appleServicesOnly ? { 404: 0, 409: 1, 422: 0, 503: 1 } : bridgeEnrollmentOnly ? { 404: 0, 409: 2, 422: 0, 503: 0 } : { 404: 2, 409: 13, 422: 1, 503: 9 };
+const googleConnectionsOnly = process.env.ADMINME_GATE7_GOOGLE_CONNECTIONS_ONLY === "1";
+if ([bridgeEnrollmentOnly, appleServicesOnly, googleConnectionsOnly].filter(Boolean).length > 1) throw new Error("Choose one focused member browser mode");
+const expectedFailures = googleConnectionsOnly ? { 404: 0, 409: 2, 422: 0, 503: 1 } : appleServicesOnly ? { 404: 0, 409: 1, 422: 0, 503: 1 } : bridgeEnrollmentOnly ? { 404: 0, 409: 2, 422: 0, 503: 0 } : { 404: 2, 409: 15, 422: 1, 503: 10 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
@@ -886,7 +888,7 @@ async function run() {
     fixture = await seed(server.baseUrl);
     console.log("[Gate 7] Canonical fixtures seeded; beginning browser assertions");
 
-    if (!bridgeEnrollmentOnly && !appleServicesOnly) {
+    if (!bridgeEnrollmentOnly && !appleServicesOnly && !googleConnectionsOnly) {
     const paginationBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     await visit(paginationBrowser.page, server.baseUrl, "/member/triage?view=all_candidates", "Triage");
     const servedAssetVersions = await paginationBrowser.page.locator("link[href*='/member-assets/member.css'], script[src*='/member-assets/member.js']").evaluateAll((nodes) => nodes.map((node) => new URL(node.href || node.src).searchParams.get("v")));
@@ -1997,7 +1999,7 @@ async function run() {
     await closePageContext(cosReplyBrowser);
 
     }
-    if (!appleServicesOnly) {
+    if (!appleServicesOnly && !googleConnectionsOnly) {
     const bridgeBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const bridgeOtherBrowser = await newContext(browser, identities.adult, { width: 1440, height: 1000 });
     const bridgeStaleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
@@ -2006,12 +2008,20 @@ async function run() {
     await closePageContext(bridgeOtherBrowser);
     await closePageContext(bridgeBrowser);
     }
-    if (!bridgeEnrollmentOnly) {
+    if (!bridgeEnrollmentOnly && !googleConnectionsOnly) {
       const appleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
       const appleStaleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
       const appleOtherBrowser = await newContext(browser, identities.adult, { width: 1440, height: 1000 });
       await auditAppleServicePermissions({ page: appleBrowser.page, stalePage: appleStaleBrowser.page, otherPage: appleOtherBrowser.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, expectHandledFailure, sourceVersion: source.asset_version });
       await closePageContext(appleOtherBrowser); await closePageContext(appleStaleBrowser); await closePageContext(appleBrowser);
+    }
+
+    if (!bridgeEnrollmentOnly && !appleServicesOnly) {
+      const googleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+      const googleStaleBrowser = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
+      const googleOtherBrowser = await newContext(browser, identities.adult, { width: 1440, height: 1000 });
+      await auditGoogleConnections({ page: googleBrowser.page, stalePage: googleStaleBrowser.page, otherPage: googleOtherBrowser.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, expectHandledFailure, sourceVersion: source.asset_version });
+      await closePageContext(googleOtherBrowser); await closePageContext(googleStaleBrowser); await closePageContext(googleBrowser);
     }
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
@@ -2059,7 +2069,7 @@ async function run() {
     generated_at: new Date().toISOString(),
     status: results.every((item) => item.status === "PASS") ? "PASS" : "FAIL",
     browser: browserDescription,
-    coverage: appleServicesOnly ? "apple-services-only" : bridgeEnrollmentOnly ? "bridge-enrollment-only" : "full-member-browser",
+    coverage: googleConnectionsOnly ? "google-connections-only" : appleServicesOnly ? "apple-services-only" : bridgeEnrollmentOnly ? "bridge-enrollment-only" : "full-member-browser",
     source,
     fixture,
     runtime: { node: process.version, python: fixture.python, playwright_core: "1.62.0" },
@@ -2069,8 +2079,8 @@ async function run() {
       pointer_target_min_css_px: 24,
       contrast: "computed foreground composited over rendered ancestor backgrounds",
     },
-    viewports: (bridgeEnrollmentOnly || appleServicesOnly) ? ["1440x1000", "390x844"] : ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
-    states: appleServicesOnly ? ["apple-permissions-disabled", "apple-permissions-enabled", "apple-permissions-revoked", "apple-permissions-unavailable", "apple-permissions-unknown", "apple-permissions-view-as"] : bridgeEnrollmentOnly ? ["bridge-enrollment-failed", "bridge-enrollment-pending", "bridge-package-ready"] : ["bridge-enrollment-failed", "bridge-enrollment-pending", "bridge-package-ready", "day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "cos-reply-confirmed", "cos-reply-sending-approval", "cos-reply-decision-result", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
+    viewports: (bridgeEnrollmentOnly || appleServicesOnly || googleConnectionsOnly) ? ["1440x1000", "390x844"] : ["1440x1000", "1280x900", "1024x900", "1024x768", "820x1180", "390x844"],
+    states: googleConnectionsOnly ? ["google-read-only", "google-write-consent", "google-reduced", "google-unknown", "google-stale-tab", "google-denied", "google-expired", "google-unavailable", "google-view-as"] : appleServicesOnly ? ["apple-permissions-disabled", "apple-permissions-enabled", "apple-permissions-revoked", "apple-permissions-unavailable", "apple-permissions-unknown", "apple-permissions-view-as"] : bridgeEnrollmentOnly ? ["bridge-enrollment-failed", "bridge-enrollment-pending", "bridge-package-ready"] : ["bridge-enrollment-failed", "bridge-enrollment-pending", "bridge-package-ready", "day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "cos-reply-confirmed", "cos-reply-sending-approval", "cos-reply-decision-result", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
     results,
     screenshots,
     console_errors: consoleErrors,
@@ -2084,7 +2094,7 @@ async function run() {
   const lines = [
     "# Gate 7 rendered portal evidence", "", `Status: **${report.status}**`, "",
     "Run from the repository root:", "", "```powershell", "npm.cmd run test:gate7 --prefix tools/console-reference-harness", "```", "",
-    appleServicesOnly ? "Focused Apple permission Settings checks using synthetic API responses; production authorization is verified separately. This is not the complete member browser release gate." : bridgeEnrollmentOnly ? "Focused bridge enrollment checks only; this is not the complete member browser release gate." : `The harness starts credential-free loopback fixtures, uses ${browserDescription}, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.`, "",
+    googleConnectionsOnly ? "Focused Google Settings checks using credential-free synthetic API responses; production OAuth authorization is verified separately. No live Google account is used." : appleServicesOnly ? "Focused Apple permission Settings checks using synthetic API responses; production authorization is verified separately. This is not the complete member browser release gate." : bridgeEnrollmentOnly ? "Focused bridge enrollment checks only; this is not the complete member browser release gate." : `The harness starts credential-free loopback fixtures, uses ${browserDescription}, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.`, "",
     "## Checks", "",
     ...results.map((item) => `- ${item.status}: ${item.name}`), "", "## Screenshots", "",
     ...Object.entries(screenshots).map(([name, meta]) => `- \`${name}\` — ${meta.bytes} bytes, SHA-256 \`${meta.sha256}\``),

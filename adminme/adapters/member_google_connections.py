@@ -1,7 +1,7 @@
 """Exact, separately authorized personal Google connections beside CoS intake.
 
-Gmail stays read-only. Calendar and Tasks may retain explicitly authorized
-read/write access under existing write governance. Automatic candidate extraction
+Gmail, Calendar and Tasks may retain explicitly authorized read/write access
+under existing write governance. Automatic candidate extraction
 is disabled. The guarded configuration operation publishes each selection.
 """
 
@@ -32,6 +32,7 @@ WRITE_SCOPES = {
     for kind, scope in SCOPES.items()
     if kind != "messaging-gmail-api"
 }
+# Gmail needs two write scopes; it is normalized separately below.
 MAIL_CONTROLS: dict[str, Any] = {
     "initial_backfill_days": 0,
     "initial_backfill_max_messages": 0,
@@ -89,13 +90,18 @@ def connection_config(
         )
     if access not in {"read_only", "read_write"}:
         raise ValueError("unsupported Google connection access")
-    if access == "read_write" and kind not in WRITE_SCOPES:
-        raise ValueError("personal Gmail connections must remain read-only")
-    scope = WRITE_SCOPES[kind] if access == "read_write" else SCOPES[kind]
+    scope = (
+        WRITE_SCOPES.get(kind, SCOPES[kind]) if access == "read_write" else SCOPES[kind]
+    )
     config = copy.deepcopy(entry.get("config") or {})
     config.update(read_only=access == "read_only", permission_scope=[scope])
     if kind == "messaging-gmail-api":
-        config["enable_writes"] = False
+        config["enable_writes"] = access == "read_write"
+        if access == "read_write":
+            config["permission_scope"] = [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+            ]
         config.update(copy.deepcopy(MAIL_CONTROLS))
     else:
         config.pop("enable_writes", None)

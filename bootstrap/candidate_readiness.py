@@ -333,6 +333,10 @@ def capture_deployment_snapshot(
         and os.path.lexists(paths.app_dir / "bridge-readiness-transition.json")
     ):
         raise CandidateReadinessError("bridge readiness transition recovery is pending")
+    if adapters_payload_override is None and os.path.lexists(
+        paths.app_dir / "member-google-readiness-transition.json"
+    ):
+        raise CandidateReadinessError("Google readiness transition recovery is pending")
     predecessor, pointer_sha256, pointer_chain_sha256 = _pointer_snapshot(paths)
     config_rows = []
     for relative, required in _CONFIG_COORDINATES:

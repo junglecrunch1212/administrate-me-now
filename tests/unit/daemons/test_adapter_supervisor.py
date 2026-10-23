@@ -391,3 +391,428 @@ def test_supervisor_backoff_constants() -> None:
     assert INITIAL_BACKOFF_S == 1.0
     assert MAX_BACKOFF_S == 300.0
     assert UPTIME_RESET_S == 300.0
+
+
+class _ConfiguredRecordingAdapter(_RecordingAdapter):
+    def __init__(self, entry: dict[str, Any]) -> None:
+        super().__init__()
+        self.instance_name = entry["id"]
+        self._config = dict(entry.get("config", {}))
+
+
+def _reconciliation_config() -> dict[str, Any]:
+    return {
+        "adapter_supervisor_port": 0,
+        "adapters": [
+            {"id": "cos-email", "config": {"service_principal_id": "cos"}},
+            {
+                "id": "member-calendar",
+                "config": {"member_id": "member-a", "enable_writes": False},
+            },
+            {"id": "other-calendar", "config": {"member_id": "member-b"}},
+            {
+                "id": "member-tasks",
+                "enabled": False,
+                "config": {"member_id": "member-a"},
+            },
+        ],
+    }
+
+
+def _reconciliation_supervisor(
+    tmp_path: Path, config: dict[str, Any]
+) -> AdapterSupervisor:
+    def loader(value: dict[str, Any]) -> Any:
+        return [
+            _ConfiguredRecordingAdapter(entry)
+            for entry in value["adapters"]
+            if entry.get("enabled") is not False
+        ]
+
+    return AdapterSupervisor(
+        config_path=tmp_path / "unused.yaml",
+        config_data=config,
+        ctx_factory=_make_ctx_factory(_FakeEventLog()),
+        adapter_loader=loader,
+    )
+
+
+async def test_selected_reconciliation_preserves_unrelated_tasks_and_backoff(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    cos_task = before["cos-email"].task
+    other_task = before["other-calendar"].task
+    before["cos-email"].backoff_s = 64
+    before["cos-email"].status.restart_count = 3
+    candidate = deepcopy(config)
+    candidate["adapters"][1]["config"]["enable_writes"] = True
+    try:
+        result = await sup.reconcile(
+            candidate, affected_instance_ids={"member-calendar"}
+        )
+        assert sup._managed["cos-email"] is before["cos-email"]
+        assert sup._managed["cos-email"].task is cos_task
+        assert sup._managed["cos-email"].backoff_s == 64
+        assert result["adapters"]["cos-email"]["restart_count"] == 3
+        assert sup._managed["other-calendar"] is before["other-calendar"]
+        assert sup._managed["other-calendar"].task is other_task
+        assert not before["cos-email"].adapter.stopped.is_set()
+        assert not before["other-calendar"].adapter.stopped.is_set()
+        assert before["member-calendar"].adapter.stopped.is_set()
+        assert before["member-calendar"].task.done()
+        replacement = sup._managed["member-calendar"]
+        assert replacement is not before["member-calendar"]
+        assert replacement.adapter.started.is_set()
+        assert replacement.adapter._config["enable_writes"] is True
+    finally:
+        await sup.stop()
+
+
+@pytest.mark.parametrize("remove", [False, True])
+async def test_selected_reconciliation_disables_or_removes_and_enables_exact_rows(
+    tmp_path: Path, remove: bool
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    candidate = deepcopy(config)
+    candidate["adapters"][3]["enabled"] = True
+    if remove:
+        candidate["adapters"].pop(1)
+    else:
+        candidate["adapters"][1]["enabled"] = False
+    try:
+        await sup.reconcile(
+            candidate,
+            affected_instance_ids={"member-calendar", "member-tasks"},
+        )
+        assert set(sup._managed) == {"cos-email", "other-calendar", "member-tasks"}
+        assert sup._managed["cos-email"] is before["cos-email"]
+        assert sup._managed["other-calendar"] is before["other-calendar"]
+        assert before["member-calendar"].adapter.stopped.is_set()
+        assert sup._managed["member-tasks"].adapter.started.is_set()
+    finally:
+        await sup.stop()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["other_permission", "global_port", "remove_other", "add_other", "duplicate_id"],
+)
+async def test_selected_reconciliation_rejects_unrelated_drift_before_any_stop(
+    tmp_path: Path, mutation: str
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    candidate = deepcopy(config)
+    if mutation == "other_permission":
+        candidate["adapters"][0]["config"]["enable_writes"] = True
+    elif mutation == "global_port":
+        candidate["adapter_supervisor_port"] = 8082
+    elif mutation == "remove_other":
+        candidate["adapters"].pop(2)
+    elif mutation == "add_other":
+        candidate["adapters"].append({"id": "new-unselected", "config": {}})
+    else:
+        candidate["adapters"].append(deepcopy(candidate["adapters"][1]))
+    try:
+        with pytest.raises(ValueError, match="selected reconciliation"):
+            await sup.reconcile(candidate, affected_instance_ids={"member-calendar"})
+        assert sup._config == config
+        assert sup._managed == before
+        assert all(not value.adapter.stopped.is_set() for value in before.values())
+        assert all(not value.task.done() for value in before.values())
+    finally:
+        await sup.stop()
+
+
+async def test_selected_reconciliation_validates_loader_before_stopping(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    candidate = deepcopy(config)
+    candidate["adapters"][1]["config"]["invalid"] = True
+
+    def broken_loader(_value: dict[str, Any]) -> Any:
+        raise ValueError("invalid candidate adapter")
+
+    sup._loader = broken_loader
+    try:
+        with pytest.raises(ValueError, match="invalid candidate"):
+            await sup.reconcile(candidate, affected_instance_ids={"member-calendar"})
+        assert sup._managed == before
+        assert all(not value.adapter.stopped.is_set() for value in before.values())
+    finally:
+        await sup.stop()
+
+
+async def test_selected_reconciliation_refuses_unrelated_instance_identity_drift(
+    tmp_path: Path,
+) -> None:
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    loader = sup._loader
+
+    def renamed_loader(value: dict[str, Any]) -> Any:
+        adapters = loader(value)
+        adapters[0].instance_name = "unselected-renamed"
+        return adapters
+
+    sup._loader = renamed_loader
+    try:
+        with pytest.raises(ValueError, match="unrelated adapter instances"):
+            await sup.reconcile(config, affected_instance_ids={"member-calendar"})
+        assert sup._managed == before
+        assert all(not value.adapter.stopped.is_set() for value in before.values())
+    finally:
+        await sup.stop()
+
+
+async def test_selected_reconciliation_allows_new_explicit_row_and_empty_noop(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    candidate = deepcopy(config)
+    candidate["adapters"].append({"id": "member-gmail", "config": {}})
+    try:
+        await sup.reconcile(candidate, affected_instance_ids={"member-gmail"})
+        assert sup._managed["member-gmail"].adapter.started.is_set()
+        assert all(sup._managed[name] is value for name, value in before.items())
+        after = dict(sup._managed)
+        await sup.reconcile(candidate, affected_instance_ids=set())
+        assert sup._managed == after
+        assert all(not value.adapter.stopped.is_set() for value in after.values())
+        with pytest.raises(ValueError, match="unconfigured instance"):
+            await sup.reconcile(candidate, affected_instance_ids={"misspelled"})
+        assert sup._managed == after
+    finally:
+        await sup.stop()
+
+
+async def test_default_reconciliation_keeps_full_restart_behavior(
+    tmp_path: Path,
+) -> None:
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    try:
+        await sup.reconcile(config)
+        assert set(sup._managed) == set(before)
+        assert all(sup._managed[name] is not value for name, value in before.items())
+        assert all(value.adapter.stopped.is_set() for value in before.values())
+        assert all(value.adapter.started.is_set() for value in sup._managed.values())
+    finally:
+        await sup.stop()
+
+
+async def test_stop_instances_contains_postcommit_failure_without_loading_or_stopping_others(
+    tmp_path: Path,
+) -> None:
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+
+    def broken_loader(_value: dict[str, Any]) -> Any:
+        raise AssertionError("containment must not construct candidate adapters")
+
+    sup._loader = broken_loader
+    try:
+        result = await sup.stop_instances({"member-calendar", "member-tasks"})
+        assert set(result["adapters"]) == {"cos-email", "other-calendar"}
+        assert "member-calendar" not in sup._managed
+        assert before["member-calendar"].adapter.stopped.is_set()
+        assert before["member-calendar"].task.done()
+        for name in ("cos-email", "other-calendar"):
+            assert sup._managed[name] is before[name]
+            assert not before[name].adapter.stopped.is_set()
+            assert not before[name].task.done()
+        # Repeated containment is safe and never reactivates the removed row.
+        assert await sup.stop_instances({"member-calendar"}) == result
+    finally:
+        await sup.stop()
+
+
+def _google_selection(adapter_id: str, member_id: str) -> dict[str, Any]:
+    return {
+        "adapter_id": adapter_id,
+        "member_id": member_id,
+        "provider_account_id": f"{member_id}@example.invalid",
+        "access": "read_only",
+        "binding_sha256": "a" * 64,
+        "owner_authorization_sha256": "b" * 64,
+    }
+
+
+async def test_selected_google_policy_first_addition_and_narrowing_preserve_other_rows(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    candidate = deepcopy(config)
+    selection = _google_selection("member-calendar", "member-a")
+    selection["access"] = "read_write"
+    candidate["member_google_connections"] = {"selections": [selection]}
+    candidate["adapters"][1]["config"]["enable_writes"] = True
+    try:
+        await sup.reconcile(candidate, affected_instance_ids={"member-calendar"})
+        assert sup._managed["cos-email"] is before["cos-email"]
+        assert sup._managed["other-calendar"] is before["other-calendar"]
+        assert sup._managed["member-calendar"].adapter._config["enable_writes"]
+        narrowed = deepcopy(candidate)
+        narrowed["adapters"][1]["config"]["enable_writes"] = False
+        narrowed["member_google_connections"]["selections"][0].update(
+            access="read_only",
+            binding_sha256="c" * 64,
+            owner_authorization_sha256="d" * 64,
+        )
+        await sup.reconcile(narrowed, affected_instance_ids={"member-calendar"})
+        assert sup._managed["cos-email"] is before["cos-email"]
+        assert not sup._managed["member-calendar"].adapter._config["enable_writes"]
+    finally:
+        await sup.stop()
+
+
+@pytest.mark.parametrize("change", ["access", "proof", "invariant"])
+async def test_selected_google_policy_rejects_other_selection_or_invariant_changes(
+    tmp_path: Path, change: str
+) -> None:
+    from copy import deepcopy
+
+    config = _reconciliation_config()
+    config["member_google_connections"] = {
+        "selections": [
+            _google_selection("member-calendar", "member-a"),
+            _google_selection("other-calendar", "member-b"),
+        ]
+    }
+    sup = _reconciliation_supervisor(tmp_path, config)
+    await sup.start()
+    await asyncio.sleep(0)
+    before = dict(sup._managed)
+    candidate = deepcopy(config)
+    if change == "access":
+        candidate["member_google_connections"]["selections"][1]["access"] = "read_write"
+    elif change == "proof":
+        candidate["member_google_connections"]["selections"][1][
+            "owner_authorization_sha256"
+        ] = "c" * 64
+    else:
+        candidate["member_google_connections"]["automated_candidate_extraction"] = True
+    try:
+        with pytest.raises(ValueError):
+            await sup.reconcile(candidate, affected_instance_ids={"member-calendar"})
+        assert sup._managed == before
+        assert all(not value.adapter.stopped.is_set() for value in before.values())
+    finally:
+        await sup.stop()
+
+
+@pytest.mark.parametrize("operation", ["reconcile", "contain"])
+async def test_revoked_dispatch_is_removed_before_slow_adapter_shutdown(
+    tmp_path: Path, operation: str
+) -> None:
+    class SlowStopTasks(_WritableGoogleTasksAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.instance_name = "member-tasks"
+            self.stop_entered = asyncio.Event()
+            self.release_stop = asyncio.Event()
+
+        async def stop(self) -> None:
+            self.stop_entered.set()
+            await self.release_stop.wait()
+            await super().stop()
+
+    adapter = SlowStopTasks()
+    cos = _RecordingAdapter()
+    cos.instance_name = "cos-email"
+    config = {
+        "adapter_supervisor_port": 0,
+        "adapters": [{"id": "member-tasks"}, {"id": "cos-email"}],
+    }
+    sup = AdapterSupervisor(
+        config_path=tmp_path / "unused.yaml",
+        config_data=config,
+        ctx_factory=_make_ctx_factory(_FakeEventLog()),
+        adapter_loader=lambda value: (
+            [cos]
+            + ([adapter] if value["adapters"][0].get("enabled") is not False else [])
+        ),  # type: ignore[list-item]
+    )
+    await sup.start()
+    await asyncio.sleep(0)
+    cos_managed = sup._managed["cos-email"]
+    pending = asyncio.create_task(
+        sup.reconcile(
+            {
+                **config,
+                "adapters": [
+                    {"id": "member-tasks", "enabled": False},
+                    {"id": "cos-email"},
+                ],
+            },
+            affected_instance_ids={"member-tasks"},
+        )
+        if operation == "reconcile"
+        else sup.stop_instances({"member-tasks"})
+    )
+    try:
+        await asyncio.wait_for(adapter.stop_entered.wait(), timeout=1)
+        with pytest.raises(LookupError, match="found 0"):
+            await sup.dispatch_write(
+                provider="google_tasks",
+                member_id="member-a",
+                provider_account_id="member-a@example.invalid",
+                operation=WriteOperation(
+                    kind="create_task",
+                    target_external_id=None,
+                    payload={"title": "Must never be dispatched"},
+                ),
+            )
+        assert adapter.operations == []
+        assert sup._managed["cos-email"] is cos_managed
+        assert not cos.stopped.is_set()
+    finally:
+        adapter.release_stop.set()
+        await pending
+        await sup.stop()
