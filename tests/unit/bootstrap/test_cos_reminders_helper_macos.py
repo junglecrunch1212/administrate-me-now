@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -83,7 +82,9 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     # Exercise the real controller's default TemporaryDirectory transport under
     # the OS temp root, not pytest's RUNNER_TEMP under /Users. realpath resolves
     # this to /private/var; NSString standardizingPath would strip /private.
-    platform_temp = os.confstr("CS_DARWIN_USER_TEMP_DIR")
+    platform_temp = subprocess.check_output(
+        ["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], text=True
+    ).strip()
     assert platform_temp
     assert str(Path(platform_temp).resolve()).startswith("/private/var/")
     coordinates = {
