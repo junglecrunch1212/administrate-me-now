@@ -220,32 +220,38 @@ One request may authorize merge and deployment; do not demand another phrase
 or confirmation if that authorization is already clear. Rollback can recover a
 reversible software failure, but cannot undo a disclosure, lost history or send.
 
-## Current enforcement and implementation gap
+## Current delivery controls
 
-This policy-only update changes no workflow, selector, runtime or updater.
 The implemented scope inventory lives in `scripts/release_scope.py`, with workers
 in `.github/workflows/administrateme-consistency.yml` and
-`.github/workflows/macos-bootstrap.yml`. Google, CoS recovery/reminders and bridge
-paths now have scoped implementations; the old three-scope description is stale.
-Inspect current code and GitHub protection rather than copying a scope/status
-list into every prompt. On 2026-10-23 the required merge status remained
-`deterministic-consistency`; affected platform contracts still need their checks.
-An unrelated unrequired aggregate is not an extra gate.
+`.github/workflows/macos-bootstrap.yml`. Updater delivery, Google, CoS
+recovery/reminders and bridge changes have focused paths with explicit dependency
+boundaries. Inspect current code and GitHub protection instead of copying a
+scope/status list into every prompt. On 2026-10-23 the required merge status
+remained `deterministic-consistency`; affected platform contracts still need
+their checks. An unrelated unrequired aggregate is not an extra gate. Unknown
+paths use the protected fallback; never claim missing, failed, cancelled, stale
+or skipped required evidence as a pass.
 
-The supported central updater still enforces backup, settlement, Doctor and
-synthetic-proof prerequisites. The reminder rollout reused the valid rehearsal
-already produced by its observation transition, but still incurred the updater's
-own work. Prose cannot remove that coupling. Unknown paths still use the protected
-fallback; never replace a missing, failed, cancelled, stale or skipped required
-result with a claimed pass.
+The supported updater reuses completed preparation only while source, toolchain,
+release ownership and generated runtime bytes still match. Recovery evidence
+can be reused only within its original freshness limit, for the same candidate,
+configuration, keys and unchanged complete state inventory, rechecked after
+quiescence. Incompatible or legacy evidence takes the existing fresh path.
+Backup, settlement, Doctor and synthetic-proof prerequisites remain enforced.
+See `bootstrap/prepared_runtime.py`, `bootstrap/backup_restore.py` and the
+preparation/recovery procedures in `MAC-MINI-OPERATIONS.md`.
 
-Remaining implementation improvements should themselves be separate deliverables:
-reuse compatible preparation/recovery evidence in the supported updater, make
-workspace-policy installation part of the supported update when relevant, and
-prepare exact restoration/enablement requests before maintenance. Each needs its
-own affected positive/negative compatibility and recovery proof before use. They
-are not prerequisites for unrelated product releases, and this policy update
-does not implement or authorize new live operations for them.
+Generated agent instructions are installed and recovered through the supported
+updater, preserving custom surrounding text and refusing unknown edits. Prepare
+instruction compatibility and the exact maintenance restoration plan before
+pausing normal operation. The plan restores only previously effective grants
+after its exact target update commits; it does not authorize enrollment, new
+permissions or sending, and does not automate re-enablement after a failed
+update rolls back. Use the existing supported recovery/activation path in that
+case. See `BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md` and
+`COS-CHANNEL-ACTIVATION-CONTRACT.md`. These improvements are not prerequisites
+for unrelated releases and do not grant new live-operation authority.
 
 Retired-provider history amendment (2026-10-20), **MODERNIZE** under CO-031:
 `tests/acceptance/test_retired_provider_history.py` must prove historical
