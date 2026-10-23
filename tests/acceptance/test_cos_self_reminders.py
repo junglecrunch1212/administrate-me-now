@@ -74,6 +74,7 @@ def advance(monkeypatch: pytest.MonkeyPatch, when: datetime) -> None:
 
     for name in ("cos_reminders", "cos_self_replies", "cos_responses", "main"):
         monkeypatch.setattr(f"adminme.products.openclaw.{name}.datetime", Clock)
+    monkeypatch.setattr("adminme.events.envelope.datetime", Clock)
 
 
 @pytest.mark.parametrize(
@@ -104,8 +105,12 @@ def test_requested_reminder_survives_restart_and_never_repeats_unknown_send(
             grant = copy.deepcopy(
                 client.portal.call(runtime.event_log.get, authority["event_id"])
             )
-            grant.pop("event_id")
-            grant.pop("recorded_at")
+            grant = {
+                key: value
+                for key, value in grant.items()
+                if key in EventEnvelope.model_fields
+                and key not in {"event_id", "recorded_at"}
+            }
             renewed_at = due - timedelta(seconds=1)
             grant["event_at_ms"] = int(renewed_at.timestamp() * 1000)
             grant["occurred_at"] = renewed_at.isoformat()

@@ -269,7 +269,13 @@ Validate the production API through request, restart, due-time enforcement,
 revocation, cancellation, exact native admission and terminal history. The
 isolated pinned-Gateway probe checks actual scoped timer creation, persistent
 restart, script tool context and one completion without a model or provider.
-It is not proof of a live iMessage delivery.
+It is not proof of a live iMessage delivery. The `cos-reminders` release scope
+runs these affected contracts, existing reply/recipient/identity/approval/audit
+checks, schema checks and static validation through the unchanged protected
+status. Its closed source boundary is checked across base, head and test merge;
+changed storage, credentials, dependencies or unrelated runtime/test inputs use
+the system path. The macOS worker also requires the pinned native timer and
+sender checks. Drafts and missing, failed or stale workers cannot approve release.
 
 Rollout has two bounded stages in one protected artifact: deploy with future
 reminders disabled and verify existing replies, then explicitly enable the
