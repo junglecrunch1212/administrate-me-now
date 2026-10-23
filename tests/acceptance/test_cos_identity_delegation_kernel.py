@@ -655,7 +655,6 @@ def test_external_contact_context_requires_exact_reviewed_party(tmp_path: Path) 
         assert context.owner_party_id == EXTERNAL
         assert context.resource_owner_principal_id == A
         assert context.allowed_scopes == {
-            f"service-private:{COS_SERVICE_PRINCIPAL_ID}",
             f"external-contact:{EXTERNAL}",
         }
         assert runtime.fixture_adapter.delivered == []

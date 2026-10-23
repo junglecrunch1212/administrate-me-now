@@ -3,9 +3,117 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from pathlib import Path
 from typing import Any
+
+
+SERVICE_PRIVATE_TOOLS = (
+    "administrateme_service_private_work",
+    "administrateme_service_private_work_state",
+    "administrateme_service_private_state",
+    "administrateme_service_context",
+)
+
+
+def service_agent_id(service_principal_id: str) -> str:
+    """A service agent never shares the member-agent namespace."""
+
+    return (
+        "am-service-" + hashlib.sha256(service_principal_id.encode()).hexdigest()[:16]
+    )
+
+
+def service_session_key(
+    service_principal_id: str, shared_secret: str, request_id: str | None = None
+) -> str:
+    """Bind one native internal session to its service principal and transport."""
+
+    if len(shared_secret) < 24:
+        raise ValueError("service session requires the configured transport secret")
+    digest = (
+        hashlib.sha256(request_id.encode()).hexdigest()[:32]
+        if request_id is not None
+        else None
+    )
+    material = f"service-session|{service_principal_id}"
+    if digest:
+        material += f"|{digest}"
+    signature = hmac.new(
+        shared_secret.encode(),
+        material.encode(),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    suffix = f"{digest}-{signature}" if digest else signature
+    return f"agent:{service_agent_id(service_principal_id)}:administrateme-service-{suffix}"
+
+
+def service_session_valid(
+    service_principal_id: str, shared_secret: str, candidate: str
+) -> bool:
+    """Verify canonical or per-request service context without storing its secret."""
+
+    if len(shared_secret) < 24:
+        return False
+    prefix = f"agent:{service_agent_id(service_principal_id)}:administrateme-service-"
+    if not candidate.startswith(prefix):
+        return False
+    parts = candidate[len(prefix) :].split("-")
+    if len(parts) not in (1, 2) or any(
+        len(part) != 32 or any(char not in "0123456789abcdef" for char in part)
+        for part in parts
+    ):
+        return False
+    material = f"service-session|{service_principal_id}"
+    if len(parts) == 2:
+        material += f"|{parts[0]}"
+    signature = hmac.new(
+        shared_secret.encode(), material.encode(), hashlib.sha256
+    ).hexdigest()[:32]
+    return hmac.compare_digest(parts[-1], signature)
+
+
+def service_workspace_path(
+    openclaw_root: Path,
+    service_principal_id: str,
+    *,
+    instructions: bytes | None = None,
+) -> Path:
+    """Service-private files never inherit a member workspace or its overlays."""
+
+    digest = hashlib.sha256(
+        SERVICE_PRIVATE_INSTRUCTIONS.encode() if instructions is None else instructions
+    ).hexdigest()
+    return (
+        openclaw_root
+        / "service-workspaces"
+        / service_agent_id(service_principal_id)
+        / digest
+    )
+
+
+SERVICE_PRIVATE_INSTRUCTIONS = """# Chief-of-Staff service work
+
+You are the trusted household Chief of Staff, a non-human staff member serving
+both household heads. This workspace is your work computer, not a household
+member identity. Use AdministrateMe service tools for your internal work,
+records, notes and scratchpad. Persist concise rationale and source references,
+not chain-of-thought. The encrypted event store is the canonical work record.
+
+Use administrateme_service_context to read canonical task and commitment facts
+covered by current standing grants. Keep source event and authority references
+when using those facts in your work. Internal processing permission does not
+permit disclosure to another person or an outside provider. Respect specific
+client confidentiality and each source's scope; never infer permission from
+operator status, a shared workspace or your ability to see information.
+
+Ordinary internal organization uses standing service authority without repeated
+member approval. These tools do not enroll accounts, create grants, send,
+create provider records or schedule delivery. Due and follow-up dates record
+work state, not a timer. Completion never proves a provider effect or delivery.
+Use existing separately authorized provider and messaging workflows for effects.
+"""
 
 
 def member_agent_id(member_id: str) -> str:
@@ -156,8 +264,13 @@ def inspect_runtime_topology(
 
 
 __all__ = [
+    "SERVICE_PRIVATE_INSTRUCTIONS",
+    "SERVICE_PRIVATE_TOOLS",
     "binding_fingerprints",
     "inspect_runtime_topology",
     "member_agent_id",
     "member_workspace_path",
+    "service_agent_id",
+    "service_session_key",
+    "service_workspace_path",
 ]

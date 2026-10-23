@@ -75,13 +75,18 @@ node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-permission-pins
 openclaw_commit="$("$python_bin" -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["openclaw"]["commit"])' \
   "$REPOSITORY_ROOT/bootstrap/versions.json")"
-node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
-  "$TEST_ROOT/app/openclaw/$openclaw_commit"
-node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
-  "$TEST_ROOT/app/openclaw/$openclaw_commit" "$TEST_ROOT/permission-helper.json"
-if [[ "${1:-}" == --self-reminder ]]; then
-  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-self-reminder-gateway.mjs" \
+if [[ "${1:-}" == --service-work ]]; then
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-service-work-gateway.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit"
+else
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
+    "$TEST_ROOT/app/openclaw/$openclaw_commit"
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
+    "$TEST_ROOT/app/openclaw/$openclaw_commit" "$TEST_ROOT/permission-helper.json"
+  if [[ "${1:-}" == --self-reminder ]]; then
+    node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-self-reminder-gateway.mjs" \
+      "$TEST_ROOT/app/openclaw/$openclaw_commit"
+  fi
 fi
 
 PYTHONPATH="$REPOSITORY_ROOT" "$python_bin" - "$TEST_ROOT" <<'PY'

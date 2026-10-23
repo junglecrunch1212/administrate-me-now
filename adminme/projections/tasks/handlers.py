@@ -959,6 +959,10 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
         "service_assignment_role": p.get("service_assignment_role"),
         "service_party_id": p.get("service_party_id"),
         "authority_grant_id": p.get("authority_grant_id"),
+        "record_kind": p.get("record_kind", "work"),
+        "source_authorities_json": json.dumps(
+            p.get("source_authorities", []), sort_keys=True, separators=(",", ":")
+        ),
         "on_behalf_of_member_id": p.get("on_behalf_of_member_id"),
         "delegated_by_member_id": p.get("delegated_by_member_id"),
         "service_work_type": p.get("service_work_type"),

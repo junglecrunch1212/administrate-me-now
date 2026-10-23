@@ -214,25 +214,29 @@ class ServiceRequestContext:
 
     @property
     def allowed_scopes(self) -> frozenset[str]:
-        service_scope = service_private_scope(self.actor_principal_id)
         if self.context_scope == "member_private":
             assert self.context_member_id is not None
-            scopes = {service_scope}
-            if "read_context" in self.permissions:
-                scopes.add(f"private:{self.context_member_id}")
-            return frozenset(scopes)
+            return (
+                frozenset({f"private:{self.context_member_id}"})
+                if "read_context" in self.permissions
+                else frozenset()
+            )
         if self.context_scope == "household_shared":
-            scopes = {service_scope}
-            if "read_context" in self.permissions:
-                scopes.add("shared:household")
-            return frozenset(scopes)
+            return (
+                frozenset({"shared:household"})
+                if "read_context" in self.permissions
+                else frozenset()
+            )
         if self.context_scope == "external_contact":
             assert self.owner_party_id is not None
-            scopes = {service_scope}
-            if "read_context" in self.permissions:
-                scopes.add(f"external-contact:{self.owner_party_id}")
-            return frozenset(scopes)
-        return frozenset({service_scope})
+            return (
+                frozenset({f"external-contact:{self.owner_party_id}"})
+                if "read_context" in self.permissions
+                else frozenset()
+            )
+        if self.context_scope == "service_private":
+            return frozenset({service_private_scope(self.actor_principal_id)})
+        return frozenset()
 
     def audit_payload(self) -> dict[str, Any]:
         """Return every applicable attribution axis without overloading one."""

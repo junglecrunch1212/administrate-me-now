@@ -8,6 +8,7 @@ labels, supplied path lists and previous runs cannot authorize a smaller gate.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -194,6 +195,68 @@ UPDATER_OPTIONAL_MODULE_TESTS = {
 UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
 ) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
+COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
+COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
+COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
+COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
+    {
+        COS_SERVICE_WORK_APPLICATION,
+        "adminme/lib/principal.py",
+        "adminme/lib/scope.py",
+        "adminme/service_identities.py",
+        "adminme/events/schemas/domain.py",
+        "adminme/projections/tasks/__init__.py",
+        "adminme/projections/tasks/handlers.py",
+        "adminme/projections/tasks/schema.sql",
+        "adminme/projections/tasks/queries.py",
+        "adminme/products/openclaw/service_work.py",
+        "adminme/products/openclaw/service_context.py",
+        "adminme/operating_agreements.py",
+        "adminme/capability_catalog.py",
+        "adminme/openclaw_topology.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/openclaw_activation.py",
+        "bootstrap/openclaw_tools.py",
+        "docs/refactor/evidence/event-lifecycle-catalog.json",
+        "openclaw/administrateme/openclaw.plugin.json",
+        "openclaw/administrateme/README.md",
+        "openclaw/administrateme/src/config.ts",
+        "openclaw/administrateme/src/contract.ts",
+        "openclaw/administrateme/src/hooks.ts",
+        "openclaw/administrateme/src/index.ts",
+        "openclaw/administrateme/src/provenance.ts",
+        "openclaw/administrateme/src/service-private.ts",
+        "openclaw/administrateme/workspace/service-private/AGENTS.md",
+        "openclaw/administrateme/scripts/validate-contract.mjs",
+        COS_SERVICE_WORK_NATIVE_INSTALL,
+    }
+)
+COS_SERVICE_WORK_TEST_PATHS = frozenset(
+    {
+        "tests/unit/test_service_work_principal.py",
+        "tests/unit/test_service_identities.py",
+        "tests/unit/test_operating_agreements.py",
+        "tests/unit/test_projection_tasks.py",
+        "tests/unit/test_capability_catalog.py",
+        "tests/acceptance/test_cos_identity_delegation_kernel.py",
+        "tests/acceptance/test_cos_service_private_work.py",
+        "tests/acceptance/test_cos_service_working_context.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/bootstrap/test_cos_member_topology.py",
+        "tests/unit/bootstrap/test_topology_readiness.py",
+        "tests/unit/bootstrap/test_openclaw_plugin_reconciliation.py",
+        "openclaw/administrateme/test/plugin-contract.test.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
+        "openclaw/administrateme/scripts/check-service-work-gateway.mjs",
+        "tests/fixtures/openclaw_service_work_probe.mjs",
+        "tests/unit/bootstrap/test_cos_service_topology.py",
+    }
+)
+COS_SERVICE_WORK_REQUIRED_PATHS = (
+    COS_SERVICE_WORK_COMPONENT_PATHS
+    | COS_SERVICE_WORK_TEST_PATHS
+    | {COS_SERVICE_WORK_CHECK_SCRIPT}
+)
 SCOPES = frozenset(
     {
         "documentation",
@@ -204,6 +267,7 @@ SCOPES = frozenset(
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "cos-service-work",
         "system-wide",
     }
 )
@@ -260,6 +324,7 @@ def choose_scope(
     bridge_runtime_interfaces_equal: bool = False,
     cos_reminder_interfaces_equal: bool = False,
     updater_interfaces_equal: bool = False,
+    cos_service_work_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -267,6 +332,17 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    if (
+        cos_service_work_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in COS_SERVICE_WORK_REQUIRED_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path) == {_service_work_mode(path)}
+            for status, path in changes
+        )
+        and any(path in COS_SERVICE_WORK_COMPONENT_PATHS for _, path in changes)
+    ):
+        return "cos-service-work"
     if (
         bridge_runtime_interfaces_equal
         and all(
@@ -464,6 +540,84 @@ def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
     ).hexdigest()
 
 
+def _service_work_application(source: str) -> tuple[str, bool] | None:
+    """Normalize only the direct service-work import/router pair, never runtime logic."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    applications = [
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "create_application"
+    ]
+    if len(applications) != 1:
+        return None
+    application = applications[0]
+    expected = ast.parse(
+        "from adminme.products.openclaw.service_work import router as service_work_router\n"
+        "app.include_router(service_work_router)\n"
+    ).body
+    shapes = [ast.dump(node, include_attributes=False) for node in expected]
+    body_shapes = [
+        ast.dump(node, include_attributes=False) for node in application.body
+    ]
+    counts = [body_shapes.count(shape) for shape in shapes]
+    if counts not in ([0, 0], [1, 1]):
+        return None
+    if counts == [1, 1] and body_shapes.index(shapes[0]) > body_shapes.index(shapes[1]):
+        return None
+    application.body = [
+        node
+        for node, shape in zip(application.body, body_shapes, strict=True)
+        if shape not in shapes
+    ]
+    digest = hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
+    return digest, counts == [1, 1]
+
+
+def _service_work_mode(path: str) -> str:
+    return "100755" if path == COS_SERVICE_WORK_NATIVE_INSTALL else "100644"
+
+
+def _service_work_dependency_fingerprint(
+    repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
+) -> tuple[str, bool] | None:
+    # Freeze every outside source/test/dependency byte and mode. The central
+    # runtime is not a general exemption: only the exact router AST pair differs.
+    application = next(
+        (entry for entry in entries if entry.path == COS_SERVICE_WORK_APPLICATION), None
+    )
+    if application is None or application.mode != "100644":
+        return None
+    normalized = _service_work_application(
+        _git(repository, "show", f"{revision}:{COS_SERVICE_WORK_APPLICATION}")
+    )
+    if normalized is None:
+        return None
+    identity, wired = normalized
+    allowed = COS_SERVICE_WORK_REQUIRED_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (
+            entry.path,
+            entry.mode,
+            identity if entry.path == COS_SERVICE_WORK_APPLICATION else entry.object_id,
+        )
+        for entry in entries
+        if entry.path == COS_SERVICE_WORK_APPLICATION
+        or not (
+            entry.mode == _service_work_mode(entry.path)
+            and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    digest = hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":")).encode()
+    ).hexdigest()
+    return digest, wired
+
+
 def _cos_reminder_mode(path: str) -> str:
     return (
         "100755"
@@ -579,10 +733,28 @@ def select_scope(
     reminder_sources_present: dict[str, bool] = {}
     updater_fingerprints: dict[str, str] = {}
     updater_sources_present: dict[str, bool] = {}
+    service_work_fingerprints: dict[str, str] = {}
+    service_work_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
         updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
         regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
+        service_work = _service_work_dependency_fingerprint(
+            repository, revision, entries
+        )
+        service_work_fingerprints[revision] = service_work[0] if service_work else ""
+        service_work_paths = {
+            entry.path
+            for entry in entries
+            if entry.mode == _service_work_mode(entry.path)
+        }
+        service_work_sources_present[revision] = service_work is not None and (
+            revision == base
+            or (
+                service_work[1]
+                and COS_SERVICE_WORK_REQUIRED_PATHS <= service_work_paths
+            )
+        )
         required_updater_paths = UPDATER_REQUIRED_PATHS - (
             {UPDATER_CHECK_SCRIPT} if revision == base else set()
         )
@@ -636,6 +808,10 @@ def select_scope(
         == 1,
         bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
         == 1,
+        cos_service_work_interfaces_equal=(
+            all(service_work_sources_present.values())
+            and len(set(service_work_fingerprints.values())) == 1
+        ),
         updater_interfaces_equal=(
             all(updater_sources_present.values())
             and len(set(updater_fingerprints.values())) == 1
@@ -661,6 +837,7 @@ def select_scope(
         "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
         "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
         "updater_dependency_sha256": updater_fingerprints[checkout],
+        "cos_service_work_dependency_sha256": service_work_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -677,6 +854,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "cos-recovery-history": "cos-recovery-history-validation",
         "cos-reminders": "cos-reminder-validation",
         "updater-delivery": "updater-delivery-validation",
+        "cos-service-work": "cos-service-work-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",

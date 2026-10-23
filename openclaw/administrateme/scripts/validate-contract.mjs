@@ -37,6 +37,10 @@ const expectedTools = [
   "administrateme_standing_order",
   "administrateme_self_reminder",
   "administrateme_self_reminder_fire",
+  "administrateme_service_private_work",
+  "administrateme_service_private_work_state",
+  "administrateme_service_private_state",
+  "administrateme_service_context",
 ];
 
 function assert(condition, message) {

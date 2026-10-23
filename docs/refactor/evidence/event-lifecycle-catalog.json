@@ -3862,7 +3862,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 366,
+    "technical_event_schemas": 368,
     "technical_event_types": 292,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -13877,6 +13877,153 @@
         "expected_last_event_id"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.work.state_changed",
+      "family": "cos_work",
+      "properties": {
+        "action": {
+          "enum": [
+            "start",
+            "wait_on_other",
+            "follow_up",
+            "hold",
+            "resume",
+            "complete",
+            "cancel"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "active_member_id": {
+          "default": null,
+          "title": "Active Member Id",
+          "type": "null"
+        },
+        "actor_service_party_id": {
+          "const": "service-party:chief-of-staff",
+          "title": "Actor Service Party Id",
+          "type": "string"
+        },
+        "actor_service_principal_id": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Actor Service Principal Id",
+          "type": "string"
+        },
+        "authority_grant_id": {
+          "title": "Authority Grant Id",
+          "type": "null"
+        },
+        "authority_kind": {
+          "const": "service_self",
+          "title": "Authority Kind",
+          "type": "string"
+        },
+        "changed_at": {
+          "format": "date-time",
+          "title": "Changed At",
+          "type": "string"
+        },
+        "expected_last_event_id": {
+          "minLength": 1,
+          "title": "Expected Last Event Id",
+          "type": "string"
+        },
+        "follow_up_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Follow Up At"
+        },
+        "on_behalf_of_member_id": {
+          "default": null,
+          "title": "On Behalf Of Member Id",
+          "type": "null"
+        },
+        "operator_principal_id": {
+          "const": "operator:openclaw:automation",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "reason_code": {
+          "enum": [
+            "member_input",
+            "external_dependency",
+            "clarification",
+            "provider_failure",
+            "reconciliation",
+            "scheduled_hold",
+            "completed",
+            "cancelled",
+            "other"
+          ],
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "resulting_status": {
+          "enum": [
+            "next",
+            "in_progress",
+            "waiting_on",
+            "deferred",
+            "done",
+            "cancelled"
+          ],
+          "title": "Resulting Status",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "waiting_on_member_id": {
+          "default": null,
+          "title": "Waiting On Member Id",
+          "type": "null"
+        },
+        "waiting_on_party_id": {
+          "anyOf": [
+            {
+              "const": "service-party:chief-of-staff",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting On Party Id"
+        }
+      },
+      "required": [
+        "task_id",
+        "action",
+        "resulting_status",
+        "changed_at",
+        "actor_service_principal_id",
+        "actor_service_party_id",
+        "operator_principal_id",
+        "authority_grant_id",
+        "reason_code",
+        "expected_last_event_id",
+        "authority_kind"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -35686,6 +35833,434 @@
         "service_work_type"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "task.created",
+      "family": "task",
+      "properties": {
+        "assignee_party_id": {
+          "const": "service-party:chief-of-staff",
+          "title": "Assignee Party Id",
+          "type": "string"
+        },
+        "authority_grant_id": {
+          "title": "Authority Grant Id",
+          "type": "null"
+        },
+        "authority_kind": {
+          "const": "service_self",
+          "title": "Authority Kind",
+          "type": "string"
+        },
+        "available_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available From"
+        },
+        "beneficiary_party_id": {
+          "default": null,
+          "title": "Beneficiary Party Id",
+          "type": "null"
+        },
+        "coordination_id": {
+          "default": null,
+          "title": "Coordination Id",
+          "type": "null"
+        },
+        "created_by": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Created By",
+          "type": "string"
+        },
+        "delegated_by_member_id": {
+          "default": null,
+          "title": "Delegated By Member Id",
+          "type": "null"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due"
+        },
+        "due_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due Date"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "tiny",
+                "small",
+                "medium",
+                "large"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "effort_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort Min"
+        },
+        "energy": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Energy"
+        },
+        "follow_up_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Follow Up At"
+        },
+        "item_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "task",
+                "purchase",
+                "appointment",
+                "research",
+                "decision",
+                "chore",
+                "maintenance"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Type"
+        },
+        "linked_item_id": {
+          "default": null,
+          "title": "Linked Item Id",
+          "type": "null"
+        },
+        "linked_item_kind": {
+          "default": null,
+          "title": "Linked Item Kind",
+          "type": "null"
+        },
+        "micro_script": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Micro Script"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "on_behalf_of_member_id": {
+          "default": null,
+          "title": "On Behalf Of Member Id",
+          "type": "null"
+        },
+        "owner_member_id": {
+          "default": null,
+          "title": "Owner Member Id",
+          "type": "null"
+        },
+        "owner_party_id": {
+          "const": "service-party:chief-of-staff",
+          "title": "Owner Party Id",
+          "type": "string"
+        },
+        "provider_account_reference": {
+          "default": null,
+          "title": "Provider Account Reference",
+          "type": "null"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "provider_external_reference_digest": {
+          "default": null,
+          "title": "Provider External Reference Digest",
+          "type": "null"
+        },
+        "provider_id": {
+          "default": null,
+          "title": "Provider Id",
+          "type": "null"
+        },
+        "provider_representation_owner_kind": {
+          "const": "none",
+          "default": "none",
+          "title": "Provider Representation Owner Kind",
+          "type": "string"
+        },
+        "provider_representation_owner_principal_id": {
+          "default": null,
+          "title": "Provider Representation Owner Principal Id",
+          "type": "null"
+        },
+        "provider_workspace_reference": {
+          "default": null,
+          "title": "Provider Workspace Reference",
+          "type": "null"
+        },
+        "record_kind": {
+          "default": "work",
+          "enum": [
+            "work",
+            "note",
+            "scratchpad"
+          ],
+          "title": "Record Kind",
+          "type": "string"
+        },
+        "recurring_id": {
+          "default": null,
+          "title": "Recurring Id",
+          "type": "null"
+        },
+        "responsible_party_id": {
+          "const": "service-party:chief-of-staff",
+          "title": "Responsible Party Id",
+          "type": "string"
+        },
+        "scheduled_end_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheduled End At"
+        },
+        "scheduled_start_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scheduled Start At"
+        },
+        "service_assignment_role": {
+          "const": "internal",
+          "title": "Service Assignment Role",
+          "type": "string"
+        },
+        "service_party_id": {
+          "const": "service-party:chief-of-staff",
+          "title": "Service Party Id",
+          "type": "string"
+        },
+        "service_work_type": {
+          "enum": [
+            "operational_task",
+            "waiting_for",
+            "follow_up",
+            "clarification",
+            "exception",
+            "preparation",
+            "held_action",
+            "provider_failure",
+            "reconciliation",
+            "operational_calendar",
+            "reminder_like"
+          ],
+          "title": "Service Work Type",
+          "type": "string"
+        },
+        "source_authorities": {
+          "items": {
+            "$ref": "#/$defs/ServiceSourceAuthority"
+          },
+          "maxItems": 20,
+          "title": "Source Authorities",
+          "type": "array"
+        },
+        "source_commitment_id": {
+          "default": null,
+          "title": "Source Commitment Id",
+          "type": "null"
+        },
+        "source_event_id": {
+          "default": null,
+          "title": "Source Event Id",
+          "type": "null"
+        },
+        "source_invocation_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Invocation Id"
+        },
+        "source_system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source System"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "waiting_on_party_id": {
+          "anyOf": [
+            {
+              "const": "service-party:chief-of-staff",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting On Party Id"
+        },
+        "work_kind": {
+          "const": "service_operational",
+          "title": "Work Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "created_by",
+        "work_kind",
+        "owner_party_id",
+        "responsible_party_id",
+        "assignee_party_id",
+        "service_assignment_role",
+        "service_party_id",
+        "authority_kind",
+        "authority_grant_id",
+        "service_work_type"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,

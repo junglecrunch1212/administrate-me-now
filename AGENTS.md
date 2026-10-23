@@ -21,6 +21,16 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 
 ## Shape tasks around usable outcomes
 
+Treat the CoS as staff with its own internal workspace. Within current grants,
+it may combine authorized sources for routine coordination and keep private
+notes, memory and scratchpad work with source provenance, without asking again
+for work the standing grant already covers. Derived work retains each client's
+confidentiality and source restrictions; recheck authority when reusing it.
+Access to an account, device or work computer is not authority to disclose its
+contents. Cross-client or external disclosure requires authority for the source,
+content and audience and must honor explicit client confidentiality. This does
+not enroll accounts, widen grants or bypass independent sending approvals.
+
 Use policy to improve the working prompt without making the owner rewrite it.
 In one to three sentences, state the first complete usable outcome, how to prove
 it, and how to recover. Preserve the full request and existing authorization;

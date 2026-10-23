@@ -74,3 +74,51 @@ Bootstrap must copy the compiled workspace files into the per-instance
 OpenClaw workspace and reconcile `automations.json` through OpenClaw's current
 automation commands. Per-member profile additions belong in per-member
 overlays; `SOUL.md` remains per-instance identity.
+
+## Service work entry and revocation
+
+After the supported installer selects this release, the non-member CoS agent
+has its own immutable instruction workspace and four service tools. It can keep
+internal work/notes/scratchpad and read canonical task/commitment facts covered
+by current standing grants. This is internal processing authority; source
+confidentiality and separate disclosure/provider-write rules still apply.
+
+An authorized local operator starts one bounded native run with the normal
+Gateway connection (no member mapping or manually derived session credential):
+
+```sh
+openclaw gateway call administrateme.service.run --params '{"message":"Read currently granted work, keep a sourced internal note, and verify its saved state.","request_id":"service-work-example-001"}' --json
+```
+
+The method accepts only `message` and `request_id`, requires `operator.admin`,
+seals the configured service agent and a request-specific signed session inside
+the plugin, and invokes the
+pinned native `runtime.subagent.run` with `deliver:false`. It returns admission
+and `run_id`, not completion or a transcript. Use native `agent.wait` with that
+run ID to observe settlement; the service's own state tool verifies persistence.
+Each admission attempt signs a fresh nonce; continuity comes from the authorized
+record tools, so revoked source grants cannot survive through an earlier run
+transcript. Reusing the same request ID uses native admission idempotency while its cache
+is valid. After expiry or restart, even that same ID starts fresh model context.
+Operator access does not supply member authority: the domain checks each source
+against current service grants. No grants or external writes are enabled here.
+The pinned runtime labels an internal non-delivery turn `webchat`; only that
+sentinel without recipient/account/thread/sender coordinates is accepted with
+the exact service binding. External and mapped-member contexts fail closed.
+
+To revoke this feature while preserving the schema-aware runtime and history:
+
+```sh
+openclaw config set plugins.entries.administrateme.config.serviceWorkEnabled false --strict-json
+openclaw gateway restart
+```
+
+The installer preserves this flag. On restart the four tools, their pre-call
+hook and the run entry all deny. Use the supported activation/operator restart
+for the installed instance; do not edit its release or state. A binary downgrade
+after new persistent history requires independently proved schema compatibility.
+
+Hosted `check-service-work-gateway.mjs` exercises the pinned Gateway's real
+operator RPC, native agent context, hook and production tools against synthetic
+loopback model/domain fixtures. It does not establish live model availability,
+member grants, provider permissions or actual deployment usability.

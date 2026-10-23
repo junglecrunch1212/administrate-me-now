@@ -16,6 +16,7 @@ import { approvalRequestFingerprint } from "../src/approval.js";
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
+import { COS_SERVICE_PRINCIPAL_ID, serviceAgentId, serviceSessionKey } from "../src/service-private.js";
 import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
 import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
@@ -186,14 +187,138 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(25);
+    expect([...runtime.tools]).toHaveLength(29);
     expect([...runtime.commands]).toHaveLength(9);
-    expect([...runtime.gateways]).toHaveLength(17);
+    expect([...runtime.gateways]).toHaveLength(18);
     expect(runtime.gateways.has("administrateme.cosPermissions.preflight")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
     expect(runtime.services).toHaveLength(3);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
+  });
+
+  it("uses one isolated service binding for private work, lifecycle and history", async () => {
+    const runtime = fakeApi();
+    const context = {
+      agentId: serviceAgentId(),
+      sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!),
+      sessionId: "fixture-service-run",
+      messageChannel: "webchat",
+      deliveryContext: { channel: "webchat" },
+    };
+    expect(context.agentId).toBe("am-service-4f2e45be890cdc3f");
+    expect(context.sessionKey).toBe("agent:am-service-4f2e45be890cdc3f:administrateme-service-8c142ef930b2dfb4313889945ebd5197");
+    const create = runtime.tools.get("administrateme_service_private_work")!(context) as AnyAgentTool;
+    const transition = runtime.tools.get("administrateme_service_private_work_state")!(context) as AnyAgentTool;
+    const state = runtime.tools.get("administrateme_service_private_state")!(context) as AnyAgentTool;
+    const before = runtime.hooks.get("before_tool_call")?.[0]?.handler;
+    expect(await before?.({ toolName: create.name, params: {} }, context)).toBeUndefined();
+    expect(await before?.({ toolName: transition.name, params: {} }, context)).toBeUndefined();
+    expect(await before?.({ toolName: state.name, params: {} }, context)).toBeUndefined();
+    await create.execute("create", { request_id: "private-work-fixture", title: "Prepare operational summary", record_kind: "note", source_event_ids: ["fixture-source"] });
+    await transition.execute("transition", { task_id: "cos-task:private/fixture", request_id: "private-state-fixture", expected_last_event_id: "event-1", action: "complete", reason_code: "completed" });
+    await state.execute("read", { task_id: "cos-task:private/fixture", limit: 10 });
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/service-private-work",
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/service-private-work/cos-task%3Aprivate%2Ffixture/state",
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/service-private-state",
+    ]);
+    for (let index = 0; index < 3; index++) {
+      expect(requestBody(fetchMock, index).provenance).toMatchObject({
+        actor_id: COS_SERVICE_PRINCIPAL_ID, agent_id: context.agentId,
+        session_key: context.sessionKey, channel_id: "administrateme-service", call_kind: "tool",
+      });
+      expect(requestBody(fetchMock, index).provenance).not.toHaveProperty("account_id");
+      expect(requestBody(fetchMock, index)).not.toHaveProperty("openclaw_approval_receipt_id");
+    }
+    expect(requestBody(fetchMock, 1)).not.toHaveProperty("task_id");
+    expect((create.parameters as Record<string, unknown>).additionalProperties).toBe(false);
+    expect((transition.parameters as Record<string, unknown>).additionalProperties).toBe(false);
+  });
+
+  it("rejects service-private authority from every member and delivery context", async () => {
+    const runtime = fakeApi();
+    const valid = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!) };
+    const before = runtime.hooks.get("before_tool_call")?.[0]?.handler;
+    const contexts: (OpenClawPluginToolContext & { requester?: unknown; channelId?: string })[] = [
+      {}, toolContext(), { ...valid, agentId: "operator" },
+      { ...valid, sessionKey: `${valid.sessionKey}0` },
+      { ...valid, sessionKey: valid.sessionKey.replace(/.$/, "0") },
+      { ...valid, requesterSenderId: "member-a" },
+      { ...valid, requester: { channel: "webchat", senderId: "member-a" } },
+      { ...valid, requester: { channel: "webchat", accountId: "account-a" } },
+      { ...valid, channelId: "member-room" },
+      { ...valid, messageChannel: "imessage" },
+      { ...valid, nativeChannelId: "imessage" },
+      { ...valid, agentAccountId: "service-mailbox" },
+      { ...valid, deliveryContext: {} },
+      { ...valid, deliveryContext: { channel: "webchat", to: "member-a" } },
+      { ...valid, deliveryContext: { channel: "webchat", accountId: "account-a" } },
+      { ...valid, deliveryContext: { channel: "webchat", threadId: "thread-a" } },
+      { ...valid, deliveryContext: { channel: "imessage" } },
+    ];
+    for (const context of contexts) {
+      const tool = runtime.tools.get("administrateme_service_private_work")!(context) as AnyAgentTool;
+      await expect(tool.execute("denied", { request_id: "denied-fixture", title: "Denied" })).rejects.toThrow(/[Ss]ervice-private/);
+      expect(await before?.({ toolName: tool.name, params: {} }, context)).toMatchObject({ block: true });
+    }
+    const memberTool = runtime.tools.get("administrateme_service_work")!({ ...valid, requesterSenderId: "actor-a", messageChannel: "discord", agentAccountId: "account-a" }) as AnyAgentTool;
+    await expect(memberTool.execute("cross-route", { request_id: "cross-route-fixture", title: "Denied" })).rejects.toThrow("cannot invoke member tools");
+    const memberBefore = await before?.({ toolName: "administrateme_service_work", params: { request_id: "member-fixture", title: "Member work" } }, toolContext());
+    expect(memberBefore).toHaveProperty("requireApproval");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("admits a sealed native service run without exposing the session or choosing a member", async () => {
+    const runtime = fakeApi();
+    const run = vi.fn(async (_params: { sessionKey: string; message: string; idempotencyKey?: string; deliver?: boolean }) => ({ runId: "fixture-native-run" }));
+    runtime.api.runtime = { subagent: { run }, channel: { outbound: { loadAdapter: vi.fn() } } };
+    const registration = runtime.gateways.get("administrateme.service.run")!;
+    const respond = vi.fn();
+    expect(registration.scope).toBe("operator.admin");
+    await registration.handler({ params: { message: "Organize current work", request_id: "fixture-request" }, client: null, respond });
+    expect(run).toHaveBeenCalledWith({
+      sessionKey: expect.stringMatching(/^agent:am-service-[0-9a-f]{16}:administrateme-service-[0-9a-f]{32}-[0-9a-f]{32}$/),
+      message: "Organize current work", idempotencyKey: "administrateme-service:fixture-request", deliver: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { status: "accepted", run_id: "fixture-native-run", service_principal_id: COS_SERVICE_PRINCIPAL_ID });
+    for (const key of ["sessionKey", "agentId", "deliver", "channel", "accountId", "to", "provider", "model", "toolsAlsoAllow"]) {
+      respond.mockClear();
+      await registration.handler({ params: { message: "Denied", request_id: "fixture-denied", [key]: "injected" }, client: null, respond });
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+    }
+    expect(run).toHaveBeenCalledTimes(1);
+    const firstKey = run.mock.calls[0]![0].sessionKey;
+    await registration.handler({ params: { message: "Organize current work", request_id: "fixture-request" }, client: null, respond });
+    expect(run.mock.calls[1]![0].sessionKey).not.toBe(firstKey);
+    expect(run.mock.calls[1]![0].idempotencyKey).toBe(run.mock.calls[0]![0].idempotencyKey);
+    const context = { agentId: serviceAgentId(), sessionKey: firstKey };
+    const state = runtime.tools.get("administrateme_service_private_state")!(context) as AnyAgentTool;
+    await state.execute("fresh-read", {});
+    expect(requestBody(fetchMock).provenance).toMatchObject({ agent_id: context.agentId, session_key: context.sessionKey });
+    expect(await runtime.hooks.get("before_tool_call")?.[0]?.handler({ toolName: state.name, params: {} }, { ...context, requester: { channel: "webchat", senderIsOwner: true } })).toBeUndefined();
+  });
+
+  it("reads granted service context and revokes all service surfaces with one retained flag", async () => {
+    const context = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!) };
+    const runtime = fakeApi();
+    const tool = runtime.tools.get("administrateme_service_context")!(context) as AnyAgentTool;
+    await tool.execute("context", { source_event_ids: ["fixture-source"], limit: 3 });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/api\/openclaw\/v1\/tools\/service-context$/);
+    expect(requestBody(fetchMock)).toMatchObject({ source_event_ids: ["fixture-source"], limit: 3 });
+    fetchMock.mockClear();
+    const revoked = fakeApi({ serviceWorkEnabled: false });
+    const before = revoked.hooks.get("before_tool_call")?.[0]?.handler;
+    for (const name of ["administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"]) {
+      const disabled = revoked.tools.get(name)!(context) as AnyAgentTool;
+      await expect(disabled.execute("disabled", {})).rejects.toThrow("disabled");
+      expect(await before?.({ toolName: name, params: {} }, context)).toMatchObject({ block: true });
+    }
+    const respond = vi.fn();
+    await revoked.gateways.get("administrateme.service.run")!.handler({ params: { message: "Denied", request_id: "fixture-denied" }, client: null, respond });
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(() => readPluginConfig({ serviceWorkEnabled: "false" })).toThrow("boolean");
   });
 
   it("cancels ordinary CoS replies and blocks generic delivery tool bypasses", async () => {
@@ -336,7 +461,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(25);
+    expect([...runtime.tools]).toHaveLength(29);
     expect(runtime.services).toHaveLength(0);
   });
 

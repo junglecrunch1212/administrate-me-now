@@ -177,6 +177,9 @@ export type OpenClawPluginApi = {
   pluginConfig?: Record<string, unknown>;
   config: Record<string, unknown>;
   runtime: {
+    subagent?: {
+      run: (params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string }) => Promise<{ runId: string }>;
+    };
     channel: {
       outbound: {
         loadAdapter: (id: string) => Promise<{

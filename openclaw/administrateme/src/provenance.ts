@@ -38,6 +38,9 @@ export function provenanceFromTool(
   sharedSecretEnv = "ADMINME_OPENCLAW_SHARED_SECRET",
 ): Provenance {
   const sessionKey = context.sessionKey ?? "";
+  if (context.agentId?.startsWith("am-service-") || sessionKey.includes(":administrateme-service-")) {
+    throw new Error("Service-private sessions cannot invoke member tools");
+  }
   const portal = /^agent:(adminme-[0-9a-f]{16}):administrateme-portal-([0-9a-f]{20})-([0-9a-f]{32})$/.exec(sessionKey);
   if (portal && callKind === "tool") {
     const agentId = portal[1]!;

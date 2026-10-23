@@ -15,7 +15,7 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 8
+    version = 9
     replay_retained_events_on_version_change = True
     subscribes_to = [
         "task.created",
@@ -92,6 +92,8 @@ class TasksProjection(Projection):
         if "beneficiary_party_id" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN beneficiary_party_id TEXT")
         additions = {
+            "record_kind": "TEXT NOT NULL DEFAULT 'work'",
+            "source_authorities_json": "TEXT NOT NULL DEFAULT '[]'",
             "service_assignment_role": "TEXT",
             "service_party_id": "TEXT",
             "authority_grant_id": "TEXT",

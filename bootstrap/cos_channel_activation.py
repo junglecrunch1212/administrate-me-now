@@ -1007,6 +1007,13 @@ class CoSChannelActivator:
             proofs = request.sender_proofs or controls["activation"].channels
             expires = self._maintenance_proof_expiry(proofs, controls["activation"])
             gateway = controls["gateway"]
+            expected_gateway = None
+            if gateway is not None:
+                from bootstrap.openclaw_activation import prepare_service_topology
+
+                expected_gateway = prepare_service_topology(
+                    gateway, self.paths, self.repository
+                )
             plan = MaintenanceRestorationPlan(
                 **request.model_dump(mode="json", exclude={"sender_proofs"}),
                 sender_proofs=proofs,
@@ -1023,9 +1030,9 @@ class CoSChannelActivator:
                 recipient_policy_sha256=_sha(_payload(controls["policy"])),
                 gateway_sha256=_sha(_payload(gateway)) if gateway is not None else None,
                 gateway_compatibility_sha256=_maintenance_gateway_fingerprint(
-                    gateway, release
+                    expected_gateway, release
                 )
-                if gateway is not None
+                if expected_gateway is not None
                 else None,
                 guard_config=controls["guard"],
                 self_reply_bindings=controls["replies"],
@@ -1079,6 +1086,7 @@ class CoSChannelActivator:
             raise CoSActivationError("maintenance predecessor authority changed")
         gateway = controls["gateway"]
         if not restoring:
+            from bootstrap.openclaw_activation import prepare_service_topology
             from bootstrap.workspace_instructions import (
                 WorkspaceInstructionsError,
                 prepare_transition,
@@ -1139,6 +1147,15 @@ class CoSChannelActivator:
                 or controls["guard"] != plan.guard_config
                 or (_sha(_payload(gateway)) if gateway is not None else None)
                 != plan.gateway_sha256
+                or (
+                    _maintenance_gateway_fingerprint(
+                        prepare_service_topology(gateway, self.paths, self.repository),
+                        release,
+                    )
+                    if gateway is not None
+                    else None
+                )
+                != plan.gateway_compatibility_sha256
                 or controls["replies"] != plan.self_reply_bindings
                 or controls["reminders"] != plan.self_reminder_bindings
             ):
