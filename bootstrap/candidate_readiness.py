@@ -1345,6 +1345,14 @@ def build_pending_attestation(
             "preliminary_backup_artifact_sha256": artifact_sha256,
             "preliminary_rehearsal_watermark_sha256": watermark_sha256,
         },
+        "recovery_inputs": {
+            "receipt": ensure_within(rehearsal_receipt, paths.backup_dir)
+            .relative_to(paths.backup_dir.resolve())
+            .as_posix(),
+            "backup": ensure_within(backup_artifact, paths.backup_dir)
+            .relative_to(paths.backup_dir.resolve())
+            .as_posix(),
+        },
         "human_evidence": human,
         "pre_switch_state": {
             "observation_active": True,
@@ -1407,6 +1415,20 @@ def validate_pending_attestation(
         "activation_boundary",
         "content_exposed",
     }
+    if "recovery_inputs" in value:
+        required.add("recovery_inputs")
+        inputs = value["recovery_inputs"]
+        if not isinstance(inputs, dict) or set(inputs) != {"receipt", "backup"}:
+            raise CandidateReadinessError("pending recovery inputs are invalid")
+        for relative in inputs.values():
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or Path(relative).is_absolute()
+                or any(part in {"", ".", ".."} for part in relative.split("/"))
+                or "\\" in relative
+            ):
+                raise CandidateReadinessError("pending recovery input path is invalid")
     if set(value) != required:
         raise CandidateReadinessError("pending readiness schema is invalid")
     if (
@@ -1710,8 +1732,10 @@ def build_active_attestation_from_pending(
     """Derive active v1 evidence only from pending plus updater mechanics.
 
     This pure builder performs no publication.  Only the crash-journaled updater
-    may call it, after rehearsing its own exact fresh artifact and proving the
-    retained predecessor.  Runtime compatibility stays on the existing active
+    may call it, after proving an exact authenticated/rehearsed artifact still
+    represents current quiesced state (or creating fresh evidence) and proving
+    the retained predecessor. Legacy ``fresh_*`` field names are retained; a
+    reused artifact keeps its original rehearsal time, never renewed freshness.  Runtime compatibility stays on the existing active
     contract while the extra activation evidence remains content-free.
     """
 

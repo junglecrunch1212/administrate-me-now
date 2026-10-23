@@ -726,3 +726,194 @@ def test_markerless_control_residue_is_recoverable_only_after_payload_absent(
     assert not (stage / ".administrateme-rehearsal-v1").exists()
     manager._remove_validated_stale_stages(parent, fingerprint)  # noqa: SLF001
     assert not stage.exists()
+
+
+def _reusable_recovery_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from types import SimpleNamespace
+    from tests.unit.bootstrap.test_candidate_readiness import (
+        NOW,
+        _arguments,
+        _private_write,
+    )
+    from bootstrap.backup_restore import _recovery_key_binding, _state_inventory_sha256
+    from bootstrap.candidate_readiness import (
+        _validate_rehearsal,
+        capture_deployment_snapshot,
+    )
+
+    paths, candidate, commit, receipt_path, artifact, *_ = _arguments(
+        tmp_path, monkeypatch
+    )
+    _private_write(
+        paths.instance_dir / "events" / "events.db", b"encrypted-event-fixture"
+    )
+    manager = BackupManager(paths, root=candidate, test_mode=True)
+    keys = {"backup": b"b" * 32, "events": b"e" * 32}
+    manager.store = SimpleNamespace(get=lambda name: keys[name])
+    monkeypatch.setattr(
+        manager, "_references", lambda: {"backup": "backup", "event_log": "events"}
+    )
+    calls: list[str] = []
+    manager._services = SimpleNamespace(  # noqa: SLF001
+        status=lambda: SimpleNamespace(status="healthy"),
+        stop=lambda: calls.append("stop"),
+        start=lambda: calls.append("start"),
+    )
+    _, manifest = manager._inventory_archive()  # noqa: SLF001
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["artifact"].update(
+        manifest_sha256=manifest["manifest_sha256"],
+        state_inventory_sha256=_state_inventory_sha256(manifest),
+        key_binding_sha256=_recovery_key_binding(
+            keys["backup"], keys["events"], receipt["artifact"]["sha256"]
+        ),
+    )
+    receipt.pop("receipt_sha256")
+    receipt["receipt_sha256"] = hashlib.sha256(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    _private_write(receipt_path, json.dumps(receipt, sort_keys=True).encode())
+    _, receipt_sha, backup_sha, watermark_sha, _ = _validate_rehearsal(
+        paths,
+        receipt_path,
+        artifact,
+        candidate_commit=commit,
+        snapshot=capture_deployment_snapshot(paths),
+        now=NOW,
+    )
+    pending = {
+        "recovery_inputs": {"receipt": receipt_path.name, "backup": artifact.name},
+        "deployment_binding": {
+            "preliminary_rehearsal_receipt_sha256": receipt_sha,
+            "preliminary_backup_artifact_sha256": backup_sha,
+            "preliminary_rehearsal_watermark_sha256": watermark_sha,
+        },
+    }
+    monkeypatch.setattr(
+        "bootstrap.backup_restore.datetime", SimpleNamespace(now=lambda _zone: NOW)
+    )
+    return (
+        manager,
+        paths,
+        candidate,
+        pending,
+        receipt_path,
+        artifact,
+        keys,
+        calls,
+        receipt,
+    )
+
+
+def test_recovery_reuses_exact_state_and_original_proof_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (
+        manager,
+        _paths,
+        candidate,
+        pending,
+        receipt_path,
+        artifact,
+        _keys,
+        calls,
+        receipt,
+    ) = _reusable_recovery_fixture(tmp_path, monkeypatch)
+    before = receipt_path.read_bytes(), artifact.read_bytes()
+    reused = manager.reuse_recovery_evidence(pending=pending, candidate=candidate)
+    assert reused is not None
+    backup, proof, selected_path = reused
+    assert backup["status"] == "reused"
+    assert backup["path"] == str(artifact)
+    assert selected_path == receipt_path
+    assert proof["tested_at"] == receipt["tested_at"]
+    assert before == (receipt_path.read_bytes(), artifact.read_bytes())
+    assert calls == ["stop", "start"]
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "state",
+        "added",
+        "removed",
+        "config",
+        "candidate",
+        "receipt",
+        "artifact",
+        "expired",
+        "backup-key",
+        "event-key",
+        "legacy",
+    ],
+)
+def test_recovery_cache_miss_preserves_normal_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from tests.unit.bootstrap.test_candidate_readiness import NOW
+
+    manager, paths, candidate, pending, receipt, artifact, keys, calls, _ = (
+        _reusable_recovery_fixture(tmp_path, monkeypatch)
+    )
+    if drift == "state":
+        (paths.instance_dir / "events/events.db").write_bytes(b"changed-event-history")
+    elif drift == "added":
+        (paths.instance_dir / "new-state").write_bytes(b"new-state")
+    elif drift == "removed":
+        (paths.instance_dir / "events/events.db").unlink()
+    elif drift == "config":
+        (paths.instance_dir / "config/adapters.json").write_text('{"adapters":[{}]}')
+    elif drift == "candidate":
+        (candidate / "bootstrap/candidate_readiness.py").write_text("# changed")
+    elif drift == "receipt":
+        receipt.write_bytes(receipt.read_bytes() + b"\n")
+    elif drift == "artifact":
+        artifact.write_bytes(b"changed-backup")
+    elif drift == "expired":
+        monkeypatch.setattr(
+            "bootstrap.backup_restore.datetime",
+            SimpleNamespace(now=lambda _zone: NOW + timedelta(days=32)),
+        )
+    elif drift == "backup-key":
+        keys["backup"] = b"x" * 32
+    elif drift == "event-key":
+        keys["events"] = b"x" * 32
+    else:
+        pending.pop("recovery_inputs")
+    assert manager.reuse_recovery_evidence(pending=pending, candidate=candidate) is None
+    assert calls == []
+
+
+def test_recovery_rechecks_state_after_quiescence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, paths, candidate, pending, _receipt, _artifact, _keys, calls, _ = (
+        _reusable_recovery_fixture(tmp_path, monkeypatch)
+    )
+
+    def stop() -> None:
+        calls.append("stop")
+        (paths.instance_dir / "events/events.db").write_bytes(b"last-in-flight-event")
+
+    manager._services.stop = stop  # noqa: SLF001
+    assert manager.reuse_recovery_evidence(pending=pending, candidate=candidate) is None
+    assert calls == ["stop", "start"]
+
+
+@pytest.mark.parametrize("key", ["backup", "events"])
+def test_recovery_rechecks_keys_after_quiescence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    manager, _paths, candidate, pending, _receipt, _artifact, keys, calls, _ = (
+        _reusable_recovery_fixture(tmp_path, monkeypatch)
+    )
+
+    def stop() -> None:
+        calls.append("stop")
+        keys[key] = b"r" * 32
+
+    manager._services.stop = stop  # noqa: SLF001
+    assert manager.reuse_recovery_evidence(pending=pending, candidate=candidate) is None
+    assert calls == ["stop", "start"]

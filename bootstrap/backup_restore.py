@@ -6,6 +6,7 @@ import asyncio
 import base64
 import fcntl
 import hashlib
+import hmac
 import io
 import json
 import multiprocessing as mp
@@ -49,6 +50,8 @@ from bootstrap.contracts import (
 )
 from bootstrap.candidate_readiness import (
     CandidateReadinessError,
+    MAX_EVIDENCE_AGE,
+    _validate_rehearsal,
     capture_deployment_snapshot,
     _pointer_snapshot,
 )
@@ -1117,6 +1120,29 @@ def _child_failure_code(exc: BaseException) -> str:
     return "backup_rehearsal_child_failed"
 
 
+def _recovery_key_binding(
+    backup_key: bytes, event_key: bytes, artifact_sha256: str
+) -> str:
+    return hmac.new(
+        backup_key,
+        b"administrateme-recovery-key-binding-v1\0"
+        + event_key
+        + artifact_sha256.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _state_inventory_sha256(manifest: dict[str, Any]) -> str:
+    """Compare all archived state bytes, independent of encryption/time metadata."""
+    rows = sorted(
+        (item["path"], item["size"], item["sha256"]) for item in manifest["files"]
+    )
+    return hashlib.sha256(
+        b"administrateme-backup-state-inventory-v1\0"
+        + json.dumps(rows, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _extract_child(
     source: str,
     staging_root: str,
@@ -1146,6 +1172,7 @@ def _extract_child(
                 "created_at": envelope["created_at"],
                 "manifest_sha256": manifest["manifest_sha256"],
                 "event_log_sha256": manifest["event_log_sha256"],
+                "state_inventory_sha256": _state_inventory_sha256(manifest),
                 "file_count": manifest["file_count"],
             }
         )
@@ -1651,6 +1678,141 @@ class BackupManager:
             "services_restarted": should_restart,
         }
 
+    def reuse_recovery_evidence(
+        self, *, pending: dict[str, Any], candidate: Path
+    ) -> tuple[dict[str, Any], dict[str, Any], Path] | None:
+        """Reuse only pending-bound evidence for byte-identical quiesced state.
+
+        Cache misses retain normal fresh backup/rehearsal. No old receipt gains
+        a new timestamp and no subset of household state is treated as complete.
+        Existing pending receipts without private relative coordinates also miss.
+        """
+        inputs = pending.get("recovery_inputs")
+        if not isinstance(inputs, dict):
+            return None
+        try:
+            source = ensure_within(
+                self.paths.backup_dir / inputs["backup"], self.paths.backup_dir
+            )
+            receipt_path = ensure_within(
+                self.paths.backup_dir / inputs["receipt"], self.paths.backup_dir
+            )
+            snapshot = capture_deployment_snapshot(self.paths)
+            commit = self._candidate_commit(candidate)
+            now = datetime.now(timezone.utc)
+            receipt, receipt_sha, backup_sha, watermark_sha, tested_at = (
+                _validate_rehearsal(
+                    self.paths,
+                    receipt_path,
+                    source,
+                    candidate_commit=commit,
+                    snapshot=snapshot,
+                    now=now,
+                )
+            )
+            binding = pending["deployment_binding"]
+            artifact = receipt["artifact"]
+            inventory_sha = artifact.get("state_inventory_sha256")
+            if (
+                tested_at + MAX_EVIDENCE_AGE <= now
+                or receipt.get("source_events_appended") != 0
+                or receipt_sha != binding["preliminary_rehearsal_receipt_sha256"]
+                or backup_sha != binding["preliminary_backup_artifact_sha256"]
+                or watermark_sha != binding["preliminary_rehearsal_watermark_sha256"]
+                or not isinstance(inventory_sha, str)
+                or _HEX_64.fullmatch(inventory_sha) is None
+            ):
+                return None
+            references = self._references()
+            key_binding = _recovery_key_binding(
+                self.store.get(references["backup"]),
+                self.store.get(references["event_log"]),
+                backup_sha,
+            )
+            if not hmac.compare_digest(
+                str(artifact.get("key_binding_sha256", "")), key_binding
+            ):
+                return None
+            # Most misses can be decided while normal operation continues.
+            # A tentative match must still be repeated after quiescence.
+            _entries, manifest = self._inventory_archive()
+            if _state_inventory_sha256(manifest) != inventory_sha:
+                return None
+        except (
+            BackupError,
+            CandidateReadinessError,
+            OSError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+        before = self.services.status()
+        if before.status not in {"stopped", "healthy", "degraded", "failed"}:
+            return None
+        should_restart = before.status in {"healthy", "degraded", "failed"}
+        if should_restart:
+            self.services.stop()
+        try:
+            _entries, manifest = self._inventory_archive()
+            if (
+                _state_inventory_sha256(manifest) != inventory_sha
+                or capture_deployment_snapshot(self.paths) != snapshot
+                or self._candidate_commit(candidate) != commit
+            ):
+                return None
+            # Detect changed evidence/artifact during the potentially long state
+            # inventory; retain exactly the pending-bound bytes and proof time.
+            current, current_sha, current_backup, current_watermark, _ = (
+                _validate_rehearsal(
+                    self.paths,
+                    receipt_path,
+                    source,
+                    candidate_commit=commit,
+                    snapshot=snapshot,
+                    now=datetime.now(timezone.utc),
+                )
+            )
+            if (current_sha, current_backup, current_watermark) != (
+                receipt_sha,
+                backup_sha,
+                watermark_sha,
+            ):
+                return None
+            references = self._references()
+            if not hmac.compare_digest(
+                key_binding,
+                _recovery_key_binding(
+                    self.store.get(references["backup"]),
+                    self.store.get(references["event_log"]),
+                    current_backup,
+                ),
+            ):
+                return None
+            return (
+                {
+                    "status": "reused",
+                    "path": str(source),
+                    "manifest_sha256": artifact["manifest_sha256"],
+                    "encrypted": True,
+                    "reused": True,
+                },
+                current,
+                receipt_path,
+            )
+        except (
+            BackupError,
+            CandidateReadinessError,
+            OSError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+        finally:
+            if should_restart:
+                self.services.start()
+
     def rehearse(
         self,
         backup: Path,
@@ -1831,6 +1993,10 @@ class BackupManager:
                     "sha256": extraction["artifact_sha256"],
                     "manifest_sha256": extraction["manifest_sha256"],
                     "event_log_sha256": extraction["event_log_sha256"],
+                    "state_inventory_sha256": extraction["state_inventory_sha256"],
+                    "key_binding_sha256": _recovery_key_binding(
+                        bytes(backup_key), bytes(event_key), artifact_sha256
+                    ),
                     "created_at": extraction["created_at"],
                     "file_count": extraction["file_count"],
                     "authenticated": True,
