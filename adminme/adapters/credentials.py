@@ -68,11 +68,13 @@ def assert_service_oauth_binding(
     service_principal_id: str,
     provider_account_id: str,
     required_scopes: list[str],
+    purpose: str = "gmail-read-send",
 ) -> None:
     """Require a newly enrolled, exact service-owned OAuth grant.
 
     Historical unbound and member-owned grants never gain service authority.
-    Service mail only needs read and send; modify/full-mail grants are rejected.
+    Each named purpose has a separate exact scope ceiling. Legacy service mail
+    retains its existing read/send binding; workspace grants cannot substitute.
     """
     from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 
@@ -80,6 +82,10 @@ def assert_service_oauth_binding(
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
     }
+    if purpose != "gmail-read-send":
+        from adminme.adapters.cos_google_workspace import grant_scopes
+
+        allowed = set(grant_scopes(purpose))
     account = document.get("provider_account_id")
     scopes = document.get("scopes")
     if (
@@ -94,6 +100,8 @@ def assert_service_oauth_binding(
         or not isinstance(scopes, list)
         or any(not isinstance(scope, str) for scope in scopes)
         or not set(required_scopes) <= set(scopes) <= allowed
+        or (purpose != "gmail-read-send" and set(scopes) != allowed)
+        or document.get("grant_purpose", "gmail-read-send") != purpose
         or not {"client_id", "client_secret", "refresh_token"} <= document.keys()
     ):
         raise RuntimeError("service OAuth grant does not match the exact CoS account")

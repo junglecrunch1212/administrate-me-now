@@ -22,6 +22,7 @@ from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloo
 from adminme.adapters.emission import write_adapter_event
 from adminme.adapters.credentials import (
     assert_installed_user_binding,
+    assert_service_oauth_binding,
     resolve_json_credentials,
 )
 from adminme.lib.adapters import (
@@ -37,6 +38,10 @@ from adminme.google_tasks_execution import (
     task_content_fingerprint as b03_task_content_fingerprint,
 )
 from adminme.provider_bindings import adapter_owner_coordinate_id
+from adminme.adapters.cos_google_workspace import (
+    validate_oauth_adapter,
+    verify_source_resource,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -263,8 +268,22 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             isinstance(service_principal_id, str) and service_principal_id
         ):
             raise ValueError("Google Tasks requires exactly one owner principal")
+        service_oauth = bool(
+            self._config.get("service_principal_id")
+            and self._config.get("oauth_credentials_ref")
+        )
+        if service_oauth:
+            validate_oauth_adapter(self._config, purpose="tasks-read")
         creds_json = self._credentials_resolver(op_ref)
-        if op_ref.startswith("keychain://"):
+        if service_oauth:
+            assert_service_oauth_binding(
+                creds_json,
+                service_principal_id=self._config["service_principal_id"],
+                provider_account_id=self._config["provider_account_id"],
+                required_scopes=self._scopes,
+                purpose="tasks-read",
+            )
+        elif op_ref.startswith("keychain://"):
             if not isinstance(member_id, str) or not member_id:
                 raise ValueError(
                     "installed-user OAuth is not reviewed for service ownership"
@@ -280,6 +299,12 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 provider_account_id=provider_account_id,
             )
         self._service = self._service_factory(creds_json, self._scopes, user_email)
+        if service_oauth:
+            verify_source_resource(
+                self._service,
+                purpose="tasks-read",
+                resource_id=self._config["tasklist_id"],
+            )
         self._ctx = ctx
         if ctx.cursor_store is not None and self._config.get("member_id"):
             ctx.cursor_store.adopt_legacy_coordinate(

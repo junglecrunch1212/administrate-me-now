@@ -68,6 +68,40 @@ GOOGLE_TEST_PATHS = frozenset(
         "tests/unit/test_cos_channel_operation.py",
     }
 )
+COS_GOOGLE_WORKSPACE_COMPONENT_PATHS = frozenset(
+    {
+        "adminme/adapters/cos_google_workspace.py",
+        "adminme/adapters/cos_channel_acquisition.py",
+        "adminme/adapters/credentials.py",
+        "adminme/adapters/disposable_test_acquisition.py",
+        "adminme/provider_bindings.py",
+        "bootstrap/cos_google_workspace.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/google_oauth.py",
+        "packs/adapters/calendaring/google-calendar/adapter.py",
+        "packs/adapters/tasks/google-tasks/adapter.py",
+        "packs/adapters/tasks/google-tasks/config.schema.json",
+    }
+)
+COS_GOOGLE_WORKSPACE_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_cos_google_workspace.py",
+        "tests/unit/bootstrap/test_google_oauth.py",
+        "tests/adapters/test_credentials.py",
+        "tests/unit/test_provider_bindings.py",
+        "tests/integration/test_service_owned_google_sources.py",
+        "tests/unit/adapters/calendaring/test_google_calendar.py",
+        "tests/unit/adapters/tasks/test_google_tasks.py",
+        "tests/acceptance/test_cos_channel_acquisition.py",
+        "tests/acceptance/test_member_google_connections.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "packs/adapters/calendaring/google-calendar/tests/test_google_calendar_pack_internal.py",
+        "packs/adapters/tasks/google-tasks/tests/test_google_tasks_pack_internal.py",
+    }
+)
+COS_GOOGLE_WORKSPACE_REQUIRED_PATHS = (
+    COS_GOOGLE_WORKSPACE_COMPONENT_PATHS | COS_GOOGLE_WORKSPACE_TEST_PATHS
+)
 COS_RECOVERY_CONTROLLER = "bootstrap/cos_channel_activation.py"
 COS_RECOVERY_HISTORY = "bootstrap/cos_recovery_history.py"
 COS_RECOVERY_COMPONENT_PATHS = frozenset(
@@ -265,6 +299,7 @@ SCOPES = frozenset(
         "bridge-enrollment",
         "bridge-runtime",
         "google-connections",
+        "cos-google-workspace",
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
@@ -321,6 +356,7 @@ def choose_scope(
     path_modes: dict[str, set[str]],
     enrollment_interfaces_equal: bool = False,
     google_interfaces_equal: bool = False,
+    cos_google_workspace_interfaces_equal: bool = False,
     cos_recovery_interfaces_equal: bool = False,
     bridge_runtime_interfaces_equal: bool = False,
     cos_reminder_interfaces_equal: bool = False,
@@ -417,6 +453,20 @@ def choose_scope(
         )
     ):
         return "cos-recovery-history"
+    if (
+        cos_google_workspace_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (
+                path in COS_GOOGLE_WORKSPACE_REQUIRED_PATHS | POLICY_PATHS
+                or _prose(path)
+            )
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(path in COS_GOOGLE_WORKSPACE_COMPONENT_PATHS for _, path in changes)
+    ):
+        return "cos-google-workspace"
     google_allowed = (
         GOOGLE_SHARED_PATHS
         | GOOGLE_TEST_PATHS
@@ -644,6 +694,28 @@ def _cos_reminder_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     ).hexdigest()
 
 
+def _cos_google_workspace_dependency_fingerprint(
+    entries: tuple[GitTreeEntry, ...],
+) -> str:
+    """Freeze all bytes/modes outside the tested OAuth/acquisition component.
+
+    The Google worker covers account/purpose binding, selected source polling,
+    member/mail preservation, governed writes and guarded activation/recovery.
+    Locks, runtime topology, bridge, persistence and unknown tests remain bound.
+    """
+    allowed = COS_GOOGLE_WORKSPACE_REQUIRED_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
 def google_dependency_fingerprint(repository: Path, revision: str) -> str:
     """Exclude the Google module and only its exact tested integration edits.
 
@@ -734,12 +806,20 @@ def select_scope(
     reminder_sources_present: dict[str, bool] = {}
     updater_fingerprints: dict[str, str] = {}
     updater_sources_present: dict[str, bool] = {}
+    workspace_fingerprints: dict[str, str] = {}
+    workspace_sources_present: dict[str, bool] = {}
     service_work_fingerprints: dict[str, str] = {}
     service_work_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
         updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
         regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
+        workspace_fingerprints[revision] = _cos_google_workspace_dependency_fingerprint(
+            entries
+        )
+        workspace_sources_present[revision] = (
+            revision == base or COS_GOOGLE_WORKSPACE_REQUIRED_PATHS <= regular_paths
+        )
         service_work = _service_work_dependency_fingerprint(
             repository, revision, entries
         )
@@ -807,6 +887,10 @@ def select_scope(
             }
         )
         == 1,
+        cos_google_workspace_interfaces_equal=(
+            all(workspace_sources_present.values())
+            and len(set(workspace_fingerprints.values())) == 1
+        ),
         bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
         == 1,
         cos_service_work_interfaces_equal=(
@@ -839,6 +923,7 @@ def select_scope(
         "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
         "updater_dependency_sha256": updater_fingerprints[checkout],
         "cos_service_work_dependency_sha256": service_work_fingerprints[checkout],
+        "cos_google_workspace_dependency_sha256": workspace_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -852,6 +937,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-enrollment": "bridge-development",
         "bridge-runtime": "bridge-development",
         "google-connections": "google-connections-validation",
+        "cos-google-workspace": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
         "cos-reminders": "cos-reminder-validation",
         "updater-delivery": "updater-delivery-validation",
