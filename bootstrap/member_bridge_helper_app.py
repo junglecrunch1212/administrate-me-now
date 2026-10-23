@@ -377,7 +377,7 @@ if [[ -z "$tailscale_bin" ]]; then
   /usr/bin/open 'https://tailscale.com/download/mac'
   exit 2
 fi
-if ! "$tailscale_bin" status >/dev/null 2>&1; then
+if ! TAILSCALE_BE_CLI=1 "$tailscale_bin" status >/dev/null 2>&1; then
   notice "Open Tailscale and connect using your own member account, then choose Prepare This Mac again."
   /usr/bin/open -a Tailscale || true
   exit 2

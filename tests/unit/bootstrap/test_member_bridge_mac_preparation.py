@@ -47,7 +47,7 @@ fdesetup) [[ "$FIXTURE_STATE" == filevault ]] && echo Off || echo On ;;
 xcrun) [[ "$FIXTURE_STATE" != sdk ]] ;;
 osascript) cat >/dev/null; printf '%s\\n' "$*" >>"$FIXTURE_UI" ;;
 open|xcode-select) exit 0 ;;
-tailscale) [[ "$FIXTURE_STATE" != network ]] ;;
+tailscale) [[ "$TAILSCALE_BE_CLI" == 1 && "$FIXTURE_STATE" != network ]] ;;
 brew) exit 0 ;;
 esac
 """)

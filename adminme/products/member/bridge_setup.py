@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from adminme.bridge_enrollment import BridgeEnrollmentError, reviewed_release
 from adminme.bridge_helper_distribution import ARCHIVE, read_distribution
@@ -43,7 +44,7 @@ def _download(request: Request, session: Session) -> tuple[dict[str, Any], bytes
 async def helper_metadata(
     request: Request, response: Response, session: SessionDep
 ) -> dict[str, Any]:
-    manifest, _ = _download(request, session)
+    manifest, _ = await run_in_threadpool(_download, request, session)
     response.headers.update(HEADERS)
     return {
         **manifest,
@@ -53,7 +54,7 @@ async def helper_metadata(
 
 @router.get("/api/member/v1/settings/bridges/helper/download")
 async def helper_download(request: Request, session: SessionDep) -> Response:
-    manifest, payload = _download(request, session)
+    manifest, payload = await run_in_threadpool(_download, request, session)
     return Response(
         payload,
         media_type="application/zip",

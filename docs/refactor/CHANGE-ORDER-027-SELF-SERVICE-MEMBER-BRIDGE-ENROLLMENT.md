@@ -93,7 +93,10 @@ checked against its pinned SHA-256 and macOS signature assessment before opening
 Installer. The native installation and account consent remain the member's.
 See [Homebrew's installer documentation](https://docs.brew.sh/Installation.html).
 The helper can use Tailscale's ordinary application executable; a terminal
-shortcut is not required. A blocked prerequisite explains its own next step and
+shortcut is not required. It sets `TAILSCALE_BE_CLI=1` for identity checks so a
+background daemon cannot accidentally open the GUI instead of the CLI, as
+documented by [Tailscale](https://tailscale.com/docs/reference/tailscale-cli?tab=macos).
+A blocked prerequisite explains its own next step and
 can resume without a pairing code. Installation does not start a daemon.
 
 Settings asks the member to confirm **Mac Preparation Complete**, then creates

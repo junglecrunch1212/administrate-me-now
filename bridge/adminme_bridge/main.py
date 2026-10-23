@@ -856,6 +856,7 @@ def _local_device_identity(config: BridgeConfig, config_path: Path) -> str:
             return ""
         status = subprocess.run(
             [tailscale_executable(), "status", "--json"],
+            env={**os.environ, "TAILSCALE_BE_CLI": "1"},
             check=False,
             capture_output=True,
             text=True,

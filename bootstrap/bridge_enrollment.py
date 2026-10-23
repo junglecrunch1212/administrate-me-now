@@ -998,6 +998,7 @@ class MemberBridgeInstaller:
             return "fixture@example.invalid", "fixture-bridge-node"
         completed = subprocess.run(
             [tailscale_executable(), "status", "--json"],
+            env={**os.environ, "TAILSCALE_BE_CLI": "1"},
             check=False,
             capture_output=True,
             text=True,
