@@ -1952,6 +1952,14 @@ def test_service_work_source_receipt_changes_keep_focused_proof(
 ) -> None:
     path, _ = repository
     _base, base = _service_work_candidate(path)
+    if relative.startswith("tests/"):
+        # A test path belongs to the focused proof alongside its component edit;
+        # the existing selector intentionally requires a component change.
+        _commit(
+            path,
+            "adminme/products/openclaw/service_context.py",
+            "# Reviewed current-source change\n",
+        )
     head = _commit(path, relative, "# Reviewed receipt or current-source change\n")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
     assert proof["scope"] == "cos-service-work"
