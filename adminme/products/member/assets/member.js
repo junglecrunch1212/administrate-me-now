@@ -4778,7 +4778,7 @@ function bridgeSettings(data) {
     helperDownload.disabled = !own;
   });
   const nativeHelp = document.createElement("details"); nativeHelp.append(text("summary", "First-open and Apple account help"), text("p", "This helper is locally signed, not notarized by Apple. If macOS blocks its first launch, review it in System Settings → Privacy & Security and use Open Anyway. The helper does not bypass macOS security. Approve any software installation prompts yourself. Sign in to your Apple account and enable the services you want in macOS before pairing. For a Google calendar displayed in Apple Calendar, select that actual account/calendar; an empty Home calendar is not an error."));
-  const confirmation = document.createElement("label"); confirmation.className = "bridge-prepared-confirmation";
+  const confirmation = document.createElement("label"); confirmation.className = "bridge-prepared-confirmation preference-check";
   const prepared = document.createElement("input"); prepared.type = "checkbox"; prepared.disabled = !own; prepared.name = "mac_prepared";
   prepared.addEventListener("change", () => { preparationConfirmed = prepared.checked; updatePreparation(); });
   confirmation.append(prepared, text("span", "The helper says Mac Preparation Complete on the Mac I am connecting."));

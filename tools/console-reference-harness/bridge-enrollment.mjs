@@ -16,6 +16,8 @@ export async function auditBridgeEnrollment({ page, otherPage, stalePage, baseUr
   const countPost = (request) => { if (new URL(request.url()).pathname === endpoint && request.method() === "POST") posts += 1; };
   page.on("request", countPost);
   await gotoBridges();
+  const preparationTarget = await page.locator(".bridge-prepared-confirmation").boundingBox();
+  record("Mac preparation confirmation has a usable pointer target", preparationTarget && preparationTarget.width >= 24 && preparationTarget.height >= 24, preparationTarget);
   const versions = await page.locator("link[href*='/member-assets/member.css'], script[src*='/member-assets/member.js']").evaluateAll((nodes) => nodes.map((node) => new URL(node.href || node.src).searchParams.get("v")));
   record("Bridge browser exercises source-bound production assets", versions.length === 2 && versions.every((version) => version === sourceVersion));
   record("Pairing is disabled until software preparation is confirmed", await page.getByRole("button", { name: "Prepare enrollment", exact: true }).isDisabled());
