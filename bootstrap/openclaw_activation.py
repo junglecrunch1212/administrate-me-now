@@ -396,7 +396,7 @@ def remove_unsupported_member_topology(paths: DeploymentPaths) -> dict[str, Any]
     }
 
 
-def _service_release_instructions(release: Path) -> bytes | None:
+def _service_release_workspace(release: Path) -> dict[str, bytes] | None:
     plugin_root = release / "openclaw" / "administrateme"
     manifest_path = plugin_root / "openclaw.plugin.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
@@ -406,21 +406,30 @@ def _service_release_instructions(release: Path) -> bytes | None:
         manifest.get("contracts", {}).get("tools", [])
     ):
         return None
-    source = plugin_root / "workspace" / "service-private" / "AGENTS.md"
-    if (
-        source.is_symlink()
-        or not source.is_file()
-        or not source.resolve().is_relative_to(plugin_root.resolve())
-    ):
-        raise RuntimeError("release service instructions are unavailable")
-    instructions = source.read_bytes()
-    if not 0 < len(instructions) <= 65536:
-        raise RuntimeError("release service instructions exceed their bound")
-    return instructions
+    # Legacy artifacts retain their exact old workspace and rollback contract.
+    filenames = manifest.get("contracts", {}).get("serviceWorkspaceFiles")
+    if filenames is None:
+        filenames = ["AGENTS.md"]
+    elif filenames != ["AGENTS.md", "IDENTITY.md"]:
+        raise RuntimeError("release service workspace declaration is invalid")
+    files = {}
+    for filename in filenames:
+        source = plugin_root / "workspace" / "service-private" / filename
+        if (
+            source.is_symlink()
+            or not source.is_file()
+            or not source.resolve().is_relative_to(plugin_root.resolve())
+        ):
+            raise RuntimeError("release service workspace files are unavailable")
+        content = source.read_bytes()
+        if not 0 < len(content) <= 65536:
+            raise RuntimeError("release service workspace files exceed their bound")
+        files[filename] = content
+    return files
 
 
 def _prepare_service_topology(
-    gateway: dict[str, Any], paths: DeploymentPaths, instructions: bytes | None
+    gateway: dict[str, Any], paths: DeploymentPaths, files: dict[str, bytes] | None
 ) -> dict[str, Any]:
     config = copy.deepcopy(gateway)
     agents = config.get("agents", {}).get("list", [])
@@ -438,7 +447,7 @@ def _prepare_service_topology(
         for row in bindings
         if not (isinstance(row, dict) and row.get("agentId") == expected_agent)
     ]
-    if instructions is not None:
+    if files is not None:
         adapter_config = json.loads(
             (paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
         )
@@ -465,7 +474,8 @@ def _prepare_service_topology(
         workspace = service_workspace_path(
             paths.instance_dir / "openclaw",
             COS_SERVICE_PRINCIPAL_ID,
-            instructions=instructions,
+            instructions=files["AGENTS.md"],
+            identity=files.get("IDENTITY.md", b""),
         )
         for directory in [workspace, *list(workspace.parents)[:2]]:
             if directory.is_symlink() or (
@@ -473,12 +483,13 @@ def _prepare_service_topology(
                 and (not directory.is_dir() or directory.resolve() != directory)
             ):
                 raise RuntimeError("service workspace must be a private directory")
-        target = workspace / "AGENTS.md"
-        if target.is_symlink() or (
-            target.exists()
-            and (not target.is_file() or target.read_bytes() != instructions)
-        ):
-            raise RuntimeError("immutable service instructions changed")
+        for filename, content in files.items():
+            target = workspace / filename
+            if target.is_symlink() or (
+                target.exists()
+                and (not target.is_file() or target.read_bytes() != content)
+            ):
+                raise RuntimeError("immutable service workspace files changed")
         retained.append(
             {
                 "id": expected_agent,
@@ -501,24 +512,25 @@ def prepare_service_topology(
     is omitted from the later compatibility comparison.
     """
     return _prepare_service_topology(
-        gateway, paths, _service_release_instructions(release)
+        gateway, paths, _service_release_workspace(release)
     )
 
 
 def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[str, Any]:
-    """Select immutable service instructions and preserve member state/history."""
-    instructions = _service_release_instructions(release)
+    """Select an immutable service profile and preserve member state/history."""
+    files = _service_release_workspace(release)
     config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
     if config_path.is_symlink() or not config_path.is_file():
         raise RuntimeError("service topology requires the runtime configuration")
     config = _prepare_service_topology(
-        json.loads(config_path.read_text("utf-8")), paths, instructions
+        json.loads(config_path.read_text("utf-8")), paths, files
     )
-    if instructions is not None:
+    if files is not None:
         workspace = service_workspace_path(
             paths.instance_dir / "openclaw",
             COS_SERVICE_PRINCIPAL_ID,
-            instructions=instructions,
+            instructions=files["AGENTS.md"],
+            identity=files.get("IDENTITY.md", b""),
         )
         for directory in reversed([workspace, *list(workspace.parents)[:2]]):
             if directory.is_symlink():
@@ -527,22 +539,21 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
             if not directory.is_dir() or directory.resolve() != directory:
                 raise RuntimeError("service workspace must be a private directory")
             directory.chmod(0o700)
-        target = workspace / "AGENTS.md"
-        if target.is_symlink() or (
-            target.exists()
-            and (not target.is_file() or target.read_bytes() != instructions)
-        ):
-            raise RuntimeError("immutable service instructions changed")
-        if not target.exists():
-            atomic_write(target, instructions, mode=0o600)
+        for filename, content in files.items():
+            target = workspace / filename
+            if target.is_symlink() or (
+                target.exists()
+                and (not target.is_file() or target.read_bytes() != content)
+            ):
+                raise RuntimeError("immutable service workspace files changed")
+            if not target.exists():
+                atomic_write(target, content, mode=0o600)
     atomic_write(
         config_path, json.dumps(config, indent=2, sort_keys=True).encode(), mode=0o600
     )
     return {
-        "service_agent_count": int(instructions is not None),
-        "service_tool_count": len(SERVICE_PRIVATE_TOOLS)
-        if instructions is not None
-        else 0,
+        "service_agent_count": int(files is not None),
+        "service_tool_count": len(SERVICE_PRIVATE_TOOLS) if files is not None else 0,
         "member_authority": False,
         "provider_authority": False,
         "content_exposed": False,
