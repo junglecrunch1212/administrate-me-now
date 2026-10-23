@@ -749,3 +749,23 @@ def test_budget_variance_independent_signed_difference_and_zero_basis():
             "1",
             {**inputs()["budget_variance"], "actual_basis": "bank_cash"},
         )
+
+
+def test_schema_discovery_preserves_bounds_and_resolves_only_declared_definitions():
+    from adminme.finance.calculators import describe_calculator
+
+    described = describe_calculator("fixed_debt")
+    reference = described["input_schema"]["properties"]["terms"]["$ref"]
+    definition = describe_calculator("fixed_debt", reference)
+    assert (
+        definition["input_schema"]["properties"]["principal_minor"]["maximum"] == 10**12
+    )
+    assert definition["input_schema"]["additionalProperties"] is False
+    for path in (
+        "../../secret",
+        "#/properties/absent",
+        "#/$defs/absent",
+        "#/properties/terms/more",
+    ):
+        with pytest.raises(CalculatorError, match="invalid_calculator_schema_path"):
+            describe_calculator("fixed_debt", path)

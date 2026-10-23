@@ -1339,6 +1339,52 @@ def calculator_catalog() -> dict[str, dict[str, Any]]:
     return metadata
 
 
+def describe_calculator(
+    identifier: str, schema_path: str | None = None
+) -> dict[str, Any]:
+    """Discover one immutable input contract; never preload every model schema.
+
+    Named definitions may be fetched separately. JSON pointers are restricted to
+    direct schema properties/definitions, not filesystem paths or data queries.
+    """
+    spec = _SPECS.get(identifier)
+    if spec is None:
+        raise CalculatorError("unsupported_calculator")
+    schema = spec.input_model.model_json_schema()
+    if schema_path is not None:
+        parts = schema_path.split("/")
+        if (
+            len(parts) != 3
+            or parts[0] != "#"
+            or parts[1] not in {"properties", "$defs"}
+        ):
+            raise CalculatorError("invalid_calculator_schema_path")
+        try:
+            selected = schema[parts[1]][parts[2]]
+        except KeyError:
+            raise CalculatorError("invalid_calculator_schema_path") from None
+    else:
+        selected = {key: value for key, value in schema.items() if key != "$defs"}
+
+    def compact(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: compact(item) for key, item in value.items() if key != "title"}
+        if isinstance(value, list):
+            return [compact(item) for item in value]
+        return value
+
+    return {
+        "calculator_id": identifier,
+        "model_version": "1",
+        "input_kind": "explicit_hypothetical",
+        "schema_path": schema_path or "#",
+        "input_schema": compact(selected),
+        "schema_definitions": [f"#/$defs/{key}" for key in schema.get("$defs", {})],
+        "semantic_validation": "Explicit confirmations and cross-field constraints are checked on calculation; a schema alone is not evidence acceptance.",
+        "next_step": "Use these exact fields with finance_calculate version 1. Fetch any referenced definition using schema_path.",
+    }
+
+
 def _period(body: CurrencyInput) -> str:
     if isinstance(body, CashLadderInput):
         return f"{body.start_date.isoformat()}/{body.end_date.isoformat()}"

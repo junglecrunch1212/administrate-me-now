@@ -256,12 +256,14 @@ async def check_disclosure(
         if not run_id or len(run_id) > 200:
             raise FinanceDisclosureError("finance_disclosure_run_required")
         run_hash = _digest(run_id)
+        found = False
         for slot in range(1, 7):
             receipt = await _read(
                 runtime, session, _run_key(session_hash, run_hash, slot)
             )
             if receipt is None:
                 continue
+            found = True
             if receipt["authority_sha256"] != expected or datetime.fromisoformat(
                 receipt["expires_at"]
             ) <= datetime.now(timezone.utc):
@@ -285,5 +287,7 @@ async def check_disclosure(
                 model = calculator_metadata().get(receipt["calculator_id"])
                 if model is None or model["version"] != receipt.get("model_version"):
                     raise FinanceDisclosureError("finance_disclosure_model_changed")
+        if require_run and not found:
+            raise FinanceDisclosureError("finance_disclosure_receipt_required")
     # The awaited reads above are not themselves a permission guarantee.
     validate_current_authority(runtime, session, expected)

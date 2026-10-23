@@ -88,6 +88,10 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     listener = socket.socket()
+    # An explicitly supplied listening socket must carry TCP_NODELAY. Otherwise
+    # sequential small responses can incur the delayed-ACK/Nagle ~40 ms stall,
+    # while concurrent traffic flushes it and falsely improves the loaded phase.
+    listener.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
     port = listener.getsockname()[1]
@@ -103,10 +107,18 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
         actor, session = receive.recv()
         async with (
             httpx.AsyncClient(
-                base_url=f"http://127.0.0.1:{port}", timeout=10
+                base_url=f"http://127.0.0.1:{port}",
+                timeout=10,
+                transport=httpx.AsyncHTTPTransport(
+                    socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
+                ),
             ) as core_client,
             httpx.AsyncClient(
-                base_url=f"http://127.0.0.1:{port}", timeout=10
+                base_url=f"http://127.0.0.1:{port}",
+                timeout=10,
+                transport=httpx.AsyncHTTPTransport(
+                    socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
+                ),
             ) as finance_client,
         ):
             grant = await core_client.post(

@@ -199,6 +199,25 @@ class TurnBudgetStore:
             state.charged_calls.add(receipt.call_number)
         return result
 
+    def check_delivery(self, receipt: TurnReceipt, *, now: float | None = None) -> None:
+        """Recheck elapsed time after durable audit/receipt writes have yielded."""
+        tick = self._time(now)
+        with self._lock:
+            state = self._states.get(receipt.identity)
+            if (
+                state is None
+                or state.call_times.get(receipt.call_number) != receipt.admitted_at
+                or receipt.call_number not in state.charged_calls
+            ):
+                raise FinanceBudgetError("invalid_finance_receipt")
+            if (
+                tick < receipt.admitted_at
+                or tick - state.started_at >= TURN_DEADLINE_SECONDS
+            ):
+                raise FinanceBudgetError("finance_turn_deadline")
+            if tick - receipt.admitted_at >= QUERY_DEADLINE_SECONDS:
+                raise FinanceBudgetError("finance_query_deadline")
+
     def charge_bundle(
         self,
         identity: TurnIdentity,

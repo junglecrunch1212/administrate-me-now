@@ -4104,10 +4104,22 @@ class FinanceStatusRequest(ContextRequest):
         default=None, min_length=1, max_length=80, pattern=r"^[a-z_]+$"
     )
 
+    calculator_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    schema_path: str | None = Field(default=None, max_length=170)
+
     @model_validator(mode="after")
     def one_finance_question(self) -> "FinanceStatusRequest":
         if self.compound_id and (self.capability_id or self.include_bundle):
             raise ValueError("choose_one_finance_question")
+        if self.calculator_id and (
+            self.compound_id
+            or self.capability_id
+            or self.include_bundle
+            or self.book_id
+        ):
+            raise ValueError("choose_one_finance_question")
+        if self.schema_path and not self.calculator_id:
+            raise ValueError("calculator_required_for_schema")
         return self
 
 
@@ -4284,6 +4296,14 @@ async def _finance_delivery(
                 )
             except FinanceDisclosureError as exc:
                 raise HTTPException(403, str(exc)) from None
+        try:
+            runtime._finance_turn_budgets.check_delivery(receipt)
+        except FinanceBudgetError as exc:
+            return {
+                "state": "temporarily_unavailable",
+                "reason": exc.code,
+                "provider_effect_count": 0,
+            }
     return result
 
 
@@ -4315,7 +4335,7 @@ async def finance_status(
         readiness,
         skill_bundle,
     )
-    from adminme.finance.calculators import calculator_metadata
+    from adminme.finance.calculators import calculator_metadata, describe_calculator
     from adminme.finance.queries import publication_status
     from adminme.finance.readiness import publication_readiness_context
     from adminme.finance.workflows import compound_readiness, preparation_workflow
@@ -4376,7 +4396,11 @@ async def finance_status(
                 result["report_boundary"] = (
                     "Read the selected report for its basis, period, quality and limitations before any financial conclusion."
                 )
-            if body.compound_id:
+            if body.calculator_id:
+                result = blocked or describe_calculator(
+                    body.calculator_id, body.schema_path
+                )
+            elif body.compound_id:
                 preparation = compound_readiness(body.compound_id, {})
                 states = {
                     row["capability_id"]: readiness(

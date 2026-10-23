@@ -509,3 +509,37 @@ def test_changed_enabled_owner_mapping_suppresses_old_result(
         assert response.json()["detail"] == "finance_authority_changed"
         assert "120000" not in response.text
         assert "values" not in response.text
+
+
+def test_model_contract_discovery_then_calculation_in_one_bound_turn(tmp_path):
+    from tests.unit.test_finance_calculators import inputs
+
+    settings = replace(
+        _settings(tmp_path),
+        finance_publications_enabled=True,
+        finance_model_members=frozenset({PRINCIPAL}),
+    )
+    with TestClient(create_application(settings)) as client:
+        _grant_cos(client, "model-discovery")
+        described = _post(
+            client, "status", "model-contract", calculator_id="reserve_coverage"
+        )
+        assert described.status_code == 200, described.text
+        contract = described.json()
+        assert contract["input_kind"] == "explicit_hypothetical"
+        assert contract["input_schema"]["additionalProperties"] is False
+        assert (
+            contract["input_schema"]["properties"]["liquid_cash_minor"]["minimum"] == 0
+        )
+        assert "liquidity_confirmed" in contract["input_schema"]["required"]
+        calculated = _post(
+            client,
+            "calculate",
+            "model-contract",
+            calculator_id=contract["calculator_id"],
+            version=contract["model_version"],
+            hypothetical=True,
+            inputs=inputs()["reserve_coverage"],
+        )
+        assert calculated.status_code == 200, calculated.text
+        assert calculated.json()["values"]["reference_months_covered"] == "4.000000"

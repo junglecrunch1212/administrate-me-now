@@ -123,3 +123,10 @@ offsets are different contracts. Neither the resource layer nor the reader
 converts an offset into liquidity or debt principal into expense. The validated
 Books funding-outlook publication and any required semantic schema extension
 remain an integration-review dependency; the v1 interchange stays unchanged.
+
+At `2f0ddbfa`, hosted functional/static/native checks passed (353 Python and
+92 plugin tests). The v2 benchmark assertion also passed, but its sequential
+baseline was 44.044 ms versus 4.113 ms loaded. This approximately 40 ms transport
+stall is not accepted as performance-isolation evidence. The next harness sets
+TCP_NODELAY explicitly on the supplied listener and both clients to remove
+Nagle/delayed-ACK distortion; all original thresholds remain unchanged.

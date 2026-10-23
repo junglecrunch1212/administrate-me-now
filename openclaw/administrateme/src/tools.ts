@@ -190,6 +190,8 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
         book_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
         include_bundle: Type.Optional(Type.Boolean()),
         compound_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        calculator_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        schema_path: Type.Optional(Type.String({ maxLength: 170 })),
       }, { additionalProperties: false }),
       path: "/api/openclaw/v1/tools/finance-status",
     },
@@ -209,7 +211,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     },
     {
       name: "administrateme_finance_calculate",
-      description: "Run a named, versioned, bounded deterministic finance model on explicitly hypothetical typed inputs. No code, formulas, writes or action grants.",
+      description: "Run a named, versioned, bounded deterministic finance model on explicitly hypothetical typed inputs. Discover its exact input contract using finance_status with calculator_id first. No code, formulas, writes or action grants.",
       parameters: Type.Object({
         calculator_id: Type.String({ minLength: 1, maxLength: 80 }),
         version: Type.String({ minLength: 1, maxLength: 40 }),

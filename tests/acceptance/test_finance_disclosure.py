@@ -104,7 +104,15 @@ def test_tool_delivery_records_private_receipts_and_revoked_history_fails(tmp_pa
 
 @pytest.mark.parametrize(
     "fault",
-    ["revoked", "disabled", "changed_run", "missing_final", "oversized", "none"],
+    [
+        "revoked",
+        "disabled",
+        "changed_run",
+        "unrecognized_run",
+        "missing_final",
+        "oversized",
+        "none",
+    ],
 )
 def test_stream_buffers_finance_until_final_authorization(tmp_path, fault):
     with TestClient(create_application(enabled_settings(tmp_path))) as client:
@@ -114,9 +122,8 @@ def test_stream_buffers_finance_until_final_authorization(tmp_path, fault):
         aborted = []
 
         async def stream(**kwargs):
-            yield MemberChatChunk(
-                kind="status", phase="starting_model", run_id="stream-run"
-            )
+            run_id = "unrecognized" if fault == "unrecognized_run" else "stream-run"
+            yield MemberChatChunk(kind="status", phase="starting_model", run_id=run_id)
             yield MemberChatChunk(kind="delta", text="Protected finance answer")
             if fault == "revoked":
                 await revoke(runtime, grant)
@@ -129,7 +136,7 @@ def test_stream_buffers_finance_until_final_authorization(tmp_path, fault):
             if fault != "missing_final":
                 yield MemberChatChunk(
                     kind="final",
-                    run_id="other-run" if fault == "changed_run" else "stream-run",
+                    run_id="other-run" if fault == "changed_run" else run_id,
                 )
 
         async def abort(**kwargs):
@@ -257,3 +264,27 @@ def test_new_publication_invalidates_inflight_result_but_allows_pinned_history(
         )
         assert response.json()["state"] == "qualified"
         client.portal.call(check, "historical")
+
+
+def test_receipt_write_cannot_extend_query_deadline(tmp_path, monkeypatch):
+    from adminme.finance import disclosure, budgets
+
+    original = disclosure._append
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "deadline-grant")
+        clock = [100.0]
+        monkeypatch.setattr(
+            budgets.TurnBudgetStore, "_time", staticmethod(lambda now: clock[0])
+        )
+
+        async def slow_append(runtime, session, key, payload):
+            await original(runtime, session, key, payload)
+            if payload["kind"] == "run":
+                clock[0] += 2.1
+
+        monkeypatch.setattr(disclosure, "_append", slow_append)
+        response = calculate(client)
+        assert response.status_code == 200
+        assert response.json()["reason"] == "finance_query_deadline"
+        assert "120000" not in response.text
+        assert "values" not in response.json()
