@@ -125,6 +125,11 @@ from bootstrap.source_identity import (
     write_source_marker_at,
 )
 from bootstrap.wizard import install_launch_agents
+from bootstrap.workspace_instructions import (
+    WorkspaceInstructionsError,
+    apply_transition as apply_workspace_instructions,
+    prepare_transition as prepare_workspace_instructions,
+)
 
 
 class UpgradeError(RuntimeError):
@@ -1802,6 +1807,45 @@ class UpgradeManager:
                     "its original items were not changed."
                 )
 
+    def _prepare_workspace_instructions(
+        self,
+        *,
+        source_release: Path,
+        target_release: Path,
+        adapter_config: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            return prepare_workspace_instructions(
+                self.paths,
+                source_release=source_release,
+                target_release=target_release,
+                adapter_config=adapter_config,
+            )
+        except WorkspaceInstructionsError as exc:
+            raise UpgradeError(str(exc)) from exc
+
+    def _select_workspace_instructions(self, journal: dict[str, Any]) -> dict[str, Any]:
+        transition = journal.get("workspace_instructions")
+        if transition is None:
+            return journal
+        if journal["phase"] not in {
+            "openclaw_selected",
+            "provider_config_selected",
+            "cos_guard_selected",
+        }:
+            raise UpgradeError(
+                "workspace instruction selection requires stopped services"
+            )
+        journal = self.activation_journal.transition(
+            journal, "workspace_instructions_selecting"
+        )
+        apply_workspace_instructions(self.paths, transition)
+        journal = self.activation_journal.transition(
+            journal, "workspace_instructions_selected"
+        )
+        self._test_crash_after_journal_phase("workspace_instructions_selected")
+        return journal
+
     def _capture_activation_baseline(
         self,
     ) -> tuple[
@@ -2190,6 +2234,11 @@ class UpgradeManager:
                 # Plugin installation must not change captured transport bytes
                 # on recovery (including their configuration fingerprint).
                 lambda: self._restore_cos_guard_rebind(recovery_journal),
+                lambda: apply_workspace_instructions(
+                    self.paths,
+                    recovery_journal.get("workspace_instructions"),
+                    recover=True,
+                ),
                 lambda: install_launch_agents(
                     self.paths,
                     predecessor,
@@ -2536,6 +2585,11 @@ class UpgradeManager:
             source_release=active_root,
             target_release=release,
         )
+        workspace_instructions = self._prepare_workspace_instructions(
+            source_release=active_root,
+            target_release=release,
+            adapter_config=selected_adapter_config,
+        )
         (
             current_pointer,
             current_active,
@@ -2633,6 +2687,7 @@ class UpgradeManager:
                     ).hexdigest(),
                     "provider_binding_transition": binding_transition,
                     "cos_imessage_rebind": cos_rebind,
+                    "workspace_instructions": workspace_instructions,
                     "was_running": was_running,
                     "pending_attestation_id": self.pending_attestation_id,
                     "pending_attestation_sha256": pending_sha256,
@@ -2894,6 +2949,7 @@ class UpgradeManager:
                     "provider_config_selected",
                 )
             journal = self._select_cos_guard_rebind(journal)
+            journal = self._select_workspace_instructions(journal)
             journal = self.activation_journal.transition(
                 journal,
                 "plugin_selecting",
@@ -3483,6 +3539,15 @@ class UpgradeManager:
             target_release=release,
             history=activation_history,
         )
+        workspace_instructions = (
+            self._prepare_workspace_instructions(
+                source_release=current_release,
+                target_release=release,
+                adapter_config=target_adapter_config,
+            )
+            if activation_history.get("workspace_instructions") is not None
+            else None
+        )
         was_running = self.services.status().status != "stopped"
         transaction_id = uuid.uuid4().hex
         try:
@@ -3547,6 +3612,7 @@ class UpgradeManager:
                     ).hexdigest(),
                     "provider_binding_transition": binding_transition,
                     "cos_imessage_rebind": cos_rebind,
+                    "workspace_instructions": workspace_instructions,
                     "was_running": was_running,
                     "pending_attestation_id": None,
                     "pending_attestation_sha256": None,
@@ -3612,6 +3678,7 @@ class UpgradeManager:
                     "provider_config_selected",
                 )
             journal = self._select_cos_guard_rebind(journal)
+            journal = self._select_workspace_instructions(journal)
             journal = self.activation_journal.transition(
                 journal,
                 "plugin_selecting",

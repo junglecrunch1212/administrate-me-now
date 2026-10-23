@@ -146,6 +146,19 @@ contract remains member-owned, so service-channel configuration must reject
 `sending_enabled:true` until a separately reviewed generic service-owner
 command contract exists and passes observation-suppressed production proof.
 
+The supported transactional updater refreshes generated `AGENTS.md` instructions
+in the instance template and configured member workspaces when their program
+sources change. It prepares every replacement before maintenance, preserves
+private prefix/suffix overlays and all persona/member files, and refuses altered
+generated blocks, missing workspaces or unsafe paths before stopping services.
+Installation occurs while services are stopped, with byte read-back before
+restart. The private activation journal retains the prior bytes: interrupted or
+failed activation restores them, and supported rollback restores the predecessor
+instructions while retaining later private overlays. A custom edit inside a
+generated block requires reconciliation before release; it is never overwritten.
+This does not grant permissions or prove a user workflow merely from template
+presence: post-deployment acceptance still checks the affected agent behavior.
+
 ## Composition lifecycle
 
 Startup order is transactional and health-visible:
