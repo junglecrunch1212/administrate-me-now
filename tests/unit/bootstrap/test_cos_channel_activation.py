@@ -994,3 +994,518 @@ def test_standing_reply_operation_publishes_both_grants_or_restores_both(
         )
         assert activation["schema_version"] == 2
         assert activation["payload"] == receipt["activation"]
+
+
+def _maintenance_controller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, messages: bool = True
+):
+    from adminme.openclaw_topology import member_agent_id
+    from bootstrap.cos_imessage import prepare_channel
+    from tests.unit.bootstrap.test_cos_imessage import _guard
+
+    controller, request, _original = _controller(tmp_path, monkeypatch)
+    if messages:
+        guard = _guard(tmp_path)
+        guard["account_id"] = "cos-messages-fixture"
+        wrapper = ROOT / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+        guard.update(
+            wrapper_path=str(wrapper),
+            wrapper_sha256=hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+        )
+        phone = "+12025550101"  # fixture:tenant_data:ok
+        adapters = copy.deepcopy(request.adapter_config)
+        adapters["cos_channel_acquisition"]["imessage_channel_id"] = (
+            "channel:chief-of-staff:apple-imessage"
+        )
+        adapters["service_identities"]["channels"][0]["response_transport_contract"] = (
+            "cos-imessage-guard-v1"
+        )
+        adapters["openclaw_actor_identities"] = {
+            f"imessage|{guard['account_id']}|{phone}": MEMBER_A
+        }
+        gateway = {
+            "agents": {"list": [{"id": member_agent_id(MEMBER_A)}]},
+            "models": {"retained": "fixture"},
+        }
+        _write(
+            controller.paths.instance_dir / "openclaw/runtime/openclaw.json", gateway
+        )
+        monkeypatch.setattr(
+            "bootstrap.openclaw_activation.prepare_existing_member_topology",
+            lambda config, **_kwargs: copy.deepcopy(config),
+        )
+        monkeypatch.setattr(
+            "bootstrap.cos_imessage.verify_guard_files", lambda *_args, **_kwargs: None
+        )
+        request = request.model_copy(
+            update={
+                "adapter_config": adapters,
+                "prepared_openclaw_config": prepare_channel(
+                    gateway, guard, allowed_senders=[phone]
+                ),
+                "cos_imsg_guard_config": guard,
+                "allow_owner_self_replies": True,
+                "allow_owner_self_reminders": True,
+                "sender_proofs": [
+                    *request.sender_proofs,
+                    request.sender_proofs[0].model_copy(
+                        update={
+                            "channel": "imessage",
+                            "provider_account_sha256": hashlib.sha256(
+                                guard["account_id"].encode()
+                            ).hexdigest(),
+                        }
+                    ),
+                ],
+                "recipient_entries": [
+                    *(request.recipient_entries or []),
+                    {"member_id": MEMBER_A, "channel": "imessage", "address": phone},
+                ],
+            }
+        )
+    controller.activate(request, enable_live=True)
+    snapshot = {
+        "predecessor_commit": "a" * 40,
+        "pointer_sha256": "1" * 64,
+        "pointer_chain_sha256": "2" * 64,
+        "instance_fingerprint": "3" * 64,
+        "host_fingerprint": "4" * 64,
+        "service_account_fingerprint": "5" * 64,
+        "configuration_fingerprint": "6" * 64,
+    }
+    monkeypatch.setattr(
+        controller, "_observation_selection", lambda: ("a" * 40, ROOT, "b" * 40)
+    )
+    monkeypatch.setattr(
+        controller, "_bound_snapshot", lambda _commit: copy.deepcopy(snapshot)
+    )
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.capture_deployment_snapshot",
+        lambda _paths: SimpleNamespace(public=lambda: copy.deepcopy(snapshot)),
+    )
+    # The real updater seals the post-reconciliation deployment fingerprint in
+    # its validated committed journal. This fixture stubs only that deployment
+    # boundary; activation, encrypted events and restoration remain real.
+    prior_binding = {
+        "release_commit": "a" * 40,
+        **{
+            key: snapshot[key]
+            for key in (
+                "instance_fingerprint",
+                "host_fingerprint",
+                "configuration_fingerprint",
+            )
+        },
+    }
+    monkeypatch.setattr(
+        "bootstrap.activation_transaction.ActivationJournal.committed_activation",
+        lambda self, **_kwargs: {
+            "initial_pointer_sha256": snapshot["pointer_sha256"],
+            "initial_readiness": {"deployment_binding": prior_binding},
+            "active_readiness": {
+                "deployment_binding": {**prior_binding, "release_commit": "b" * 40}
+            },
+        },
+    )
+    return controller, request
+
+
+def _prepare_maintenance(controller, request):
+    from bootstrap.cos_channel_activation import MaintenancePreparationRequest
+
+    return controller.prepare_maintenance(
+        MaintenancePreparationRequest(
+            owner_member_id=request.owner_member_id,
+            operator_principal_id=request.operator_principal_id,
+            owner_authorization_sha256=request.owner_authorization_sha256,
+        )
+    )
+
+
+@pytest.mark.parametrize("messages", [False, True])
+def test_prepared_maintenance_restores_exact_authority_without_new_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, messages: bool
+) -> None:
+    controller, request = _maintenance_controller(
+        tmp_path, monkeypatch, messages=messages
+    )
+    _, events_before = asyncio.run(_audit(controller))
+    controls_before = {
+        path: path.read_bytes()
+        for path in controller.config_dir.iterdir()
+        if path.is_file()
+    }
+    stops_before = controller.services.stops
+    plan = _prepare_maintenance(controller, request)
+    assert controller.services.stops == stops_before
+    assert controls_before == {path: path.read_bytes() for path in controls_before}
+    assert asyncio.run(_audit(controller))[1] == events_before
+    assert plan.self_reply_bindings == plan.self_reminder_bindings
+    assert bool(plan.self_reply_bindings) is messages
+    assert plan.sender_proofs == request.sender_proofs
+    controller.pause_maintenance(plan)
+    monkeypatch.setattr(controller, "_selection", lambda: ("b" * 40, ROOT))
+    if messages:
+        # Plugin reinstallation can remove the host copy. The plan may restore
+        # only the exact previously effective intersection, not recipient ceilings.
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        gateway = json.loads(path.read_text())
+        config = gateway["plugins"]["entries"]["administrateme"]["config"]
+        config.pop("standingSelfReplyBindings")
+        config.pop("scheduledSelfReminderBindings")
+        _write(path, gateway)
+    result = controller.activate(plan, enable_live=True)
+    assert result["observation_active"] is False
+    assert result["provider_test_messages_sent"] == 0
+    receipt = json.loads(
+        (controller.config_dir / "cos-channel-operation.json").read_text()
+    )
+    assert receipt["activation"]["self_reply_bindings"] == plan.self_reply_bindings
+    if messages:
+        config = json.loads(path.read_text())["plugins"]["entries"]["administrateme"][
+            "config"
+        ]
+        assert config["standingSelfReplyBindings"] == plan.self_reply_bindings
+        assert config["scheduledSelfReminderBindings"] == plan.self_reminder_bindings
+    # Successful activation consumes the predecessor receipt; replay cannot send
+    # or recreate a live boundary even if the operator keeps the private artifact.
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="drifted"):
+        controller.activate(plan, enable_live=True)
+    assert controller.services.stops == stops
+
+
+@pytest.mark.parametrize(
+    "mutation", ["grant", "expired", "gateway", "member", "candidate", "sender"]
+)
+def test_maintenance_rejects_changed_plan_before_pausing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    plan = _prepare_maintenance(controller, request)
+    stops = controller.services.stops
+    if mutation == "grant":
+        plan = plan.model_copy(update={"self_reply_bindings": ["f" * 64]})
+    elif mutation == "expired":
+        plan = plan.model_copy(
+            update={
+                "expires_at": (
+                    datetime.now(timezone.utc) - timedelta(seconds=1)
+                ).isoformat()
+            }
+        )
+    elif mutation == "candidate":
+        plan = plan.model_copy(update={"target_commit": "c" * 40})
+    elif mutation == "sender":
+        plan = plan.model_copy(
+            update={
+                "sender_proofs": [
+                    request.sender_proofs[0].model_copy(
+                        update={"provider_account_sha256": "f" * 64}
+                    )
+                ]
+            }
+        )
+    elif mutation == "member":
+        _write(
+            controller.config_dir / "member-mapping.json",
+            {"members": [{"member_id": MEMBER_A, "role": "standard"}]},
+        )
+    else:
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        gateway = json.loads(path.read_text())
+        gateway["models"]["retained"] = "changed-after-preparation"
+        _write(path, gateway)
+    with pytest.raises(CoSActivationError):
+        controller.pause_maintenance(plan)
+    assert controller.services.stops == stops
+    assert not controller.journal_path.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "plan",
+        "gateway",
+        "recipient",
+        "guard",
+        "revocation",
+        "missing_pause",
+        "candidate",
+        "native_hook",
+        "native_grant",
+        "native_denial",
+        "updater_history",
+    ],
+)
+def test_restoration_refuses_drift_or_new_authority_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    plan = _prepare_maintenance(controller, request)
+    if mutation != "missing_pause":
+        controller.pause_maintenance(plan)
+    monkeypatch.setattr(
+        controller,
+        "_selection",
+        lambda: ("c" * 40 if mutation == "candidate" else "b" * 40, ROOT),
+    )
+    if mutation == "plan":
+        plan = plan.model_copy(update={"self_reply_bindings": ["f" * 64]})
+    elif mutation == "gateway":
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        gateway = json.loads(path.read_text())
+        gateway["models"]["retained"] = "unrelated-model-change"
+        _write(path, gateway)
+    elif mutation == "guard":
+        path = controller.config_dir / "cos-imsg-guard.json"
+        guard = json.loads(path.read_text())
+        guard["db_path"] = "/fixture/different-messages.db"
+        _write(path, guard)
+    elif mutation in {"native_hook", "native_grant", "native_denial"}:
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        gateway = json.loads(path.read_text())
+        entry = gateway["plugins"]["entries"]["administrateme"]
+        if mutation in {"native_hook", "native_denial"}:
+            entry["hooks"]["allowConversationAccess"] = False
+        else:
+            entry["config"].pop("standingSelfReplyBindings")
+        _write(path, gateway)
+        # A native-only revocation can update normal readiness too; it must
+        # still differ from the immutable post-updater fingerprint.
+        drifted = {**plan.deployment_snapshot, "configuration_fingerprint": "8" * 64}
+        if mutation != "native_denial":
+            monkeypatch.setattr(controller, "_bound_snapshot", lambda _commit: drifted)
+    elif mutation == "updater_history":
+        from bootstrap.activation_transaction import ActivationJournalError
+
+        def missing_history(self, **_kwargs):
+            raise ActivationJournalError("no completed deployment")
+
+        monkeypatch.setattr(
+            "bootstrap.activation_transaction.ActivationJournal.committed_activation",
+            missing_history,
+        )
+    elif mutation == "recipient":
+        current = asyncio.run(controller._policy())
+        current["revision"] += 1
+
+        async def changed_policy():
+            return current
+
+        monkeypatch.setattr(controller, "_policy", changed_policy)
+    elif mutation == "revocation":
+        # A later deliberate revocation must supersede pre-maintenance authority.
+        asyncio.run(
+            controller._audit_and_toggle(
+                None,
+                journal={
+                    "activation_id": plan.prior_activation_id,
+                    "operator_principal_id": plan.operator_principal_id,
+                },
+                deactivate_reason="operation_failed",
+            )
+        )
+    stops = controller.services.stops
+    with pytest.raises((CoSActivationError, FileNotFoundError)):
+        controller.activate(plan, enable_live=True)
+    assert controller.services.stops == stops
+    assert not controller.journal_path.exists()
+
+
+def test_maintenance_rejects_expired_original_proofs_before_downtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bootstrap.cos_channel_activation import MaintenancePreparationRequest
+
+    controller, request = _maintenance_controller(tmp_path, monkeypatch, messages=False)
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="before maintenance"):
+        controller.prepare_maintenance(
+            MaintenancePreparationRequest(
+                owner_member_id=request.owner_member_id,
+                operator_principal_id=request.operator_principal_id,
+                owner_authorization_sha256=request.owner_authorization_sha256,
+                sender_proofs=[
+                    request.sender_proofs[0].model_copy(
+                        update={
+                            "observed_at": (
+                                datetime.now(timezone.utc) - timedelta(days=2)
+                            ).isoformat()
+                        }
+                    )
+                ],
+            )
+        )
+    assert controller.services.stops == stops
+
+
+def test_maintenance_cli_consumes_same_private_artifact_through_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from bootstrap.cos_channel_activation import main
+
+    controller, request = _maintenance_controller(tmp_path, monkeypatch, messages=False)
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.CoSChannelActivator",
+        lambda *_args, **_kwargs: controller,
+    )
+    authority = tmp_path / "maintenance-authority.json"
+    plan = tmp_path / "maintenance-plan.json"
+    _write(
+        authority,
+        {
+            key: getattr(request, key)
+            for key in (
+                "owner_member_id",
+                "operator_principal_id",
+                "owner_authorization_sha256",
+            )
+        },
+    )
+    base = ["cos_channel_activation", "--instance-root", str(controller.paths.root)]
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            *base,
+            "--request",
+            str(authority),
+            "--prepare-maintenance",
+            "--output",
+            str(plan),
+        ],
+    )
+    main()
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["status"] == "maintenance_prepared"
+    assert summary["runtime_changed"] is False
+    assert "sender_proofs" not in summary
+    assert plan.stat().st_mode & 0o777 == 0o600
+    original = plan.read_bytes()
+    with pytest.raises(FileExistsError):
+        main()
+    assert plan.read_bytes() == original
+    monkeypatch.setattr(
+        "sys.argv", [*base, "--request", str(plan), "--pause-maintenance"]
+    )
+    main()
+    assert json.loads(capsys.readouterr().out)["observation_active"] is True
+    monkeypatch.setattr(controller, "_selection", lambda: ("b" * 40, ROOT))
+    monkeypatch.setattr(
+        "sys.argv", [*base, "--request", str(plan), "--restore-maintenance"]
+    )
+    main()
+    assert json.loads(capsys.readouterr().out)["observation_active"] is False
+
+
+def test_maintenance_gateway_fingerprint_bounds_release_metadata_only() -> None:
+    from bootstrap.cos_channel_activation import _maintenance_gateway_fingerprint
+
+    source, target = Path("/fixture/source"), Path("/fixture/target")
+    gateway = {
+        "meta": {"lastTouchedAt": "old"},
+        "plugins": {
+            "load": {"paths": [str(source / "openclaw/administrateme")]},
+            "installs": {
+                "administrateme": {"sourcePath": str(source), "installedAt": "old"}
+            },
+            "entries": {
+                "administrateme": {
+                    "config": {"standingSelfReplyBindings": ["a" * 64]},
+                    "hooks": {"allowConversationAccess": True},
+                }
+            },
+        },
+        "channels": {
+            "imessage": {
+                "accounts": {
+                    "fixture": {
+                        "cliPath": str(
+                            source / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+                        ),
+                        "allowFrom": ["fixture-private-sender"],
+                    }
+                }
+            }
+        },
+        "models": {"retained": "fixture"},
+    }
+    fingerprint = _maintenance_gateway_fingerprint(gateway, source)
+    selected = copy.deepcopy(gateway)
+    selected["meta"]["lastTouchedAt"] = "new"
+    selected["plugins"]["load"]["paths"] = [str(target / "openclaw/administrateme")]
+    selected["plugins"]["installs"]["administrateme"] = {
+        "sourcePath": str(target),
+        "installedAt": "new",
+    }
+    selected["plugins"]["entries"]["administrateme"]["config"] = {}
+    selected["plugins"]["entries"]["administrateme"]["hooks"] = {}
+    selected["channels"]["imessage"]["accounts"]["fixture"]["cliPath"] = str(
+        target / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+    )
+    assert _maintenance_gateway_fingerprint(selected, target) == fingerprint
+    selected["models"]["retained"] = "changed"
+    assert _maintenance_gateway_fingerprint(selected, target) != fingerprint
+
+
+@pytest.mark.parametrize("disabled", ["native_hook", "scheduler"])
+def test_maintenance_does_not_turn_disabled_native_controls_into_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, disabled: str
+) -> None:
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+    gateway = json.loads(path.read_text())
+    if disabled == "native_hook":
+        gateway["plugins"]["entries"]["administrateme"]["hooks"][
+            "allowConversationAccess"
+        ] = False
+    else:
+        gateway["cron"]["triggers"]["enabled"] = False
+    _write(path, gateway)
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="cannot re-enable"):
+        _prepare_maintenance(controller, request)
+    assert controller.services.stops == stops
+    assert json.loads(path.read_text()) == gateway
+
+
+@pytest.mark.parametrize("stage", ["prepare", "pause"])
+def test_workspace_preflight_refuses_custom_generated_instructions_before_maintenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    from adminme.openclaw_topology import member_agent_id
+    from bootstrap.workspace_instructions import compile_instructions
+
+    controller, request = _maintenance_controller(tmp_path, monkeypatch, messages=False)
+    candidate = tmp_path / "candidate"
+    programs = candidate / "bootstrap/openclaw/programs"
+    programs.mkdir(parents=True)
+    (programs / "fixture.md").write_text("Updated generated instructions.\n")
+    controller.repository = candidate
+    adapters = json.loads((controller.config_dir / "adapters.json").read_text())
+    members = set((adapters.get("openclaw_actor_identities") or {}).values()) | set(
+        adapters.get("member_chat_enabled_members") or []
+    )
+    coordinates = ["workspace"] + [
+        f"member-workspaces/{member_agent_id(member)}" for member in sorted(members)
+    ]
+    files = []
+    for coordinate in coordinates:
+        directory = controller.paths.instance_dir / "openclaw" / coordinate
+        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        path = directory / "AGENTS.md"
+        atomic_write(path, compile_instructions(ROOT) + b"Private overlay.\n")
+        files.append(path)
+    plan = _prepare_maintenance(controller, request) if stage == "pause" else None
+    atomic_write(files[0], b"Customized generated instructions.\n")
+    before = [path.read_bytes() for path in files]
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="before maintenance"):
+        if plan is not None:
+            controller.pause_maintenance(plan)
+        else:
+            _prepare_maintenance(controller, request)
+    assert controller.services.stops == stops
+    assert [path.read_bytes() for path in files] == before
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is False

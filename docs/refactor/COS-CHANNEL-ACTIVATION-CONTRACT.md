@@ -238,6 +238,74 @@ Runtime verification continues to require the selected immutable release's exact
 wrapper; retained-release paths and caller-supplied replacement hashes are not
 accepted as substitutes.
 
+### Prepare exact restoration before maintenance
+
+This MODERNIZE adds a supported preparation path for an already healthy live
+CoS. It captures the effective host/domain intersection of private reply grants
+and the existing reminder subset before maintenance. It never turns an allowed
+recipient into a sending grant or invents fresh account verification. Ordinary
+channel enrollment and new permission enablement keep their existing separate
+activation requests.
+
+From the clean, merged target checkout, using the selected predecessor Python,
+provide a private request with `owner_member_id`, `operator_principal_id`, and
+`owner_authorization_sha256` for the already-authorized maintenance. Optional
+`sender_proofs` may supply actual refreshed evidence for exactly the same enrolled
+accounts; otherwise the existing receipt's proofs are reused within their original
+24-hour lifetime. Expired or future evidence fails before services are stopped.
+Preparation writes a new owner-only plan at `--output`, refuses to replace an
+existing file, and reports its expiry without printing private configuration.
+
+```sh
+SELECTED_PYTHON -m bootstrap.cos_channel_activation \
+  --instance-root PRIVATE_INSTANCE_ROOT --request PRIVATE_MAINTENANCE_AUTHORITY \
+  --prepare-maintenance --output PRIVATE_MAINTENANCE_PLAN
+SELECTED_PYTHON -m bootstrap.cos_channel_activation \
+  --instance-root PRIVATE_INSTANCE_ROOT --request PRIVATE_MAINTENANCE_PLAN \
+  --pause-maintenance
+```
+
+Preparation reads current authority and configuration under the operation lock;
+it does not stop services, change grants, append events, enroll accounts or send
+anything. It also runs the supported workspace-instruction preflight and repeats
+that read-only check immediately before pausing. A customized generated block or
+unsafe workspace fails before observation starts; private overlays are preserved.
+Pausing uses the existing observation transaction and journals the exact plan digest. After the ordinary guarded updater selects the plan's target, use the
+same plan from the selected merged checkout and its installed Python:
+
+```sh
+SELECTED_PYTHON -m bootstrap.cos_channel_activation \
+  --instance-root PRIVATE_INSTANCE_ROOT --request PRIVATE_MAINTENANCE_PLAN \
+  --restore-maintenance
+```
+
+Restoration constructs the concrete activation request from the current selected
+configuration. No hand-edited release paths or blanket owner opt-in are needed.
+It requires both the completed planned observation journal and the exact committed
+updater transaction. The current deployment fingerprint must equal that updater
+transaction's sealed post-reconciliation configuration; a later native hook or
+host-grant revocation cannot be mistaken for reinstallation loss. The same receipt, recipient
+policy, member mapping, adapter selection, instance and host are required, with no
+later activation or revocation. Guard changes are limited to the reviewed target's
+wrapper path and content. Gateway compatibility ignores only updater-owned plugin
+registration metadata, its release paths, and the exact grants/hook being restored;
+models, routing, tools and other configuration remain bound. Host grants must be
+either the captured list or absent following reinstallation. A different list,
+unknown drift, expired plan, changed candidate or replay after successful
+activation fails before another service stop or write. A deliberate permission
+change uses a new ordinary authorized activation request, never this old plan.
+
+The existing activation transaction restores both independent copies of the exact
+reply grants and the original reminder subset, creates a new audited activation
+boundary, and retains its backup, settlement and observation recovery behavior.
+On a failed activation, recover through `--recover`; this keeps observation active.
+Do not retry an expired/drifted plan or treat returning to observation as restored
+normal service. A plan restores only its successfully committed target; if the
+updater returns to the predecessor, use the existing activation path to restore
+that release's already-authorized operation. This plan does not automatically
+re-enable a rolled-back runtime. Successful restoration is still followed by the bounded affected
+workflow check; preparation alone is not evidence that live replies work.
+
 ### Upgrading an already live CoS
 
 This MODERNIZE preserves the AGENTS.md observation-on deployment rule. Before
@@ -301,8 +369,8 @@ does not duplicate the deactivation, observation-enable fact or archived interva
 Configuration, policy or unknown-effect drift remains a blocking failure.
 
 After successful containment, collect normal HTR-10 and candidate-pending
-evidence and use the guarded updater. Its encrypted backup, rollback, full Doctor
-and member-browser gates remain mandatory. Current and archived effect intervals
+evidence and use the guarded updater, preserving its implemented safeguards and
+the affected acceptance scope in AGENTS.md. Current and archived effect intervals
 must survive promotion and rollback without reinterpretation of authorized live
 effects as observation effects. After successful deployment, run the existing
 `--request PRIVATE_ACTIVATION_REQUEST --enable-live` operation from the selected

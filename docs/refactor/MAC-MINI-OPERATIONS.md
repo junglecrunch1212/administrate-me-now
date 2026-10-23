@@ -587,10 +587,15 @@ activity-coordinate replacement, or an unreaped command fails closed. Only
 then is the isolated Python environment and native-plugin build prepared at the
 stable, non-selected final path. Preparation authority comes from that pending
 record, never from the marker alone. Every retry revalidates the record, source,
-marker, pointer chain, and release coordinate; deletes every allowed generated
-root without following links; rebuilds from scratch; and verifies exact
-preferred Python at both the formula and venv coordinates plus exact Node and
-Poetry. Active and recursively retained releases are read-only. If preparation
+marker, pointer chain, release coordinate and exact preferred Python, Node and
+Poetry. A completed, unconsumed preparation also records a content fingerprint
+of its generated dependency/build files, modes and link targets. When that
+fingerprint still matches, retry reuses the prepared runtime without reinstalling
+dependencies or rebuilding. Interrupted, changed or older preparations without a
+fingerprint take the existing clean rebuild path; unsafe paths fail closed. The
+updater checks the fingerprint again immediately before consuming preparation.
+Reuse applies only to the same candidate and predecessor, never another commit
+or a selected, retained or already-consumed release. Active and recursively retained releases are read-only. If preparation
 fails, the verified source remains inactive and no backup, service stop,
 selector, plugin registration, or pointer mutation has occurred. One private
 cooperative operation lock covers the supported fixed-commit activate launcher

@@ -1142,11 +1142,17 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
 
 
 @pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize(
+    "workspace_case", ["unchanged", "changed", "failure", "crash", "rollback"]
+)
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     reuse: bool,
+    workspace_case: str,
 ) -> None:
+    from bootstrap.workspace_instructions import compile_instructions
+
     paths = _paths(tmp_path)
     stub_uninitialized_intake(monkeypatch, paths)
     pointer_payload, pointer, readiness_payload = _documents(paths)
@@ -1163,6 +1169,22 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     release = paths.app_dir / "releases" / CANDIDATE_COMMIT
     release.mkdir(mode=0o700)
     write_release_manifest_fixture(release)
+    for fixture_release in (Path(pointer["path"]), release):
+        programs = fixture_release / "bootstrap" / "openclaw" / "programs"
+        programs.mkdir(parents=True)
+        (programs / "fixture.md").write_text("Fixture instructions.\n")
+    workspace = paths.instance_dir / "openclaw" / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    instruction_path = workspace / "AGENTS.md"
+    original_instructions = b"Private overlay.\n" + compile_instructions(
+        Path(pointer["path"])
+    )
+    atomic_write(instruction_path, original_instructions, mode=0o600)
+    if workspace_case != "unchanged":
+        (release / "bootstrap/openclaw/programs/fixture.md").write_text(
+            "Updated fixture instructions.\n"
+        )
+    selected_instructions = b"Private overlay.\n" + compile_instructions(release)
     manager = UpgradeManager(
         paths,
         root=candidate,
@@ -1338,7 +1360,71 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
 
     monkeypatch.setattr(manager.activation_journal, "transition", observe_transition)
 
+    if workspace_case == "failure":
+
+        def fail_candidate_doctor(selected, **_kwargs):
+            if selected == release:
+                assert instruction_path.read_bytes() == selected_instructions
+                raise RuntimeError("injected candidate failure")
+            return {"status": "healthy", "checks": []}
+
+        monkeypatch.setattr(manager, "_post_switch_doctor", fail_candidate_doctor)
+        with pytest.raises(UpgradeError, match="predecessor was recovered"):
+            manager.activate(candidate)
+        assert instruction_path.read_bytes() == original_instructions
+        assert not manager.activation_journal.path.exists()
+        return
+    if workspace_case == "crash":
+
+        class Interrupted(BaseException):
+            pass
+
+        def crash_after_instructions(phase):
+            if phase == "workspace_instructions_selected":
+                raise Interrupted()
+
+        monkeypatch.setattr(
+            manager, "_test_crash_after_journal_phase", crash_after_instructions
+        )
+        with pytest.raises(Interrupted):
+            manager.activate(candidate)
+        assert instruction_path.read_bytes() == selected_instructions
+        assert (
+            manager.activation_journal.load()["phase"]
+            == "workspace_instructions_selected"
+        )
+        manager._recover_interrupted_transaction(candidate)  # noqa: SLF001
+        assert instruction_path.read_bytes() == original_instructions
+        assert not manager.activation_journal.path.exists()
+        return
+
     result = manager.activate(candidate)
+    assert instruction_path.read_bytes() == selected_instructions
+    if workspace_case != "unchanged":
+        assert events.index("phase:services_quiesced") < events.index(
+            "phase:workspace_instructions_selecting"
+        )
+        assert events.index("phase:workspace_instructions_selected") < events.index(
+            "action:plugin"
+        )
+    if workspace_case == "rollback":
+        instruction_path.write_bytes(
+            selected_instructions + b"Later private preference.\n"
+        )
+        monkeypatch.setattr(
+            manager, "_validate_runtime", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            manager, "_write_refreshed_runtime_binding", lambda *_args, **_kwargs: None
+        )
+        result = manager.rollback()
+        assert result["status"] == "rolled_back"
+        assert (
+            instruction_path.read_bytes()
+            == original_instructions + b"Later private preference.\n"
+        )
+        assert not manager.activation_journal.path.exists()
+        return
 
     assert result["status"] == "upgraded"
     assert result["pending_attestation_id"] == PENDING_ID

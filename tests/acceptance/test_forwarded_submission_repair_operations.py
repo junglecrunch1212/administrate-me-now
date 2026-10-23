@@ -136,6 +136,13 @@ def _prepare_upgrade(
             release / "bootstrap/versions.json",
             (ROOT / "bootstrap/versions.json").read_bytes(),
         )
+        # The updater now compares real generated instructions before maintenance.
+        # Both synthetic releases retain the same reviewed program sources.
+        for program in (ROOT / "bootstrap/openclaw/programs").glob("*.md"):
+            atomic_write(
+                release / "bootstrap/openclaw/programs" / program.name,
+                program.read_bytes(),
+            )
     pointer_path = paths.app_dir / "current-release.json"
     atomic_write(
         pointer_path,
