@@ -49,7 +49,7 @@
     },
     "oauth_credentials_ref": {
       "type": "string",
-      "pattern": "^keychain://[^/]+/[^/]+$",
+      "pattern": "^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
       "description": "macOS Keychain reference to installed-user OAuth credentials."
     },
     "tasklist_id": {

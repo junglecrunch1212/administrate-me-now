@@ -18,6 +18,7 @@ from adminme.adapters.cos_channel_acquisition import (
     restrict_cos_adapter_config,
 )
 from adminme.service_identities import service_private_scope
+from adminme.adapters.cos_google_workspace import PURPOSES, validate_oauth_adapter
 from adminme.google_tasks_execution import (
     ACTION_CLASS as B03_ACTION_CLASS,
     ADAPTER_IDENTITY as B03_ADAPTER_IDENTITY,
@@ -333,6 +334,11 @@ def _validate_provider_binding_inventory(
             and kind == "messaging-gmail-api"
             and provenance == "oauth-subject"
         )
+        workspace_oauth = (
+            service_principal_id is not None
+            and kind in {row[0] for row in PURPOSES.values()}
+            and provenance == "oauth-subject"
+        )
         cos_writes = False
         b03 = adapter_config.get("b03_google_tasks_create")
         if b03 is not None and not isinstance(b03, dict):
@@ -433,6 +439,9 @@ def _validate_provider_binding_inventory(
                 # domain and OpenClaw approvals, observation and the final
                 # privacy guard remain mandatory at the response transport.
                 cos_writes = enable_writes is True
+            elif workspace_oauth:
+                purpose = next(key for key, row in PURPOSES.items() if row[0] == kind)
+                validate_oauth_adapter(adapter_config, purpose=purpose)
             elif b03 is None:
                 reviewed_scopes = SERVICE_OWNER_READONLY_SCOPES[kind]
                 if frozenset(permission_scope) != reviewed_scopes:
@@ -510,7 +519,7 @@ def _validate_provider_binding_inventory(
                     raise ValueError(
                         "B03 binding requires a positive reviewed revision"
                     )
-            if not cos_oauth and (
+            if not (cos_oauth or workspace_oauth) and (
                 provenance != "service-account-delegation"
                 or not isinstance(adapter_config.get("service_account_key_ref"), str)
             ):
