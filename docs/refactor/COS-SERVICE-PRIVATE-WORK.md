@@ -44,7 +44,7 @@ is resolved separately under each current standing grant; internal aggregation
 does not turn the CoS into either member or expand a disclosure audience.
 
 The native agent ID uses a separate namespace from member agents. Its session
-coordinate binds the principal, request digest and existing transport secret
+coordinate binds the principal, fresh run nonce and existing transport secret
 through HMAC. Each new operator request starts a fresh model session, then
 loads durable records through current authority checks. This prevents old
 transcripts from becoming an unchecked source after a grant is revoked.
@@ -131,8 +131,7 @@ openclaw gateway restart
 The plugin denies both the operator entry and service tools when disabled;
 normal installer reconciliation preserves this explicit setting. Verify the
 entry refuses new runs and existing runtime health remains good. Keep the
-schema-aware runtime; do not erase
-history or assume an older registry can read new events. A later binary
+schema-aware runtime; do not erase history or assume an older registry can read new events. A later binary
 rollback requires demonstrated compatibility with the retained history.
 Workspace selection/removal retains prior immutable instruction directories
 and private data. Maintenance must match the exact planned target agent,

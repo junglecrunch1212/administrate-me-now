@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 import yaml
 
+from bootstrap.source_identity import SourceIdentityError
 from scripts.release_scope import (
     CONTRACT,
     COS_SERVICE_WORK_APPLICATION,
@@ -2017,6 +2018,10 @@ def test_service_work_scope_checks_actual_merge_tree(
         "Exact-parent service work merge",
     )
     _git(path, "checkout", "--detach", merge)
+    if drift == "symlink":
+        with pytest.raises(SourceIdentityError, match="unsupported object or mode"):
+            select_scope(path, _event(base, head), checkout_sha=merge)
+        return
     proof = select_scope(path, _event(base, head), checkout_sha=merge)
     assert proof["scope"] == ("cos-service-work" if drift == "none" else "system-wide")
 
