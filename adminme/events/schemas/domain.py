@@ -242,8 +242,149 @@ class TaskCreatedV3(TaskCreatedV2):
         return self
 
 
+class ServiceSourceAuthority(BaseModel):
+    """Inherited client restrictions for one authorized canonical source fact."""
+
+    model_config = {"extra": "forbid", "frozen": True}
+
+    source_event_id: str = Field(min_length=1, max_length=240)
+    authority_grant_id: str = Field(min_length=1, max_length=240)
+    context_scope: Literal["member_private", "household_shared", "external_contact"]
+    context_member_id: str | None = Field(default=None, min_length=1, max_length=240)
+    owner_party_id: str | None = Field(default=None, min_length=1, max_length=240)
+    source_owner_scope: str = Field(min_length=1, max_length=500)
+    source_visibility_scope: str = Field(min_length=1, max_length=500)
+    source_sensitivity: Literal["normal", "sensitive", "privileged"]
+    source_adapter: str = Field(min_length=1, max_length=240)
+    source_account_id: str = Field(min_length=1, max_length=500)
+    source_policy_key: str = Field(min_length=1, max_length=240)
+    source_policy_owner_id: str = Field(min_length=1, max_length=240)
+    source_audience: list[str] = Field(default_factory=list, max_length=100)
+    restriction: Literal["internal_processing_only"]
+
+    @model_validator(mode="after")
+    def validate_source_scope(self) -> ServiceSourceAuthority:
+        if self.context_scope == "member_private":
+            if not self.context_member_id or self.owner_party_id is not None:
+                raise ValueError("private source authority requires its exact member")
+            scope = f"private:{self.context_member_id}"
+        elif self.context_scope == "household_shared":
+            if self.context_member_id is not None or self.owner_party_id is not None:
+                raise ValueError("shared source authority cannot impersonate an owner")
+            scope = "shared:household"
+        else:
+            if not self.context_member_id or not self.owner_party_id:
+                raise ValueError(
+                    "external source authority requires its owner and Party"
+                )
+            scope = f"external-contact:{self.owner_party_id}"
+        if self.source_owner_scope != scope or self.source_visibility_scope != scope:
+            raise ValueError(
+                "source authority must retain its exact ownership and visibility"
+            )
+        if len(set(self.source_audience)) != len(self.source_audience):
+            raise ValueError("source audience must be unique")
+        if any(not member.strip() for member in self.source_audience):
+            raise ValueError("source audience must use nonempty identities")
+        return self
+
+
+class TaskCreatedV4(BaseModel):
+    """Service-self internal work without delegated or provider authority."""
+
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    description: str | None = None
+    owner_member_id: None = None
+    due: str | None = None
+    due_date: str | None = None
+    available_from: str | None = None
+    energy: Literal["low", "medium", "high"] | None = None
+    effort_min: int | None = Field(default=None, ge=0)
+    effort: Literal["tiny", "small", "medium", "large"] | None = None
+    domain: str | None = None
+    item_type: (
+        Literal[
+            "task",
+            "purchase",
+            "appointment",
+            "research",
+            "decision",
+            "chore",
+            "maintenance",
+        ]
+        | None
+    ) = None
+    micro_script: str | None = None
+    notes: str | None = None
+    created_by: Literal["service-principal:chief-of-staff"] = Field()
+    source_system: str | None = None
+    source_commitment_id: None = None
+    work_kind: Literal["service_operational"]
+    owner_party_id: Literal["service-party:chief-of-staff"] = Field()
+    responsible_party_id: Literal["service-party:chief-of-staff"] = Field()
+    assignee_party_id: Literal["service-party:chief-of-staff"] = Field()
+    beneficiary_party_id: None = None
+    service_assignment_role: Literal["internal"]
+    service_party_id: Literal["service-party:chief-of-staff"]
+    authority_kind: Literal["service_self"]
+    authority_grant_id: None
+    record_kind: Literal["work", "note", "scratchpad"] = "work"
+    source_authorities: list[ServiceSourceAuthority] = Field(
+        default_factory=list, max_length=20
+    )
+    on_behalf_of_member_id: None = None
+    delegated_by_member_id: None = None
+    service_work_type: Literal[
+        "operational_task",
+        "waiting_for",
+        "follow_up",
+        "clarification",
+        "exception",
+        "preparation",
+        "held_action",
+        "provider_failure",
+        "reconciliation",
+        "operational_calendar",
+        "reminder_like",
+    ]
+    linked_item_kind: None = None
+    linked_item_id: None = None
+    recurring_id: None = None
+    scheduled_start_at: AwareDatetime | None = None
+    scheduled_end_at: AwareDatetime | None = None
+    follow_up_at: AwareDatetime | None = None
+    waiting_on_party_id: Literal["service-party:chief-of-staff"] | None = None
+    coordination_id: None = None
+    source_event_id: None = None
+    source_invocation_id: str | None = Field(default=None, min_length=1)
+    provider_representation_owner_kind: Literal["none"] = "none"
+    provider_representation_owner_principal_id: None = None
+    provider_id: None = None
+    provider_account_reference: None = None
+    provider_workspace_reference: None = None
+    provider_external_reference_digest: None = None
+    provider_effect_count: Literal[0] = 0
+
+    @model_validator(mode="after")
+    def validate_internal_schedule(self) -> TaskCreatedV4:
+        source_ids = [source.source_event_id for source in self.source_authorities]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("source authorities must identify distinct source events")
+        if (self.scheduled_start_at is None) != (self.scheduled_end_at is None):
+            raise ValueError("scheduled work requires both start and end")
+        if (
+            self.scheduled_start_at is not None
+            and self.scheduled_end_at is not None
+            and self.scheduled_end_at <= self.scheduled_start_at
+        ):
+            raise ValueError("scheduled work must end after it starts")
+        return self
+
+
 class CoSWorkStateChangedV1(BaseModel):
-    """Service-authored lifecycle without fabricating a human member actor."""
+    """Existing delegated work lifecycle retains its mandatory exact grant."""
 
     model_config = {"extra": "forbid"}
 
@@ -287,44 +428,91 @@ class CoSWorkStateChangedV1(BaseModel):
 
     @model_validator(mode="after")
     def validate_transition(self) -> CoSWorkStateChangedV1:
-        if (self.active_member_id is None) != (self.on_behalf_of_member_id is None):
-            raise ValueError("active and on-behalf-of member must travel together")
-        if self.active_member_id != self.on_behalf_of_member_id:
-            raise ValueError("active and on-behalf-of member must agree")
-        expected_status = {
-            "start": "in_progress",
-            "wait_on_member": "waiting_on",
-            "wait_on_other": "waiting_on",
-            "follow_up": "deferred",
-            "hold": "deferred",
-            "resume": "next",
-            "complete": "done",
-            "cancel": "cancelled",
-        }[self.action]
-        if self.resulting_status != expected_status:
-            raise ValueError("CoS work action has an invalid resulting status")
-        if self.action == "wait_on_member":
-            if not self.waiting_on_member_id or self.waiting_on_party_id:
-                raise ValueError("member wait requires exactly one member dependency")
-        elif self.action == "wait_on_other":
-            if not self.waiting_on_party_id or self.waiting_on_member_id:
-                raise ValueError("external wait requires exactly one Party dependency")
-        elif self.action in {"follow_up", "hold"}:
-            if self.follow_up_at is None:
-                raise ValueError("follow-up/hold requires a future activation")
-            if self.waiting_on_member_id or self.waiting_on_party_id:
-                raise ValueError("follow-up/hold cannot name a waiting dependency")
-        elif (
-            self.waiting_on_member_id
-            or self.waiting_on_party_id
-            or self.follow_up_at is not None
-        ):
-            raise ValueError(
-                "this action cannot carry waiting or follow-up coordinates"
-            )
-        if self.follow_up_at is not None and self.follow_up_at <= self.changed_at:
-            raise ValueError("follow-up activation must be after the state change")
+        _validate_cos_work_transition(self)
         return self
+
+
+class CoSWorkStateChangedV2(BaseModel):
+    """Service-self lifecycle; a date is state, never delivery authorization."""
+
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    action: Literal[
+        "start", "wait_on_other", "follow_up", "hold", "resume", "complete", "cancel"
+    ]
+    resulting_status: Literal[
+        "next", "in_progress", "waiting_on", "deferred", "done", "cancelled"
+    ]
+    changed_at: AwareDatetime
+    actor_service_principal_id: Literal["service-principal:chief-of-staff"]
+    actor_service_party_id: Literal["service-party:chief-of-staff"]
+    operator_principal_id: Literal["operator:openclaw:automation"]
+    authority_grant_id: None = Field()
+    active_member_id: None = None
+    on_behalf_of_member_id: None = None
+    waiting_on_party_id: Literal["service-party:chief-of-staff"] | None = None
+    waiting_on_member_id: None = None
+    follow_up_at: AwareDatetime | None = None
+    reason_code: Literal[
+        "member_input",
+        "external_dependency",
+        "clarification",
+        "provider_failure",
+        "reconciliation",
+        "scheduled_hold",
+        "completed",
+        "cancelled",
+        "other",
+    ]
+    expected_last_event_id: str = Field(min_length=1)
+    provider_effect_count: Literal[0] = 0
+    authority_kind: Literal["service_self"]
+
+    @model_validator(mode="after")
+    def validate_transition(self) -> CoSWorkStateChangedV2:
+        _validate_cos_work_transition(self)
+        return self
+
+
+def _validate_cos_work_transition(
+    work: CoSWorkStateChangedV1 | CoSWorkStateChangedV2,
+) -> None:
+    """Share lifecycle rules without weakening either version's identity fields."""
+    if (work.active_member_id is None) != (work.on_behalf_of_member_id is None):
+        raise ValueError("active and on-behalf-of member must travel together")
+    if work.active_member_id != work.on_behalf_of_member_id:
+        raise ValueError("active and on-behalf-of member must agree")
+    expected_status = {
+        "start": "in_progress",
+        "wait_on_member": "waiting_on",
+        "wait_on_other": "waiting_on",
+        "follow_up": "deferred",
+        "hold": "deferred",
+        "resume": "next",
+        "complete": "done",
+        "cancel": "cancelled",
+    }[work.action]
+    if work.resulting_status != expected_status:
+        raise ValueError("CoS work action has an invalid resulting status")
+    if work.action == "wait_on_member":
+        if not work.waiting_on_member_id or work.waiting_on_party_id:
+            raise ValueError("member wait requires exactly one member dependency")
+    elif work.action == "wait_on_other":
+        if not work.waiting_on_party_id or work.waiting_on_member_id:
+            raise ValueError("external wait requires exactly one Party dependency")
+    elif work.action in {"follow_up", "hold"}:
+        if work.follow_up_at is None:
+            raise ValueError("follow-up/hold requires a future activation")
+        if work.waiting_on_member_id or work.waiting_on_party_id:
+            raise ValueError("follow-up/hold cannot name a waiting dependency")
+    elif (
+        work.waiting_on_member_id
+        or work.waiting_on_party_id
+        or work.follow_up_at is not None
+    ):
+        raise ValueError("this action cannot carry waiting or follow-up coordinates")
+    if work.follow_up_at is not None and work.follow_up_at <= work.changed_at:
+        raise ValueError("follow-up activation must be after the state change")
 
 
 class TaskCompletedV1(BaseModel):
@@ -698,7 +886,9 @@ registry.register("commitment.expired", 1, CommitmentExpiredV1)
 registry.register("task.created", 1, TaskCreatedV1)
 registry.register("task.created", 2, TaskCreatedV2)
 registry.register("task.created", 3, TaskCreatedV3)
+registry.register("task.created", 4, TaskCreatedV4)
 registry.register("cos.work.state_changed", 1, CoSWorkStateChangedV1)
+registry.register("cos.work.state_changed", 2, CoSWorkStateChangedV2)
 registry.register("task.completed", 1, TaskCompletedV1)
 registry.register("task.deferred", 1, TaskDeferredV1)
 registry.register("task.snoozed", 1, TaskSnoozedV1)

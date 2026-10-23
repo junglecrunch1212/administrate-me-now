@@ -1146,6 +1146,10 @@ def test_prepared_maintenance_restores_exact_authority_without_new_opt_in(
     controller.pause_maintenance(plan)
     monkeypatch.setattr(controller, "_selection", lambda: ("b" * 40, ROOT))
     if messages:
+        from bootstrap.openclaw_activation import reconcile_service_topology
+
+        # Model the supported updater's exact new service-only agent selection.
+        reconcile_service_topology(controller.paths, ROOT)
         # Plugin reinstallation can remove the host copy. The plan may restore
         # only the exact previously effective intersection, not recipient ceilings.
         path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
@@ -1176,7 +1180,16 @@ def test_prepared_maintenance_restores_exact_authority_without_new_opt_in(
 
 
 @pytest.mark.parametrize(
-    "mutation", ["grant", "expired", "gateway", "member", "candidate", "sender"]
+    "mutation",
+    [
+        "grant",
+        "expired",
+        "gateway",
+        "member",
+        "candidate",
+        "sender",
+        "target_topology_hash",
+    ],
 )
 def test_maintenance_rejects_changed_plan_before_pausing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
@@ -1186,6 +1199,8 @@ def test_maintenance_rejects_changed_plan_before_pausing(
     stops = controller.services.stops
     if mutation == "grant":
         plan = plan.model_copy(update={"self_reply_bindings": ["f" * 64]})
+    elif mutation == "target_topology_hash":
+        plan = plan.model_copy(update={"gateway_compatibility_sha256": "f" * 64})
     elif mutation == "expired":
         plan = plan.model_copy(
             update={
@@ -1245,6 +1260,9 @@ def test_restoration_refuses_drift_or_new_authority_without_mutation(
     plan = _prepare_maintenance(controller, request)
     if mutation != "missing_pause":
         controller.pause_maintenance(plan)
+    from bootstrap.openclaw_activation import reconcile_service_topology
+
+    reconcile_service_topology(controller.paths, ROOT)
     monkeypatch.setattr(
         controller,
         "_selection",
@@ -1511,9 +1529,19 @@ def test_workspace_preflight_refuses_custom_generated_instructions_before_mainte
     assert controller.services.runtime_diagnostics()["observation_active"] is False
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [None, "service_allowlist", "service_workspace", "service_agent", "member_tools"],
+)
 def test_real_plugin_replacement_preserves_maintenance_restoration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str | None
 ) -> None:
+    from adminme.openclaw_topology import (
+        SERVICE_PRIVATE_TOOLS,
+        member_agent_id,
+        service_agent_id,
+    )
+    from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
     from bootstrap.cos_guard_release import COORDINATES, prepare_rebind, snapshot_bytes
     from bootstrap.openclaw_activation import reconcile_member_topology
     from bootstrap.openclaw_tools import reconcile_administrateme_plugin
@@ -1540,7 +1568,10 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
         "administrateme"
     ]
     assert before["config"]["forwardIntakeAccounts"]
+    gateway_before = gateway_path.read_bytes()
     plan = _prepare_maintenance(controller, request)
+    assert gateway_path.read_bytes() == gateway_before
+    assert not (paths.instance_dir / "openclaw/service-workspaces").exists()
     controller.pause_maintenance(plan)
     candidate = tmp_path / "candidate"
 
@@ -1563,7 +1594,39 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
         )
     assert reconcile_administrateme_plugin(paths, candidate)["ok"] is True
     assert any(command[1:3] == ["plugins", "uninstall"] for command in commands)
+    installed = json.loads(gateway_path.read_bytes())
+    service = next(
+        row
+        for row in installed["agents"]["list"]
+        if row["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+    )
+    assert service["tools"] == {"allow": list(SERVICE_PRIVATE_TOOLS)}
     monkeypatch.setattr(controller, "_selection", lambda: ("b" * 40, candidate))
+    if mutation is not None:
+        if mutation == "service_allowlist":
+            service["tools"]["allow"].append("administrateme_service_work")
+        elif mutation == "service_workspace":
+            service["workspace"] = str(paths.instance_dir / "openclaw/workspace")
+        elif mutation == "service_agent":
+            service["id"] = "am-service-unreviewed"
+        else:
+            member = next(
+                row
+                for row in installed["agents"]["list"]
+                if row["id"] == member_agent_id(MEMBER_A)
+            )
+            member.setdefault("tools", {}).setdefault("allow", []).append(
+                "unreviewed-provider-tool"
+            )
+        _write(gateway_path, installed)
+        stops = controller.services.stops
+        with pytest.raises(
+            CoSActivationError, match="routing or configuration drifted"
+        ):
+            controller.activate(plan, enable_live=True)
+        assert controller.services.stops == stops
+        assert json.loads(gateway_path.read_bytes()) == installed
+        return
     result = controller.activate(plan, enable_live=True)
     assert result["observation_active"] is False
     assert result["provider_test_messages_sent"] == 0

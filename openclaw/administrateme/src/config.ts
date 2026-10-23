@@ -5,6 +5,7 @@ const DEFAULTS: PluginConfig = {
   sharedSecretEnv: "ADMINME_OPENCLAW_SHARED_SECRET",
   timeoutMs: 5_000,
   bridgeEnabled: false,
+  serviceWorkEnabled: true,
   bridgeChannels: [],
   bridgeEventKinds: [...BRIDGE_EVENT_KINDS],
   forwardIntakeAccounts: [],
@@ -44,6 +45,9 @@ export function isLoopbackBaseUrl(value: string): boolean {
 
 export function readPluginConfig(value: Record<string, unknown> | undefined): PluginConfig {
   const raw = value ?? {};
+  if (raw.serviceWorkEnabled !== undefined && typeof raw.serviceWorkEnabled !== "boolean") {
+    throw new Error("AdministrateMe serviceWorkEnabled must be boolean");
+  }
   const intakeAccounts = raw.forwardIntakeAccounts ?? [];
   if (!Array.isArray(intakeAccounts) || intakeAccounts.length > 20) {
     throw new Error("AdministrateMe forwardIntakeAccounts must be a bounded reviewed list");
@@ -120,6 +124,7 @@ export function readPluginConfig(value: Record<string, unknown> | undefined): Pl
     sharedSecretEnv,
     timeoutMs,
     bridgeEnabled: raw.bridgeEnabled === true,
+    serviceWorkEnabled: raw.serviceWorkEnabled !== false,
     bridgeChannels: stringArray(raw.bridgeChannels),
     bridgeEventKinds,
     forwardIntakeAccounts,

@@ -17,6 +17,7 @@ from typing import Any
 import sqlcipher3
 
 from adminme.lib.scope import filter_one, filter_rows
+from adminme.lib.principal import ServiceSession
 from adminme.lib.session import Session
 
 
@@ -42,7 +43,7 @@ def _coordination_member_id(session: Session) -> str:
 
 def get_task(
     conn: sqlcipher3.Connection,
-    session: Session,
+    session: Session | ServiceSession,
     *,
     task_id: str,
 ) -> dict[str, Any] | None:
@@ -228,13 +229,54 @@ def sub_tasks_of(
     return filter_rows(session, [dict(r) for r in rows])
 
 
+def service_work_for_principal(
+    conn: sqlcipher3.Connection,
+    session: ServiceSession,
+    *,
+    include_completed: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return bounded, exact service-owned work including durable completion."""
+
+    if not 1 <= limit <= 200 or offset < 0:
+        raise ValueError(
+            "service work requires a limit between 1 and 200 and nonnegative offset"
+        )
+    rows = conn.execute(
+        """
+        SELECT * FROM tasks
+         WHERE tenant_id=? AND owner_scope=? AND visibility_scope=?
+           AND owner_party_id=? AND service_party_id=? AND assignee_party=?
+           AND work_kind='service_operational' AND service_assignment_role='internal'
+           AND owner_member_id IS NULL AND on_behalf_of_member_id IS NULL
+           AND authority_grant_id IS NULL
+           AND (? OR status NOT IN ('done','cancelled','dismissed'))
+         ORDER BY last_event_id DESC, task_id ASC
+         LIMIT ? OFFSET ?
+        """,
+        (
+            session.tenant_id,
+            session.private_scope,
+            session.private_scope,
+            session.principal.party_id,
+            session.principal.party_id,
+            session.principal.party_id,
+            include_completed,
+            limit,
+            offset,
+        ),
+    ).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])
+
+
 def service_work_for_context(
     conn: sqlcipher3.Connection,
     session: Session,
     *,
     service_party_id: str,
 ) -> list[dict[str, Any]]:
-    """Return CoS work only for its exact member context plus service-private work."""
+    """Return delegated CoS work only for its exact authorized context."""
 
     context = session.service_context
     if context is None:

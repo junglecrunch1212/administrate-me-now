@@ -25,7 +25,7 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
-CATALOG_VERSION = "1.2.0"
+CATALOG_VERSION = "1.3.0"
 CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
@@ -128,7 +128,8 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "capability_id": "domain.cos_work",
         "category": "planning",
         "label": "Coordinate authorized CoS work",
-        "outcome": "Create and advance CoS-owned or CoS-managed work under one exact grant.",
+        "outcome": "Create and advance CoS-owned or CoS-managed work under exact delegated or service-self authority.",
+        "owner_kinds": ["member", "service_principal"],
         "source": "product:cos-work",
         "verbs": {
             "read": "supported",

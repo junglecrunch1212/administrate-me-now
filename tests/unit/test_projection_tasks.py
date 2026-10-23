@@ -125,11 +125,22 @@ def test_tasks_v4_additive_migration_accepts_existing_v2_table(
             );
             """
         )
+        conn.execute(
+            "INSERT INTO tasks(task_id, tenant_id, due_date) VALUES (?, ?, ?)",
+            ("legacy-task", "tenant-fixture", "2030-01-01"),
+        )
         TasksProjection().migrate_schema(conn)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(tasks)")}
         assert "available_from" in columns
         assert {"lifecycle_action", "lifecycle_at", "lifecycle_reason"} <= columns
+        assert {"record_kind", "source_authorities_json"} <= columns
+        retained = conn.execute(
+            "SELECT due_date, record_kind, source_authorities_json FROM tasks "
+            "WHERE tenant_id=? AND task_id=?",
+            ("tenant-fixture", "legacy-task"),
+        ).fetchone()
+        assert tuple(retained) == ("2030-01-01", "work", "[]")
         assert "idx_tasks_tenant_available" in indexes
     finally:
         conn.close()

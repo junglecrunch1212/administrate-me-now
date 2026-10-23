@@ -38,6 +38,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Iterable
 
+from adminme.lib.principal import ServiceSession
+
 if TYPE_CHECKING:  # avoid runtime import cycle with session.py
     from adminme.lib.session import Session
 
@@ -79,7 +81,9 @@ class ScopeViolation(Exception):
     and refuses [§6.4]."""
 
 
-def allowed_read(session: "Session", sensitivity: str, owner_scope: str) -> bool:
+def allowed_read(
+    session: "Session | ServiceSession", sensitivity: str, owner_scope: str
+) -> bool:
     """Mirror of the SQL WHERE clause from BUILD.md L3-continued, applied
     in Python to a single (sensitivity, owner_scope) pair [DIAGRAMS.md §5].
 
@@ -91,6 +95,12 @@ def allowed_read(session: "Session", sensitivity: str, owner_scope: str) -> bool
         ``allowed_scopes``; if sensitivity == 'privileged', owner_scope
         must equal ``private:<auth_member>``.
     """
+    if isinstance(session, ServiceSession):
+        return owner_scope == session.private_scope and sensitivity in {
+            "normal",
+            "sensitive",
+            "privileged",
+        }
     role = session.auth_role
 
     # Ambient: no surface at all [§6.2, DIAGRAMS.md §5].
@@ -135,7 +145,9 @@ def allowed_read(session: "Session", sensitivity: str, owner_scope: str) -> bool
     return True
 
 
-def privacy_filter(session: "Session", row: dict[str, Any]) -> dict[str, Any]:
+def privacy_filter(
+    session: "Session | ServiceSession", row: dict[str, Any]
+) -> dict[str, Any]:
     """Apply read-time privacy redaction to a single row
     [CONSOLE_PATTERNS.md §6, §5.5].
 
@@ -151,7 +163,12 @@ def privacy_filter(session: "Session", row: dict[str, Any]) -> dict[str, Any]:
         return row
 
     owner_scope = row.get("owner_scope") or ""
-    if owner_scope == f"private:{session.auth_member_id}":
+    private_scope = (
+        session.private_scope
+        if isinstance(session, ServiceSession)
+        else f"private:{session.auth_member_id}"
+    )
+    if owner_scope == private_scope:
         # Owner: see full content [CONSOLE_PATTERNS.md §6 owner branch].
         return row
 
@@ -214,14 +231,16 @@ def _row_tags(row: dict[str, Any]) -> Iterable[str]:
     return ()
 
 
-def child_hidden_tag_filter(session: "Session", row: dict[str, Any]) -> bool:
+def child_hidden_tag_filter(
+    session: "Session | ServiceSession", row: dict[str, Any]
+) -> bool:
     """Return True if ``row`` is visible to ``session``, False to drop.
 
     For child-role sessions, drops any row tagged with a member of
     ``CHILD_FORBIDDEN_TAGS`` regardless of the row's nominal sensitivity
     [CONSOLE_PATTERNS.md §6/§7].
     """
-    if session.auth_role != "child":
+    if isinstance(session, ServiceSession) or session.auth_role != "child":
         return True
     tags = set(_row_tags(row))
     if tags & CHILD_FORBIDDEN_TAGS:
@@ -229,7 +248,9 @@ def child_hidden_tag_filter(session: "Session", row: dict[str, Any]) -> bool:
     return True
 
 
-def filter_rows(session: "Session", rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def filter_rows(
+    session: "Session | ServiceSession", rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Bundle ``allowed_read`` + ``privacy_filter`` + ``child_hidden_tag_filter``
     + coach-strip into a single helper called by every projection query
     [BUILD.md L3-continued].
@@ -240,6 +261,18 @@ def filter_rows(session: "Session", rows: list[dict[str, Any]]) -> list[dict[str
     they carry no per-row privacy semantics and are gated only by the
     role-axis defense.
     """
+    if isinstance(session, ServiceSession):
+        return [
+            row
+            for row in rows
+            if row.get("tenant_id") == session.tenant_id
+            and row.get("visibility_scope") == session.private_scope
+            and allowed_read(
+                session,
+                str(row.get("sensitivity") or "normal"),
+                str(row.get("owner_scope") or ""),
+            )
+        ]
     out: list[dict[str, Any]] = []
     for row in rows:
         sens = row.get("sensitivity") or "normal"
@@ -261,7 +294,9 @@ def filter_rows(session: "Session", rows: list[dict[str, Any]]) -> list[dict[str
     return out
 
 
-def filter_one(session: "Session", row: dict[str, Any] | None) -> dict[str, Any] | None:
+def filter_one(
+    session: "Session | ServiceSession", row: dict[str, Any] | None
+) -> dict[str, Any] | None:
     """Single-row variant of ``filter_rows``."""
     if row is None:
         return None
