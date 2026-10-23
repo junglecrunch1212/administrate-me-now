@@ -13,6 +13,7 @@ from adminme.events.log import AppendValidationError, EventLog
 from adminme.events.writer import EventWriter
 from adminme.direct_intake import DirectIntakeProcessor
 from adminme.historical_attribution import (
+    _manual_submission_owner_matches,
     _openclaw_submission_owner_matches,
     audit_historical_attribution,
 )
@@ -927,3 +928,287 @@ async def test_native_submission_attribution_keeps_sensitive_incomplete_sources_
 
     matched = await _openclaw_submission_owner_matches(Receipts(), source, "ev_01C")  # type: ignore[arg-type]
     assert matched is (defect == "none")
+
+
+def _manual_source() -> dict:
+    request = {
+        "text": "Synthetic private calendar request.",
+        "source_surface": "calendar",
+        "kind_hint": "calendar_event",
+        "source_event_id": None,
+        "client_request_id": "fixture-manual-request",
+    }
+    tenant = "fixture-manual-tenant"
+    member = "fixture-manual-member"
+    return {
+        "event_id": "ev_02",
+        "tenant_id": tenant,
+        "type": "triage.intent.submitted",
+        "schema_version": 2,
+        "occurred_at": "2026-10-23T12:00:00+00:00",
+        "source_adapter": "member-calendar",
+        "source_account_id": member,
+        "owner_scope": f"private:{member}",
+        "visibility_scope": f"private:{member}",
+        "actor_identity": member,
+        "sensitivity": "normal",
+        "causation_id": None,
+        "idempotency_key": f"triage-intent:{member}:{request['client_request_id']}",
+        "raw_ref": "request-sha256:"
+        + hashlib.sha256(
+            json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "payload": {
+            **request,
+            "intent_id": "intent_"
+            + hashlib.sha256(
+                f"{tenant}|{member}|{request['client_request_id']}".encode()
+            ).hexdigest()[:28],
+            "member_id": member,
+            "submitted_at": "2026-10-23T12:00:00+00:00",
+            "submission_kind": "manual",
+            "intake_channel": "member",
+            "evidence_complete": True,
+            "evidence_issues": [],
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "key", "value"),
+    [
+        ("source", "schema_version", 1),
+        ("source", "type", "messaging.received"),
+        ("source", "source_adapter", "member-invented"),
+        ("source", "source_adapter", "member-reminders"),
+        ("source", "source_adapter", "messaging-gmail-api"),
+        ("source", "source_account_id", "other-member"),
+        ("source", "actor_identity", "other-member"),
+        ("source", "actor_identity", None),
+        ("source", "owner_scope", "private:other-member"),
+        ("source", "visibility_scope", "shared:household"),
+        ("source", "tenant_id", "other-tenant"),
+        ("source", "sensitivity", "privileged"),
+        ("source", "causation_id", "other-source"),
+        ("source", "occurred_at", "2026-10-23T13:00:00+00:00"),
+        ("source", "idempotency_key", "unrelated-request"),
+        ("source", "raw_ref", "request-sha256:" + "0" * 64),
+        ("payload", "member_id", "other-member"),
+        ("payload", "intent_id", "intent_wrong"),
+        ("payload", "client_request_id", "other-request"),
+        ("payload", "client_request_id", "short"),
+        ("payload", "text", "Changed private request"),
+        ("payload", "text", ""),
+        ("payload", "kind_hint", "task"),
+        ("payload", "kind_hint", "invalid-kind"),
+        ("payload", "source_surface", "invented"),
+        ("payload", "source_event_id", "missing-source"),
+        ("payload", "submission_kind", "member_forwarded"),
+        ("payload", "intake_channel", "gmail"),
+        ("payload", "evidence_complete", False),
+        ("payload", "evidence_complete", 1),
+        ("payload", "evidence_issues", ["missing_attachment"]),
+        ("payload", "unexpected_field", "not-emitted"),
+    ],
+)
+async def test_manual_attribution_refuses_inconsistent_source(
+    target: str, key: str, value: object
+) -> None:
+    source = _manual_source()
+    {"source": source, "payload": source["payload"]}[target][key] = value
+    assert not await _manual_submission_owner_matches(None, source)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "private",
+        "shared",
+        "sensitive",
+        "privileged",
+        "missing",
+        "future",
+        "tenant",
+        "owner",
+        "visibility",
+        "sensitivity",
+    ],
+)
+async def test_manual_linked_evidence_retains_visibility_and_sensitivity(
+    case: str,
+) -> None:
+    source = _manual_source()
+    member = source["payload"]["member_id"]
+    parent = {
+        "event_id": "ev_01",
+        "tenant_id": source["tenant_id"],
+        "owner_scope": f"private:{member}",
+        "visibility_scope": f"private:{member}",
+        "sensitivity": "normal",
+    }
+    if case == "shared":
+        parent.update(
+            owner_scope="shared:household", visibility_scope="shared:household"
+        )
+    elif case in {"sensitive", "privileged"}:
+        parent["sensitivity"] = source["sensitivity"] = case
+    elif case == "future":
+        parent["event_id"] = "ev_03"
+    elif case == "tenant":
+        parent["tenant_id"] = "other-tenant"
+    elif case == "owner":
+        parent["owner_scope"] = "private:other-member"
+    elif case == "visibility":
+        parent["visibility_scope"] = "private:other-member"
+    elif case == "sensitivity":
+        parent["sensitivity"] = "sensitive"
+    source["causation_id"] = source["payload"]["source_event_id"] = parent["event_id"]
+    source["raw_ref"] = (
+        "request-sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                {
+                    key: source["payload"][key]
+                    for key in (
+                        "text",
+                        "source_surface",
+                        "kind_hint",
+                        "source_event_id",
+                        "client_request_id",
+                    )
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
+
+    class Evidence:
+        async def get(self, event_id: str) -> dict | None:
+            assert event_id == parent["event_id"]
+            return None if case == "missing" else parent
+
+    assert await _manual_submission_owner_matches(Evidence(), source) is (  # type: ignore[arg-type]
+        case in {"private", "shared", "sensitive", "privileged"}
+    )
+
+
+def test_manual_attribution_uses_authenticated_production_emitter(
+    tmp_path: Path,
+) -> None:
+    from fastapi.testclient import TestClient
+    from adminme.runtime.application import create_application
+    from tests.acceptance.test_triage_vertical_slice import AUTH, CHILD_AUTH, _settings
+
+    instance = tmp_path / "member-attribution"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        assert client.portal is not None
+        source_id = None
+        surfaces = (
+            "today",
+            "triage",
+            "comms",
+            "reminders",
+            "calendar",
+            "people",
+            "notes",
+            "finance",
+            "scoreboard",
+            "settings",
+            "openclaw",
+        )
+        for surface in surfaces:
+            body = {
+                "text": "Maybe a synthetic calendar request for review",
+                "source_surface": surface,
+                "client_request_id": f"fixture-manual-{surface}",
+                "source_event_id": source_id,
+            }
+            response = client.post(
+                "/api/member/v1/triage/intents", headers=AUTH, json=body
+            )
+            assert response.status_code == 202, response.text
+            retry = client.post(
+                "/api/member/v1/triage/intents", headers=AUTH, json=body
+            )
+            assert retry.status_code == 202 and retry.json()["duplicate"] is True
+            event = client.portal.call(
+                runtime.event_log.get_by_idempotency,
+                runtime.settings.instance.tenant_id,
+                f"triage-intent:{runtime.settings.member_identities['triage-principal.ts.net']}:{body['client_request_id']}",
+            )
+            assert event is not None
+            assert client.portal.call(
+                _manual_submission_owner_matches, runtime.event_log, event
+            )
+            source_id = event["event_id"]
+        refused = client.post(
+            "/api/member/v1/triage/intents", headers=CHILD_AUTH, json=body
+        )
+        assert refused.status_code == 403
+
+        async def audit() -> dict:
+            return await audit_historical_attribution(
+                runtime.event_log,
+                repository_root=REPO_ROOT,
+                provider_bindings=(),
+                hash_key=b"synthetic-attribution-key",
+            )
+
+        proof = client.portal.call(audit)
+        assert proof["state"] == "healthy"
+        assert (
+            proof["source_event_count"]
+            == proof["attributed_event_count"]
+            == len(surfaces)
+        )
+        assert {row["binding_state"] for row in proof["groups"]} == {
+            "internal_manual_member_source_reconciled"
+        }
+        exported = json.dumps(proof)
+        assert body["text"] not in exported
+        assert "member_triage_principal" not in exported
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "adapter", ["member-calendar", "member-invented", "messaging-gmail-api"]
+)
+async def test_manual_attribution_cannot_borrow_provider_binding(
+    tmp_path: Path, adapter: str
+) -> None:
+    source = _manual_source()
+    source.update(source_adapter=adapter, actor_identity="other-member", event_at_ms=1)
+    member = source["source_account_id"]
+    binding = ProviderBinding(
+        adapter_id="fixture-provider",
+        kind="messaging-gmail-api",
+        provider_family="google",
+        owner_kind="member",
+        owner_id=member,
+        member_id=member,
+        service_principal_id=None,
+        provider_account_id=member,
+        workspace="personal",
+        permission_scope=("gmail.read",),
+        binding_provenance="oauth-subject",
+    )
+    log = EventLog(tmp_path / "borrowed.db", b"b" * 32)
+    try:
+        await log.append(EventEnvelope(**source))
+        proof = await audit_historical_attribution(
+            log,
+            repository_root=REPO_ROOT,
+            provider_bindings=(binding,),
+            hash_key=b"fixture-audit-key",
+        )
+    finally:
+        await log.close()
+    assert proof["state"] == "degraded"
+    assert proof["unattributed_event_count"] == 1
+    assert proof["groups"][0]["binding_state"] == "unattributed"

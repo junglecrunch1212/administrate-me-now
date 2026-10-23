@@ -8,12 +8,17 @@ import json
 import re
 from typing import Any
 
+from pydantic import ValidationError
+
 from adminme.bridge_history import BridgeHistory, SOURCE_ADAPTERS
 from adminme.apple_service_history import apple_command_owner_matches
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
 from adminme.events.log import EventLog
+from adminme.events.schemas.triage import TriageIntentSubmittedV2
+from adminme.lib.scope import filter_one
+from adminme.lib.session import build_internal_session
 from adminme.provider_bindings import HistoricalProviderBinding, ProviderBinding
 from adminme.service_identities import (
     COS_AUTOMATION_OPERATOR_ID,
@@ -228,6 +233,99 @@ async def _direct_intake_owner_matches(
             and row.get("sensitivity") == source.get("sensitivity")
             for row in (cue, route)
         )
+    )
+
+
+_MANUAL_MEMBER_SURFACES = frozenset(
+    {
+        "today",
+        "triage",
+        "comms",
+        "reminders",
+        "calendar",
+        "people",
+        "notes",
+        "finance",
+        "scoreboard",
+        "settings",
+        "openclaw",
+    }
+)
+_MANUAL_REQUEST_FIELDS = (
+    "text",
+    "source_surface",
+    "kind_hint",
+    "source_event_id",
+    "client_request_id",
+)
+
+
+async def _manual_submission_owner_matches(
+    event_log: EventLog, source: dict[str, Any]
+) -> bool:
+    """Recognize the authenticated member route's exact immutable source.
+
+    The account is the member, not an enrolled provider account. Reconstruct
+    the route's request fingerprint and intent seed, retaining linked-source
+    visibility and sensitivity without consulting today's member/provider grants.
+    """
+    payload = source.get("payload")
+    if not isinstance(payload, dict) or set(payload) != set(
+        TriageIntentSubmittedV2.model_fields
+    ):
+        return False
+    try:
+        TriageIntentSubmittedV2.model_validate(payload)
+    except ValidationError:
+        return False
+    member = payload["member_id"]
+    tenant = source.get("tenant_id")
+    surface = payload["source_surface"]
+    request_id = payload["client_request_id"]
+    scope = f"private:{member}"
+    if not (
+        isinstance(tenant, str)
+        and tenant
+        and surface in _MANUAL_MEMBER_SURFACES
+        and source.get("type") == "triage.intent.submitted"
+        and source.get("schema_version") == 2
+        and source.get("source_adapter") == f"member-{surface}"
+        and source.get("source_account_id") == source.get("actor_identity") == member
+        and source.get("owner_scope") == source.get("visibility_scope") == scope
+        and source.get("idempotency_key") == f"triage-intent:{member}:{request_id}"
+        and source.get("causation_id") == payload["source_event_id"]
+        and source.get("occurred_at") == payload["submitted_at"]
+        and payload["submission_kind"] == "manual"
+        and payload["intake_channel"] == "member"
+        and payload["evidence_complete"] is True
+        and payload["evidence_issues"] == []
+        and payload["intent_id"]
+        == "intent_"
+        + hashlib.sha256(f"{tenant}|{member}|{request_id}".encode()).hexdigest()[:28]
+    ):
+        return False
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {key: payload[key] for key in _MANUAL_REQUEST_FIELDS},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    if source.get("raw_ref") != f"request-sha256:{fingerprint}":
+        return False
+    parent_id = payload["source_event_id"]
+    if parent_id is None:
+        return source.get("sensitivity") == "normal"
+    parent = await event_log.get(parent_id)
+    # The real member route permits visible shared evidence as well as its own
+    # private evidence. This historical session never authorizes a new action.
+    session = build_internal_session(member, "principal", tenant)
+    return bool(
+        parent is not None
+        and parent_id < str(source.get("event_id") or "")
+        and parent.get("tenant_id") == tenant
+        and filter_one(session, parent) is not None
+        and source.get("sensitivity") == parent.get("sensitivity", "normal")
     )
 
 
@@ -461,6 +559,14 @@ async def audit_historical_attribution(
                 event_log, submission, watermark or ""
             ):
                 binding_state = "internal_openclaw_member_source_reconciled"
+                workspace = "personal"
+                attributed += 1
+        elif submission is not None:
+            # All remaining triage sources must prove the exact member route.
+            # A malformed or invented member-* source must never borrow a
+            # provider binding whose account happens to match the member id.
+            if await _manual_submission_owner_matches(event_log, submission):
+                binding_state = "internal_manual_member_source_reconciled"
                 workspace = "personal"
                 attributed += 1
         elif adapter in SOURCE_ADAPTERS:
